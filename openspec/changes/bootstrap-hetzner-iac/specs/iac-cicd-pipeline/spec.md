@@ -29,6 +29,27 @@ When validation checks pass, the workflow SHALL run `terraform plan` against the
 - **WHEN** the apply workflow run is pending approval
 - **THEN** the `HCLOUD_TOKEN` and Terraform Cloud credentials scoped to the `production` Environment SHALL NOT be readable by the workflow job until approval is granted
 
+### Requirement: Credential Scoping by Privilege
+Authentication secrets SHALL be split by privilege so that automatically-running jobs (PR-time and scheduled `terraform plan`) only ever have read-only access to Hetzner Cloud, while write access is confined to the approval-gated apply job.
+
+Two Hetzner Cloud API tokens SHALL be provisioned: a **Read Only** token and a **Read & Write** token. They SHALL be placed as follows, relying on GitHub resolving an environment-scoped secret ahead of a repository-scoped secret of the same name (a job declaring `environment: production` receives the environment value; any other job receives the repository value):
+
+| Secret | Location | Value |
+|---|---|---|
+| `HCLOUD_TOKEN` | Repository secret (Settings → Secrets and variables → Actions) | Read Only Hetzner token |
+| `TF_API_TOKEN` | Repository secret | Terraform Cloud API token |
+| `HCLOUD_TOKEN` | `production` Environment secret | Read & Write Hetzner token |
+
+The `TF_API_TOKEN` is a plain repository secret because on its own it can read and write Terraform *state* but cannot mutate Hetzner resources without a write-capable `HCLOUD_TOKEN`, which remains behind the approval gate.
+
+#### Scenario: Plan jobs receive only a read-only Hetzner token
+- **WHEN** a PR-time or scheduled `terraform plan` job runs without declaring `environment: production`
+- **THEN** its `HCLOUD_TOKEN` SHALL resolve to the repository-scoped Read Only token, which cannot create, modify, or destroy Hetzner resources
+
+#### Scenario: Apply job receives the read-write Hetzner token only after approval
+- **WHEN** the apply job runs after the `production` Environment approval is granted
+- **THEN** its `HCLOUD_TOKEN` SHALL resolve to the environment-scoped Read & Write token, and that token SHALL NOT be readable by any job that has not passed the approval gate
+
 ### Requirement: Scheduled Drift Detection
 A scheduled GitHub Actions workflow SHALL run `terraform plan` against the prod environment on a recurring nightly schedule, without applying any changes, to surface divergence between the committed configuration and actual infrastructure state.
 

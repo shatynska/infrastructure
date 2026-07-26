@@ -3,7 +3,7 @@
 - [ ] 1.1 Create the Terraform Cloud organization (if not already present) and a CLI-driven workspace named `infrastructure-prod` (no VCS connection).
 - [ ] 1.2 Create a dedicated Hetzner Cloud project for prod and generate a project-scoped `HCLOUD_TOKEN`.
 - [ ] 1.3 Generate a Terraform Cloud API token for CLI/CI use.
-- [ ] 1.4 In the GitHub repo, create a `production` Environment with a required-reviewer protection rule.
+- [x] 1.4 In the GitHub repo, create a `production` Environment with a required-reviewer protection rule.
 - [ ] 1.5 Add `HCLOUD_TOKEN` and the Terraform Cloud API token as secrets scoped to the `production` Environment (not repo-wide secrets).
 
 ## 2. Repo Scaffolding and Local Tooling
