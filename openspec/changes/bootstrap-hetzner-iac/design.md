@@ -97,6 +97,19 @@ The original safety-hardening scope protected Terraform from its operator but le
 
 Backups carry a 20% surcharge on the server price and are enabled anyway: `delete_protection` and `prevent_destroy` protect the *resource*, and nothing in the original design protected the *data* on its disk. Restoring from a backup is the only answer to a corrupted or wiped filesystem, which no amount of Terraform guardrail prevents.
 
+**14. Write-capable credentials never reach a workstation.**
+Decisions 7, 8 and 12 are all properties of the *GitHub Actions path* to production, not of Terraform: the destroy-policy gate parses a plan in CI, the approval gate is a GitHub Environment rule on a CI job, and branch protection governs commits. Decision 1's Execution Mode = Local means the `terraform` CLI runs on whatever machine invokes it, directly against real state. An operator — or an agent working in this repository — holding the Read & Write Hetzner token can therefore reach production with a single `terraform apply`, passing none of those three gates and leaving behind no pull request, no reviewer, and no run log.
+
+The worse variant is not the skipped approval but the skipped *commit*: a local apply applies the working tree, so production can be moved to a state that no commit on `main` describes.
+
+The split-token scheme in Decision 9 already mints exactly the right two credentials; it simply never said where a human's copy comes from. This decision extends the split from "CI jobs" to "CI jobs and workstations": the **Read & Write** token exists in exactly one place — the `production` GitHub Environment secret — and is never exported into a shell, written to a dotfile or `direnv` file, or stored in a credential helper. Local work uses the **Read Only** token, which is sufficient for `terraform plan` and refresh, and which makes a local `terraform apply` fail at the Hetzner API rather than by convention.
+
+Two supporting layers, both weaker and neither load-bearing:
+- HCP Terraform workspace permissions could deny state writes to the operator's own user while granting them to CI's OIDC identity. Whether that cleanly permits local `plan` — which reads state and takes a lock — while blocking local `apply` depends on how HCP's permission levels map onto those operations; verify during implementation before relying on it, in the manner of Decision 7's `delete_protection` caveat.
+- The prohibition is written where it will actually be read: the README runbook for a human, and a repository-root `AGENTS.md` for an agent. The repository currently has neither `AGENTS.md` nor `CLAUDE.md`, so an agent opening it today receives none of the thirteen decisions above as standing context.
+
+Drift detection (Decision 10) is the detective backstop, and only a partial one. A local apply of *uncommitted* code leaves state diverging from `main`'s configuration, so the nightly plan reports it. A local apply of code that is later committed unchanged produces no diff at all and is invisible to drift detection — what catches that one is the missing pull request, not the pipeline.
+
 ## Risks / Trade-offs
 
 - **No staging environment yet** → every change goes from PR review straight to prod. *Mitigation*: PR-posted `terraform plan` output for human review, the saved-plan approval flow (Decision 8) so the approver sees the exact diff, required-reviewer approval on the `production` GitHub Environment, and the destroy-policy gate. Staging can be added later as a lower-stakes environment to test against first.
@@ -106,6 +119,7 @@ Backups carry a 20% surcharge on the server price and are enabled anyway: `delet
 - **Nightly drift detection may produce noise** from provider-managed attributes that change outside Terraform's control (e.g., Hetzner-assigned fields). *Mitigation*: address with `lifecycle.ignore_changes` on specific attributes as false positives are discovered — not solved preemptively.
 - **Single Hetzner project/token for prod** means a compromised token affects the only environment that exists. *Mitigation*: acceptable for now since there is nothing to isolate from yet; revisit when staging is added.
 - **A single write-capable token, if repo-wide, would make the approval gate cosmetic** — any workflow run (including PR-time plan) could read it before approval. *Mitigation*: split Hetzner tokens by privilege. A **Read Only** `HCLOUD_TOKEN` lives as a repo secret for plan jobs; a **Read & Write** `HCLOUD_TOKEN` lives in the `production` Environment for the gated apply job (same name, environment secret wins for gated jobs). Consequently, **no plan job may declare `environment: production`** — doing so would both block every PR on manual approval and hand the write token to an ungated job, collapsing the whole scheme. See the "Credential Scoping by Privilege" requirement in the iac-cicd-pipeline spec.
+- **The workstation control is procedural, not mechanical** (Decision 14). Nothing prevents an operator who holds Hetzner console access — which tasks 1.4 and 1.5 require — from minting a fresh Read & Write token and applying locally anyway. *Mitigation*: none available, and none sought. The same person owns the console, the repository and the approval, so this is not a control that can be made binding against its own holder. It exists to stop an *unintended* bypass and to keep the gated path the path of least resistance, and it is written down so the boundary is explicit rather than assumed.
 
 ## Migration Plan
 

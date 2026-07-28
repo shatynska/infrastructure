@@ -49,6 +49,27 @@ Every `hcloud_*` resource managed by this repository SHALL carry an `environment
 - **WHEN** a `hcloud_server` resource is created via `environments/prod/`
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`
 
+### Requirement: Write Credentials Confined to the Gated Pipeline
+The **Read & Write** Hetzner Cloud API token SHALL exist in exactly one location: the `production` GitHub Environment secret. It SHALL NOT be exported into a shell environment, written to a dotfile, `direnv` file, or any `.tfvars` file, or stored in a local credential helper on any workstation.
+
+Local Terraform work SHALL authenticate with the **Read Only** token, which is sufficient for `terraform plan` and refresh and which causes any local `terraform apply` to fail at the Hetzner Cloud API.
+
+Because the workspace's Execution Mode is Local, the destroy-policy gate, the saved-plan approval gate, and branch protection are properties of the GitHub Actions path to production rather than of Terraform itself — a workstation holding a write-capable token bypasses all three in a single command. This requirement extends the split established by the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability from CI jobs to workstations.
+
+The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents.
+
+#### Scenario: Local apply is refused by the API
+- **WHEN** an operator or coding agent runs `terraform apply` from a workstation against `environments/prod/`
+- **THEN** the Hetzner Cloud API SHALL reject the write, because the only token available locally is read-only
+
+#### Scenario: Local plan remains available
+- **WHEN** an operator runs `terraform plan` from a workstation against `environments/prod/`
+- **THEN** it SHALL succeed using the read-only token, so that local iteration never requires write credentials
+
+#### Scenario: An agent opening the repository is told the boundary
+- **WHEN** a coding agent begins work in this repository
+- **THEN** a repository-root `AGENTS.md` SHALL state that production changes reach Hetzner only through the gated pipeline and that `terraform apply` is not run locally
+
 ### Requirement: Automated Dependency Updates
 The repository SHALL configure Dependabot for both the `terraform` and `github-actions` package ecosystems, opening pull requests when newer versions become available.
 

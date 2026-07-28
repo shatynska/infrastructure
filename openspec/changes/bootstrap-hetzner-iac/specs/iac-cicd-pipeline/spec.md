@@ -45,6 +45,8 @@ Two Hetzner Cloud API tokens SHALL be provisioned: a **Read Only** token and a *
 
 No static HCP Terraform API token SHALL be stored, per the Dynamic Credentials requirement in the iac-state-management capability.
 
+This requirement governs where the two tokens live *inside GitHub*. Confining the Read & Write token so that it never reaches a workstation — where the workspace's Local execution mode would let it bypass this pipeline entirely — is specified by the Write Credentials Confined to the Gated Pipeline requirement in the iac-safety-hardening capability.
+
 No job that runs `terraform plan` SHALL declare `environment: production`. Doing so would both block the job on manual approval — making every pull request require an approval click — and resolve `HCLOUD_TOKEN` to the write-capable token in an ungated job, defeating the split entirely.
 
 #### Scenario: Plan jobs receive only a read-only Hetzner token
