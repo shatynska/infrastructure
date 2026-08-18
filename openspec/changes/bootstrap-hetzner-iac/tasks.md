@@ -46,34 +46,34 @@
 
 ## 5. GitHub Actions: Pull Request Validation
 
-- [ ] 5.1 Add a workflow triggered on pull requests that runs `terraform fmt -check`, `terraform validate`, and `tflint`. Register it as the required status check — and do **not** use a workflow-level `paths` filter on it, or PRs touching only non-Terraform files will hang unmergeable. Condition the Terraform steps on changed paths *inside* an always-running job instead.
-- [ ] 5.2 Add a Trivy misconfiguration-scanning step, including any custom Hetzner policies committed under the repo.
-- [ ] 5.3 Add a `gitleaks` secret-scanning step that invokes the **CLI binary**, not `gitleaks/gitleaks-action@v2` (which needs a paid license for org-owned repos and stops working when Node 20 leaves GitHub runners on 2026-09-16).
-- [ ] 5.4 Add a `terraform plan` step that runs after validation passes and posts the plan output as a PR comment. The job MUST NOT declare `environment: production` — that would block every PR on manual approval and hand it the write-capable token.
-- [ ] 5.5 Declare least-privilege `permissions:` per job: `pull-requests: write` only on the commenting job, `id-token: write` only on jobs authenticating to HCP Terraform.
+- [x] 5.1 Add a workflow triggered on pull requests that runs `terraform fmt -check`, `terraform validate`, and `tflint`. Register it as the required status check — and do **not** use a workflow-level `paths` filter on it, or PRs touching only non-Terraform files will hang unmergeable. Condition the Terraform steps on changed paths *inside* an always-running job instead. Implemented in `.github/workflows/pr-validation.yml` (job `validate`); this job name is what task 2.5's branch protection rule must mark as required.
+- [x] 5.2 Add a Trivy misconfiguration-scanning step, including any custom Hetzner policies committed under the repo. No custom policies exist yet (none were in scope for this change); the step runs Trivy's default config scan.
+- [x] 5.3 Add a `gitleaks` secret-scanning step that invokes the **CLI binary**, not `gitleaks/gitleaks-action@v2` (which needs a paid license for org-owned repos and stops working when Node 20 leaves GitHub runners on 2026-09-16).
+- [x] 5.4 Add a `terraform plan` step that runs after validation passes and posts the plan output as a PR comment. The job MUST NOT declare `environment: production` — that would block every PR on manual approval and hand it the write-capable token.
+- [x] 5.5 Declare least-privilege `permissions:` per job: `pull-requests: write` only on the commenting job. **Revised:** no job declares `id-token: write` — HCP Terraform's CLI-driven backend auth doesn't accept a GitHub OIDC token (see design.md Decision 9); authentication uses the static, privilege-split `TF_API_TOKEN` instead, via `setup-terraform`'s `cli_config_credentials_token` input.
 
 ## 6. GitHub Actions: Gated Apply
 
-- [ ] 6.1 Add an apply workflow on push to `main` with `concurrency: { group: terraform-prod, cancel-in-progress: false }` so runs queue in order rather than overlapping.
-- [ ] 6.2 Implement job A (plan): no `environment:` declared, authenticates with the read-only token, runs `terraform plan -out=tfplan`.
-- [ ] 6.3 In job A, write the human-readable plan to `$GITHUB_STEP_SUMMARY` so the approver can read the exact diff before approving.
-- [ ] 6.4 In job A, implement the destroy-policy gate: parse `terraform show -json tfplan` and fail the workflow if any resource action is `delete` or `replace`, unless the PR carries the override label (mechanism assumed to be a PR label — see design.md's Open Questions; settle before relying on it in production). Since job A runs on `push` to `main` with no direct pull-request context, resolve the pull request associated with the triggering push (e.g. via the GitHub API using the merge commit SHA) to check for the label.
-- [ ] 6.5 In job A, upload `tfplan` as a workflow artifact.
-- [ ] 6.6 Implement job B (apply): `needs` job A, declares `environment: production`, downloads `tfplan`, runs `terraform apply tfplan`.
-- [ ] 6.7 Verify the read-write `HCLOUD_TOKEN` is unreadable by any job until the `production` approval is granted, and that job A completed using only the read-only token.
-- [ ] 6.8 Define and document the behavior when reviewer approval outlasts the `tfplan` artifact's retention window: job B SHALL fail cleanly (not apply a stale or missing plan) if the artifact has expired, requiring job A to rerun and produce a fresh plan for re-review.
+- [x] 6.1 Add an apply workflow on push to `main` with `concurrency: { group: terraform-prod, cancel-in-progress: false }` so runs queue in order rather than overlapping.
+- [x] 6.2 Implement job A (plan): no `environment:` declared, authenticates with the read-only `HCLOUD_TOKEN` and the Plan-level `TF_API_TOKEN`, runs `terraform plan -out=tfplan`.
+- [x] 6.3 In job A, write the human-readable plan to `$GITHUB_STEP_SUMMARY` so the approver can read the exact diff before approving.
+- [x] 6.4 In job A, implement the destroy-policy gate: parse `terraform show -json tfplan` and fail the workflow if any resource action is `delete` or `replace`, unless the PR carries the override label (mechanism assumed to be a PR label — see design.md's Open Questions; settle before relying on it in production). Since job A runs on `push` to `main` with no direct pull-request context, resolve the pull request associated with the triggering push (e.g. via the GitHub API using the merge commit SHA) to check for the label. Implemented via `gh api repos/{repo}/commits/{sha}/pulls`; override label literal is `destroy-override` (`.github/workflows/apply.yml`'s `DESTROY_OVERRIDE_LABEL` env var) — settle/rename before relying on it in production, per the open design question.
+- [x] 6.5 In job A, upload `tfplan` as a workflow artifact.
+- [x] 6.6 Implement job B (apply): `needs` job A, declares `environment: production` (resolving both `HCLOUD_TOKEN` and `TF_API_TOKEN` to their Write-level Environment secrets), downloads `tfplan`, runs `terraform apply tfplan`.
+- [x] 6.7 Verify the read-write `HCLOUD_TOKEN` (and Write-permission `TF_API_TOKEN`) is unreadable by any job until the `production` approval is granted, and that job A completed using only the read-only/Plan-level tokens. By construction: job A declares no `environment:` (resolves both secrets to their repository-scoped, lower-privilege values per GitHub's environment-shadowing behavior), job B alone declares `environment: production` (resolves both to their Write-level Environment secrets). Full end-to-end confirmation is task 9.7, blocked on tasks 1.5/2.2/2.3/2.8/2.9 providing real tokens.
+- [x] 6.8 Define and document the behavior when reviewer approval outlasts the `tfplan` artifact's retention window: job B SHALL fail cleanly (not apply a stale or missing plan) if the artifact has expired, requiring job A to rerun and produce a fresh plan for re-review. Implemented: job B's download step uses `continue-on-error`, followed by an explicit failing step with a clear error message if the artifact is missing.
 
 ## 7. GitHub Actions: Drift Detection
 
-- [ ] 7.1 Add a scheduled nightly workflow that runs `terraform plan -lock=false` (no apply) against `environments/prod/`, and also accepts `workflow_dispatch`.
-- [ ] 7.2 On a non-empty diff, create or update a **single** deduplicated GitHub issue containing the diff; close or resolve it when a later run finds no drift.
-- [ ] 7.3 Note in the README runbook that GitHub auto-disables scheduled workflows after 60 days of repository inactivity, and how to re-enable this one.
+- [x] 7.1 Add a scheduled nightly workflow that runs `terraform plan -lock=false` (no apply) against `environments/prod/`, and also accepts `workflow_dispatch`. Implemented in `.github/workflows/drift.yml`.
+- [x] 7.2 On a non-empty diff, create or update a **single** deduplicated GitHub issue containing the diff; close or resolve it when a later run finds no drift. Deduplicated by searching open issues for the fixed title `"Terraform drift detected: environments/prod"`.
+- [x] 7.3 Note in the README runbook that GitHub auto-disables scheduled workflows after 60 days of repository inactivity, and how to re-enable this one. Already present (README "Re-enabling the drift-detection workflow" section, added by the archived `project-foundation` change) — verified it matches the actual workflow's name/path.
 
 ## 8. Dependency Automation
 
-- [ ] 8.1 Add a `dependabot.yml` entry for the `terraform` package ecosystem targeting `environments/prod/` and `modules/server/`.
-- [ ] 8.2 Add a `dependabot.yml` entry for the `github-actions` ecosystem.
-- [ ] 8.3 Add a scheduled workflow that runs `pre-commit autoupdate` and opens a PR when hook revisions change. (Dependabot has no `pre-commit` ecosystem.)
+- [x] 8.1 Add a `dependabot.yml` entry for the `terraform` package ecosystem targeting `environments/prod/` and `modules/server/`.
+- [x] 8.2 Add a `dependabot.yml` entry for the `github-actions` ecosystem.
+- [x] 8.3 Add a scheduled workflow that runs `pre-commit autoupdate` and opens a PR when hook revisions change. (Dependabot has no `pre-commit` ecosystem.)
 
 ## 9. End-to-End Validation
 

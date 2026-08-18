@@ -1,0 +1,159 @@
+name: PR Validation
+
+# Required status check. This job must always run and report a
+# conclusion — including on PRs that touch no Terraform files — so it
+# is NOT path-filtered at the workflow level. Terraform-specific steps
+# are instead conditioned on changed paths inside the job. See the
+# Required Status Checks Report on Every Pull Request requirement.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # only this job posts the plan comment
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect Terraform changes
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            terraform:
+              - 'environments/**'
+              - 'modules/**'
+
+      # HCP Terraform has no OIDC path for CLI-driven backend/state auth
+      # (its "dynamic credentials" feature authenticates providers during
+      # a remote-executed run, not the CLI itself) — see design.md
+      # Decision 9. TF_API_TOKEN is a static, least-privilege HCP
+      # Terraform token; this job holds only the Plan-level (read-only)
+      # repository-scoped one, mirroring HCLOUD_TOKEN's split.
+      - name: Setup Terraform
+        if: steps.changes.outputs.terraform == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: terraform fmt -check
+        if: steps.changes.outputs.terraform == 'true'
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate (modules/server)
+        if: steps.changes.outputs.terraform == 'true'
+        working-directory: modules/server
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: terraform validate (environments/prod)
+        if: steps.changes.outputs.terraform == 'true'
+        working-directory: environments/prod
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Setup tflint
+        if: steps.changes.outputs.terraform == 'true'
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: tflint
+        if: steps.changes.outputs.terraform == 'true'
+        run: |
+          tflint --init --config="${{ github.workspace }}/.tflint.hcl"
+          tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir=modules/server
+          tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir=environments/prod
+
+      # Trivy's/tfsec's built-in misconfiguration rule packs target
+      # AWS/Azure/GCP/Kubernetes/Docker, not Hetzner — see the Hetzner
+      # Guardrails Are Encoded Locally requirement. This step catches
+      # generic Terraform-level issues; it is deliberately not treated
+      # as the Hetzner security control. Custom Hetzner-specific
+      # policies, if added under the repo, are picked up automatically
+      # by trivy-action's `trivy-config` custom checks directory.
+      - name: Trivy misconfiguration scan
+        if: steps.changes.outputs.terraform == 'true'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+
+      - name: Install gitleaks
+        if: steps.changes.outputs.terraform == 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          rm gitleaks.tar.gz
+
+      # Invokes the gitleaks CLI binary directly, not
+      # gitleaks/gitleaks-action@v2 — that action requires a paid
+      # GITLEAKS_LICENSE for org-owned repos and runs on Node 20, which
+      # GitHub-hosted runners drop on 2026-09-16. See design.md
+      # Decision 6.
+      - name: gitleaks
+        if: steps.changes.outputs.terraform == 'true'
+        run: ./gitleaks detect --source . --redact --exit-code 1
+
+      - name: terraform plan
+        if: steps.changes.outputs.terraform == 'true'
+        id: plan
+        working-directory: environments/prod
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          terraform init
+          set +e
+          terraform plan -no-color -input=false -out=tfplan >plan_output.txt 2>&1
+          plan_exit=$?
+          set -e
+          {
+            echo '### Terraform Plan — `environments/prod`'
+            echo
+            echo '```'
+            cat plan_output.txt
+            echo '```'
+          } >comment_body.md
+          cat plan_output.txt
+          if [ "$plan_exit" -eq 1 ]; then
+            exit 1
+          fi
+
+      - name: Find existing plan comment
+        if: steps.changes.outputs.terraform == 'true' && always() && steps.plan.outcome != 'skipped'
+        id: find_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "### Terraform Plan"
+
+      - name: Post plan as PR comment
+        if: steps.changes.outputs.terraform == 'true' && always() && steps.plan.outcome != 'skipped'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body-path: environments/prod/comment_body.md

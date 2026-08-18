@@ -1,0 +1,91 @@
+name: Drift Detection
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # nightly, 03:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: drift
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # No `environment:` on this job, so TF_API_TOKEN resolves to the
+      # repository-scoped Plan-level (read-only) token — sufficient for
+      # a read-only plan. See design.md Decision 9.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: terraform init
+        working-directory: environments/prod
+        run: terraform init
+
+      # Runs with -lock=false: this plan writes nothing, and taking the
+      # state lock would let a nightly read collide with an in-flight
+      # apply and report a spurious failure. detailed-exitcode: 0 = no
+      # diff, 1 = error, 2 = diff present. This workflow never applies
+      # and does not invoke the destroy-policy gate — see the Scheduled
+      # Drift Detection requirement.
+      - name: terraform plan
+        id: plan
+        working-directory: environments/prod
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set +e
+          terraform plan -lock=false -no-color -input=false -detailed-exitcode -out=tfplan >plan_output.txt 2>&1
+          echo "exit_code=$?" >>"$GITHUB_OUTPUT"
+          set -e
+          cat plan_output.txt
+
+      - name: Report drift as a deduplicated issue
+        working-directory: environments/prod
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          issue_title="Terraform drift detected: environments/prod"
+          existing=$(gh issue list --search "\"$issue_title\" in:title" --state open --json number --jq '.[0].number // empty')
+
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "No drift."
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Drift resolved: the nightly plan on $(date -u +%Y-%m-%dT%H:%M:%SZ) found no differences."
+              gh issue close "$existing"
+            fi
+            exit 0
+          fi
+
+          if [ "$EXIT_CODE" != "2" ]; then
+            echo "::error::terraform plan failed (exit code $EXIT_CODE) rather than reporting a diff."
+            exit 1
+          fi
+
+          body_file=$(mktemp)
+          {
+            echo "Nightly drift-detection plan found a difference between the committed configuration and actual infrastructure state, as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            echo
+            echo '```'
+            cat plan_output.txt
+            echo '```'
+          } >"$body_file"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body_file"
+          else
+            gh issue create --title "$issue_title" --body-file "$body_file"
+          fi
