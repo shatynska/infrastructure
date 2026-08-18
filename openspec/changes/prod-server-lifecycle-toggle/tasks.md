@@ -12,9 +12,9 @@
 - [x] 2.1 Set `server_enabled = false` in `environments/prod/terraform.tfvars`, leaving every other value (`name`, `server_type`, `image`, `location`, `ssh_public_key`, `ssh_allowed_cidrs`, `web_allowed_cidrs`) untouched.
 - [x] 2.2 Verify locally: `terraform fmt -check -recursive`, `terraform validate`.
 - [x] 2.3 Verify locally with a live `terraform plan` against the real HCP Terraform backend: expect the server and firewall planned for destruction, and the SSH key shown as *moved* (relocated to its new address), not created or destroyed. Confirmed: `0 to add, 1 to change, 2 to destroy` — the SSH key moved from `module.server.hcloud_ssh_key.this` to `hcloud_ssh_key.this` and updated in-place (name only, a cosmetic change), server and firewall destroyed.
-- [ ] 2.4 Commit and open a PR against `main`.
-- [ ] 2.5 Confirm the PR's `validate` check passes and its plan comment matches the local plan from 2.3.
-- [ ] 2.6 Add the destroy-policy gate's override label to the PR (required — this plan contains `delete` actions).
+- [x] 2.4 Commit and open a PR against `main`. https://github.com/shatynska/infrastructure/pull/10
+- [x] 2.5 Confirm the PR's `validate` check passes and its plan comment matches the local plan from 2.3. Passed; plan comment matches exactly (SSH key moved + renamed, server and firewall destroyed).
+- [x] 2.6 Add the destroy-policy gate's override label to the PR (required — this plan contains `delete` actions). Created the `destroy-override` label (didn't exist yet) and applied it.
 - [ ] 2.7 Merge the PR and approve the gated `production` apply.
 - [ ] 2.8 Confirm the apply succeeds: server and firewall destroyed, SSH key relocated (not touched on the Hetzner side), no errors.
 
