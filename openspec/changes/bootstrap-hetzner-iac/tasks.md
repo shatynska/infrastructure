@@ -32,17 +32,17 @@
 
 ## 4. Terraform Module and Prod Environment
 
-- [ ] 4.1 Implement `modules/server` encapsulating the `hcloud_server` resource, parameterized by variables (server type, region, image, labels).
-- [ ] 4.2 Make firewall attachment structural in the module: create an `hcloud_firewall` with default-deny inbound and explicitly enumerated allow rules, and attach it to the server so a firewall-less server is not expressible.
-- [ ] 4.3 Register the SSH key via `hcloud_ssh_key` and ensure password authentication is disabled on the server.
-- [ ] 4.4 Set `backups = true` on the server.
-- [ ] 4.5 Expose `delete_protection` as a module variable (with `rebuild_protection` set to match, as the provider requires) and set it to `true` from `environments/prod/`. Do **not** put `lifecycle { prevent_destroy = true }` in the module — it accepts only literals and would make the module undestroyable for all future environments.
-- [ ] 4.6 Verify against the pinned provider version whether `delete_protection` blocks `terraform destroy` or is lifted by the provider; record the finding, and rely on the CI destroy-policy gate (task 6.4) as the Terraform-side guard regardless.
-- [ ] 4.7 Add `variable validation` blocks rejecting unsafe or malformed inputs at plan time — at minimum, reject `0.0.0.0/0` as an SSH source CIDR.
-- [ ] 4.8 Ensure the module applies `environment` and `managed_by = "terraform"` labels to every `hcloud_*` resource it creates.
-- [ ] 4.9 Implement `environments/prod/` calling `modules/server` with prod-specific variables, including `backend.tf` configured for the `infrastructure-prod` HCP Terraform workspace (CLI-driven).
-- [ ] 4.10 Commit `environments/prod/terraform.tfvars` with the non-secret server sizing/region/image/CIDR values.
-- [ ] 4.11 Run `terraform init` locally against the prod environment to generate and commit `.terraform.lock.hcl`.
+- [x] 4.1 Implement `modules/server` encapsulating the `hcloud_server` resource, parameterized by variables (server type, region, image, labels).
+- [x] 4.2 Make firewall attachment structural in the module: create an `hcloud_firewall` with default-deny inbound and explicitly enumerated allow rules, and attach it to the server so a firewall-less server is not expressible.
+- [x] 4.3 Register the SSH key via `hcloud_ssh_key` and ensure password authentication is disabled on the server.
+- [x] 4.4 Set `backups = true` on the server.
+- [x] 4.5 Expose `delete_protection` as a module variable (with `rebuild_protection` set to match, as the provider requires) and set it to `true` from `environments/prod/`. Do **not** put `lifecycle { prevent_destroy = true }` in the module — it accepts only literals and would make the module undestroyable for all future environments.
+- [x] 4.6 Verify against the pinned provider version whether `delete_protection` blocks `terraform destroy` or is lifted by the provider; record the finding, and rely on the CI destroy-policy gate (task 6.4) as the Terraform-side guard regardless. **Finding recorded in design.md Decision 7:** the provider does not reliably block or fail fast on destroy/replace when `delete_protection = true` (upstream bugs hetznercloud/terraform-provider-hcloud#1014, #519 — behavior ranges from hanging indefinitely to silently destroying the "protected" resource). The CI destroy-policy gate is the actual guard; `delete_protection` is kept only for blocking deletion via the Hetzner console/API outside Terraform.
+- [x] 4.7 Add `variable validation` blocks rejecting unsafe or malformed inputs at plan time — at minimum, reject `0.0.0.0/0` as an SSH source CIDR.
+- [x] 4.8 Ensure the module applies `environment` and `managed_by = "terraform"` labels to every `hcloud_*` resource it creates.
+- [x] 4.9 Implement `environments/prod/` calling `modules/server` with prod-specific variables, including a `cloud` block in `versions.tf` configured for the `infrastructure-prod` HCP Terraform workspace (CLI-driven). The organization name is a placeholder (`REPLACE_WITH_HCP_ORGANIZATION`) pending task 1.1 creating the actual organization.
+- [ ] 4.10 Commit `environments/prod/terraform.tfvars` with the non-secret server sizing/region/image/CIDR values. **Partially done:** `name`/`server_type`/`image`/`location` are committed; `ssh_allowed_cidrs` and `ssh_public_key` are deliberately left unset (undefined vars, not guessed placeholders) — blocked on task 1.6 (CIDR decision) and task 1.7 (SSH key pair).
+- [x] 4.11 Run `terraform init` locally against the prod environment to generate and commit `.terraform.lock.hcl`. Ran `terraform init -backend=false` (the real HCP backend can't be reached yet — placeholder org, task 1.1) — provider locking is independent of backend selection, so the resulting lock file (hcloud provider `1.68.0`, satisfying `~> 1.52`) is correct and committed. Re-run a plain `terraform init` once the real workspace exists to confirm the backend itself connects.
 
 ## 5. GitHub Actions: Pull Request Validation
 

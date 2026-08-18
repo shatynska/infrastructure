@@ -1,0 +1,47 @@
+locals {
+  labels = merge(
+    {
+      environment = var.environment
+      managed_by  = "terraform"
+    },
+    var.labels
+  )
+}
+
+resource "hcloud_ssh_key" "this" {
+  name       = "${var.environment}-${var.name}"
+  public_key = var.ssh_public_key
+  labels     = local.labels
+}
+
+# Default-deny inbound: only the rules declared here are allowed in.
+# Outbound traffic is unrestricted by omitting any "out" rule.
+resource "hcloud_firewall" "this" {
+  name   = "${var.environment}-${var.name}"
+  labels = local.labels
+
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "22"
+    source_ips = var.ssh_allowed_cidrs
+  }
+}
+
+resource "hcloud_server" "this" {
+  name        = var.name
+  server_type = var.server_type
+  image       = var.image
+  location    = var.location
+  labels      = local.labels
+
+  # Providing the key at creation means Hetzner never sets a root
+  # password, so password authentication is never available.
+  ssh_keys     = [hcloud_ssh_key.this.id]
+  firewall_ids = [hcloud_firewall.this.id]
+
+  backups = var.backups
+
+  delete_protection  = var.delete_protection
+  rebuild_protection = var.delete_protection
+}

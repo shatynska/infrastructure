@@ -49,7 +49,7 @@ variable "ssh_allowed_cidrs" {
 }
 
 variable "delete_protection" {
-  description = "Whether to enable Hetzner's server-side delete/rebuild protection. Parameterized (not a literal lifecycle.prevent_destroy) so this module stays reusable by environments that must remain destroyable, e.g. a future staging environment."
+  description = "Whether to enable Hetzner's server-side delete/rebuild protection. Parameterized (not a literal lifecycle.prevent_destroy) so this module stays reusable by environments that must remain destroyable, e.g. a future staging environment. Does not reliably block `terraform destroy`/replace (see design.md decision 7 finding for task 4.6) — the CI destroy-policy gate is the actual Terraform-side guard; this only blocks deletion via the Hetzner console/API."
   type        = bool
   default     = true
 }
