@@ -27,8 +27,8 @@
 - [ ] 3.3 Add `.pre-commit-config.yaml` using `antonbabenko/pre-commit-terraform` hooks for `terraform fmt`, `tflint`, `terraform validate`, and `gitleaks`.
 - [ ] 3.4 Add `commitlint` configuration for Conventional Commits and wire it into a `pre-commit` (or existing) commit-msg hook.
 - [ ] 3.5 Add `.tflint.hcl` enabling only the bundled `terraform` ruleset. (There is no Hetzner/`hcloud` tflint ruleset — do not attempt to enable one.)
-- [ ] 3.6 Document local setup (installing `pre-commit`, running `pre-commit install`) and the drift-workflow re-enable runbook step in the repo README.
-- [ ] 3.7 Add a repository-root `AGENTS.md` stating that `terraform apply` is never run locally and that production changes reach Hetzner only through the gated pipeline, and record the same prohibition in the README runbook. (The repository has neither `AGENTS.md` nor `CLAUDE.md` today, so no decision in `design.md` is standing context for a coding agent.)
+- [ ] 3.6 Verify the repo README already documents local setup (installing `pre-commit`, running `pre-commit install`) and the drift-workflow re-enable runbook step (both added by the already-archived `project-foundation` change); extend if any detail is missing or out of date once the actual workflows exist.
+- [ ] 3.7 Verify the repository-root `AGENTS.md` already states that `terraform apply` is never run locally and that production changes reach Hetzner only through the gated pipeline (added by the already-archived `project-foundation` change, under "Production changes never bypass the pipeline"), and that the same prohibition is recorded in the README runbook; extend if anything is missing.
 
 ## 4. Terraform Module and Prod Environment
 
@@ -57,10 +57,11 @@
 - [ ] 6.1 Add an apply workflow on push to `main` with `concurrency: { group: terraform-prod, cancel-in-progress: false }` so runs queue in order rather than overlapping.
 - [ ] 6.2 Implement job A (plan): no `environment:` declared, authenticates with the read-only token, runs `terraform plan -out=tfplan`.
 - [ ] 6.3 In job A, write the human-readable plan to `$GITHUB_STEP_SUMMARY` so the approver can read the exact diff before approving.
-- [ ] 6.4 In job A, implement the destroy-policy gate: parse `terraform show -json tfplan` and fail the workflow if any resource action is `delete` or `replace`, unless the PR carries the agreed override label.
+- [ ] 6.4 In job A, implement the destroy-policy gate: parse `terraform show -json tfplan` and fail the workflow if any resource action is `delete` or `replace`, unless the PR carries the override label (mechanism assumed to be a PR label — see design.md's Open Questions; settle before relying on it in production). Since job A runs on `push` to `main` with no direct pull-request context, resolve the pull request associated with the triggering push (e.g. via the GitHub API using the merge commit SHA) to check for the label.
 - [ ] 6.5 In job A, upload `tfplan` as a workflow artifact.
 - [ ] 6.6 Implement job B (apply): `needs` job A, declares `environment: production`, downloads `tfplan`, runs `terraform apply tfplan`.
 - [ ] 6.7 Verify the read-write `HCLOUD_TOKEN` is unreadable by any job until the `production` approval is granted, and that job A completed using only the read-only token.
+- [ ] 6.8 Define and document the behavior when reviewer approval outlasts the `tfplan` artifact's retention window: job B SHALL fail cleanly (not apply a stale or missing plan) if the artifact has expired, requiring job A to rerun and produce a fresh plan for re-review.
 
 ## 7. GitHub Actions: Drift Detection
 

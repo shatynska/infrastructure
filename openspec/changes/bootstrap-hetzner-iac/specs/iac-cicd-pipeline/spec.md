@@ -90,17 +90,23 @@ Because a saved plan file stores sensitive values in cleartext, the `tfplan` art
 - **THEN** the read-write `HCLOUD_TOKEN` scoped to the `production` Environment SHALL NOT be readable by the workflow job until approval is granted
 
 ### Requirement: Destroy Policy Gate
-Any pipeline that produces a Terraform plan SHALL inspect that plan's machine-readable form (`terraform show -json`) and SHALL fail when the plan contains any resource action of `delete` or `replace`, unless the change carries an explicit override signal (assumed to be a pull request label).
+The gated production apply workflow's plan job (Job A, per the Gated Production Apply Applies the Reviewed Plan requirement) SHALL inspect its plan's machine-readable form (`terraform show -json`) and SHALL fail the workflow when the plan contains any resource action of `delete` or `replace`, unless the change carries an explicit override signal (assumed to be a pull request label).
+
+This gate applies only to the plan Job B would apply. It does NOT apply to the pull request's informational `terraform plan` (Pull Request Plan Visibility) — which gates nothing yet, since apply happens only after merge — nor to the nightly drift-detection plan (Scheduled Drift Detection), which is read-only and reports rather than blocks.
 
 This is the Terraform-side guard against destructive applies. It replaces reliance on `lifecycle { prevent_destroy = true }` in shared modules, which cannot be parameterized per environment and only covers individually annotated resources. The gate covers every resource in the plan automatically and surfaces the objection where it can be discussed rather than as an opaque Terraform error.
 
 #### Scenario: Unintended resource replacement blocks the pipeline
-- **WHEN** a plan for `environments/prod/` shows the server being replaced because an immutable attribute changed, and the pull request carries no override label
+- **WHEN** the apply workflow's plan job shows the server being replaced because an immutable attribute changed, and the pull request carries no override label
 - **THEN** the destroy-policy gate SHALL fail the workflow and report which resources would be destroyed or replaced, and no apply SHALL run
 
 #### Scenario: Deliberate teardown is possible with explicit acknowledgement
 - **WHEN** an operator intends a destructive change and applies the override label to the pull request
 - **THEN** the destroy-policy gate SHALL pass and the change SHALL proceed to the normal approval gate, which still requires reviewer approval
+
+#### Scenario: Drift-detection plan is not affected by this gate
+- **WHEN** the nightly drift-detection plan (Scheduled Drift Detection) shows a resource being deleted or replaced
+- **THEN** the destroy-policy gate SHALL NOT fail that workflow; the drift is instead reported per the Scheduled Drift Detection requirement
 
 ### Requirement: Serialized Terraform Runs
 Workflows that run `terraform apply` against an environment SHALL declare a GitHub Actions `concurrency` group per environment with `cancel-in-progress: false`, so that runs queue rather than overlap or cancel each other.
@@ -136,7 +142,7 @@ The repository's default `GITHUB_TOKEN` permission SHALL be set to read-only, an
 - **THEN** that job SHALL declare `id-token: write`, and jobs that do not authenticate SHALL NOT declare it
 
 ### Requirement: Scheduled Drift Detection
-A scheduled GitHub Actions workflow SHALL run `terraform plan` against the prod environment on a recurring nightly schedule, without applying any changes, to surface divergence between the committed configuration and actual infrastructure state.
+A scheduled GitHub Actions workflow SHALL run `terraform plan` against the prod environment on a recurring nightly schedule, without applying any changes, to surface divergence between the committed configuration and actual infrastructure state. This plan is read-only and reporting-only: it does not invoke the Destroy Policy Gate, which applies only to the apply workflow's plan (see that requirement).
 
 When the plan shows a non-empty diff, the workflow SHALL create or update a **single, deduplicated** GitHub issue containing the diff, and SHALL close or resolve it when a later run finds no drift. Failing the workflow alone is insufficient: a persistently red scheduled job is muted in practice, leaving drift undetected.
 
