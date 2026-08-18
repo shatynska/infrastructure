@@ -144,7 +144,7 @@ jobs:
       - name: Find existing plan comment
         if: steps.changes.outputs.terraform == 'true' && always() && steps.plan.outcome != 'skipped'
         id: find_comment
-        uses: peter-evans/find-comment@v3
+        uses: peter-evans/find-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: "github-actions[bot]"
