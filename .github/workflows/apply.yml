@@ -36,11 +36,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # HCP Terraform has no OIDC path for CLI-driven backend/state auth
-      # — see design.md Decision 9. TF_API_TOKEN is a static,
-      # least-privilege HCP Terraform token; this job declares no
-      # `environment:`, so it resolves to the repository-scoped
-      # Plan-level (read-only) token, mirroring HCLOUD_TOKEN's split.
+      # HCP Terraform has no OIDC path for CLI-driven backend/state auth,
+      # and this org's free tier has no team-scoped tokens to split by
+      # privilege — see design.md Decision 9. TF_API_TOKEN is a single
+      # static token, identical in both the repository and production
+      # Environment secrets; HCLOUD_TOKEN's split (below) is the real
+      # security boundary this job's separation into two jobs protects.
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -122,10 +123,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # This job declares `environment: production`, so TF_API_TOKEN
-      # resolves to the Write-level Environment secret (state write
-      # access), shadowing the repository-scoped Plan-level token —
-      # same mechanism as HCLOUD_TOKEN. See design.md Decision 9.
+      # This job declares `environment: production`, so HCLOUD_TOKEN
+      # resolves to the write-capable Environment secret. TF_API_TOKEN
+      # resolves to its Environment secret too, via the same shadowing
+      # mechanism, but that value is identical to the repository one —
+      # this org's free HCP Terraform tier has no privilege split to
+      # apply here. See design.md Decision 9.
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:

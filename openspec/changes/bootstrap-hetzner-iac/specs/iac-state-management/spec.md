@@ -24,24 +24,20 @@ A workspace configured with a `cloud` block defaults to **remote** execution, wh
 - **WHEN** the `infrastructure-prod` workspace is found to be in remote execution mode
 - **THEN** this SHALL be treated as a configuration defect to correct, not an acceptable alternative
 
-### Requirement: HCP Terraform Access Split by Privilege
-Authentication to HCP Terraform from GitHub Actions SHALL use a static HCP Terraform API token, split by privilege exactly as `HCLOUD_TOKEN` is (see the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability): a token from a team granted only **Plan** permission on the `infrastructure-prod` workspace, stored as the repository-scoped `TF_API_TOKEN` secret, and a token from a team granted **Write** permission, stored as the `production` Environment-scoped `TF_API_TOKEN` secret.
+### Requirement: HCP Terraform Access via a Static Token, Unsplit by Privilege
+Authentication to HCP Terraform from GitHub Actions SHALL use a static HCP Terraform API token (`TF_API_TOKEN`), stored as an identical value in both the repository-scoped secret and the `production` Environment-scoped secret of the same name — kept as two separate GitHub secrets, not one shared name, so the environment-secret-shadowing mechanism stays wired up for a future privilege split.
 
-GitHub OIDC dynamic credentials were the original design here, on the assumption that it could eliminate a long-lived HCP token the same way it can for a cloud provider. That assumption does not hold: HCP Terraform's dynamic-credentials / workload-identity feature authenticates a *provider* during a run HCP Terraform itself executes remotely — it has no mechanism for authenticating the Terraform CLI's own backend/state access when the CLI runs externally, as it does under this repository's CLI-driven, Local-execution workspace (see the Workspace Execution Mode Set to Local requirement). This was discovered during implementation; a static, narrowly-scoped token is the actual supported mechanism.
+GitHub OIDC dynamic credentials were the original design here, on the assumption that it could eliminate a long-lived HCP token the same way it can for a cloud provider. That assumption does not hold: HCP Terraform's dynamic-credentials / workload-identity feature authenticates a *provider* during a run HCP Terraform itself executes remotely — it has no mechanism for authenticating the Terraform CLI's own backend/state access when the CLI runs externally, as it does under this repository's CLI-driven, Local-execution workspace (see the Workspace Execution Mode Set to Local requirement). A follow-up attempt to split this token by privilege using HCP Terraform's per-team Plan/Write permission levels also failed: Teams are a paid-tier HCP Terraform feature, unavailable on this organization's free tier, where every token has full access to every workspace regardless of who it belongs to. Both findings were discovered during implementation (see design.md Decision 9).
 
-Neither token SHALL be an organization-level or admin-level credential; each SHALL be scoped to a team with access to only the `infrastructure-prod` workspace, at the minimum permission level that job needs.
+This is a deliberately accepted risk, not an oversight. A compromised PR-time or drift-detection job holding `TF_API_TOKEN` can read or corrupt Terraform *state* — it cannot mutate real Hetzner infrastructure, because it still lacks the write-capable `HCLOUD_TOKEN`, which remains genuinely split by privilege (see the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability) and is the actual load-bearing security boundary in this design.
 
-#### Scenario: No overprivileged HCP token exists in repository secrets
-- **WHEN** the repository's Actions secrets are inspected
-- **THEN** every stored HCP Terraform token SHALL be scoped to a team with access to only the `infrastructure-prod` workspace, and none SHALL carry organization-wide or admin permissions
+#### Scenario: HCP token cannot reach real infrastructure on its own
+- **WHEN** a job holding only `TF_API_TOKEN` (no write-capable `HCLOUD_TOKEN`) is compromised
+- **THEN** it SHALL be able to read or write Terraform state but SHALL NOT be able to create, modify, or destroy any Hetzner Cloud resource
 
-#### Scenario: Plan jobs cannot write state
-- **WHEN** a PR-time or scheduled `terraform plan` job runs without declaring `environment: production`
-- **THEN** its `TF_API_TOKEN` SHALL resolve to the repository-scoped Plan-level token, which can read state and acquire a read lock but cannot write state
-
-#### Scenario: Apply job receives write access only after approval
-- **WHEN** the apply job runs after the `production` Environment approval is granted
-- **THEN** its `TF_API_TOKEN` SHALL resolve to the environment-scoped Write-level token, and that token SHALL NOT be readable by any job that has not passed the approval gate
+#### Scenario: The split mechanism remains wired for a future upgrade
+- **WHEN** this organization is upgraded to a paid HCP Terraform tier and team-scoped Plan/Write tokens become available
+- **THEN** only the repository-scoped and environment-scoped `TF_API_TOKEN` secret *values* need to change to achieve a real privilege split — no workflow SHALL require code changes to adopt it
 
 ### Requirement: State Locking
 Concurrent `terraform plan` or `terraform apply` operations against the same environment's state SHALL be prevented via HCP Terraform's state locking.

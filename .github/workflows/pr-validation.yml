@@ -38,10 +38,11 @@ jobs:
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth
       # (its "dynamic credentials" feature authenticates providers during
-      # a remote-executed run, not the CLI itself) — see design.md
-      # Decision 9. TF_API_TOKEN is a static, least-privilege HCP
-      # Terraform token; this job holds only the Plan-level (read-only)
-      # repository-scoped one, mirroring HCLOUD_TOKEN's split.
+      # a remote-executed run, not the CLI itself), and this org's free
+      # tier has no team-scoped tokens to split by privilege either — see
+      # design.md Decision 9. TF_API_TOKEN is a single static token,
+      # identical in both the repository and production Environment
+      # secrets; HCLOUD_TOKEN's split remains the real security boundary.
       - name: Setup Terraform
         if: steps.changes.outputs.terraform == 'true'
         uses: hashicorp/setup-terraform@v3

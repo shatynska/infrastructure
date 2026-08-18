@@ -19,9 +19,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # No `environment:` on this job, so TF_API_TOKEN resolves to the
-      # repository-scoped Plan-level (read-only) token — sufficient for
-      # a read-only plan. See design.md Decision 9.
+      # No `environment:` on this job, so TF_API_TOKEN resolves to its
+      # repository-scoped secret. It's a single unsplit HCP Terraform
+      # token (this org's free tier has no privilege split to apply) —
+      # this job never applies, so HCLOUD_TOKEN's Read Only token is
+      # what actually keeps it from mutating infrastructure. See
+      # design.md Decision 9.
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
