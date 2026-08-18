@@ -32,6 +32,13 @@ jobs:
     # Manual Approval requirements (the same principle applies here).
     permissions:
       contents: read
+      # The destroy-policy gate reads the merged PR's labels. A job-level
+      # `permissions:` block replaces the repo's default entirely (it does
+      # not layer on top of it) — omitting this made every PR-label lookup
+      # silently fail with no access, which looked exactly like the
+      # commit->PR data not existing yet and cost several failed apply
+      # runs before the real cause was found.
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -115,21 +122,33 @@ jobs:
             echo "Resolved PR #$pr_number directly from the merge commit message."
           fi
 
+          # Errors are captured and echoed, not silently swallowed: a
+          # permissions failure here must be visibly obviously different
+          # from "the PR genuinely has no override label" the next time
+          # something is wrong, not indistinguishable from it.
           if [ -n "$pr_number" ]; then
-            labels=$(gh api "repos/${{ github.repository }}/pulls/$pr_number" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+            if ! api_response=$(gh api "repos/${{ github.repository }}/pulls/$pr_number" 2>&1); then
+              echo "::warning::gh api pulls/$pr_number failed: $api_response"
+              labels=""
+            else
+              labels=$(echo "$api_response" | jq -r '[.labels[].name] | join(",")')
+            fi
           else
             echo "Could not parse a PR number from the commit message (\"$commit_subject\") — falling back to the commit->PR search API with retries."
             pulls_json="[]"
             for attempt in $(seq 1 15); do
-              pulls_json=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" 2>/dev/null || echo "[]")
-              if [ "$(echo "$pulls_json" | jq 'length')" -gt 0 ]; then
+              if ! pulls_json=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" 2>&1); then
+                echo "::warning::gh api commits/${{ github.sha }}/pulls failed: $pulls_json"
+                pulls_json="[]"
+              fi
+              if [ "$(echo "$pulls_json" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
                 echo "Found the associated PR on attempt $attempt/15."
                 break
               fi
               echo "No PR associated with ${{ github.sha }} yet (attempt $attempt/15) — retrying in 5s..."
               sleep 5
             done
-            labels=$(echo "$pulls_json" | jq -r '[.[].labels[].name] | join(",")')
+            labels=$(echo "$pulls_json" | jq -r '[.[].labels[].name] | join(",")' 2>/dev/null || echo "")
           fi
 
           if echo ",$labels," | grep -q ",${DESTROY_OVERRIDE_LABEL},"; then
