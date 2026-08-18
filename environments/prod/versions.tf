@@ -14,11 +14,8 @@ terraform {
   # The `infrastructure-prod` workspace's Execution Mode must be set to
   # Local in the HCP Terraform UI/API (task 1.2) — that setting lives on
   # the workspace, not in this block.
-  #
-  # TODO(task 1.1): replace the placeholder organization name below once
-  # the HCP Terraform organization has been created.
   cloud {
-    organization = "REPLACE_WITH_HCP_ORGANIZATION"
+    organization = "shatynska"
 
     workspaces {
       name = "infrastructure-prod"

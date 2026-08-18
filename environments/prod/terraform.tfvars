@@ -2,14 +2,11 @@
 # Excludes State and Secrets requirement — CI needs these values present
 # in a clean checkout.
 
-name        = "prod"
-server_type = "cx22"
-image       = "ubuntu-24.04"
-location    = "fsn1"
+name        = "server"
+server_type = "cx23"
+image       = "ubuntu-26.04"
+location    = "hel1"
 
-# ssh_public_key and ssh_allowed_cidrs are intentionally NOT set here yet.
-# They depend on decisions/actions blocked on tasks 1.6 (SSH source CIDRs
-# — do not default to 0.0.0.0/0) and 1.7 (SSH key pair). Add both once
-# those are resolved; until then, plan/apply against this environment
-# will fail with a "no value" error for these two variables, which is
-# the intended fail-safe rather than a guessed placeholder.
+ssh_public_key    = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMeSWD47lN9AUVvOF2/7llxkBY0WWDgmAA1VwgIdhQsW shatynska@helen"
+ssh_allowed_cidrs = ["176.104.184.0/24"]
+web_allowed_cidrs = ["0.0.0.0/0"]

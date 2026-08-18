@@ -27,3 +27,9 @@ variable "ssh_allowed_cidrs" {
   description = "Source CIDRs allowed to reach the prod server over SSH. Depends on the decision recorded for task 1.6 — must not be 0.0.0.0/0 or ::/0."
   type        = list(string)
 }
+
+variable "web_allowed_cidrs" {
+  description = "Source CIDRs allowed to reach the prod server over HTTP/HTTPS. Empty by default (no web rule)."
+  type        = list(string)
+  default     = []
+}

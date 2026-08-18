@@ -26,6 +26,18 @@ resource "hcloud_firewall" "this" {
     port       = "22"
     source_ips = var.ssh_allowed_cidrs
   }
+
+  # HTTP/HTTPS are opt-in: no rule is created unless the caller sets
+  # web_allowed_cidrs, so a server with no web service stays SSH-only.
+  dynamic "rule" {
+    for_each = length(var.web_allowed_cidrs) > 0 ? [80, 443] : []
+    content {
+      direction  = "in"
+      protocol   = "tcp"
+      port       = tostring(rule.value)
+      source_ips = var.web_allowed_cidrs
+    }
+  }
 }
 
 resource "hcloud_server" "this" {
