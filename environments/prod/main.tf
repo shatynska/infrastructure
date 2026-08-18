@@ -12,8 +12,11 @@ module "server" {
   ssh_allowed_cidrs = var.ssh_allowed_cidrs
   web_allowed_cidrs = var.web_allowed_cidrs
 
-  # delete_protection = true is a prod-specific choice, not the module
-  # default consumers should inherit blindly. See design.md Decision 7.
-  delete_protection = true
+  # Temporarily false to allow decommissioning the server (see the
+  # decommission PR that follows this one) — Hetzner's API refuses a
+  # delete while this is true, and the provider doesn't reliably handle
+  # that itself (see design.md Decision 7 / task 4.6's finding). Restore
+  # to true if/when a server is recreated here.
+  delete_protection = false
   backups           = true
 }
