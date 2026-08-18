@@ -1,0 +1,164 @@
+name: Terraform Apply (prod)
+
+# Runs on merge to main. Split into two jobs in one run so the
+# approving reviewer sees the exact diff before approving, rather than
+# approving a not-yet-computed run. See design.md Decision 8.
+on:
+  push:
+    branches: [main]
+
+# State locking alone doesn't prevent runs applying out of order; queue
+# them instead of allowing overlap or cancellation.
+concurrency:
+  group: terraform-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # PR label that permits a plan containing a delete/replace action to
+  # proceed. Mechanism assumed per design.md's Open Questions; not yet
+  # settled as final policy.
+  DESTROY_OVERRIDE_LABEL: destroy-override
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    # No `environment:` here — this job must start immediately with the
+    # read-only token, not block on approval. See the Credential
+    # Scoping by Privilege and Pull Request Validation Requires No
+    # Manual Approval requirements (the same principle applies here).
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # HCP Terraform has no OIDC path for CLI-driven backend/state auth,
+      # and this org's free tier has no team-scoped tokens to split by
+      # privilege — see design.md Decision 9. TF_API_TOKEN is a single
+      # static token, identical in both the repository and production
+      # Environment secrets; HCLOUD_TOKEN's split (below) is the real
+      # security boundary this job's separation into two jobs protects.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: terraform init
+        working-directory: environments/prod
+        run: terraform init
+
+      - name: terraform plan
+        id: plan
+        working-directory: environments/prod
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: terraform plan -no-color -input=false -out=tfplan
+
+      - name: Write plan to job summary
+        working-directory: environments/prod
+        run: |
+          {
+            echo '### Terraform Plan — `environments/prod`'
+            echo
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # Fails the workflow if the plan shows any resource being deleted
+      # or replaced, unless the merged PR carries the override label.
+      # This gate applies only to this apply-workflow plan — not to the
+      # PR-time informational plan or the drift-detection plan. See the
+      # Destroy Policy Gate requirement.
+      - name: Destroy-policy gate
+        id: destroy_gate
+        working-directory: environments/prod
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan >plan.json
+          has_destructive=$(jq -e '[.resource_changes[]? | select(.change.actions | index("delete") != null)] | length > 0' plan.json || true)
+
+          if [ "$has_destructive" != "true" ]; then
+            echo "has_destructive_changes=false" >>"$GITHUB_OUTPUT"
+            echo "No delete/replace actions in the plan."
+            exit 0
+          fi
+
+          echo "has_destructive_changes=true" >>"$GITHUB_OUTPUT"
+          echo "::warning::Plan contains a delete or replace action."
+
+          labels=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            --jq '[.[].labels[].name] | join(",")' 2>/dev/null || echo "")
+
+          if echo ",$labels," | grep -q ",${DESTROY_OVERRIDE_LABEL},"; then
+            echo "Override label '${DESTROY_OVERRIDE_LABEL}' found on the merged PR — proceeding."
+          else
+            echo "::error::Plan contains a delete or replace action, and the merged PR did not carry the '${DESTROY_OVERRIDE_LABEL}' label. Failing to prevent an unintended destructive apply."
+            exit 1
+          fi
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: environments/prod/tfplan
+          retention-days: 1 # tfplan holds sensitive values in cleartext
+
+  apply:
+    name: apply
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production # gates this job on required-reviewer approval
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # This job declares `environment: production`, so HCLOUD_TOKEN
+      # resolves to the write-capable Environment secret. TF_API_TOKEN
+      # resolves to its Environment secret too, via the same shadowing
+      # mechanism, but that value is identical to the repository one —
+      # this org's free HCP Terraform tier has no privilege split to
+      # apply here. See design.md Decision 9.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: terraform init
+        working-directory: environments/prod
+        run: terraform init
+
+      # Fails cleanly (rather than applying a stale or missing plan) if
+      # the plan job's tfplan artifact has already expired by the time
+      # approval is granted. See task 6.8.
+      - name: Download plan artifact
+        id: download
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: tfplan
+          path: environments/prod
+
+      - name: Fail cleanly if the plan artifact is unavailable
+        if: steps.download.outcome == 'failure'
+        run: |
+          echo "::error::The tfplan artifact from the plan job is missing or has expired (retention: 1 day). Re-run this workflow from a fresh push to main to produce a new plan for re-review before applying."
+          exit 1
+
+      - name: terraform apply
+        working-directory: environments/prod
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: terraform apply -input=false tfplan

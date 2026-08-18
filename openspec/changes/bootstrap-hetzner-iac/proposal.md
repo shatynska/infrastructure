@@ -5,7 +5,7 @@ This repository is currently empty except for OpenSpec scaffolding. We need to s
 ## What Changes
 
 - Scaffold the repo structure: `environments/prod/` as a folder, consuming shared modules from `modules/` (starting with `modules/server`). The folder-based layout leaves room to add further environments later without restructuring.
-- Configure HCP Terraform (formerly Terraform Cloud) as a backend-only (CLI-driven) remote state store — no VCS connection, no HCP-run execution, workspace Execution Mode set to **Local** — with a single workspace: `infrastructure-prod`. Authenticate to it via GitHub OIDC dynamic credentials rather than a long-lived API token.
+- Configure HCP Terraform (formerly Terraform Cloud) as a backend-only (CLI-driven) remote state store — no VCS connection, no HCP-run execution, workspace Execution Mode set to **Local** — with a single workspace: `infrastructure-prod`. Authenticate to it with a static HCP Terraform API token, split by privilege (Plan vs. Write) the same way the Hetzner tokens are — GitHub OIDC dynamic credentials do not apply here, since that HCP Terraform feature authenticates providers during a remotely-executed run, not the CLI's own backend access (discovered during implementation; see design.md Decision 9).
 - Use a dedicated Hetzner Cloud project for prod, with two project-scoped tokens split by privilege: a Read Only token for automatic plan jobs and a Read & Write token confined to the approval-gated apply.
 - Add local quality tooling: `terraform fmt`, `tflint` (bundled `terraform` ruleset only), the `pre-commit` framework with `antonbabenko/pre-commit-terraform` hooks (fmt, tflint, validate, gitleaks), `commitlint` for Conventional Commits, a Terraform-aware `.gitignore`, and a committed `.terraform.lock.hcl`.
 - Protect the repository so the pipeline's gates can't be bypassed: branch protection on `main` (require PR, require status checks, no force-push) and read-only default `GITHUB_TOKEN` permissions with per-job escalation.
@@ -22,7 +22,7 @@ This repository is currently empty except for OpenSpec scaffolding. We need to s
 
 ### New Capabilities
 - `iac-repo-foundations`: Repo scaffolding and local developer quality gates — environment/module folder structure, formatting, linting, pre-commit hooks, commit message linting, gitignore/tfvars sensitivity split, lockfile conventions, and locally-encoded Hetzner guardrails.
-- `iac-state-management`: HCP Terraform backend configuration (CLI-driven, local execution, OIDC dynamic credentials) and the dedicated Hetzner Cloud project for the prod environment.
+- `iac-state-management`: HCP Terraform backend configuration (CLI-driven, local execution, static tokens split by privilege) and the dedicated Hetzner Cloud project for the prod environment.
 - `iac-cicd-pipeline`: GitHub Actions workflows covering PR validation/planning, saved-plan gated apply, the destroy-policy gate, branch protection and least-privilege permissions, and scheduled drift detection.
 - `iac-safety-hardening`: Guardrails against destructive, unnoticed, or externally-exposed changes — deletion protection, backups, network baseline, resource labeling, and automated dependency updates.
 

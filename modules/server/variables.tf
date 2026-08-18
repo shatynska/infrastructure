@@ -48,8 +48,14 @@ variable "ssh_allowed_cidrs" {
   }
 }
 
+variable "web_allowed_cidrs" {
+  description = "Source CIDRs allowed to reach the server over HTTP (80) and HTTPS (443). Empty by default — no web rule is created, so a server with no web service stays SSH-only. Set to [\"0.0.0.0/0\"] for a public-facing web service."
+  type        = list(string)
+  default     = []
+}
+
 variable "delete_protection" {
-  description = "Whether to enable Hetzner's server-side delete/rebuild protection. Parameterized (not a literal lifecycle.prevent_destroy) so this module stays reusable by environments that must remain destroyable, e.g. a future staging environment."
+  description = "Whether to enable Hetzner's server-side delete/rebuild protection. Parameterized (not a literal lifecycle.prevent_destroy) so this module stays reusable by environments that must remain destroyable, e.g. a future staging environment. Does not reliably block `terraform destroy`/replace (see design.md decision 7 finding for task 4.6) — the CI destroy-policy gate is the actual Terraform-side guard; this only blocks deletion via the Hetzner console/API."
   type        = bool
   default     = true
 }

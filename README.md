@@ -51,6 +51,18 @@ addition (see Status below), not a rejected idea.
 3. Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/)
    (`feat:`, `fix:`, `docs:`, `chore:`, ...) — enforced locally by the
    `commitlint` hook and mirrored by CI.
+4. Local `terraform plan`/`validate` needs the **Read Only** Hetzner token as
+   `HCLOUD_TOKEN`. Recommended: [`direnv`](https://direnv.net/) so it's only
+   loaded while you're in this directory:
+
+   ```sh
+   cp .envrc.example .envrc   # fill in the real token; .envrc is gitignored
+   direnv allow
+   ```
+
+   Never put the **Read & Write** token here or in any other local file — it
+   lives exclusively in the `production` GitHub Environment secret. See
+   `AGENTS.md`.
 
 ## Environment variables and secrets
 

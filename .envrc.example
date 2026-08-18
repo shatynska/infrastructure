@@ -1,0 +1,8 @@
+# Copy this file to .envrc (gitignored) and fill in the real value:
+#   cp .envrc.example .envrc
+#   direnv allow
+#
+# Read Only Hetzner Cloud token only — enough for `terraform plan`/`validate`.
+# Never put the Read & Write token here; it lives exclusively in the
+# `production` GitHub Environment secret. See AGENTS.md.
+export HCLOUD_TOKEN="your-read-only-hetzner-token"

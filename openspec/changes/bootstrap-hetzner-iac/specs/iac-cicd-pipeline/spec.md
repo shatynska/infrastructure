@@ -36,14 +36,16 @@ When validation checks pass, the workflow SHALL run `terraform plan` against the
 ### Requirement: Credential Scoping by Privilege
 Authentication secrets SHALL be split by privilege so that automatically-running jobs (PR-time and scheduled `terraform plan`) only ever have read-only access to Hetzner Cloud, while write access is confined to the approval-gated apply job.
 
-Two Hetzner Cloud API tokens SHALL be provisioned: a **Read Only** token and a **Read & Write** token. They SHALL be placed as follows, relying on GitHub resolving an environment-scoped secret ahead of a repository-scoped secret of the same name (a job declaring `environment: production` receives the environment value; any other job receives the repository value):
+Two Hetzner Cloud API tokens SHALL be provisioned: a **Read Only** token and a **Read & Write** token. `TF_API_TOKEN` (HCP Terraform access) is placed using the same repository/Environment secret pair for structural consistency, but SHALL NOT be assumed to carry the same privilege split — see the HCP Terraform Access via a Static Token, Unsplit by Privilege requirement in the iac-state-management capability, which is the actual source of truth for what that token can and cannot do. All SHALL be placed as follows, relying on GitHub resolving an environment-scoped secret ahead of a repository-scoped secret of the same name (a job declaring `environment: production` receives the environment value; any other job receives the repository value):
 
 | Secret | Location | Value |
 |---|---|---|
 | `HCLOUD_TOKEN` | Repository secret (Settings → Secrets and variables → Actions) | Read Only Hetzner token |
 | `HCLOUD_TOKEN` | `production` Environment secret | Read & Write Hetzner token |
+| `TF_API_TOKEN` | Repository secret | HCP Terraform token (unsplit — see iac-state-management) |
+| `TF_API_TOKEN` | `production` Environment secret | Same HCP Terraform token value, kept as a separate secret so a future privilege split needs no workflow changes |
 
-No static HCP Terraform API token SHALL be stored, per the Dynamic Credentials requirement in the iac-state-management capability.
+`HCLOUD_TOKEN` SHALL NOT be an organization-wide or admin-level credential, and its Read Only/Read & Write split remains the load-bearing privilege boundary for this pipeline, precisely because `TF_API_TOKEN` is currently unsplit by necessity (see iac-state-management).
 
 This requirement governs where the two tokens live *inside GitHub*. Confining the Read & Write token so that it never reaches a workstation — where the workspace's Local execution mode would let it bypass this pipeline entirely — is specified by the Write Credentials Confined to the Gated Pipeline requirement in the iac-safety-hardening capability.
 
@@ -90,17 +92,23 @@ Because a saved plan file stores sensitive values in cleartext, the `tfplan` art
 - **THEN** the read-write `HCLOUD_TOKEN` scoped to the `production` Environment SHALL NOT be readable by the workflow job until approval is granted
 
 ### Requirement: Destroy Policy Gate
-Any pipeline that produces a Terraform plan SHALL inspect that plan's machine-readable form (`terraform show -json`) and SHALL fail when the plan contains any resource action of `delete` or `replace`, unless the change carries an explicit override signal (assumed to be a pull request label).
+The gated production apply workflow's plan job (Job A, per the Gated Production Apply Applies the Reviewed Plan requirement) SHALL inspect its plan's machine-readable form (`terraform show -json`) and SHALL fail the workflow when the plan contains any resource action of `delete` or `replace`, unless the change carries an explicit override signal (assumed to be a pull request label).
+
+This gate applies only to the plan Job B would apply. It does NOT apply to the pull request's informational `terraform plan` (Pull Request Plan Visibility) — which gates nothing yet, since apply happens only after merge — nor to the nightly drift-detection plan (Scheduled Drift Detection), which is read-only and reports rather than blocks.
 
 This is the Terraform-side guard against destructive applies. It replaces reliance on `lifecycle { prevent_destroy = true }` in shared modules, which cannot be parameterized per environment and only covers individually annotated resources. The gate covers every resource in the plan automatically and surfaces the objection where it can be discussed rather than as an opaque Terraform error.
 
 #### Scenario: Unintended resource replacement blocks the pipeline
-- **WHEN** a plan for `environments/prod/` shows the server being replaced because an immutable attribute changed, and the pull request carries no override label
+- **WHEN** the apply workflow's plan job shows the server being replaced because an immutable attribute changed, and the pull request carries no override label
 - **THEN** the destroy-policy gate SHALL fail the workflow and report which resources would be destroyed or replaced, and no apply SHALL run
 
 #### Scenario: Deliberate teardown is possible with explicit acknowledgement
 - **WHEN** an operator intends a destructive change and applies the override label to the pull request
 - **THEN** the destroy-policy gate SHALL pass and the change SHALL proceed to the normal approval gate, which still requires reviewer approval
+
+#### Scenario: Drift-detection plan is not affected by this gate
+- **WHEN** the nightly drift-detection plan (Scheduled Drift Detection) shows a resource being deleted or replaced
+- **THEN** the destroy-policy gate SHALL NOT fail that workflow; the drift is instead reported per the Scheduled Drift Detection requirement
 
 ### Requirement: Serialized Terraform Runs
 Workflows that run `terraform apply` against an environment SHALL declare a GitHub Actions `concurrency` group per environment with `cancel-in-progress: false`, so that runs queue rather than overlap or cancel each other.
@@ -131,12 +139,12 @@ The repository's default `GITHUB_TOKEN` permission SHALL be set to read-only, an
 - **WHEN** the validation workflow runs
 - **THEN** only the job that posts the plan comment SHALL hold `pull-requests: write`, and no job SHALL hold `contents: write` unless it needs to push
 
-#### Scenario: OIDC permission is scoped to jobs that authenticate
-- **WHEN** a job authenticates to HCP Terraform using dynamic credentials
-- **THEN** that job SHALL declare `id-token: write`, and jobs that do not authenticate SHALL NOT declare it
+#### Scenario: No job declares an OIDC permission it cannot use
+- **WHEN** a job authenticates to HCP Terraform or Hetzner Cloud
+- **THEN** it SHALL do so using the static, privilege-scoped tokens (`TF_API_TOKEN`, `HCLOUD_TOKEN`) described by the Credential Scoping by Privilege requirement, and SHALL NOT declare `id-token: write` — neither HCP Terraform's CLI-driven backend nor Hetzner Cloud's API accepts a GitHub OIDC token
 
 ### Requirement: Scheduled Drift Detection
-A scheduled GitHub Actions workflow SHALL run `terraform plan` against the prod environment on a recurring nightly schedule, without applying any changes, to surface divergence between the committed configuration and actual infrastructure state.
+A scheduled GitHub Actions workflow SHALL run `terraform plan` against the prod environment on a recurring nightly schedule, without applying any changes, to surface divergence between the committed configuration and actual infrastructure state. This plan is read-only and reporting-only: it does not invoke the Destroy Policy Gate, which applies only to the apply workflow's plan (see that requirement).
 
 When the plan shows a non-empty diff, the workflow SHALL create or update a **single, deduplicated** GitHub issue containing the diff, and SHALL close or resolve it when a later run finds no drift. Failing the workflow alone is insufficient: a persistently red scheduled job is muted in practice, leaving drift undetected.
 
