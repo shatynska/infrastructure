@@ -22,13 +22,13 @@
 
 ## 3. Repo Scaffolding and Local Tooling
 
-- [ ] 3.1 Create the `environments/prod/` and `modules/` directory structure.
-- [ ] 3.2 Add a Terraform-aware `.gitignore` covering `.terraform/`, `*.tfstate*`, `*.secret.tfvars`, and `secrets.auto.tfvars`. Do **not** add a blanket `*.tfvars` rule — CI needs the committed non-secret `terraform.tfvars`.
-- [ ] 3.3 Add `.pre-commit-config.yaml` using `antonbabenko/pre-commit-terraform` hooks for `terraform fmt`, `tflint`, `terraform validate`, and `gitleaks`.
-- [ ] 3.4 Add `commitlint` configuration for Conventional Commits and wire it into a `pre-commit` (or existing) commit-msg hook.
-- [ ] 3.5 Add `.tflint.hcl` enabling only the bundled `terraform` ruleset. (There is no Hetzner/`hcloud` tflint ruleset — do not attempt to enable one.)
-- [ ] 3.6 Verify the repo README already documents local setup (installing `pre-commit`, running `pre-commit install`) and the drift-workflow re-enable runbook step (both added by the already-archived `project-foundation` change); extend if any detail is missing or out of date once the actual workflows exist.
-- [ ] 3.7 Verify the repository-root `AGENTS.md` already states that `terraform apply` is never run locally and that production changes reach Hetzner only through the gated pipeline (added by the already-archived `project-foundation` change, under "Production changes never bypass the pipeline"), and that the same prohibition is recorded in the README runbook; extend if anything is missing.
+- [x] 3.1 Create the `environments/prod/` and `modules/` directory structure.
+- [x] 3.2 Add a Terraform-aware `.gitignore` covering `.terraform/`, `*.tfstate*`, `*.secret.tfvars`, and `secrets.auto.tfvars`. Do **not** add a blanket `*.tfvars` rule — CI needs the committed non-secret `terraform.tfvars`.
+- [x] 3.3 Add `.pre-commit-config.yaml` using `antonbabenko/pre-commit-terraform` hooks for `terraform fmt`, `tflint`, `terraform validate`, and `gitleaks`.
+- [x] 3.4 Add `commitlint` configuration for Conventional Commits and wire it into a `pre-commit` (or existing) commit-msg hook.
+- [x] 3.5 Add `.tflint.hcl` enabling only the bundled `terraform` ruleset. (There is no Hetzner/`hcloud` tflint ruleset — do not attempt to enable one.)
+- [x] 3.6 Verify the repo README already documents local setup (installing `pre-commit`, running `pre-commit install`) and the drift-workflow re-enable runbook step (both added by the already-archived `project-foundation` change); extend if any detail is missing or out of date once the actual workflows exist.
+- [x] 3.7 Verify the repository-root `AGENTS.md` already states that `terraform apply` is never run locally and that production changes reach Hetzner only through the gated pipeline (added by the already-archived `project-foundation` change, under "Production changes never bypass the pipeline"), and that the same prohibition is recorded in the README runbook; extend if anything is missing.
 
 ## 4. Terraform Module and Prod Environment
 
