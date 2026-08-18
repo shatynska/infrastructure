@@ -36,14 +36,16 @@ When validation checks pass, the workflow SHALL run `terraform plan` against the
 ### Requirement: Credential Scoping by Privilege
 Authentication secrets SHALL be split by privilege so that automatically-running jobs (PR-time and scheduled `terraform plan`) only ever have read-only access to Hetzner Cloud, while write access is confined to the approval-gated apply job.
 
-Two Hetzner Cloud API tokens SHALL be provisioned: a **Read Only** token and a **Read & Write** token. They SHALL be placed as follows, relying on GitHub resolving an environment-scoped secret ahead of a repository-scoped secret of the same name (a job declaring `environment: production` receives the environment value; any other job receives the repository value):
+Two Hetzner Cloud API tokens SHALL be provisioned: a **Read Only** token and a **Read & Write** token. The same split-by-privilege pattern SHALL apply to HCP Terraform access, per the HCP Terraform Access Split by Privilege requirement in the iac-state-management capability. All SHALL be placed as follows, relying on GitHub resolving an environment-scoped secret ahead of a repository-scoped secret of the same name (a job declaring `environment: production` receives the environment value; any other job receives the repository value):
 
 | Secret | Location | Value |
 |---|---|---|
 | `HCLOUD_TOKEN` | Repository secret (Settings → Secrets and variables → Actions) | Read Only Hetzner token |
 | `HCLOUD_TOKEN` | `production` Environment secret | Read & Write Hetzner token |
+| `TF_API_TOKEN` | Repository secret | HCP Terraform token from a team with Plan-only permission on `infrastructure-prod` |
+| `TF_API_TOKEN` | `production` Environment secret | HCP Terraform token from a team with Write permission on `infrastructure-prod` |
 
-No static HCP Terraform API token SHALL be stored, per the Dynamic Credentials requirement in the iac-state-management capability.
+Neither `HCLOUD_TOKEN` nor `TF_API_TOKEN` SHALL be an organization-wide or admin-level credential.
 
 This requirement governs where the two tokens live *inside GitHub*. Confining the Read & Write token so that it never reaches a workstation — where the workspace's Local execution mode would let it bypass this pipeline entirely — is specified by the Write Credentials Confined to the Gated Pipeline requirement in the iac-safety-hardening capability.
 
@@ -137,9 +139,9 @@ The repository's default `GITHUB_TOKEN` permission SHALL be set to read-only, an
 - **WHEN** the validation workflow runs
 - **THEN** only the job that posts the plan comment SHALL hold `pull-requests: write`, and no job SHALL hold `contents: write` unless it needs to push
 
-#### Scenario: OIDC permission is scoped to jobs that authenticate
-- **WHEN** a job authenticates to HCP Terraform using dynamic credentials
-- **THEN** that job SHALL declare `id-token: write`, and jobs that do not authenticate SHALL NOT declare it
+#### Scenario: No job declares an OIDC permission it cannot use
+- **WHEN** a job authenticates to HCP Terraform or Hetzner Cloud
+- **THEN** it SHALL do so using the static, privilege-scoped tokens (`TF_API_TOKEN`, `HCLOUD_TOKEN`) described by the Credential Scoping by Privilege requirement, and SHALL NOT declare `id-token: write` — neither HCP Terraform's CLI-driven backend nor Hetzner Cloud's API accepts a GitHub OIDC token
 
 ### Requirement: Scheduled Drift Detection
 A scheduled GitHub Actions workflow SHALL run `terraform plan` against the prod environment on a recurring nightly schedule, without applying any changes, to surface divergence between the committed configuration and actual infrastructure state. This plan is read-only and reporting-only: it does not invoke the Destroy Policy Gate, which applies only to the apply workflow's plan (see that requirement).

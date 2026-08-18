@@ -2,7 +2,7 @@
 
 - [ ] 1.1 Create the HCP Terraform organization (if not already present) and a CLI-driven workspace named `infrastructure-prod` (no VCS connection).
 - [ ] 1.2 Set the `infrastructure-prod` workspace's Execution Mode to **Local**. (A `cloud` block defaults to remote execution, which would run plans on HCP's runners and break the saved-plan apply flow.)
-- [ ] 1.3 Configure HCP Terraform dynamic credentials: add the GitHub OIDC identity provider trust relationship scoped to this repository, so no long-lived HCP API token is needed.
+- [ ] 1.3 Create two teams in the HCP Terraform organization, each scoped to only the `infrastructure-prod` workspace: one with **Plan** permission, one with **Write** permission. Generate a team API token from each, for the repository-scoped and `production` Environment-scoped `TF_API_TOKEN` secrets (task 2.8/2.9). GitHub OIDC does **not** apply here: HCP Terraform's dynamic-credentials/workload-identity feature authenticates providers during a run HCP Terraform executes remotely, not the CLI's own backend/state access for a CLI-driven, Local-execution workspace like this one — confirmed during implementation (see design.md Decision 9).
 - [ ] 1.4 Create a dedicated Hetzner Cloud project for prod.
 - [ ] 1.5 In that project, generate two API tokens: one **Read Only** and one **Read & Write**.
 - [ ] 1.6 Decide and record the SSH source CIDRs the prod firewall will allow (see the open question in `design.md` — do not default to `0.0.0.0/0`).
