@@ -95,23 +95,25 @@ jobs:
           echo "has_destructive_changes=true" >>"$GITHUB_OUTPUT"
           echo "::warning::Plan contains a delete or replace action."
 
-          # GitHub's commit->PR association index can lag a few seconds
-          # behind a just-completed merge, so this job (which starts
-          # almost immediately on push) can see zero associated PRs even
+          # GitHub's commit->PR association index can lag well behind a
+          # just-completed merge — observed over 15s in practice, not
+          # just a couple of seconds — and this job starts almost
+          # immediately on push, so it can see zero associated PRs even
           # though the merge that triggered it obviously has one. Retry
-          # briefly instead of failing on that race — this doesn't
-          # weaken the check, it just waits for the same lookup to
-          # return a real answer. Empty because the PR truly has no
-          # labels (or the association never resolves) still fails
-          # closed once the budget is spent.
+          # for up to ~75s instead of failing on that race — this
+          # doesn't weaken the check, it just waits for the same lookup
+          # to return a real answer. Empty because the PR truly has no
+          # labels (or the association never resolves at all) still
+          # fails closed once the budget is spent.
           pulls_json="[]"
-          for attempt in 1 2 3 4 5; do
+          for attempt in $(seq 1 15); do
             pulls_json=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" 2>/dev/null || echo "[]")
             if [ "$(echo "$pulls_json" | jq 'length')" -gt 0 ]; then
+              echo "Found the associated PR on attempt $attempt/15."
               break
             fi
-            echo "No PR associated with ${{ github.sha }} yet (attempt $attempt/5) — retrying in 3s..."
-            sleep 3
+            echo "No PR associated with ${{ github.sha }} yet (attempt $attempt/15) — retrying in 5s..."
+            sleep 5
           done
           labels=$(echo "$pulls_json" | jq -r '[.[].labels[].name] | join(",")')
 
