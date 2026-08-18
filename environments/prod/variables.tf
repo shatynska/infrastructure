@@ -33,3 +33,9 @@ variable "web_allowed_cidrs" {
   type        = list(string)
   default     = []
 }
+
+variable "server_enabled" {
+  description = "Whether the prod server should exist. Set false to decommission without losing configuration — all other values here and in terraform.tfvars stay in place, ready to re-enable."
+  type        = bool
+  default     = true
+}
