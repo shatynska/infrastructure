@@ -15,6 +15,11 @@ terraform.rc
 *.secret.tfvars
 secrets.auto.tfvars
 
+# Local shell env (e.g. direnv's .envrc holding HCLOUD_TOKEN — Read Only
+# only, per AGENTS.md; never the Read & Write token)
+.envrc
+.env
+
 # OS/editor cruft
 .DS_Store
 *.swp
