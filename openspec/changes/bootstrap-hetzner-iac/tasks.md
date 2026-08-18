@@ -7,6 +7,8 @@
 - [ ] 1.5 In that project, generate two API tokens: one **Read Only** and one **Read & Write**.
 - [ ] 1.6 Decide and record the SSH source CIDRs the prod firewall will allow (see the open question in `design.md` — do not default to `0.0.0.0/0`).
 - [ ] 1.7 Create or select the SSH key pair for prod access and register its public key.
+- [ ] 1.8 Confirm the **Read & Write** token is stored only as the `production` Environment secret (task 2.3) and is not exported into any local shell, dotfile, `direnv` file, `.tfvars` file, or credential helper. Configure local shells with the **Read Only** token instead — it is enough for `terraform plan`, and it makes a local `terraform apply` fail at the API rather than by convention.
+- [ ] 1.9 Investigate whether HCP Terraform workspace permissions can grant the operator's own user enough access for local `terraform plan` (state read plus locking) while denying the state write a local `terraform apply` needs. Record the finding; adopt this second layer only if it does not break local plan.
 
 ## 2. Repository Settings and Protection
 
@@ -26,6 +28,7 @@
 - [ ] 3.4 Add `commitlint` configuration for Conventional Commits and wire it into a `pre-commit` (or existing) commit-msg hook.
 - [ ] 3.5 Add `.tflint.hcl` enabling only the bundled `terraform` ruleset. (There is no Hetzner/`hcloud` tflint ruleset — do not attempt to enable one.)
 - [ ] 3.6 Document local setup (installing `pre-commit`, running `pre-commit install`) and the drift-workflow re-enable runbook step in the repo README.
+- [ ] 3.7 Add a repository-root `AGENTS.md` stating that `terraform apply` is never run locally and that production changes reach Hetzner only through the gated pipeline, and record the same prohibition in the README runbook. (The repository has neither `AGENTS.md` nor `CLAUDE.md` today, so no decision in `design.md` is standing context for a coding agent.)
 
 ## 4. Terraform Module and Prod Environment
 
@@ -79,3 +82,4 @@
 - [ ] 9.4 Verify the firewall: confirm a non-allowed inbound port is refused and that SSH succeeds only from an allowed CIDR with key authentication.
 - [ ] 9.5 Verify the destroy-policy gate fires: open a throwaway PR forcing a resource replacement and confirm the pipeline fails without the override label.
 - [ ] 9.6 Manually trigger the drift-detection workflow to confirm it runs cleanly, then make a deliberate out-of-band change in the Hetzner console and confirm the drift issue is opened, deduplicated on a second run, and closed after reverting.
+- [ ] 9.7 Verify the workstation boundary: with the local shell holding the Read Only token, confirm `terraform plan` against `environments/prod/` succeeds and `terraform apply` fails with an authorization error from the Hetzner Cloud API.

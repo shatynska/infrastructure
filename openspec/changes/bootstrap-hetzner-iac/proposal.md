@@ -15,6 +15,7 @@ This repository is currently empty except for OpenSpec scaffolding. We need to s
   - A destroy-policy gate that parses the plan JSON and fails on any `delete` or `replace` action unless explicitly overridden.
   - Scheduled nightly drift-detection workflow: plan-only against prod, no apply, reporting divergence to a single deduplicated GitHub issue.
 - Add safety hardening: provider-level `delete_protection` (parameterized, so shared modules stay reusable), consistent `environment`/`managed_by` labels on all `hcloud_*` resources, and Dependabot configured for the `terraform` and `github-actions` ecosystems plus a scheduled `pre-commit autoupdate` job.
+- Confine write-capable Hetzner credentials to the gated pipeline: the Read & Write token lives only as a `production` Environment secret and never on a workstation, so the workspace's Local execution mode cannot be used to apply straight to prod past the approval, destroy-policy, and branch-protection gates. Record the prohibition in the README runbook and in a repository-root `AGENTS.md`.
 - Give the server a network baseline it is safe to expose: a structurally required default-deny `hcloud_firewall` with explicitly enumerated source CIDRs, key-only SSH with password auth disabled, and `backups = true`.
 
 ## Capabilities
