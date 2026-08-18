@@ -15,11 +15,11 @@
 - [x] 2.4 Commit and open a PR against `main`. https://github.com/shatynska/infrastructure/pull/10
 - [x] 2.5 Confirm the PR's `validate` check passes and its plan comment matches the local plan from 2.3. Passed; plan comment matches exactly (SSH key moved + renamed, server and firewall destroyed).
 - [x] 2.6 Add the destroy-policy gate's override label to the PR (required — this plan contains `delete` actions). Created the `destroy-override` label (didn't exist yet) and applied it.
-- [ ] 2.7 Merge the PR and approve the gated `production` apply.
-- [ ] 2.8 Confirm the apply succeeds: server and firewall destroyed, SSH key relocated (not touched on the Hetzner side), no errors.
+- [x] 2.7 Merge the PR and approve the gated `production` apply. Took 5 PRs total (#10 the actual change, then #11-#14 fixing the destroy-policy gate's PR-lookup: first misdiagnosed as a commit->PR search-index race, actually a missing `pull-requests: read` permission on the plan job — see those PRs' descriptions for the full debugging trail).
+- [x] 2.8 Confirm the apply succeeds: server and firewall destroyed, SSH key relocated (not touched on the Hetzner side), no errors. Confirmed: "Apply complete! Resources: 0 added, 1 changed, 2 destroyed."
 
 ## 3. Validation
 
-- [ ] 3.1 Confirm via the Hetzner API or console that the SSH key (id `117088533`) still exists, unchanged, after the apply.
-- [ ] 3.2 Confirm via the HCP Terraform workspace (resource count) that state reflects only what should remain (one managed resource — the relocated SSH key; server and firewall destroyed).
-- [ ] 3.3 Confirm the full re-enable path works with no extra step: with `server_enabled` set back to `true` locally (do not apply unless the operator wants the server back), `terraform plan` shows the server and firewall recreated using the existing `terraform.tfvars` values and the existing (already-managed) SSH key, with no additional input, no fresh `import`, and no uniqueness conflict.
+- [x] 3.1 Confirm via the Hetzner API or console that the SSH key (id `117088533`) still exists, unchanged, after the apply. Confirmed via the Hetzner API: same fingerprint (`d2:8a:88:d9:b6:f9:96:71:c2:c5:b5:63:8e:4b:76:a0`), name updated to `prod` as planned.
+- [x] 3.2 Confirm via the HCP Terraform workspace (resource count) that state reflects only what should remain (one managed resource — the relocated SSH key; server and firewall destroyed). Confirmed: `resource-count: 1`, unlocked, no lock info.
+- [x] 3.3 Confirm the full re-enable path works with no extra step: with `server_enabled` set back to `true` locally (do not apply unless the operator wants the server back), `terraform plan` shows the server and firewall recreated using the existing `terraform.tfvars` values and the existing (already-managed) SSH key, with no additional input, no fresh `import`, and no uniqueness conflict. Confirmed: `Plan: 2 to add, 0 to change, 0 to destroy` — server and firewall recreated cleanly using the existing SSH key (`ssh_keys = ["117088533"]`). Local change reverted afterward, not committed or applied.
