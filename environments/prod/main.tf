@@ -1,4 +1,6 @@
 module "server" {
+  count = var.server_enabled ? 1 : 0
+
   source = "../../modules/server"
 
   environment = "prod"
@@ -8,7 +10,7 @@ module "server" {
   image       = var.image
   location    = var.location
 
-  ssh_public_key    = var.ssh_public_key
+  ssh_key_id        = hcloud_ssh_key.this.id
   ssh_allowed_cidrs = var.ssh_allowed_cidrs
   web_allowed_cidrs = var.web_allowed_cidrs
 

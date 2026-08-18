@@ -28,8 +28,8 @@ variable "location" {
   type        = string
 }
 
-variable "ssh_public_key" {
-  description = "Public key material (e.g. contents of an id_ed25519.pub file) used for SSH access. Providing this at creation means Hetzner never sets a root password, so password authentication is never available."
+variable "ssh_key_id" {
+  description = "ID of an existing hcloud_ssh_key resource to attach to the server for SSH access. Providing a key at creation means Hetzner never sets a root password, so password authentication is never available. This module does not create or own the key — its lifecycle (a login credential) is independent of any particular server instance, so the caller owns it. See the prod-server-lifecycle-toggle change's design.md for why."
   type        = string
 }
 

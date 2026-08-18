@@ -8,12 +8,6 @@ locals {
   )
 }
 
-resource "hcloud_ssh_key" "this" {
-  name       = "${var.environment}-${var.name}"
-  public_key = var.ssh_public_key
-  labels     = local.labels
-}
-
 # Default-deny inbound: only the rules declared here are allowed in.
 # Outbound traffic is unrestricted by omitting any "out" rule.
 resource "hcloud_firewall" "this" {
@@ -47,9 +41,11 @@ resource "hcloud_server" "this" {
   location    = var.location
   labels      = local.labels
 
-  # Providing the key at creation means Hetzner never sets a root
-  # password, so password authentication is never available.
-  ssh_keys     = [hcloud_ssh_key.this.id]
+  # Providing a key at creation means Hetzner never sets a root
+  # password, so password authentication is never available. The key
+  # itself is owned by the caller (see var.ssh_key_id's description),
+  # not by this module.
+  ssh_keys     = [var.ssh_key_id]
   firewall_ids = [hcloud_firewall.this.id]
 
   backups = var.backups
