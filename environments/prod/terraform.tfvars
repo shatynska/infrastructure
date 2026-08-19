@@ -2,8 +2,8 @@
 # Excludes State and Secrets requirement — CI needs these values present
 # in a clean checkout.
 
-name        = "server"
-server_type = "cx23"
+name        = "main-server"
+server_type = "cx33"
 image       = "ubuntu-26.04"
 location    = "hel1"
 
