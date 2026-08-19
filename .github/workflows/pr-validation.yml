@@ -55,19 +55,21 @@ jobs:
         if: steps.changes.outputs.terraform == 'true'
         run: terraform fmt -check -recursive
 
-      - name: terraform validate (modules/server)
+      # validate/tflint/test discover modules/*/environments/* directories
+      # rather than naming them, so a directory added under either one is
+      # covered without a workflow edit — see
+      # openspec/changes/fix-ci-module-coverage.
+      - name: terraform validate
         if: steps.changes.outputs.terraform == 'true'
-        working-directory: modules/server
         run: |
-          terraform init -backend=false
-          terraform validate
-
-      - name: terraform validate (environments/prod)
-        if: steps.changes.outputs.terraform == 'true'
-        working-directory: environments/prod
-        run: |
-          terraform init -backend=false
-          terraform validate
+          set -euo pipefail
+          for dir in modules/*/ environments/*/; do
+            if compgen -G "${dir}*.tf" >/dev/null; then
+              echo "::group::terraform validate ${dir}"
+              (cd "$dir" && terraform init -backend=false && terraform validate)
+              echo "::endgroup::"
+            fi
+          done
 
       - name: Setup tflint
         if: steps.changes.outputs.terraform == 'true'
@@ -78,9 +80,25 @@ jobs:
       - name: tflint
         if: steps.changes.outputs.terraform == 'true'
         run: |
+          set -euo pipefail
           tflint --init --config="${{ github.workspace }}/.tflint.hcl"
-          tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir=modules/server
-          tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir=environments/prod
+          for dir in modules/*/ environments/*/; do
+            if compgen -G "${dir}*.tf" >/dev/null; then
+              tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir="${dir%/}"
+            fi
+          done
+
+      - name: terraform test
+        if: steps.changes.outputs.terraform == 'true'
+        run: |
+          set -euo pipefail
+          for dir in modules/*/; do
+            if compgen -G "${dir}tests/*.tftest.hcl" >/dev/null; then
+              echo "::group::terraform test ${dir}"
+              (cd "$dir" && terraform test)
+              echo "::endgroup::"
+            fi
+          done
 
       # Trivy's/tfsec's built-in misconfiguration rule packs target
       # AWS/Azure/GCP/Kubernetes/Docker, not Hetzner — see the Hetzner
