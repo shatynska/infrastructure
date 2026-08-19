@@ -1,0 +1,24 @@
+---
+# Dynamic inventory via the hcloud plugin (hetzner.hcloud collection) — see
+# the "Dynamic Inventory via hcloud Plugin" requirement (iac-host-
+# configuration). Hosts are resolved live from Hetzner Cloud's API on every
+# run rather than from a committed hosts file, so a disabled/destroyed
+# server (server_enabled = false in terraform/environments/prod) yields no
+# stale inventory entry.
+#
+# Authenticates via the HCLOUD_TOKEN environment variable — the plugin's
+# `token` option falls back to it automatically, so it is intentionally not
+# set here. This is the same read-only token `terraform plan` already uses
+# locally; no separate token is introduced.
+plugin: hetzner.hcloud.hcloud
+
+# Groups hosts by the `environment` Hetzner label already applied to every
+# resource (see terraform/modules/server's ssh_key.tf) — this plugin has no
+# `group_by` option; grouping is done via the `constructed` fragment's
+# `keyed_groups` instead. `separator: ""` (with no `prefix`) makes the group
+# name the label's value alone, e.g. `prod`, so a playbook run can target
+# the `prod` group directly and adding `staging` later is a label value, not
+# an inventory rewrite.
+keyed_groups:
+  - key: hcloud_labels.environment
+    separator: ""

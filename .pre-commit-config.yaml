@@ -13,6 +13,25 @@ repos:
     hooks:
       - id: gitleaks
 
+  - repo: https://github.com/ansible/ansible-lint
+    rev: v26.8.0
+    hooks:
+      - id: ansible-lint
+        files: ^ansible/
+        # pass_filenames is false upstream (ansible-lint's own recommendation),
+        # so without an explicit target it scans the whole repo, not just
+        # `ansible/` — flagging unrelated files like .github/workflows/*.yml.
+        args: ["ansible/"]
+
+  - repo: local
+    hooks:
+      - id: ansible-playbook-syntax-check
+        name: ansible-playbook --syntax-check
+        language: system
+        entry: bash -c 'set -euo pipefail; for f in ansible/playbooks/*.yml; do [ -e "$f" ] && ansible-playbook --syntax-check "$f"; done'
+        pass_filenames: false
+        files: ^ansible/playbooks/.*\.ya?ml$
+
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.23.0
     hooks:

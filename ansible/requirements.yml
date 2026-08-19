@@ -1,0 +1,13 @@
+---
+# Pinned per the "Container Runtime Installed via Pinned External Role or
+# Equivalent" requirement (iac-host-configuration): any external role or
+# collection used, for any purpose, is pinned to an exact version — never a
+# floating range. Install with:
+#   ansible-galaxy install -r ansible/requirements.yml
+collections:
+  - name: hetzner.hcloud
+    version: "7.0.0"
+
+roles:
+  - name: geerlingguy.docker
+    version: "8.0.0"
