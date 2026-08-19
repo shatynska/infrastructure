@@ -16,19 +16,19 @@
     # --- "External role version is pinned" (specified) ---
     - name: Read the committed requirements.yml from the repository (not the managed node)
       ansible.builtin.set_fact:
-        requirements_yml_content: "{{ lookup('file', playbook_dir + '/../../../../requirements.yml') }}"
+        docker_requirements_yml_content: "{{ lookup('file', playbook_dir + '/../../../../requirements.yml') }}"
       delegate_to: localhost
       become: false
 
     - name: Parse requirements.yml
       ansible.builtin.set_fact:
-        requirements_yml_parsed: "{{ requirements_yml_content | from_yaml }}"
+        docker_requirements_yml_parsed: "{{ docker_requirements_yml_content | from_yaml }}"
       delegate_to: localhost
       become: false
 
     - name: Extract the pinned geerlingguy.docker role entry
       ansible.builtin.set_fact:
-        docker_role_pin: "{{ requirements_yml_parsed.roles | selectattr('name', 'equalto', 'geerlingguy.docker') | list | first }}"
+        docker_role_pin: "{{ docker_requirements_yml_parsed.roles | selectattr('name', 'equalto', 'geerlingguy.docker') | list | first }}"
       delegate_to: localhost
       become: false
 

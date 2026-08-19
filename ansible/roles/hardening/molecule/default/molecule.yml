@@ -33,6 +33,10 @@ platforms:
 
 provisioner:
   name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml for why this
+    # is needed -- same reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
 
 verifier:
   name: ansible

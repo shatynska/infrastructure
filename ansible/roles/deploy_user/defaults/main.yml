@@ -1,0 +1,4 @@
+---
+# deploy_user_public_key has no default -- it must be supplied by the
+# caller (Ansible Vault or a run-time variable, per tasks.md 3.1). There
+# is no safe default for a login credential.

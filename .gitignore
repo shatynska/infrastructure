@@ -23,3 +23,8 @@ secrets.auto.tfvars
 # OS/editor cruft
 .DS_Store
 *.swp
+
+# Ansible: Galaxy-installed role/collection content (fetched via
+# `ansible-galaxy install -r ansible/requirements.yml`), pinned by exact
+# version in that file, not committed itself.
+ansible/roles/geerlingguy.docker/

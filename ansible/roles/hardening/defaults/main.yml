@@ -1,0 +1,8 @@
+---
+# hardening_ssh_allowed_cidrs has no default — it must be supplied by the
+# caller (e.g. group_vars), since there is no safe default source CIDR for
+# SSH. hardening_web_allowed_cidrs defaults closed: a safe default for
+# this role in general, independent of what any particular environment's
+# group_vars sets it to (see ansible/inventory/group_vars/prod.yml for
+# this project's actual prod value).
+hardening_web_allowed_cidrs: []

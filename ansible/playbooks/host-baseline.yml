@@ -1,0 +1,14 @@
+---
+# Host configuration for the prod server: container runtime, host-level
+# hardening, and the restricted deploy account. See
+# openspec/changes/bootstrap-ansible-host-baseline for the full rationale.
+# Ansible's scope stops here -- it never templates platform/'s Compose
+# file or invokes a Compose lifecycle command (iac-platform-services'
+# "Platform Stack Deployment Is Not Ansible's Responsibility").
+- name: Host baseline configuration
+  hosts: prod
+  become: true
+  roles:
+    - role: docker
+    - role: hardening
+    - role: deploy_user

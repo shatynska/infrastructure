@@ -35,6 +35,13 @@ platforms:
 
 provisioner:
   name: ansible
+  env:
+    # Ansible's default role search path only checks <playbook_dir>/roles,
+    # which for converge.yml (nested under this role's molecule/default/)
+    # resolves to nowhere. Since `molecule test` runs from within this
+    # role's own directory, MOLECULE_PROJECT_DIRECTORY is that directory
+    # -- its parent is ansible/roles/, where sibling roles actually live.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
 
 verifier:
   name: ansible

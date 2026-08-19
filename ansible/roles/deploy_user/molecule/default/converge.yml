@@ -20,4 +20,4 @@
       AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeTestKeyOnlyNotARealCredential
       test-molecule@ci
   roles:
-    - role: deploy-user
+    - role: deploy_user

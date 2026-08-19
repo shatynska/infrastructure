@@ -14,23 +14,23 @@
     # ============================================================
     - name: Confirm the deploy account exists
       ansible.builtin.command: id deploy
-      register: id_deploy
+      register: deploy_user_id_deploy
       changed_when: false
 
     - name: Assert deploy is not a member of the docker group (root-equivalent membership rejected on review, design.md)
       ansible.builtin.assert:
         that:
-          - "'docker' not in id_deploy.stdout"
+          - "'docker' not in deploy_user_id_deploy.stdout"
         fail_msg: "deploy is a member of the docker group -- design.md explicitly rejects this as root-equivalent"
 
     - name: Read the sudoers.d drop-in for deploy
       ansible.builtin.slurp:
         src: /etc/sudoers.d/deploy
-      register: sudoers_drop_in
+      register: deploy_user_sudoers_drop_in
 
     - name: Assert the sudoers rule is exactly the fixed, argument-free, wildcard-free invocation (design.md / tasks.md 3.3)
       vars:
-        sudoers_content: "{{ sudoers_drop_in.content | b64decode }}"
+        sudoers_content: "{{ deploy_user_sudoers_drop_in.content | b64decode }}"
       ansible.builtin.assert:
         that:
           - "'deploy ALL=(root) NOPASSWD: /usr/local/bin/platform-compose-deploy' in sudoers_content"
@@ -44,33 +44,36 @@
     - name: Confirm the wrapper script's ownership and permissions (root:root, 0755 -- tasks.md 3.3)
       ansible.builtin.stat:
         path: /usr/local/bin/platform-compose-deploy
-      register: wrapper_stat
+      register: deploy_user_wrapper_stat
 
     - name: Assert the wrapper script is root-owned, mode 0755
       ansible.builtin.assert:
         that:
-          - wrapper_stat.stat.exists
-          - wrapper_stat.stat.pw_name == "root"
-          - wrapper_stat.stat.gr_name == "root"
-          - wrapper_stat.stat.mode == "0755"
-        fail_msg: "the wrapper script is not root:root mode 0755 -- if deploy could write to it, the 'fixed script' guarantee this scenario depends on would not hold"
+          - deploy_user_wrapper_stat.stat.exists
+          - deploy_user_wrapper_stat.stat.pw_name == "root"
+          - deploy_user_wrapper_stat.stat.gr_name == "root"
+          - deploy_user_wrapper_stat.stat.mode == "0755"
+        fail_msg: >-
+          the wrapper script is not root:root mode 0755 -- if deploy could
+          write to it, the 'fixed script' guarantee this scenario depends
+          on would not hold
 
     - name: Attempt the one permitted invocation as deploy, non-interactively (no PTY, matching how CI will invoke it -- design.md Risks)
       ansible.builtin.command: sudo -n /usr/local/bin/platform-compose-deploy
       become: true
       become_user: deploy
-      register: permitted_invocation
+      register: deploy_user_permitted_invocation
       changed_when: false
       failed_when: false
 
     - name: Assert sudo itself did not reject the permitted invocation
       ansible.builtin.assert:
         that:
-          - "'password is required' not in permitted_invocation.stderr"
-          - "'not allowed' not in permitted_invocation.stderr"
+          - "'password is required' not in deploy_user_permitted_invocation.stderr"
+          - "'not allowed' not in deploy_user_permitted_invocation.stderr"
         fail_msg: >-
           sudo denied deploy's one permitted invocation of the wrapper
-          script ({{ permitted_invocation.stderr }}) -- the sudoers rule
+          script ({{ deploy_user_permitted_invocation.stderr }}) -- the sudoers rule
           does not actually grant it. (This does not assert the wrapper's
           own `docker compose` commands succeed: Docker is not installed in
           this role's isolated scenario by design -- see molecule.yml.)
@@ -79,60 +82,64 @@
       ansible.builtin.command: sudo -n /usr/local/bin/platform-compose-deploy --extra-argument
       become: true
       become_user: deploy
-      register: argument_injection_attempt
+      register: deploy_user_argument_injection_attempt
       changed_when: false
       failed_when: false
 
     - name: Assert appending an argument to the wrapper invocation is denied
       ansible.builtin.assert:
         that:
-          - argument_injection_attempt.rc != 0
-          - "'password is required' in argument_injection_attempt.stderr or 'not allowed' in argument_injection_attempt.stderr"
+          - deploy_user_argument_injection_attempt.rc != 0
+          - "'password is required' in deploy_user_argument_injection_attempt.stderr or 'not allowed' in deploy_user_argument_injection_attempt.stderr"
         fail_msg: "deploy was able to invoke the wrapper with an appended argument -- the sudoers rule accepts argument injection"
 
     - name: Attempt sudo docker directly as deploy, non-interactively
       ansible.builtin.command: sudo -n docker ps
       become: true
       become_user: deploy
-      register: docker_direct_attempt
+      register: deploy_user_docker_direct_attempt
       changed_when: false
       failed_when: false
 
     - name: Assert deploy cannot invoke docker directly with elevated privilege
       ansible.builtin.assert:
         that:
-          - docker_direct_attempt.rc != 0
+          - deploy_user_docker_direct_attempt.rc != 0
         fail_msg: "deploy was able to run `sudo docker` directly -- only the fixed wrapper script SHALL be a privileged option"
 
     - name: Attempt an arbitrary privileged command (sudo whoami) as deploy, non-interactively
       ansible.builtin.command: sudo -n whoami
       become: true
       become_user: deploy
-      register: whoami_attempt
+      register: deploy_user_whoami_attempt
       changed_when: false
       failed_when: false
 
     - name: Assert deploy cannot run an arbitrary privileged command
       ansible.builtin.assert:
         that:
-          - whoami_attempt.rc != 0
-          - "'root' not in whoami_attempt.stdout"
+          - deploy_user_whoami_attempt.rc != 0
+          - "'root' not in deploy_user_whoami_attempt.stdout"
         fail_msg: "deploy was able to run an arbitrary privileged command (sudo whoami) -- only the fixed wrapper script SHALL be a privileged option"
 
     - name: Attempt to overwrite the wrapper script as deploy (derived -- supports the 'fixed script' guarantee)
       ansible.builtin.copy:
         dest: /usr/local/bin/platform-compose-deploy
         content: "echo pwned\n"
+        mode: "0644"
       become: true
       become_user: deploy
-      register: overwrite_attempt
+      register: deploy_user_overwrite_attempt
       ignore_errors: true
 
     - name: Assert deploy cannot modify the wrapper script itself
       ansible.builtin.assert:
         that:
-          - overwrite_attempt is failed
-        fail_msg: "deploy was able to overwrite the wrapper script -- the 'one fixed action' guarantee does not hold if the action itself is mutable by this account"
+          - deploy_user_overwrite_attempt is failed
+        fail_msg: >-
+          deploy was able to overwrite the wrapper script -- the 'one
+          fixed action' guarantee does not hold if the action itself is
+          mutable by this account
 
     # ============================================================
     # Scenario: Deploy account can escalate via the content it is
@@ -149,15 +156,15 @@
     - name: Confirm /opt/platform's ownership and permissions (deploy:deploy, 0750 -- tasks.md 3.1)
       ansible.builtin.stat:
         path: /opt/platform
-      register: opt_platform_stat
+      register: deploy_user_opt_platform_stat
 
     - name: Assert /opt/platform is owned deploy:deploy, mode 0750
       ansible.builtin.assert:
         that:
-          - opt_platform_stat.stat.exists
-          - opt_platform_stat.stat.pw_name == "deploy"
-          - opt_platform_stat.stat.gr_name == "deploy"
-          - opt_platform_stat.stat.mode == "0750"
+          - deploy_user_opt_platform_stat.stat.exists
+          - deploy_user_opt_platform_stat.stat.pw_name == "deploy"
+          - deploy_user_opt_platform_stat.stat.gr_name == "deploy"
+          - deploy_user_opt_platform_stat.stat.mode == "0750"
         fail_msg: "/opt/platform is not owned deploy:deploy mode 0750 per tasks.md 3.1"
 
     - name: Deploy writes a new Compose file into the directory the wrapper operates on
@@ -169,22 +176,25 @@
         mode: "0640"
       become: true
       become_user: deploy
-      register: compose_write
+      register: deploy_user_compose_write
 
     - name: Assert the write succeeded -- deploy is entitled to place content the wrapper will later apply
       ansible.builtin.assert:
         that:
-          - compose_write is not failed
-        fail_msg: "deploy could not write a Compose file into /opt/platform -- this is the write access the requirement's own text says is how a deployment mechanism gets new content onto the host at all"
+          - deploy_user_compose_write is not failed
+        fail_msg: >-
+          deploy could not write a Compose file into /opt/platform -- this
+          is the write access the requirement's own text says is how a
+          deployment mechanism gets new content onto the host at all
 
     - name: Read the wrapper script's content from the managed node
       ansible.builtin.slurp:
         src: /usr/local/bin/platform-compose-deploy
-      register: wrapper_script_file
+      register: deploy_user_wrapper_script_file
 
     - name: Assert the wrapper applies whatever Compose content is present, with no content validation of its own
       vars:
-        wrapper_content: "{{ wrapper_script_file.content | b64decode }}"
+        wrapper_content: "{{ deploy_user_wrapper_script_file.content | b64decode }}"
       ansible.builtin.assert:
         that:
           - "'docker compose pull' in wrapper_content"
@@ -208,14 +218,14 @@
     # ============================================================
     - name: Assert the deploy account resolves with the fixed /opt/platform home, using only this converge's deploy_user_public_key
       ansible.builtin.command: getent passwd deploy
-      register: deploy_passwd
+      register: deploy_user_deploy_passwd
       changed_when: false
 
     - name: Assert deploy is a real account with home /opt/platform
       ansible.builtin.assert:
         that:
-          - deploy_passwd.rc == 0
-          - "'/opt/platform' in deploy_passwd.stdout"
+          - deploy_user_deploy_passwd.rc == 0
+          - "'/opt/platform' in deploy_user_deploy_passwd.stdout"
         fail_msg: >-
           The deploy account does not exist with home /opt/platform, even
           though this converge supplied no operator/personal key variable
@@ -224,11 +234,11 @@
     - name: Read deploy's authorized_keys
       ansible.builtin.slurp:
         src: /opt/platform/.ssh/authorized_keys
-      register: authorized_keys_file
+      register: deploy_user_authorized_keys_file
 
     - name: Assert only the test-supplied deploy key is authorized
       vars:
-        authorized_keys_content: "{{ authorized_keys_file.content | b64decode }}"
+        authorized_keys_content: "{{ deploy_user_authorized_keys_file.content | b64decode }}"
       ansible.builtin.assert:
         that:
           - "'test-molecule@ci' in authorized_keys_content"
@@ -252,18 +262,18 @@
         grep -rl -e "BEGIN OPENSSH PRIVATE KEY" -e "BEGIN RSA PRIVATE KEY" -e "BEGIN PRIVATE KEY" "{{ playbook_dir }}/../.." || true
       args:
         executable: /bin/bash
-      register: committed_private_key_scan
+      register: deploy_user_committed_private_key_scan
       changed_when: false
       delegate_to: localhost
       become: false
 
-    - name: Assert no private-key marker is committed anywhere under the deploy-user role
+    - name: Assert no private-key marker is committed anywhere under the deploy_user role
       ansible.builtin.assert:
         that:
-          - committed_private_key_scan.stdout | trim == ""
+          - deploy_user_committed_private_key_scan.stdout | trim == ""
         fail_msg: >-
-          A private-key marker was found under the deploy-user role's
-          committed files: {{ committed_private_key_scan.stdout }} -- the
+          A private-key marker was found under the deploy_user role's
+          committed files: {{ deploy_user_committed_private_key_scan.stdout }} -- the
           deploy keypair's private half SHALL be stored outside version
           control (Ansible Vault or a GitHub Actions Environment secret,
           per tasks.md 3.2) and SHALL NOT appear in plaintext in the

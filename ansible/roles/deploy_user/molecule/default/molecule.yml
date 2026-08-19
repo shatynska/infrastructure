@@ -1,8 +1,8 @@
 ---
-# Molecule scenario for the `deploy-user` role. Same convention as the
+# Molecule scenario for the `deploy_user` role. Same convention as the
 # other two roles' scenarios -- see docker/molecule/default/molecule.yml
 # for the shared rationale. Run via `molecule test` from
-# ansible/roles/deploy-user/.
+# ansible/roles/deploy_user/.
 #
 # Deliberately does NOT install Docker in this instance: this role's own
 # tests are scoped to account/sudoers/wrapper-script provisioning, kept
@@ -21,7 +21,7 @@ driver:
 platforms:
   # systemd for a real sudo/PAM environment; nothing here needs Docker
   # itself running.
-  - name: deploy-user-role-instance
+  - name: deploy_user-role-instance
     image: geerlingguy/docker-ubuntu2204-ansible:latest
     command: /lib/systemd/systemd
     privileged: true
@@ -34,6 +34,10 @@ platforms:
 
 provisioner:
   name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml for why this
+    # is needed -- same reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
 
 verifier:
   name: ansible
