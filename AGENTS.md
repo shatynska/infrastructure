@@ -100,7 +100,7 @@ full reasoning.
 
 ### Production changes never bypass the pipeline
 
-`terraform apply` is never run locally against `environments/prod/`.
+`terraform apply` is never run locally against `terraform/environments/prod/`.
 Production changes reach Hetzner only through the gated GitHub Actions
 pipeline: a PR-time plan for review, then a human-approved apply of that
 exact saved plan on merge to `main`. Local runs use the read-only Hetzner
@@ -111,8 +111,8 @@ token and are for `terraform plan`/`validate` only.
 There is no traditional unit-test layer for the Terraform code yet.
 Verification is static analysis (`terraform fmt`, `terraform validate`,
 `tflint`, Trivy, `gitleaks`) plus mandatory human review of an exact
-`terraform plan`. As `modules/` grows past `modules/server`, add
-module-level tests as `modules/<name>/tests/*.tftest.hcl`, run via
+`terraform plan`. As `terraform/modules/` grows past `terraform/modules/server`, add
+module-level tests as `terraform/modules/<name>/tests/*.tftest.hcl`, run via
 `terraform test` — that is this project's test command and test-path glob
 for the independent-test-authoring step in the workflow above.
 
@@ -120,5 +120,45 @@ for the independent-test-authoring step in the workflow above.
 
 Run `pre-commit install --hook-type pre-commit --hook-type commit-msg`
 once per clone (see README's Local setup). It runs `terraform fmt`,
-`tflint`, `terraform validate`, and `gitleaks` on `git commit`, and
-`commitlint` (Conventional Commits) on the commit message.
+`tflint`, `terraform validate`, `gitleaks`, `ansible-lint`, and
+`ansible-playbook --syntax-check` on `git commit`, and `commitlint`
+(Conventional Commits) on the commit message.
+
+### Host configuration and platform stack
+
+`ansible/` configures a Terraform-provisioned host; `platform/` holds the
+shared Compose stack every application on that host depends on. See
+`iac-host-configuration` and `iac-platform-services`, and
+`openspec/changes/integrate-ansible-host-config/design.md` for the full
+rationale. This project's defaults for the decisions those specs leave to
+the consuming project:
+
+- **Inventory**: dynamic, via the `hcloud` plugin (`ansible/inventory/hcloud.yml`),
+  grouped by the existing `environment` label — never a static or
+  hand-maintained hosts file, so a disabled/destroyed server can't leave a
+  stale entry behind.
+- **Container runtime**: installed via a pinned external Galaxy role
+  (`geerlingguy.docker`, pinned in `ansible/requirements.yml`) — not the
+  only acceptable pattern going forward, but this project's current default.
+  Any external role or collection used for any purpose is pinned to an exact
+  version, never a floating range.
+- **Secrets**: Ansible Vault is the default mechanism. Encrypting the
+  *source* value isn't enough — a task that renders a Vault-decrypted value
+  into an on-host file (e.g. an `.env` file) produces plaintext on disk
+  regardless of how the source was protected. Any such rendered file must
+  have restrictive permissions and must be excluded from version control.
+- **Firewall split**: the Hetzner cloud firewall (Terraform-managed) is the
+  default-deny gate for what's reachable from the internet at all;
+  Ansible-managed UFW/fail2ban is host-level defense-in-depth on top of what
+  the cloud firewall already allows. For any given port, exactly one layer
+  is the documented access gate — never opened at only one layer while
+  assumed closed at the other.
+- **Scope boundary**: Ansible's responsibility ends once the container
+  runtime is installed and ready. It never templates an application
+  service-definition file (e.g. a Compose file) and never invokes a
+  runtime's application-lifecycle commands (starting, stopping, restarting
+  an application stack) — that's `platform/`'s and each application's own
+  Compose files, deployed by a mechanism other than Ansible.
+- **No dedicated monitoring server**: Prometheus/Grafana, when added, run
+  alongside `platform/`'s stack on the same host; single-host observability
+  risk is mitigated with an external dead-man's-switch, not a second server.

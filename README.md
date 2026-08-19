@@ -29,16 +29,28 @@ addition (see Status below), not a rejected idea.
 
 ## Repository layout
 
-- `modules/` — shared, reusable Terraform modules (e.g. `modules/server`).
-- `environments/<name>/` — one folder per environment (currently only `prod`),
-  each calling the shared modules with environment-specific variables. New
-  environments are added as new folders, never as branches.
+- `terraform/` — Terraform provisions infrastructure (server, volumes, cloud
+  firewall).
+  - `terraform/modules/` — shared, reusable Terraform modules (e.g.
+    `terraform/modules/server`).
+  - `terraform/environments/<name>/` — one folder per environment (currently
+    only `prod`), each calling the shared modules with environment-specific
+    variables. New environments are added as new folders, never as branches.
+- `ansible/` — Ansible configures the provisioned host (container runtime,
+  host-level security). Scope stops at the container runtime; it never
+  templates a service-definition file or manages application lifecycle.
+- `platform/` — the shared Compose stack (reverse proxy, shared PostgreSQL
+  instance) that every application on the host depends on, deployed by a
+  mechanism other than Ansible.
 
 ## Local setup
 
 1. Install [pre-commit](https://pre-commit.com/) and the tools its hooks
    shell out to: `terraform`, [`tflint`](https://github.com/terraform-linters/tflint),
-   and [`gitleaks`](https://github.com/gitleaks/gitleaks).
+   [`gitleaks`](https://github.com/gitleaks/gitleaks), and
+   [`ansible-core`](https://pypi.org/project/ansible-core/) (for
+   `ansible-playbook --syntax-check`; `ansible-lint` itself is installed by
+   `pre-commit` into its own managed environment).
 2. From the repo root, run:
 
    ```sh
@@ -66,7 +78,7 @@ addition (see Status below), not a rejected idea.
 
 ## Environment variables and secrets
 
-Each `environments/<env>/terraform.tfvars` is committed and holds **non-secret**
+Each `terraform/environments/<env>/terraform.tfvars` is committed and holds **non-secret**
 configuration only (server type, region, image, allowed CIDRs, labels). Files
 matching `*.secret.tfvars` or `secrets.auto.tfvars` are gitignored and must
 never be committed.
@@ -87,9 +99,9 @@ never be committed.
 ### Testing
 
 Terraform has no traditional unit-test layer here; verification is the
-static checks and plan review above, plus (as `modules/` grows past
-`modules/server`) module-level tests in `modules/<name>/tests/*.tftest.hcl`,
-run via `terraform test`. See
+static checks and plan review above, plus (as `terraform/modules/` grows past
+`terraform/modules/server`) module-level tests in
+`terraform/modules/<name>/tests/*.tftest.hcl`, run via `terraform test`. See
 `openspec/changes/project-foundation/design.md` for the full testing
 strategy.
 
@@ -109,6 +121,11 @@ Cloud project and tokens, GitHub environment/branch settings) — see that
 change's `tasks.md` for the current checklist. Project identity, scope, and
 non-goals are recorded in `openspec/changes/project-foundation/design.md`.
 
-A staging environment (a second `environments/<name>/` folder reusing the
+A staging environment (a second `terraform/environments/<name>/` folder reusing the
 same modules) is anticipated as the next environment after `prod` is fully
 stood up, but is not yet in scope.
+
+The `ansible/` and `platform/` directories, and the `terraform/`/`ansible/`/
+`platform/` structure and pipeline boundary between them, were established by
+`openspec/changes/integrate-ansible-host-config/` — structure and convention
+only; neither directory has role/playbook or Compose service content yet.
