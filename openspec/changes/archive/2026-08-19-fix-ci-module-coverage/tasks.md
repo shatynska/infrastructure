@@ -15,4 +15,4 @@
 ## 3. Rollout
 
 - [x] 3.1 Merge the PR once the `validate` check passes with the new steps green. Merged: PR #27, commit 91052c9b3b7414a0691be59e79c7ee32b5d14f24.
-- [ ] 3.2 Mark this change's tasks complete and archive it.
+- [x] 3.2 Mark this change's tasks complete and archive it.
