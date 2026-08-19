@@ -39,3 +39,19 @@ variable "server_enabled" {
   type        = bool
   default     = true
 }
+
+variable "volume_enabled" {
+  description = "Whether the prod data volume should exist. The volume has no location of its own — it can only exist attached to the prod server — so its actual effective state is volume_enabled AND server_enabled; disabling the server also removes the volume even if this stays true. Set false to detach the volume from management without losing configuration."
+  type        = bool
+  default     = true
+}
+
+variable "volume_name" {
+  description = "Name of the prod data volume."
+  type        = string
+}
+
+variable "volume_size" {
+  description = "Size of the prod data volume in GB."
+  type        = number
+}

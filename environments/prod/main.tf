@@ -22,3 +22,21 @@ module "server" {
   delete_protection = true
   backups           = true
 }
+
+module "volume" {
+  # The volume has no location of its own — it can only be created
+  # attached to the server, so its count depends on both toggles, not
+  # volume_enabled alone. See design.md Decision 3 of the
+  # add-prod-data-volume change.
+  count = var.volume_enabled && var.server_enabled ? 1 : 0
+
+  source = "../../modules/volume"
+
+  environment = "prod"
+
+  name      = var.volume_name
+  size      = var.volume_size
+  server_id = one(module.server[*].id)
+
+  delete_protection = true
+}
