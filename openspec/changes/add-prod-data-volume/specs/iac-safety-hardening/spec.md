@@ -10,7 +10,7 @@ This attribute SHALL NOT be hardcoded, and `lifecycle { prevent_destroy = true }
 - **THEN** the deletion SHALL be refused because the resource carries a server-side protection lock
 
 #### Scenario: Prod volume is protected against console deletion
-- **WHEN** an operator attempts to delete the `production_data` volume through the Hetzner Cloud console or API
+- **WHEN** an operator attempts to delete the `main-data` volume through the Hetzner Cloud console or API
 - **THEN** the deletion SHALL be refused because the resource carries a server-side protection lock
 
 #### Scenario: Shared module remains reusable by a future non-prod environment
@@ -25,5 +25,5 @@ Every `hcloud_*` resource managed by this repository SHALL carry an `environment
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`
 
 #### Scenario: Prod volume is labeled
-- **WHEN** the `production_data` `hcloud_volume` resource is created via `environments/prod/`
+- **WHEN** the `main-data` `hcloud_volume` resource is created via `environments/prod/`
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`

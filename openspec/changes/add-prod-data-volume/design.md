@@ -7,12 +7,12 @@ The Hetzner Cloud Terraform provider's `hcloud_volume` resource takes a `server_
 ## Goals / Non-Goals
 
 **Goals:**
-- A `production_data` volume, 10 GB, attached to the prod server at creation, protected from console deletion, correctly labeled.
+- A `main-data` volume, 10 GB, attached to the prod server at creation, protected from console deletion, correctly labeled.
 - Match the existing `modules/server` conventions closely enough that the two modules read as one system: same labeling locals, same `*_enabled`/`count` toggle idiom, same `delete_protection` variable style.
 
 **Non-Goals:**
 - Filesystem provisioning inside the guest (mounting, `/etc/fstab`, partitioning) — out of scope for this Terraform-layer change; see Decision 4.
-- A generic multi-volume or multi-server attachment mechanism — this covers the single `production_data` volume attached to the single prod server, matching the project's existing single-environment, single-server scope.
+- A generic multi-volume or multi-server attachment mechanism — this covers the single `main-data` volume attached to the single prod server, matching the project's existing single-environment, single-server scope.
 - Detach/reattach-across-servers lifecycle — the volume is expected to stay attached to the prod server for its lifetime; if that ever needs to change, `hcloud_volume_attachment` as a separate resource can be introduced then.
 - The volume outliving the prod server it was created against — see Decision 3. The volume has no location of its own, so it cannot exist while the server is disabled; a future change can add an explicit `location` variable if that independence is ever actually needed.
 
@@ -47,7 +47,7 @@ Mirrors how `modules/server` takes `ssh_key_id` as an input rather than creating
 
 1. Add `modules/volume/{main,variables,outputs,versions}.tf`.
 2. Add `volume_enabled`, `volume_name`, and `volume_size` variables to `environments/prod/variables.tf`; add the `module "volume"` block to `environments/prod/main.tf`, gated by `count = var.volume_enabled && var.server_enabled ? 1 : 0`, with `name = var.volume_name`, `size = var.volume_size`, `server_id = one(module.server[*].id)`.
-3. Add `volume_name = "production_data"`, `volume_size = 10`, `volume_enabled = true` to `environments/prod/terraform.tfvars`.
+3. Add `volume_name = "main-data"`, `volume_size = 10`, `volume_enabled = true` to `environments/prod/terraform.tfvars`.
 4. Add volume outputs to `environments/prod/outputs.tf` (id, `linux_device`) via `one(module.volume[*].*)`.
 5. Verify locally: `terraform fmt -check -recursive`, `terraform validate`, `terraform plan` (read-only token) — expect one `hcloud_volume` addition, attached to the existing server, no changes to the server or firewall.
 6. Open a PR, confirm the plan comment matches, merge, approve the gated apply.

@@ -34,7 +34,7 @@ mock_provider "hcloud" {}
 
 variables {
   environment       = "prod"
-  name              = "production_data"
+  name              = "main-data"
   size              = 10
   server_id         = "12345"
   delete_protection = true

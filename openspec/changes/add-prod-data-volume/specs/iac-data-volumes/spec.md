@@ -13,7 +13,7 @@ Configuration values SHALL remain declared in the environment's variables and no
 
 #### Scenario: Toggle enabled creates the volume
 - **WHEN** the prod environment's volume-enabled variable is `true` and the prod server is also enabled
-- **THEN** `terraform plan` SHALL show the `production_data` volume and its configuration exactly as declared
+- **THEN** `terraform plan` SHALL show the `main-data` volume and its configuration exactly as declared
 
 #### Scenario: Volume toggle disabled creates nothing
 - **WHEN** the prod environment's volume-enabled variable is `false`
@@ -33,9 +33,9 @@ The prod volume SHALL be attached to the prod server at creation by setting the 
 The volume SHALL take its location from the server it is attached to rather than declaring a redundant, independently-specified location, since Hetzner requires a volume and the server it is attached to share the same location.
 
 #### Scenario: Volume is created already attached
-- **WHEN** the `production_data` volume is created with the prod server enabled
+- **WHEN** the `main-data` volume is created with the prod server enabled
 - **THEN** the volume SHALL be attached to that server, with no separate attachment step required after creation
 
 #### Scenario: Volume shares the server's location
-- **WHEN** the `production_data` volume is created
+- **WHEN** the `main-data` volume is created
 - **THEN** its location SHALL match the prod server's location, derived from the attachment rather than independently configured

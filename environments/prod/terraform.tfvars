@@ -14,5 +14,5 @@ web_allowed_cidrs = ["0.0.0.0/0"]
 server_enabled = true
 
 volume_enabled = true
-volume_name    = "production_data"
+volume_name    = "main-data"
 volume_size    = 10
