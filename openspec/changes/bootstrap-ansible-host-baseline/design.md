@@ -142,11 +142,16 @@ different layer. See Risks / Trade-offs.
   to get wrong on its end — it either calls the one permitted command or it
   doesn't.
 - [Non-interactive `sudo` over CI-driven SSH may require `requiretty` to be
-  unset for `deploy`, which isn't stated anywhere by default] → The
-  `deploy_user` role SHALL explicitly ensure `deploy` is exempted from any
-  `requiretty` default (or that none is set), and tasks.md includes a
-  verification step invoking the permitted command the same way CI will
-  (`ssh deploy@host sudo /usr/local/bin/platform-compose-deploy`, no PTY).
+  unset for `deploy`] → **Resolved during the real implementation run**,
+  not by an explicit override: the actual target's sudo build (Ubuntu
+  26.04) doesn't recognize `requiretty` as a setting at all —
+  `visudo -cf` rejected `Defaults:deploy !requiretty` outright as an
+  "unknown setting," not merely inapplicable. Since Debian/Ubuntu's stock
+  sudoers has never set `Defaults requiretty` globally either, there was
+  never a state to counteract; the role no longer contains this line (see
+  `ansible/roles/deploy_user/tasks/main.yml`'s comment). Non-interactive
+  invocation still needs verifying end-to-end (tasks.md 3.5), but not via
+  this mechanism.
 - [**Accepted risk**: `deploy` can escalate to root by writing a hostile
   `docker-compose.yml` into the directory it owns, then triggering the one
   permitted command — the invocation is restricted, but the content it

@@ -64,6 +64,14 @@
 # specification in sudoers matches only an invocation with zero
 # arguments, so appending anything to this command is denied by sudo
 # itself, not by anything this task does at runtime.
+#
+# No `Defaults:deploy !requiretty` line: on the actual target (Ubuntu
+# 26.04's sudo build), visudo rejects `requiretty` outright as an
+# "unknown setting" -- not merely inapplicable here, genuinely absent
+# from this sudo's grammar. Since Debian/Ubuntu's stock sudoers has never
+# set `Defaults requiretty` globally either, there was never a state this
+# override needed to counteract; see design.md's Risks entry, corrected
+# to match what this run found.
 - name: Grant deploy a NOPASSWD sudo rule scoped to exactly the wrapper script
   ansible.builtin.copy:
     dest: /etc/sudoers.d/deploy
@@ -72,5 +80,4 @@
     mode: "0440"
     content: |
       deploy ALL=(root) NOPASSWD: /usr/local/bin/platform-compose-deploy
-      Defaults:deploy !requiretty
     validate: "visudo -cf %s"

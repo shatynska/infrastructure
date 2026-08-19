@@ -1,4 +1,11 @@
 ---
+# The prod server was created with only a single SSH key and no root
+# password (terraform/modules/server/main.tf's own comment: providing a
+# key at creation means Hetzner never sets one) -- root is the only
+# login this host has. Without this, Ansible defaults to the local
+# operator's own username, which fails with "Permission denied".
+ansible_user: root
+
 # Non-secret prod configuration, mirroring
 # terraform/environments/prod/terraform.tfvars's ssh_allowed_cidrs and
 # web_allowed_cidrs exactly -- see ansible/roles/hardening/README.md for
