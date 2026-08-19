@@ -7,7 +7,7 @@ GitHub Actions workflows covering PR validation/planning, saved-plan gated apply
 ### Requirement: Pull Request Validation Checks
 Every pull request that changes Terraform configuration SHALL trigger a GitHub Actions workflow that runs `terraform fmt -check`, `terraform validate`, `tflint`, Trivy misconfiguration scanning, and `gitleaks` secret scanning.
 
-`terraform validate` and `tflint` SHALL run against every directory under `modules/` and `environments/` that contains Terraform configuration, discovered rather than enumerated by a fixed list of directory names. A directory added under `modules/` or `environments/` SHALL be covered by these checks without any workflow edit.
+`terraform validate` and `tflint` SHALL run against every directory under `terraform/modules/` and `terraform/environments/` that contains Terraform configuration, discovered rather than enumerated by a fixed list of directory names. A directory added under `terraform/modules/` or `terraform/environments/` SHALL be covered by these checks without any workflow edit.
 
 Any module directory containing `*.tftest.hcl` test files SHALL also have `terraform test` run against it as part of the same workflow.
 
@@ -26,11 +26,11 @@ Any module directory containing `*.tftest.hcl` test files SHALL also have `terra
 - **THEN** it SHALL complete without requiring a `GITLEAKS_LICENSE` secret or any other paid license credential
 
 #### Scenario: A newly added module is validated and linted without a workflow change
-- **WHEN** a pull request adds a new directory under `modules/` containing Terraform configuration, and no change is made to `pr-validation.yml` to name that directory
+- **WHEN** a pull request adds a new directory under `terraform/modules/` containing Terraform configuration, and no change is made to `pr-validation.yml` to name that directory
 - **THEN** the validation workflow SHALL still run `terraform validate` and `tflint` against that directory
 
 #### Scenario: A module's tests run in CI
-- **WHEN** a pull request changes a directory under `modules/` that contains `*.tftest.hcl` files
+- **WHEN** a pull request changes a directory under `terraform/modules/` that contains `*.tftest.hcl` files
 - **THEN** the validation workflow SHALL run `terraform test` against that directory and fail the check if any test fails
 
 ### Requirement: Required Status Checks Report on Every Pull Request
@@ -39,14 +39,14 @@ The pull request check that is registered as a required status check SHALL repor
 Terraform work MAY be path-filtered, but the filtering SHALL occur *inside* an always-running job rather than via a workflow-level `paths` filter. A workflow-level `paths` filter on a required check never reports for non-matching pull requests, leaving those pull requests permanently unmergeable under the branch protection rule below.
 
 #### Scenario: Documentation-only pull request remains mergeable
-- **WHEN** a pull request changes only files outside `environments/` and `modules/` (e.g. a README)
+- **WHEN** a pull request changes only files outside `terraform/environments/` and `terraform/modules/` (e.g. a README)
 - **THEN** the required status check SHALL report success rather than remaining pending, and the pull request SHALL be mergeable
 
 ### Requirement: Pull Request Plan Visibility
 When validation checks pass, the workflow SHALL run `terraform plan` against the prod environment and post the full plan output as a comment on the pull request.
 
 #### Scenario: Reviewer sees the plan without leaving GitHub
-- **WHEN** validation checks pass on a pull request that changes `environments/prod/` or `modules/`
+- **WHEN** validation checks pass on a pull request that changes `terraform/environments/prod/` or `terraform/modules/`
 - **THEN** the workflow SHALL post the resulting `terraform plan` output as a PR comment, viewable directly in the GitHub pull request
 
 ### Requirement: Credential Scoping by Privilege
@@ -92,7 +92,7 @@ This ensures the approving reviewer sees the exact diff that will be applied. A 
 Because a saved plan file stores sensitive values in cleartext, the `tfplan` artifact SHALL be treated as a secret: retention SHALL be set to the shortest workable period, and the artifact SHALL NOT be produced in a public repository without symmetric encryption using a key held in repository secrets.
 
 #### Scenario: Merge does not apply immediately
-- **WHEN** a pull request changing `environments/prod/` is merged to `main`
+- **WHEN** a pull request changing `terraform/environments/prod/` is merged to `main`
 - **THEN** the apply job SHALL pause and wait for a required reviewer to approve the `production` GitHub Environment before running `terraform apply`
 
 #### Scenario: Reviewer sees the exact diff before approving

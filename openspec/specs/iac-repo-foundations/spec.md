@@ -67,7 +67,7 @@ Variable files SHALL be split by sensitivity rather than excluded wholesale:
 
 | File | Tracked | Contents |
 |---|---|---|
-| `environments/<env>/terraform.tfvars` | Committed | Non-secret environment configuration (server type, region, image, labels, allowed CIDRs) |
+| `terraform/environments/<env>/terraform.tfvars` | Committed | Non-secret environment configuration (server type, region, image, labels, allowed CIDRs) |
 | `*.secret.tfvars`, `secrets.auto.tfvars` | Ignored | Any values that must not enter version control |
 
 A blanket `*.tfvars` ignore rule SHALL NOT be used: CI runs `terraform plan` and `apply` from a clean checkout and requires the non-secret environment configuration to be present in the repository.
@@ -77,7 +77,7 @@ A blanket `*.tfvars` ignore rule SHALL NOT be used: CI runs `terraform plan` and
 - **THEN** `git status` SHALL NOT show these files as trackable/stageable
 
 #### Scenario: CI has the environment configuration it needs
-- **WHEN** a CI job checks out the repository and runs `terraform plan` against `environments/prod/`
+- **WHEN** a CI job checks out the repository and runs `terraform plan` against `terraform/environments/prod/`
 - **THEN** the non-secret `terraform.tfvars` values SHALL be present in the checkout, requiring no out-of-band file injection
 
 #### Scenario: Secret-bearing variable file is not committable

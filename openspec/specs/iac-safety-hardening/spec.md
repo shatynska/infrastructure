@@ -7,7 +7,7 @@ Guardrails against destructive, unnoticed, or externally-exposed changes — del
 ### Requirement: Provider-Level Deletion Protection
 Servers and any future volumes managed by this repository SHALL set the Hetzner provider's `delete_protection` attribute (with `rebuild_protection` set to match on resources that support it, as the provider requires), exposed as a module variable so each environment can choose its own value.
 
-This attribute SHALL NOT be hardcoded, and `lifecycle { prevent_destroy = true }` SHALL NOT be declared inside shared modules under `modules/`. `prevent_destroy` accepts only a literal value — it cannot read a variable — so placing it in a shared module would make that module permanently undestroyable for every consumer, preventing a future non-prod environment from ever being torn down. Literal `prevent_destroy` MAY be used for genuinely never-destroy resources declared in an environment-specific file under `environments/prod/`.
+This attribute SHALL NOT be hardcoded, and `lifecycle { prevent_destroy = true }` SHALL NOT be declared inside shared modules under `terraform/modules/`. `prevent_destroy` accepts only a literal value — it cannot read a variable — so placing it in a shared module would make that module permanently undestroyable for every consumer, preventing a future non-prod environment from ever being torn down. Literal `prevent_destroy` MAY be used for genuinely never-destroy resources declared in an environment-specific file under `terraform/environments/prod/`.
 
 #### Scenario: Prod server is protected against console deletion
 - **WHEN** an operator attempts to delete the prod server through the Hetzner Cloud console or API
@@ -18,7 +18,7 @@ This attribute SHALL NOT be hardcoded, and `lifecycle { prevent_destroy = true }
 - **THEN** the deletion SHALL be refused because the resource carries a server-side protection lock
 
 #### Scenario: Shared module remains reusable by a future non-prod environment
-- **WHEN** a future environment consumes `modules/server` or `modules/volume` and sets its deletion-protection variable to `false`
+- **WHEN** a future environment consumes `terraform/modules/server` or `terraform/modules/volume` and sets its deletion-protection variable to `false`
 - **THEN** that environment's resources SHALL be destroyable via `terraform destroy` without editing the shared module
 
 ### Requirement: Data Durability for Stateful Resources
@@ -27,7 +27,7 @@ The prod server SHALL have `backups = true`.
 Deletion protection and destroy gating protect the *resource*; neither protects the *data* on its disk against corruption, accidental deletion inside the guest, or filesystem loss. Restoring from a backup is the only remedy for those, and no Terraform-level guardrail substitutes for it. This is accepted at the cost of Hetzner's 20% backup surcharge on the server price.
 
 #### Scenario: Server is created with backups enabled
-- **WHEN** the prod server is created via `environments/prod/`
+- **WHEN** the prod server is created via `terraform/environments/prod/`
 - **THEN** automatic backups SHALL be enabled on it
 
 ### Requirement: Default-Deny Network Baseline
@@ -54,11 +54,11 @@ Servers SHALL be provisioned with SSH public key authentication via `hcloud_ssh_
 Every `hcloud_*` resource managed by this repository SHALL carry an `environment` label matching its environment folder and a `managed_by = "terraform"` label.
 
 #### Scenario: Prod resources are labeled
-- **WHEN** a `hcloud_server` resource is created via `environments/prod/`
+- **WHEN** a `hcloud_server` resource is created via `terraform/environments/prod/`
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`
 
 #### Scenario: Prod volume is labeled
-- **WHEN** the `main-data` `hcloud_volume` resource is created via `environments/prod/`
+- **WHEN** the `main-data` `hcloud_volume` resource is created via `terraform/environments/prod/`
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`
 
 ### Requirement: Write Credentials Confined to the Gated Pipeline
@@ -71,11 +71,11 @@ Because the workspace's Execution Mode is Local, the destroy-policy gate, the sa
 The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents.
 
 #### Scenario: Local apply is refused by the API
-- **WHEN** an operator or coding agent runs `terraform apply` from a workstation against `environments/prod/`
+- **WHEN** an operator or coding agent runs `terraform apply` from a workstation against `terraform/environments/prod/`
 - **THEN** the Hetzner Cloud API SHALL reject the write, because the only token available locally is read-only
 
 #### Scenario: Local plan remains available
-- **WHEN** an operator runs `terraform plan` from a workstation against `environments/prod/`
+- **WHEN** an operator runs `terraform plan` from a workstation against `terraform/environments/prod/`
 - **THEN** it SHALL succeed using the read-only token, so that local iteration never requires write credentials
 
 #### Scenario: An agent opening the repository is told the boundary
