@@ -33,8 +33,8 @@ jobs:
         with:
           filters: |
             terraform:
-              - 'environments/**'
-              - 'modules/**'
+              - 'terraform/environments/**'
+              - 'terraform/modules/**'
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth
       # (its "dynamic credentials" feature authenticates providers during
@@ -55,7 +55,7 @@ jobs:
         if: steps.changes.outputs.terraform == 'true'
         run: terraform fmt -check -recursive
 
-      # validate/tflint/test discover modules/*/environments/* directories
+      # validate/tflint/test discover terraform/modules/*/ and terraform/environments/* directories
       # rather than naming them, so a directory added under either one is
       # covered without a workflow edit — see
       # openspec/changes/fix-ci-module-coverage.
@@ -63,7 +63,7 @@ jobs:
         if: steps.changes.outputs.terraform == 'true'
         run: |
           set -euo pipefail
-          for dir in modules/*/ environments/*/; do
+          for dir in terraform/modules/*/ terraform/environments/*/; do
             if compgen -G "${dir}*.tf" >/dev/null; then
               echo "::group::terraform validate ${dir}"
               (cd "$dir" && terraform init -backend=false && terraform validate)
@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           tflint --init --config="${{ github.workspace }}/.tflint.hcl"
-          for dir in modules/*/ environments/*/; do
+          for dir in terraform/modules/*/ terraform/environments/*/; do
             if compgen -G "${dir}*.tf" >/dev/null; then
               tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir="${dir%/}"
             fi
@@ -92,7 +92,7 @@ jobs:
         if: steps.changes.outputs.terraform == 'true'
         run: |
           set -euo pipefail
-          for dir in modules/*/; do
+          for dir in terraform/modules/*/; do
             if compgen -G "${dir}tests/*.tftest.hcl" >/dev/null; then
               echo "::group::terraform test ${dir}"
               (cd "$dir" && terraform test)
@@ -137,7 +137,7 @@ jobs:
       - name: terraform plan
         if: steps.changes.outputs.terraform == 'true'
         id: plan
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
@@ -148,7 +148,7 @@ jobs:
           plan_exit=$?
           set -e
           {
-            echo '### Terraform Plan — `environments/prod`'
+            echo '### Terraform Plan — `terraform/environments/prod`'
             echo
             echo '```'
             cat plan_output.txt
@@ -175,4 +175,4 @@ jobs:
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
           edit-mode: replace
-          body-path: environments/prod/comment_body.md
+          body-path: terraform/environments/prod/comment_body.md

@@ -33,7 +33,7 @@ jobs:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: terraform init
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         run: terraform init
 
       # Runs with -lock=false: this plan writes nothing, and taking the
@@ -44,7 +44,7 @@ jobs:
       # Drift Detection requirement.
       - name: terraform plan
         id: plan
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
@@ -55,13 +55,13 @@ jobs:
           cat plan_output.txt
 
       - name: Report drift as a deduplicated issue
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         env:
           GH_TOKEN: ${{ github.token }}
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
         run: |
           set -euo pipefail
-          issue_title="Terraform drift detected: environments/prod"
+          issue_title="Terraform drift detected: terraform/environments/prod"
           existing=$(gh issue list --search "\"$issue_title\" in:title" --state open --json number --jq '.[0].number // empty')
 
           if [ "$EXIT_CODE" = "0" ]; then

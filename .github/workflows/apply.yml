@@ -57,21 +57,21 @@ jobs:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: terraform init
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         run: terraform init
 
       - name: terraform plan
         id: plan
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: terraform plan -no-color -input=false -out=tfplan
 
       - name: Write plan to job summary
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         run: |
           {
-            echo '### Terraform Plan — `environments/prod`'
+            echo '### Terraform Plan — `terraform/environments/prod`'
             echo
             echo '```'
             terraform show -no-color tfplan
@@ -85,7 +85,7 @@ jobs:
       # Destroy Policy Gate requirement.
       - name: Destroy-policy gate
         id: destroy_gate
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
@@ -162,7 +162,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
-          path: environments/prod/tfplan
+          path: terraform/environments/prod/tfplan
           retention-days: 1 # tfplan holds sensitive values in cleartext
 
   apply:
@@ -190,7 +190,7 @@ jobs:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: terraform init
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         run: terraform init
 
       # Fails cleanly (rather than applying a stale or missing plan) if
@@ -202,7 +202,7 @@ jobs:
         continue-on-error: true
         with:
           name: tfplan
-          path: environments/prod
+          path: terraform/environments/prod
 
       - name: Fail cleanly if the plan artifact is unavailable
         if: steps.download.outcome == 'failure'
@@ -211,7 +211,7 @@ jobs:
           exit 1
 
       - name: terraform apply
-        working-directory: environments/prod
+        working-directory: terraform/environments/prod
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: terraform apply -input=false tfplan

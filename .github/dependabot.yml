@@ -2,8 +2,8 @@ version: 2
 updates:
   - package-ecosystem: "terraform"
     directories:
-      - "/environments/prod"
-      - "/modules/server"
+      - "/terraform/environments/prod"
+      - "/terraform/modules/server"
     schedule:
       interval: "weekly"
 
