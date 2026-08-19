@@ -24,7 +24,7 @@
 ## 4. Rollout
 
 - [x] 4.1 Commit and open a PR against `main`. https://github.com/shatynska/infrastructure/pull/25
-- [ ] 4.2 Confirm the PR's `validate` check passes and its plan comment matches the local plan from 3.4.
+- [x] 4.2 Confirm the PR's `validate` check passes and its plan comment matches the local plan from 3.4. `validate` passed. Plan comment differs from what 3.4 anticipated (that assumed the server already existed) — CI's plan revealed the live prod server had drifted (deleted outside of Terraform), so this PR now also recreates the server under the corrected `main-server`/`cx33` config (a pending, previously-uncommitted local edit, folded into this PR by user decision) alongside the volume: `2 to add, 1 to change (firewall rename, cosmetic), 0 to destroy`. No destroy-policy override label needed.
 - [ ] 4.3 Merge the PR and approve the gated `production` apply.
 - [ ] 4.4 Confirm the apply succeeds: `production_data` volume created and attached, server and firewall unchanged, no errors.
 - [ ] 4.5 Confirm via the Hetzner API or console that the volume is attached to `main-server`, sized 10 GB, and carries `environment = prod` / `managed_by = terraform` labels.
