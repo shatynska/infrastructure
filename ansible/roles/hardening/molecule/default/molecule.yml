@@ -1,0 +1,38 @@
+---
+# Molecule scenario for the `hardening` role (UFW + fail2ban). Same
+# convention as the `docker` role's scenario -- see its molecule.yml for
+# the rationale shared across roles. Run via `molecule test` from
+# ansible/roles/hardening/.
+dependency:
+  name: galaxy
+  options:
+    # This role is hand-written (no external role pinned for it, per
+    # design.md), but its UFW tasks will plausibly need the
+    # `community.general.ufw` module, which is not currently pinned in
+    # ansible/requirements.yml -- see test-manifest.md's unresolved
+    # project questions. This dependency step installs whatever *is*
+    # pinned there so converge has it available once added.
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # systemd is required: UFW and fail2ban are managed as services, and
+  # fail2ban-client/ufw status both expect a running init system.
+  - name: hardening-role-instance
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+
+verifier:
+  name: ansible
