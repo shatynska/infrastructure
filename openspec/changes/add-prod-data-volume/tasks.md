@@ -23,7 +23,7 @@
 
 ## 4. Rollout
 
-- [ ] 4.1 Commit and open a PR against `main`.
+- [x] 4.1 Commit and open a PR against `main`. https://github.com/shatynska/infrastructure/pull/25
 - [ ] 4.2 Confirm the PR's `validate` check passes and its plan comment matches the local plan from 3.4.
 - [ ] 4.3 Merge the PR and approve the gated `production` apply.
 - [ ] 4.4 Confirm the apply succeeds: `production_data` volume created and attached, server and firewall unchanged, no errors.
