@@ -1,0 +1,117 @@
+name: Platform Deploy
+
+# Diff-then-gated-deploy, mirroring apply.yml's plan/apply split so the
+# production Environment's approver sees the exact diff before approving
+# -- see the Reviewer Sees the Exact Diff Before Approving requirement in
+# iac-platform-deploy-pipeline. Not a required PR check; only the
+# validation step in pr-validation.yml is that.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "platform/**"
+
+# State on the host isn't locked the way Terraform state is; queue
+# deploys instead of allowing two to overlap or race, same reasoning as
+# apply.yml's Serialized Terraform Runs precedent (Serialized Deploys
+# requirement here).
+concurrency:
+  group: platform-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    name: diff
+    runs-on: ubuntu-latest
+    # No `environment:` here -- must start immediately, with no access to
+    # the deploy credential. See Reviewer Sees the Exact Diff Before
+    # Approving and Deploy Credential Confined to the Gated Job.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Write platform/ diff to job summary
+        run: |
+          {
+            echo '### platform/ diff — this merge'
+            echo
+            echo '```diff'
+            git diff "${{ github.event.before }}" "${{ github.sha }}" -- platform/
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: deploy
+    needs: diff
+    runs-on: ubuntu-latest
+    environment: production # gates this job on required-reviewer approval
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Rendered fresh each run from Environment-scoped secrets -- never
+      # committed, never logged. See Platform Secrets Rendered from CI at
+      # Deploy Time.
+      - name: Render .env from secrets
+        run: |
+          umask 077
+          {
+            echo "ACME_EMAIL=${{ secrets.PLATFORM_ACME_EMAIL }}"
+            echo "POSTGRES_USER=${{ secrets.PLATFORM_POSTGRES_USER }}"
+            echo "POSTGRES_PASSWORD=${{ secrets.PLATFORM_POSTGRES_PASSWORD }}"
+          } >platform/.env
+
+      # PLATFORM_DEPLOY_SSH_KEY is the private half of the keypair
+      # bootstrap-ansible-host-baseline's deploy_user role installs the
+      # public half of -- generated out-of-band there (its tasks.md 3.2),
+      # not here. Both this key and the three secrets above SHALL be
+      # scoped to the `production` Environment specifically (GitHub
+      # resolves an Environment-scoped secret ahead of a repository-scoped
+      # one of the same name, mirroring apply.yml's HCLOUD_TOKEN pattern),
+      # since the sibling change's accepted content-layer trust boundary
+      # depends on this key being unreadable before this job's approval
+      # gate is passed.
+      - name: Set up the deploy SSH key
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.PLATFORM_DEPLOY_SSH_KEY }}" >~/.ssh/platform_deploy_key
+          chmod 600 ~/.ssh/platform_deploy_key
+          ssh-keyscan -H "${{ secrets.PLATFORM_DEPLOY_HOST }}" >>~/.ssh/known_hosts
+
+      # /opt/platform is deploy's home directory, already provisioned
+      # deploy-owned by bootstrap-ansible-host-baseline -- this workflow
+      # creates nothing there itself.
+      - name: Copy docker-compose.yml and .env to the host
+        run: |
+          scp -i ~/.ssh/platform_deploy_key \
+            platform/docker-compose.yml platform/.env \
+            "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}:/opt/platform/"
+
+      # Satisfies iac-platform-services's restrictive-permissions
+      # requirement on rendered secret files.
+      - name: Tighten .env permissions on the host
+        run: |
+          ssh -i ~/.ssh/platform_deploy_key "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}" \
+            'chmod 600 /opt/platform/.env'
+
+      # The one fixed, argument-free command bootstrap-ansible-host-
+      # baseline's sudoers.d rule permits -- no `-f`, no working
+      # directory, no other argument. `docker compose up -d --wait`
+      # inside that script blocks until every service is running/healthy
+      # and exits non-zero otherwise, which is what fails this step (and
+      # therefore this job) on a partial deploy -- no separate
+      # post-deploy health check is added here.
+      - name: Trigger the deploy wrapper script
+        run: |
+          ssh -i ~/.ssh/platform_deploy_key "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}" \
+            'sudo /usr/local/bin/platform-compose-deploy'

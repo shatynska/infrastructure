@@ -1,0 +1,52 @@
+services:
+  traefik:
+    image: traefik:v3.2
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      # Only route containers that opt in via a `traefik.enable=true`
+      # label -- an application repo's own service, not this stack's.
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=platform_edge
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only: Traefik only needs to list containers and their labels
+      # to build its routing table, per its Docker provider's documented
+      # requirements.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - platform_edge
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - platform_edge
+    # No published host port: per-application databases live inside this
+    # one shared instance (iac-platform-services), reached only via the
+    # platform_edge network, not the host's network interface.
+
+networks:
+  platform_edge:
+    # Fixed, literal name -- not Compose's default project-prefixed name
+    # -- so a separate application repository's own docker-compose.yml
+    # can declare this same network as `external: true` and join it. See
+    # README.md for how an application repo does that.
+    name: platform_edge
+
+volumes:
+  traefik_letsencrypt:
+  postgres_data:
