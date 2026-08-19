@@ -30,9 +30,13 @@ already depends on running successfully.
 **Non-Goals:**
 - Deciding per-application database/user provisioning mechanics — noted as
   a follow-up in proposal.md.
-- Opening `web_allowed_cidrs` at the Terraform layer — a separate change;
-  this stack's Compose file and workflow can be built and merged before
-  that lands, they just won't serve public traffic until it does.
+- Changing `web_allowed_cidrs` at the Terraform layer — not needed, it's
+  already set to `["0.0.0.0/0"]` (corrected from an earlier, incorrect
+  "currently unset" assumption; see the sibling change's design.md for
+  how that error was made). This stack's Compose file and workflow can be
+  built and merged independent of the sibling change's UFW work, but
+  Traefik won't actually be reachable until that sibling change's host
+  firewall rules also allow 80/443.
 - Choosing the deploy account's restriction shape or its privileged
   command — settled by `bootstrap-ansible-host-baseline`, not here: a
   plain restricted user (ordinary `scp`/`ssh`, no SSH-layer forced
@@ -162,10 +166,15 @@ for application-platform changes needs to diverge.
   for this change (inherent to the already-decided "one shared instance"
   requirement in `iac-platform-services`); mitigation is future work
   (connection limits, per-database roles) if it becomes a problem.
-- [This stack can be merged before `web_allowed_cidrs` is set, producing a
-  Traefik that can't obtain ACME certificates yet] → Acceptable: the stack
-  simply won't serve public HTTPS until the Terraform change lands; no
-  broken intermediate state, just an inert one.
+- [This stack can be merged before `bootstrap-ansible-host-baseline`'s UFW
+  rules actually allow 80/443 at the host layer, producing a Traefik that
+  can't obtain ACME certificates yet] → Acceptable: the stack simply won't
+  serve public HTTPS until that sibling change's host firewall rules land;
+  no broken intermediate state, just an inert one. (Earlier drafts of this
+  entry attributed the blocker to an unset `web_allowed_cidrs` at the
+  Terraform layer — that was incorrect; the cloud firewall already allows
+  it, the sibling change's host-level UFW rules are the actual remaining
+  prerequisite.)
 - [`docker compose pull` succeeds but `up -d` fails partway (bad `.env`,
   port conflict, image pull auth), leaving a mixed running/updated state]
   → Mitigated by `platform-compose-deploy`'s use of `docker compose up -d

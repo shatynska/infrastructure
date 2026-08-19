@@ -34,11 +34,15 @@ deploy and update it.
 - **Depends on** `bootstrap-ansible-host-baseline`: the `deploy` account and
   its SSH key must exist on the host before this workflow's deploy job can
   authenticate. This change does not provision that account itself.
-- Does not open HTTP/HTTPS at the Hetzner cloud firewall layer
-  (`web_allowed_cidrs` in `terraform/environments/prod/terraform.tfvars` is
-  currently unset) — that is a separate, small Terraform change and a
-  prerequisite for Traefik to serve any public traffic, tracked as an
-  external dependency rather than folded in here.
+- HTTP/HTTPS are already open at the Hetzner cloud firewall layer
+  (`web_allowed_cidrs` in `terraform/environments/prod/terraform.tfvars`
+  is set to `["0.0.0.0/0"]` — corrected here from an earlier, incorrect
+  assumption that it was unset, made from a grep pattern that never
+  actually searched for that string). No separate Terraform change is
+  needed for Traefik to serve public traffic; the remaining prerequisite
+  is the sibling `bootstrap-ansible-host-baseline` change's UFW rules
+  actually allowing 80/443 at the host layer too (its tasks.md now sets
+  this explicitly in `prod`'s group_vars).
 - Does not define the per-application database provisioning process (how a
   new application actually gets a database inside the shared Postgres
   instance) — flagged as a follow-up, not solved by this change.
@@ -63,8 +67,6 @@ deploy and update it.
   new.
 - `.github/workflows/` — new workflow file for platform validation + deploy.
 - Requires `bootstrap-ansible-host-baseline` to be implemented first (the
-  `deploy` account/key it provisions).
-- Requires a small, separate Terraform change to set `web_allowed_cidrs`
-  before Traefik can serve public HTTP/HTTPS traffic — noted as a blocker,
-  not addressed here.
+  `deploy` account/key it provisions, and its UFW rules actually letting
+  80/443 through at the host layer — the cloud layer already does).
 - No changes to `ansible/` or `terraform/` in this change.

@@ -16,9 +16,11 @@ mechanism will depend on: a restricted deploy account.
   (`ansible/requirements.yml`), satisfying the existing "Container Runtime
   Installed via Pinned External Role or Equivalent" requirement.
 - Add host-level hardening: a UFW firewall mirroring what the Hetzner cloud
-  firewall allows (SSH from the configured CIDRs today; HTTP/HTTPS once
-  `web_allowed_cidrs` is set in Terraform) and fail2ban, satisfying the
-  existing "Host-Level Security Owned by Ansible, Cloud Firewall Owned by
+  firewall allows today — SSH from the configured CIDR, and HTTP/HTTPS
+  from `0.0.0.0/0` (`web_allowed_cidrs` is already set in
+  `terraform/environments/prod/terraform.tfvars`, opening 80/443 at the
+  cloud layer already) — and fail2ban, satisfying the existing
+  "Host-Level Security Owned by Ansible, Cloud Firewall Owned by
   Terraform" requirement.
 - **New requirement** on `iac-host-configuration`: provision a dedicated,
   restricted `deploy` system account and SSH keypair, scoped to operating

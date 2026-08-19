@@ -45,14 +45,14 @@ is still accounted for.
 ## Delta-spec scenario accounting (4/4)
 
 Requirement: **Restricted Deploy Account for Platform Stack Access**
-(ADDED, `ansible/roles/deploy-user`)
+(ADDED, `ansible/roles/deploy_user`)
 
 | # | Scenario | Test(s) | Status |
 |---|---|---|---|
-| 1 | Deploy account's privileged access is a single fixed action, not arbitrary command injection | `ansible/roles/deploy-user/molecule/default/verify.yml` — tasks: "Assert deploy is not a member of the docker group…", "Assert the sudoers rule is exactly the fixed, argument-free, wildcard-free invocation…", "Assert the wrapper script is root-owned, mode 0755", "Assert sudo itself did not reject the permitted invocation", "Assert appending an argument to the wrapper invocation is denied", "Assert deploy cannot invoke docker directly with elevated privilege", "Assert deploy cannot run an arbitrary privileged command", "Assert deploy cannot modify the wrapper script itself" | Covered |
-| 2 | Deploy account can escalate via the content it is entitled to write | `ansible/roles/deploy-user/molecule/default/verify.yml` — tasks: "Assert /opt/platform is owned deploy:deploy, mode 0750", "Assert the write succeeded…", "Assert the wrapper applies whatever Compose content is present, with no content validation of its own" | Covered (see note below) |
-| 3 | Deploy account is provisioned independently of any operator | `ansible/roles/deploy-user/molecule/default/verify.yml` — tasks: "Assert deploy is a real account with home /opt/platform", "Assert only the test-supplied deploy key is authorized", exercised by `converge.yml` deliberately supplying no operator/personal-key variable | Covered |
-| 4 | Deploy private key is never committed | `ansible/roles/deploy-user/molecule/default/verify.yml` — task: "Assert no private-key marker is committed anywhere under the deploy-user role" (static repo scan, `delegate_to: localhost`) | Covered |
+| 1 | Deploy account's privileged access is a single fixed action, not arbitrary command injection | `ansible/roles/deploy_user/molecule/default/verify.yml` — tasks: "Assert deploy is not a member of the docker group…", "Assert the sudoers rule is exactly the fixed, argument-free, wildcard-free invocation…", "Assert the wrapper script is root-owned, mode 0755", "Assert sudo itself did not reject the permitted invocation", "Assert appending an argument to the wrapper invocation is denied", "Assert deploy cannot invoke docker directly with elevated privilege", "Assert deploy cannot run an arbitrary privileged command", "Assert deploy cannot modify the wrapper script itself" | Covered |
+| 2 | Deploy account can escalate via the content it is entitled to write | `ansible/roles/deploy_user/molecule/default/verify.yml` — tasks: "Assert /opt/platform is owned deploy:deploy, mode 0750", "Assert the write succeeded…", "Assert the wrapper applies whatever Compose content is present, with no content validation of its own" | Covered (see note below) |
+| 3 | Deploy account is provisioned independently of any operator | `ansible/roles/deploy_user/molecule/default/verify.yml` — tasks: "Assert deploy is a real account with home /opt/platform", "Assert only the test-supplied deploy key is authorized", exercised by `converge.yml` deliberately supplying no operator/personal-key variable | Covered |
+| 4 | Deploy private key is never committed | `ansible/roles/deploy_user/molecule/default/verify.yml` — task: "Assert no private-key marker is committed anywhere under the deploy_user role" (static repo scan, `delegate_to: localhost`) | Covered |
 
 **Note on scenario 2**: its normative content is that content-layer
 escalation is *not* prevented and is explicitly out of scope for this
@@ -116,7 +116,7 @@ rather than silently skipped.
 - **Deliberately untested** (identified, not silently dropped):
   - An actual end-to-end run of `docker compose pull && docker compose up
     -d --wait` through the wrapper against real Compose content. The
-    `deploy-user` role's Molecule scenario deliberately does not install
+    `deploy_user` role's Molecule scenario deliberately does not install
     Docker (see its `molecule.yml` comment) to keep this role's tests
     independent of the `docker` role, per design.md's "each can be
     run/tested independently" rationale. Full end-to-end verification
@@ -156,9 +156,9 @@ during implementation.
 1. **Role variable interface.** No implementation exists, so I invented
    variable names the tests assume the roles will expose:
    `hardening_ssh_allowed_cidrs` / `hardening_web_allowed_cidrs` (hardening
-   role) and `deploy_user_public_key` (deploy-user role). Every test in
+   role) and `deploy_user_public_key` (deploy_user role). Every test in
    `hardening/molecule/default/{converge,verify}.yml` and
-   `deploy-user/molecule/default/converge.yml` depends on these exact
+   `deploy_user/molecule/default/converge.yml` depends on these exact
    names. If the implementer picks different names, either the role
    should accept these, or these test files' `vars:` need updating to
    match — that update is additive/mechanical, not a rewrite of what's
@@ -169,7 +169,7 @@ during implementation.
    `ansible/requirements.yml` does not currently pin the
    `community.general` collection. Flagged as a probable gap for the
    implementer to close (add and pin it) rather than assumed silently;
-   the hardening/deploy-user `molecule.yml` files' `dependency:` step
+   the hardening/deploy_user `molecule.yml` files' `dependency:` step
    already points at `ansible/requirements.yml` so the pin will be
    installed automatically once added.
 3. **Test image OS does not match production exactly.** All three
@@ -206,7 +206,7 @@ during implementation.
 - `ansible/requirements-test.txt`
 - `ansible/roles/docker/molecule/default/{molecule.yml,converge.yml,verify.yml}`
 - `ansible/roles/hardening/molecule/default/{molecule.yml,converge.yml,verify.yml}`
-- `ansible/roles/deploy-user/molecule/default/{molecule.yml,converge.yml,verify.yml}`
+- `ansible/roles/deploy_user/molecule/default/{molecule.yml,converge.yml,verify.yml}`
 - `openspec/changes/bootstrap-ansible-host-baseline/test-manifest.md` (this file)
 
 No playbook or role implementation code was written. No existing test was

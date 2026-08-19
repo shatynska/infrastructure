@@ -8,6 +8,18 @@ proposal.md for why this change exists now: `platform/`'s Compose stack
 (Traefik + Postgres, proposed separately) needs a deploy account to exist
 before its GitHub Actions workflow can be built.
 
+**Correction (caught only at implementation time):** earlier drafts of
+this design, and of the sibling `deploy-platform-compose-stack` change,
+stated `web_allowed_cidrs` was unset in
+`terraform/environments/prod/terraform.tfvars`, based on a grep that
+never actually searched for that string. It is in fact already set to
+`["0.0.0.0/0"]` — the cloud firewall already opens 80/443 publicly, and
+no separate Terraform change is needed for that. This changes nothing
+about the mechanism decisions elsewhere in this document (the deploy
+account, the wrapper script, the test framework) — only the Goals/
+Non-Goals framing below and the concrete UFW values this change's
+group_vars should carry, both corrected accordingly.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -24,10 +36,12 @@ before its GitHub Actions workflow can be built.
   that is a separate, not-yet-proposed change.
 - Deciding or implementing anything under `platform/` (Compose file, Traefik
   config, Postgres config).
-- Opening HTTP/HTTPS at the cloud firewall layer (`web_allowed_cidrs` in
-  `terraform/environments/prod/terraform.tfvars` is currently unset) — UFW
-  will be written to allow it once that Terraform change lands, but making
-  that Terraform change is out of scope here.
+- Changing the cloud firewall layer itself — `web_allowed_cidrs` in
+  `terraform/environments/prod/terraform.tfvars` is already set to
+  `["0.0.0.0/0"]` (corrected after this design initially, incorrectly,
+  assumed it was unset — see Context below), so no Terraform change is
+  needed or in scope here; this change's UFW rules mirror that existing
+  state rather than waiting on one.
 
 ## Decisions
 
@@ -52,7 +66,7 @@ for Terraform once `terraform/modules/` grew past its first module.
 **Role structure**: one playbook (`ansible/playbooks/host-baseline.yml`)
 composing three roles: `docker` (wraps the pinned `geerlingguy.docker`
 role), `hardening` (UFW + fail2ban, hand-written — no external role pinned
-for this, since the ruleset is small and project-specific), and `deploy-user`
+for this, since the ruleset is small and project-specific), and `deploy_user`
 (the restricted account). Kept as separate roles rather than one monolithic
 playbook so each can be run/tested independently and matches the existing
 convention of one concern per unit.
@@ -114,10 +128,11 @@ different layer. See Risks / Trade-offs.
 ## Risks / Trade-offs
 
 - [UFW rules drift from the cloud firewall as either side changes] →
-  Mitigated by writing UFW's allowed ports from the same values referenced
-  in this design (22 always; 80/443 once `web_allowed_cidrs` is set), and
-  calling this out explicitly in tasks.md so a future firewall change on
-  either side prompts a look at the other.
+  Mitigated by writing UFW's allowed ports from the same values the cloud
+  firewall already carries (22 from the configured SSH CIDR; 80/443 from
+  `0.0.0.0/0`, since `web_allowed_cidrs` is already set), and calling this
+  out explicitly in tasks.md so a future firewall change on either side
+  prompts a look at the other.
 - [Restricted account is provisioned but its restriction mechanism is picked
   without seeing the actual GitHub Actions workflow that will use it] →
   Mitigated by keeping the choice reversible: switching to a forced-command
@@ -128,7 +143,7 @@ different layer. See Risks / Trade-offs.
   doesn't.
 - [Non-interactive `sudo` over CI-driven SSH may require `requiretty` to be
   unset for `deploy`, which isn't stated anywhere by default] → The
-  `deploy-user` role SHALL explicitly ensure `deploy` is exempted from any
+  `deploy_user` role SHALL explicitly ensure `deploy` is exempted from any
   `requiretty` default (or that none is set), and tasks.md includes a
   verification step invoking the permitted command the same way CI will
   (`ssh deploy@host sudo /usr/local/bin/platform-compose-deploy`, no PTY).
