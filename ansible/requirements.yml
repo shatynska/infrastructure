@@ -7,6 +7,14 @@
 collections:
   - name: hetzner.hcloud
     version: "7.0.0"
+  # Needed by the hardening role for community.general.ufw. Pinned per
+  # convention, but this exact version was chosen without the ability to
+  # query Galaxy from this environment (no network access) -- confirm it
+  # resolves, or bump to whichever exact version does, before relying on
+  # this file in CI or locally. See bootstrap-ansible-host-baseline's
+  # test-manifest.md for the same caveat on the pinned Molecule versions.
+  - name: community.general
+    version: "9.5.0"
 
 roles:
   - name: geerlingguy.docker

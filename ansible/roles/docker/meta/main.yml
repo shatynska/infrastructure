@@ -1,0 +1,9 @@
+---
+# Wraps the pinned geerlingguy.docker role (version pinned in
+# ansible/requirements.yml) as a dependency, per iac-host-configuration's
+# "Container Runtime Installed via Pinned External Role or Equivalent"
+# requirement. This role itself adds no tasks of its own — it exists so
+# the playbook composes three same-shaped roles (docker, hardening,
+# deploy_user) rather than referencing the external role directly.
+dependencies:
+  - role: geerlingguy.docker

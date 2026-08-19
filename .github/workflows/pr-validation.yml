@@ -27,7 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Detect Terraform changes
+      - name: Detect Terraform and platform changes
         id: changes
         uses: dorny/paths-filter@v3
         with:
@@ -35,6 +35,21 @@ jobs:
             terraform:
               - 'terraform/environments/**'
               - 'terraform/modules/**'
+            platform:
+              - 'platform/**'
+
+      # Validates platform/docker-compose.yml renders and parses
+      # correctly. No SSH credential, no `environment:` declared anywhere
+      # in this job -- see the Pull Request Validation Runs Without
+      # Deploy Credentials requirement in iac-platform-deploy-pipeline.
+      # .env.example supplies dummy values purely so `config` can resolve
+      # variable interpolation; real values are never present here.
+      - name: docker compose config (platform/)
+        if: steps.changes.outputs.platform == 'true'
+        run: |
+          cp platform/.env.example platform/.env
+          docker compose -f platform/docker-compose.yml config
+          rm platform/.env
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth
       # (its "dynamic credentials" feature authenticates providers during

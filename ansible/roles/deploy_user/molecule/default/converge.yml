@@ -1,0 +1,23 @@
+---
+# Deliberately supplies ONLY the deploy public key variable -- no
+# operator/personal SSH key or credential variable is defined anywhere in
+# this converge. That absence is how the "Deploy account is provisioned
+# independently of any operator" scenario is exercised in verify.yml: the
+# role must succeed and produce a working account without one.
+#
+# ASSUMPTION (role variable interface -- the role doesn't exist yet, so
+# this name is this test author's invented interface, not a stated
+# requirement; see test-manifest.md): `deploy_user_public_key` (a single
+# public key string installed into deploy's authorized_keys). The private
+# half is never supplied here or anywhere in this repo, per tasks.md 3.2
+# (generated out-of-band).
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    deploy_user_public_key: >-
+      ssh-ed25519
+      AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeTestKeyOnlyNotARealCredential
+      test-molecule@ci
+  roles:
+    - role: deploy_user

@@ -1,0 +1,24 @@
+---
+# Converges with the variable state this repo actually runs in production
+# today: SSH allowed from a configured CIDR, HTTP/HTTPS left closed because
+# `web_allowed_cidrs` gating in UFW defaults shut until the corresponding
+# Terraform change lands (design.md Non-Goals). The "web enabled" path
+# (tasks.md 2.1's HTTP/HTTPS rules once that variable is set) is exercised
+# separately in verify.yml via a second role invocation, so it never
+# touches this file -- keeping Molecule's built-in idempotence check (which
+# re-runs only this converge.yml) scoped to the one state this project
+# actually deploys right now.
+#
+# ASSUMPTION (role variable interface -- the role doesn't exist yet, so
+# this names are this test author's invented interface, not a stated
+# requirement; see test-manifest.md): `hardening_ssh_allowed_cidrs` and
+# `hardening_web_allowed_cidrs` (list of CIDR strings, the latter defaulting
+# to `[]`/closed when unset).
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    hardening_ssh_allowed_cidrs:
+      - "203.0.113.0/24"
+  roles:
+    - role: hardening

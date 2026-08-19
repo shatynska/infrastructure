@@ -1,0 +1,19 @@
+# Pinned pip test dependencies for this project's Ansible test framework
+# (Molecule), adopted by openspec/changes/bootstrap-ansible-host-baseline's
+# design.md Decisions section. These arrive via pip rather than Galaxy, but
+# the same "any external role or collection used for any purpose is pinned
+# to an exact version" convention (AGENTS.md) is extended to them here —
+# never a floating range, for the same reason an unpinned Galaxy role isn't
+# actually pinned: two installs at different times could otherwise resolve
+# different versions and silently change what a test run actually checks.
+#
+# Install with: pip install -r ansible/requirements-test.txt
+#
+# NOTE (recorded for the implementer, see test-manifest.md's "unresolved
+# project questions"): these exact versions were chosen without the ability
+# to confirm current PyPI availability from this environment. Confirm they
+# resolve, or bump to whatever exact version does, before relying on this
+# file in CI or locally -- the requirement is an exact pin, not this
+# specific number.
+molecule==24.12.0
+molecule-plugins[docker]==23.5.3

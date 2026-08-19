@@ -1,0 +1,47 @@
+---
+# Molecule scenario for the `docker` role. This project's Ansible test
+# convention (design.md, bootstrap-ansible-host-baseline): one scenario
+# directory per role, converge-then-verify, pinned test dependencies (see
+# ansible/requirements-test.txt). Run via `molecule test` from
+# ansible/roles/docker/.
+dependency:
+  name: galaxy
+  options:
+    # Ensures the pinned geerlingguy.docker role this role wraps (and any
+    # pinned collection content) is present before converge runs.
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # A systemd-capable image is required: geerlingguy.docker installs and
+  # starts docker.service, which needs a real init system as PID 1, not
+  # just a bare shell. Ubuntu is used as the closest systemd-capable
+  # Molecule image family to this project's target OS
+  # (terraform.tfvars pins image = "ubuntu-26.04"); exact OS-version parity
+  # with production is not guaranteed by this image and is left as a
+  # question for the implementer (see test-manifest.md).
+  - name: docker-role-instance
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # Ansible's default role search path only checks <playbook_dir>/roles,
+    # which for converge.yml (nested under this role's molecule/default/)
+    # resolves to nowhere. Since `molecule test` runs from within this
+    # role's own directory, MOLECULE_PROJECT_DIRECTORY is that directory
+    # -- its parent is ansible/roles/, where sibling roles actually live.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

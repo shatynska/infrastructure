@@ -1,0 +1,26 @@
+---
+# The prod server was created with only a single SSH key and no root
+# password (terraform/modules/server/main.tf's own comment: providing a
+# key at creation means Hetzner never sets one) -- root is the only
+# login this host has. Without this, Ansible defaults to the local
+# operator's own username, which fails with "Permission denied".
+ansible_user: root
+
+# Non-secret prod configuration, mirroring
+# terraform/environments/prod/terraform.tfvars's ssh_allowed_cidrs and
+# web_allowed_cidrs exactly -- see ansible/roles/hardening/README.md for
+# why these two are hand-kept in sync rather than generated from
+# Terraform, and why that matters (they drifted once already: this
+# project's UFW rules initially assumed web_allowed_cidrs was unset when
+# it was actually already ["0.0.0.0/0"], which would have left the host
+# firewall blocking traffic the cloud firewall already permitted).
+hardening_ssh_allowed_cidrs:
+  - "176.104.184.0/24"
+hardening_web_allowed_cidrs:
+  - "0.0.0.0/0"
+
+# deploy_user_public_key is deliberately NOT set here -- it's the deploy
+# account's public key, safe to commit in principle, but the keypair
+# doesn't exist yet (tasks.md 3.2: generated out-of-band, not by this
+# playbook). Supply it at run time (-e deploy_user_public_key=... ) or via
+# an encrypted group_vars/prod/vault.yml once the real key is generated.

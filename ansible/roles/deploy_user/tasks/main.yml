@@ -1,0 +1,83 @@
+---
+# Provisions the restricted `deploy` account per iac-host-configuration's
+# ADDED "Restricted Deploy Account for Platform Stack Access" requirement
+# (openspec/changes/bootstrap-ansible-host-baseline). See that change's
+# design.md for why this account is scoped the way it is: a plain
+# restricted user whose only privileged capability is a single fixed,
+# argument-free wrapper script via `sudo` -- not `docker`-group
+# membership, and not a `sudo` rule that forwards raw `docker compose`
+# arguments (both rejected as root-equivalent).
+
+- name: Create the deploy group
+  ansible.builtin.group:
+    name: deploy
+    state: present
+
+- name: Create the deploy system account
+  ansible.builtin.user:
+    name: deploy
+    group: deploy
+    home: /opt/platform
+    system: true
+    shell: /bin/bash
+    password: "!"
+    create_home: true
+
+- name: Ensure /opt/platform is owned deploy:deploy, mode 0750
+  ansible.builtin.file:
+    path: /opt/platform
+    state: directory
+    owner: deploy
+    group: deploy
+    mode: "0750"
+
+- name: Ensure deploy's .ssh directory exists
+  ansible.builtin.file:
+    path: /opt/platform/.ssh
+    state: directory
+    owner: deploy
+    group: deploy
+    mode: "0700"
+
+- name: Install deploy's authorized public key
+  ansible.builtin.copy:
+    dest: /opt/platform/.ssh/authorized_keys
+    content: "{{ deploy_user_public_key }}\n"
+    owner: deploy
+    group: deploy
+    mode: "0600"
+
+- name: Install the fixed, argument-free deploy wrapper script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/platform-compose-deploy
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      cd /opt/platform
+      docker compose pull
+      docker compose up -d --wait
+
+# No wildcard, no arguments accepted -- a bare command with no argument
+# specification in sudoers matches only an invocation with zero
+# arguments, so appending anything to this command is denied by sudo
+# itself, not by anything this task does at runtime.
+#
+# No `Defaults:deploy !requiretty` line: on the actual target (Ubuntu
+# 26.04's sudo build), visudo rejects `requiretty` outright as an
+# "unknown setting" -- not merely inapplicable here, genuinely absent
+# from this sudo's grammar. Since Debian/Ubuntu's stock sudoers has never
+# set `Defaults requiretty` globally either, there was never a state this
+# override needed to counteract; see design.md's Risks entry, corrected
+# to match what this run found.
+- name: Grant deploy a NOPASSWD sudo rule scoped to exactly the wrapper script
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/deploy
+    owner: root
+    group: root
+    mode: "0440"
+    content: |
+      deploy ALL=(root) NOPASSWD: /usr/local/bin/platform-compose-deploy
+    validate: "visudo -cf %s"

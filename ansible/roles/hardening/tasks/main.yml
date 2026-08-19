@@ -1,0 +1,73 @@
+---
+# Host-level UFW + fail2ban, per iac-host-configuration's "Host-Level
+# Security Owned by Ansible, Cloud Firewall Owned by Terraform"
+# requirement. UFW's allowed ports SHALL mirror what the Hetzner cloud
+# firewall (terraform/modules/server's hcloud_firewall) already allows --
+# see this role's README for the sync obligation between the two.
+
+- name: Ensure UFW is installed
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+    update_cache: true
+
+- name: Set UFW default incoming policy to deny
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Set UFW default outgoing policy to allow
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Allow SSH (22) from the configured CIDRs
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ hardening_ssh_allowed_cidrs }}"
+
+- name: Allow HTTP (80) from the configured web CIDRs
+  community.general.ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ hardening_web_allowed_cidrs }}"
+
+- name: Allow HTTPS (443) from the configured web CIDRs
+  community.general.ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ hardening_web_allowed_cidrs }}"
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+
+- name: Ensure fail2ban is installed
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+    update_cache: true
+
+- name: Enable the sshd jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [sshd]
+      enabled = true
+  notify: Restart fail2ban
+
+- name: Ensure fail2ban is enabled and started
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started

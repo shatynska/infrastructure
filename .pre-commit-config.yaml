@@ -28,7 +28,13 @@ repos:
       - id: ansible-playbook-syntax-check
         name: ansible-playbook --syntax-check
         language: system
-        entry: bash -c 'set -euo pipefail; for f in ansible/playbooks/*.yml; do [ -e "$f" ] && ansible-playbook --syntax-check "$f"; done'
+        # Runs with cwd = ansible/ (not the repo root pre-commit hooks
+        # otherwise use) so ansible.cfg -- and its roles_path, which
+        # resolves this project's own roles/ directory -- is actually
+        # found. Without this, every role reference fails to resolve:
+        # Ansible only looks for ansible.cfg in the current directory,
+        # it does not search upward.
+        entry: bash -c 'set -euo pipefail; cd ansible && for f in playbooks/*.yml; do [ -e "$f" ] && ansible-playbook --syntax-check "$f"; done'
         pass_filenames: false
         files: ^ansible/playbooks/.*\.ya?ml$
 

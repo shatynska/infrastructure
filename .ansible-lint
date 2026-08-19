@@ -1,0 +1,24 @@
+---
+# ansible/roles/geerlingguy.docker/ is third-party content fetched by
+# `ansible-galaxy install -r ansible/requirements.yml` (pinned by exact
+# version there, gitignored, never committed — see .gitignore). It's not
+# this project's code to lint or fix; excluding it is what keeps
+# pre-commit's `ansible-lint ansible/` hook working for anyone who has
+# actually installed the pinned dependency locally, rather than failing
+# on upstream issues in a role we don't own.
+exclude_paths:
+  - ansible/roles/geerlingguy.docker/
+
+# Each role's molecule/default/converge.yml references that role by name
+# (e.g. `role: hardening`) to exercise it under test. ansible-lint resolves
+# role references relative to the converge.yml file's own location, not via
+# ANSIBLE_ROLES_PATH (which only applies at actual `molecule test` runtime,
+# set in each molecule.yml) -- so standalone ansible-lint can't find these
+# without help. Mocking them here avoids a false-positive "role not found"
+# on content that resolves correctly both at role-implementation time
+# (this project's roles_path = roles in ansible.cfg) and at molecule-test
+# time (each molecule.yml's ANSIBLE_ROLES_PATH).
+mock_roles:
+  - docker
+  - hardening
+  - deploy_user
