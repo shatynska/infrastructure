@@ -12,3 +12,7 @@ ssh_allowed_cidrs = ["176.104.184.0/24"]
 web_allowed_cidrs = ["0.0.0.0/0"]
 
 server_enabled = true
+
+volume_enabled = true
+volume_name    = "production_data"
+volume_size    = 10
