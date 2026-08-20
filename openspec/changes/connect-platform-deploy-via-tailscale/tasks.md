@@ -1,57 +1,49 @@
 ## 1. Tailscale on the host
 
-- [ ] 1.1 Add a `tailscale` Ansible role: install Tailscale via its
-      official apt repository, pinned to an exact package version per
-      this project's external-dependency convention. Verify the repo
-      actually publishes a line for this host's Ubuntu codename
-      (`resolute`) before assuming it — Docker's repo needed no fallback
-      in the end, but that was confirmed, not assumed; do the same check
-      here.
-- [ ] 1.2 Add a `tailscale_auth_key` variable (no default, required —
-      same shape as `deploy_user_public_key`'s "no default" pattern, but
-      this one is a genuine secret, sourced from Vault or a run-time
-      variable, never committed). Run `tailscale up --authkey=...`
-      (idempotently — check `tailscale status` first so re-running the
-      playbook doesn't re-register or error on an already-joined node).
-- [ ] 1.3 Wire the `tailscale` role into
+- [x] 1.1 Add a `tailscale` Ansible role: install Tailscale via its
+      official apt repository, pinned to an exact package version
+      (`1.102.3`) per this project's external-dependency convention.
+      Confirmed directly against `pkgs.tailscale.com` that the repo
+      publishes a `resolute` line and that exact version — not assumed.
+- [x] 1.2 Added `tailscale_auth_key` (no default, required, `no_log:
+      true`). `tailscale up` only runs when `tailscale status --json`
+      shows the host isn't already `Running`, so a re-run doesn't
+      re-register an already-joined node.
+- [x] 1.3 Wired the `tailscale` role into
       `ansible/playbooks/host-baseline.yml`.
-- [ ] 1.4 Add a README to the role documenting the auth-key storage
-      pattern (mirror `ansible/roles/deploy_user/README.md`'s "Key
-      storage" section) and that Tailscale ACL configuration is out of
-      scope for this repo's IaC (done in Tailscale's admin console).
+- [x] 1.4 Added `ansible/roles/tailscale/README.md`.
 
 ## 2. Host firewall
 
-- [ ] 2.1 Add a UFW rule to the `hardening` role allowing SSH (22) via
-      `src: 100.64.0.0/10` (the tailnet CGNAT range) — consistent with
-      this role's existing rules, which are all `src:`-scoped rather than
-      interface-scoped (see `ansible/roles/hardening/tasks/main.yml`'s
-      current SSH/HTTP/HTTPS rules). Additive to, not replacing, the
-      existing public-interface SSH rule. Do not touch
-      `hardening_ssh_allowed_cidrs`'s existing value or that rule.
-- [ ] 2.2 Verify: after this role runs, `ufw status verbose` shows both
-      the original public-interface SSH rule (unchanged) and the new
-      tailnet-scoped one.
+- [x] 2.1 Added a UFW rule to the `hardening` role allowing SSH (22) via
+      `src: 100.64.0.0/10` — additive, `hardening_ssh_allowed_cidrs` and
+      the existing public-interface rule untouched.
+- [ ] 2.2 **Blocked — needs a real playbook run against the host** (see
+      task 4.3). Verify: `ufw status verbose` shows both the original
+      public-interface SSH rule (unchanged) and the new tailnet-scoped
+      one.
 
 ## 3. GitHub Actions
 
-- [ ] 3.1 Add a `tailscale/github-action` step to `platform-deploy.yml`'s
-      `deploy` job, before the existing "Set up the deploy SSH key" step,
-      authenticating via a Tailscale OAuth client (`TAILSCALE_OAUTH_CLIENT_ID`
-      / `TAILSCALE_OAUTH_SECRET` — new secrets, scoped to the `production`
-      Environment, same as every other secret this job uses).
-- [ ] 3.2 Confirm the new step declares no broader permissions than the
-      job already has, and that the two new secrets are unreadable by any
-      job that hasn't passed the `production` Environment gate (same
-      check as `deploy-platform-compose-stack`'s tasks.md 4.1, extended to
-      cover these two).
+- [x] 3.1 Added a `tailscale/github-action@v4` step to `platform-deploy.yml`'s
+      `deploy` job, before "Set up the deploy SSH key", authenticating via
+      `TAILSCALE_OAUTH_CLIENT_ID`/`TAILSCALE_OAUTH_SECRET`. Also added
+      `ping: ${{ secrets.PLATFORM_DEPLOY_HOST }}` (not originally
+      speced) — the action's own docs note new tailnet peers propagate
+      with a brief, eventually-consistent delay; without waiting for
+      that, the deploy steps immediately after could race it.
+- [x] 3.2 Confirmed by code inspection: the new step adds no `permissions:`
+      beyond what the `deploy` job already declares (no `id-token: write`
+      needed — using an OAuth client, not workload identity federation),
+      and both new secrets are referenced only inside the `deploy` job,
+      which already requires `production` Environment approval — same
+      gating as `PLATFORM_DEPLOY_SSH_KEY`.
 
 ## 4. Cutover
 
-- [ ] 4.1 **Operator action.** Generate the host's Tailscale auth key in
-      the Tailscale admin console; generate the OAuth client for CI
-      (scoped/tagged appropriately). Store both per task 1.2/1.4's and
-      3.1's documented paths.
+- [x] 4.1 **Operator action, done.** Generated the host's Tailscale auth
+      key (reusable, non-ephemeral) and the CI OAuth client
+      (`tag:ci`-scoped).
 - [ ] 4.2 **Operator action.** Add `TAILSCALE_OAUTH_CLIENT_ID` and
       `TAILSCALE_OAUTH_SECRET` to the `production` GitHub Environment.
 - [ ] 4.3 Run the host-baseline playbook with the auth key supplied;
@@ -67,8 +59,17 @@
 
 ## 5. Verification
 
-- [ ] 5.1 Run `ansible-lint` against the new role.
-- [ ] 5.2 Run `ansible-playbook ansible/playbooks/host-baseline.yml
-      --syntax-check`.
-- [ ] 5.3 Confirm the operator's own direct SSH access (public IP, their
-      CIDR) still works unchanged after this change lands.
+- [x] 5.1 Ran `ansible-lint ansible/` — clean at the `production` profile.
+      Two new findings fixed along the way: the `tailscale` role needed
+      adding to `.ansible-lint`'s `mock_roles` (same false-positive class
+      as the other three roles, and — corrected here — that mocking turns
+      out to be needed for the real playbook's role resolution too, not
+      only Molecule scenario files, per `.ansible-lint`'s updated
+      comment), and the `tailscale up` command task needed an explicit
+      `changed_when: true`.
+- [x] 5.2 Ran `ansible-playbook ansible/playbooks/host-baseline.yml
+      --syntax-check` — passes.
+- [ ] 5.3 **Blocked — needs a real playbook run and the operator's own
+      SSH client** (see task 4.3/4.5). Confirm the operator's own direct
+      SSH access (public IP, their CIDR) still works unchanged after this
+      change lands.

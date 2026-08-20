@@ -11,4 +11,5 @@
   roles:
     - role: docker
     - role: hardening
+    - role: tailscale
     - role: deploy_user
