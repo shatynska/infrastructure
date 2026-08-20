@@ -58,6 +58,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Joins this runner to the same tailnet the host is a member of
+      # (connect-platform-deploy-via-tailscale) -- SSH is only reachable
+      # this way, not over the public internet, per that change's
+      # design.md. The OAuth client is scoped to the `production`
+      # Environment like every other secret this job uses, and ephemeral
+      # per-run nodes are created automatically (tailscale/github-action's
+      # own behavior), not a long-lived credential. `ping` waits for the
+      # host to actually become reachable before proceeding -- new
+      # tailnet peers propagate with a brief, eventually-consistent
+      # delay, and the deploy steps below would otherwise race it.
+      - name: Connect to the tailnet
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+
       # Rendered fresh each run from Environment-scoped secrets -- never
       # committed, never logged. See Platform Secrets Rendered from CI at
       # Deploy Time.

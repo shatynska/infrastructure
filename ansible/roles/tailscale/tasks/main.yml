@@ -1,0 +1,60 @@
+---
+# Joins the prod host to a private tailnet, per iac-host-configuration's
+# ADDED "Host Joins a Private Tailnet for Non-Operator SSH Access"
+# requirement (openspec/changes/connect-platform-deploy-via-tailscale).
+# This exists so the GitHub Actions deploy job can reach the host without
+# widening SSH access on the public internet -- see that change's
+# design.md for the full rationale.
+
+- name: Ensure the apt keyrings directory exists
+  ansible.builtin.file:
+    path: /usr/share/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add the Tailscale apt signing key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_distribution_release }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+
+- name: Add the Tailscale apt repository
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_distribution_release }}.tailscale-keyring.list"
+    dest: /etc/apt/sources.list.d/tailscale.list
+    mode: "0644"
+
+# Pinned per this project's external-dependency convention. Confirmed
+# directly against https://pkgs.tailscale.com/stable/ubuntu/resolute/...
+# that this exact version is published for this host's Ubuntu codename
+# (resolute) before pinning it here -- not assumed the way it briefly was
+# for Docker.
+- name: Ensure Tailscale is installed (pinned exact version)
+  ansible.builtin.apt:
+    name: "tailscale=1.102.3"
+    state: present
+    update_cache: true
+
+- name: Ensure the tailscaled service is enabled and started
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: true
+    state: started
+
+- name: Check current tailnet connection status
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status_check
+  changed_when: false
+  failed_when: false
+
+# Idempotent: only calls `tailscale up` when not already connected, so a
+# re-run doesn't attempt to re-register an already-joined node. no_log
+# because the auth key would otherwise appear in the task's command
+# output.
+- name: Bring the host onto the tailnet
+  ansible.builtin.command: "tailscale up --authkey={{ tailscale_auth_key }}"
+  when: >
+    tailscale_status_check.rc != 0 or
+    (tailscale_status_check.stdout | from_json).BackendState != "Running"
+  changed_when: true # this task only ever runs when the host wasn't already connected, so it always represents a real state change
+  no_log: true
