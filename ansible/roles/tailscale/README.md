@@ -11,7 +11,7 @@ for SSH to actually be reachable over the new `tailscale0` interface.
 ## Key storage
 
 `tailscale_auth_key` is a genuine secret — it grants tailnet-join
-capability, unlike `deploy_user`'s `deploy_user_public_key`. Generate it
+capability, unlike `deploy_user`'s `deploy_apps` public keys. Generate it
 in the Tailscale admin console (Settings → Keys → Generate auth key):
 **reusable**, **not ephemeral** (this host is a persistent tailnet member,
 not a throwaway CI node), and store it the same way as the deploy

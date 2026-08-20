@@ -15,6 +15,19 @@ collections:
   # test-manifest.md for the same caveat on the pinned Molecule versions.
   - name: community.general
     version: "9.5.0"
+  # Needed by deploy_user for ansible.posix.authorized_key's key_options
+  # (per-key restrict,command= forced-command entries -- add-per-app-
+  # deploy-keys). Pinned per convention; chosen without the ability to
+  # query Galaxy from this environment (no network access) -- confirm it
+  # resolves, or bump to whichever exact version does, before relying on
+  # this file in CI or locally.
+  - name: ansible.posix
+    version: "1.6.2"
+  # Needed by deploy_user for community.docker.docker_login (GHCR pull
+  # authentication -- add-per-app-deploy-keys). Same unverified-pin caveat
+  # as ansible.posix above.
+  - name: community.docker
+    version: "4.1.0"
 
 roles:
   - name: geerlingguy.docker

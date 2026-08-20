@@ -1,5 +1,6 @@
 ---
 # tailscale_auth_key has no default -- it must be supplied by the caller
 # (Ansible Vault or a run-time variable, per tasks.md 1.2). This is a
-# genuine secret (grants tailnet-join capability), unlike
-# deploy_user_public_key -- there is no safe default for it.
+# genuine secret (grants tailnet-join capability), unlike the deploy
+# account's own public keys (deploy_user's deploy_apps) -- there is no
+# safe default for it.

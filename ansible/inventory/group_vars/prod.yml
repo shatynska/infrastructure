@@ -19,8 +19,35 @@ hardening_ssh_allowed_cidrs:
 hardening_web_allowed_cidrs:
   - "0.0.0.0/0"
 
-# deploy_user_public_key is deliberately NOT set here -- it's the deploy
-# account's public key, safe to commit in principle, but the keypair
-# doesn't exist yet (tasks.md 3.2: generated out-of-band, not by this
-# playbook). Supply it at run time (-e deploy_user_public_key=... ) or via
-# an encrypted group_vars/prod/vault.yml once the real key is generated.
+# Per-application deploy public keys (add-per-app-deploy-keys). Safe to
+# commit -- these are public keys, not secrets; only each private half is
+# sensitive, and that never appears here (platform's lives in this
+# repository's PLATFORM_DEPLOY_SSH_KEY Environment secret; commerce-ops's
+# lives in that application's own repository's Environment secret, per
+# tasks.md 2.2). `platform`'s entry is the same keypair that already
+# authenticates prod today (tasks.md 2.1's "existing platform public key")
+# -- restricting its authorized_keys entry to deploy-receive, rather than
+# rotating it, is what lets the migration in design.md's Migration Plan
+# proceed without needing a new secret on the platform-deploy.yml side.
+deploy_apps:
+  - name: platform
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKbTTA4VUQjmUt2+jOE3FxPahMc8i+bRvR6g8f+7/m9M deploy@platform"
+  - name: commerce-ops
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvqBXstDCjAlYAZ3i92iLanC+lDe44eNpS0UGa6N4jw commerce-ops-deploy"
+
+# ghcr_pull_username is not secret (it's the GitHub account the token
+# below belongs to) and is committed in plain text. ghcr_pull_token is a
+# genuine secret (a read:packages-scoped GHCR token, tasks.md 2.3:
+# generated out-of-band) and is therefore Ansible-Vault-encrypted in place
+# below, not plain text -- decrypting it requires the Vault password,
+# which is not stored anywhere in this repository (per this project's
+# Secrets convention).
+ghcr_pull_username: shatynska
+ghcr_pull_token: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          36356231333439633736653161383534303661343039396230633265366338303465656439653866
+          6237376536653038646434383538343833323830393332380a623962393835326437616433383432
+          34663965626538346335363065343339643533663961613734376637313230613535356563386464
+          3335623564633964380a386563643938616165333636383637366536656339386432363235316263
+          39663331643930396130376666396162396361643261363531336139623937316432376237666266
+          3830613337306566353336303437663339653739636362313561
