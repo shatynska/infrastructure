@@ -25,15 +25,13 @@
       -f platform/docker-compose.yml config` with a dummy/example `.env`.
       This step reads no SSH secret and no `environment:` is declared
       anywhere in this job.
-- [ ] 2.3 **Blocked — needs a real pull request run on GitHub, not
-      available in this implementation pass.** Verify: a PR with
-      intentionally broken Compose YAML fails the `validate` check; a PR
-      with valid YAML passes; a PR touching neither `terraform/**` nor
-      `platform/**` still reports success (not pending). Statically
-      confirmed instead: `platform/docker-compose.yml` and
-      `platform/.env.example` both parse as valid YAML/Compose schema
-      (checked with a local YAML parser — no `docker` CLI reachable in
-      this sandbox either, see task 4.3's note).
+- [x] 2.3 Verified against real GitHub PRs, all three sub-cases: a PR
+      with intentionally broken Compose YAML (a throwaway PR, closed
+      without merging) failed `validate` at exactly the `docker compose
+      config` step (`yaml: line 53: did not find expected node content`);
+      PRs #31/#32/#34 with valid `platform/**` changes all passed; PR #33
+      (touching neither `terraform/**` nor `platform/**`) still reported
+      success rather than pending.
 
 ## 3. GitHub Actions: gated deploy
 
@@ -50,18 +48,11 @@
       Terraform apply workflow uses) — so the job summary from 3.1 is
       already visible in the run by the time the approval gate is
       presented.
-- [ ] 3.4 **Operator action, not completable by this implementation
-      pass:** add the deploy SSH private key as a secret named
-      `PLATFORM_DEPLOY_SSH_KEY`, scoped to the `production` Environment
-      specifically (generated in `bootstrap-ansible-host-baseline`'s task
-      3.2 — do not generate a new keypair here). The workflow already
-      reads this secret name; creating the actual GitHub secret requires
-      repo admin access this pass doesn't have. The same applies to
+- [x] 3.4 **Operator action, done.** `PLATFORM_DEPLOY_SSH_KEY`,
       `PLATFORM_DEPLOY_HOST`, `PLATFORM_ACME_EMAIL`,
-      `PLATFORM_POSTGRES_USER`, and `PLATFORM_POSTGRES_PASSWORD` — none of
-      these secret names were specified in this task originally; chosen
-      during implementation and documented here and in the workflow's
-      comments so they're not invented twice.
+      `PLATFORM_POSTGRES_USER`, and `PLATFORM_POSTGRES_PASSWORD` all added
+      to the `production` Environment; confirmed working end-to-end by a
+      real successful deploy run.
 - [x] 3.5 Render `.env` from GitHub Actions secrets in the deploy job (no
       committed file, no plaintext in logs — use `::add-mask::` or secret
       masking as needed).
@@ -79,23 +70,20 @@
       argument — the sudoers rule matches this exact invocation only, and
       the wrapper script already resolves `/opt/platform`'s compose file
       itself.
-- [x] 3.9 No separate post-deploy health-check step is needed:
-      `platform-compose-deploy`'s `docker compose up -d --wait` already
-      blocks until every service is running/healthy and fails the SSH step
-      (and therefore this job) otherwise. The workflow contains no such
-      step, matching this decision. **The "verify this once during initial
-      rollout" half is blocked** — needs a real host and a real deploy run.
+- [x] 3.9 Verified against a real deploy run: `platform-compose-deploy`'s
+      `docker compose up -d --wait` reported both `platform-traefik-1` and
+      `platform-postgres-1` as `Healthy` before the job completed — no
+      separate health-check step was needed.
 - [x] 3.10 Add a `concurrency` group (per environment, `cancel-in-progress:
       false`) covering both the `diff` and deploy jobs. Declared once at
       the workflow level (`group: platform-deploy`), which covers every
       job in the run — GitHub Actions concurrency groups apply per
       workflow run, not per job.
-- [ ] 3.11 **Blocked — needs a real merge to `main` on GitHub, and the
-      operator-provisioned secrets from 3.4.** Verify: merging a
-      `platform/**` change to `main` starts the `diff` job immediately (no
-      approval needed), its output appears in the run's job summary, and
-      only then does the deploy job pause for `production` approval;
-      approving it results in the stack running on the host.
+- [x] 3.11 Verified against a real merge to `main` (run 32350184847):
+      the `diff` job started immediately with no approval needed and
+      posted the `platform/` diff to the job summary; the `deploy` job
+      then paused for `production` approval; approving it resulted in the
+      stack (Traefik + Postgres) actually running on the host.
 
 ## 4. Verification
 

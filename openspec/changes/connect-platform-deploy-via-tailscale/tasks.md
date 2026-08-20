@@ -43,18 +43,23 @@
 - [x] 4.1 **Operator action, done.** Generated the host's Tailscale auth
       key (reusable, non-ephemeral) and the CI OAuth client
       (`tag:ci`-scoped).
-- [ ] 4.2 **Operator action.** Add `TAILSCALE_OAUTH_CLIENT_ID` and
-      `TAILSCALE_OAUTH_SECRET` to the `production` GitHub Environment.
-- [ ] 4.3 Run the host-baseline playbook with the auth key supplied;
-      confirm the host appears in the Tailscale admin console and has a
-      stable tailnet address (IP or MagicDNS name).
-- [ ] 4.4 **Operator action.** Update the `PLATFORM_DEPLOY_HOST` secret's
-      value to that tailnet address.
-- [ ] 4.5 Verify: trigger the deploy workflow (e.g. a no-op `platform/**`
-      change) and confirm the `deploy` job joins the tailnet and
-      successfully SSHes into the host over it — the specific failure
-      that prompted this change (`ssh-keyscan` timing out) SHALL NOT
-      recur.
+- [x] 4.2 **Operator action, done.** `TAILSCALE_OAUTH_CLIENT_ID` and
+      `TAILSCALE_OAUTH_SECRET` added to the `production` GitHub Environment.
+- [x] 4.3 Ran the host-baseline playbook with the auth key supplied; the
+      host joined the tailnet (`tailscale status --json` showing
+      `BackendState: Running` on a subsequent idempotent re-run,
+      `changed=0`).
+- [x] 4.4 **Operator action, done.** `PLATFORM_DEPLOY_HOST` repointed to
+      the host's tailnet address.
+- [x] 4.5 Verified against a real merge to `main`
+      (github.com/shatynska/infrastructure/actions/runs/32350184847): the
+      `diff` job posted to the job summary, the `deploy` job connected via
+      Tailscale (DERP-relayed — direct P2P didn't establish, which is
+      normal/expected, not a failure), SSHed in, and
+      `platform-compose-deploy` pulled both images and brought up
+      `platform-traefik-1`/`platform-postgres-1`, both reporting
+      `Healthy`. The `ssh-keyscan` timeout that prompted this change did
+      not recur.
 
 ## 5. Verification
 
@@ -68,7 +73,7 @@
       `changed_when: true`.
 - [x] 5.2 Ran `ansible-playbook ansible/playbooks/host-baseline.yml
       --syntax-check` — passes.
-- [ ] 5.3 **Blocked — needs a real playbook run and the operator's own
-      SSH client** (see task 4.3/4.5). Confirm the operator's own direct
-      SSH access (public IP, their CIDR) still works unchanged after this
-      change lands.
+- [x] 5.3 Confirmed: the operator's own `ssh root@<public IP>` access
+      continued working throughout this change's implementation and after
+      (used directly to run diagnostic commands like `ufw status verbose`
+      post-rollout) — unaffected by the new tailnet-scoped rule.
