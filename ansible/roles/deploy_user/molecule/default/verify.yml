@@ -290,29 +290,44 @@
     # Scenario: Platform deploys through the same mechanism as every other
     # application
     #
-    # This fresh Molecule instance never had the retired
-    # platform-compose-deploy script installed on it in the first place
-    # (this role's tasks no longer install it), so its absence here is a
-    # legitimate assertion in this isolated context. This is NOT the same
-    # claim as "the live production migration has already deleted it" --
-    # production deliberately keeps that script present-but-unreachable
-    # until tasks.md 5.6's separate, later, validation-gated playbook run
-    # (design.md's Migration Plan). See test-manifest.md.
+    # converge.yml's pre_tasks seed a pre-migration
+    # platform-compose-deploy script and /etc/sudoers.d/deploy entry
+    # before the role runs -- simulating an already-provisioned host that
+    # still carries them (design.md's Migration Plan: present-but-
+    # unreachable until tasks.md 5.6's cleanup). This exercises the role's
+    # absent tasks actually removing something, not merely confirming a
+    # fresh host never had it.
     # ============================================================
-    - name: Assert the retired platform-compose-deploy script does not exist on this fresh instance
+    - name: Assert the retired platform-compose-deploy script does not exist after convergence
       ansible.builtin.stat:
         path: /usr/local/bin/platform-compose-deploy
       register: deploy_user_per_app_old_wrapper_stat
 
-    - name: Assert no separate platform-specific script is installed by this role's tasks
+    - name: Assert the seeded platform-specific script was removed by this role's tasks (tasks.md 5.6)
       ansible.builtin.assert:
         that:
           - not deploy_user_per_app_old_wrapper_stat.stat.exists
         fail_msg: >-
-          /usr/local/bin/platform-compose-deploy exists on a fresh
-          convergence of this role -- platform SHALL deploy through the
-          same generic app-deploy/deploy-receive mechanism as every other
-          application, with no separate platform-specific script.
+          /usr/local/bin/platform-compose-deploy still exists after
+          convergence, even though converge.yml seeded it beforehand --
+          platform SHALL deploy through the same generic
+          app-deploy/deploy-receive mechanism as every other application,
+          with no separate platform-specific script, and this role's
+          tasks SHALL remove a pre-migration leftover (tasks.md 5.6).
+
+    - name: Assert the seeded pre-migration sudoers entry was removed by this role's tasks (tasks.md 5.6)
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/deploy
+      register: deploy_user_per_app_old_sudoers_stat
+
+    - name: Assert /etc/sudoers.d/deploy does not exist after convergence
+      ansible.builtin.assert:
+        that:
+          - not deploy_user_per_app_old_sudoers_stat.stat.exists
+        fail_msg: >-
+          /etc/sudoers.d/deploy still exists after convergence, even
+          though converge.yml seeded it beforehand -- this role's tasks
+          SHALL remove the pre-migration sudoers entry (tasks.md 5.6).
 
     - name: Assert the generic app-deploy script exists (root:root, mode 0755 -- tasks.md 1.2)
       ansible.builtin.stat:
