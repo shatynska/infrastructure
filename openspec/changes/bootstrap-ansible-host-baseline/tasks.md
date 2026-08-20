@@ -46,16 +46,16 @@
       platform change), and installs an authorized public key sourced from
       Ansible Vault or a variable supplied at run time (not committed in
       plaintext).
-- [ ] 3.2 **Partially done.** The operator generated the deploy keypair
-      out-of-band (`ssh-keygen -t ed25519`, no passphrase — required since
-      the CI job in `deploy-platform-compose-stack` invokes it
-      non-interactively) and its public half is confirmed installed and
-      working on the real host (see 3.5/3.6 below). **Still outstanding:**
-      the private half currently exists only as a local file on the
-      operator's machine — it SHALL still be added to the `production`
-      Environment's GitHub secret (`PLATFORM_DEPLOY_SSH_KEY`, per
-      `deploy-platform-compose-stack`'s tasks.md 3.4), not left there
-      long-term. Leave this task open until that's done.
+- [x] 3.2 **Done.** The operator generated the deploy keypair out-of-band
+      (`ssh-keygen -t ed25519`, no passphrase — required since the CI job
+      in `deploy-platform-compose-stack` invokes it non-interactively);
+      its public half is installed and working on the real host (3.5/3.6
+      below), and its private half is stored in the `production`
+      Environment's `PLATFORM_DEPLOY_SSH_KEY` GitHub secret (per
+      `deploy-platform-compose-stack`'s tasks.md 3.4) — confirmed working
+      by a real successful deploy run
+      (github.com/shatynska/infrastructure/actions/runs/32350184847), not
+      left only as a local file.
 - [x] 3.3 Add the fixed wrapper script `/usr/local/bin/platform-compose-deploy`
       (root:root, mode `0755`) containing exactly:
       `cd /opt/platform && docker compose pull && docker compose up -d --wait`
