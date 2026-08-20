@@ -16,10 +16,13 @@ reverse proxy and a single shared PostgreSQL instance today; monitoring
   `platform/**` is validated via `docker compose config` (no deploy
   credential); merging to `main` runs a credential-less job that posts the
   diff to the run's job summary, then a `production`-Environment-gated job
-  that authenticates as the `deploy` account (provisioned by
-  `bootstrap-ansible-host-baseline`) and triggers its one fixed deploy
-  script over SSH. See `iac-platform-deploy-pipeline` and
-  `.github/workflows/platform-deploy.yml`. Ansible's configuration-
+  that joins the same private Tailscale tailnet the host is a member of
+  (`connect-platform-deploy-via-tailscale`) and authenticates as the
+  `deploy` account (provisioned by `bootstrap-ansible-host-baseline`) to
+  trigger its one fixed deploy script over SSH — reachable only over that
+  tailnet, not the public internet, so this pipeline never needed SSH
+  opened beyond the operator's own CIDR. See `iac-platform-deploy-pipeline`
+  and `.github/workflows/platform-deploy.yml`. Ansible's configuration-
   management scope stops at the container runtime; it never templates this
   stack's service definitions or invokes its lifecycle commands.
 - **No dedicated monitoring server.** When Prometheus/Grafana are added,
