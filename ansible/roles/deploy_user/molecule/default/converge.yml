@@ -34,6 +34,34 @@
           commerce-ops-molecule@ci
     ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('dummy-molecule-placeholder-token-not-real', true) }}"
     ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('dummy-molecule-placeholder-user-not-real', true) }}"
+  pre_tasks:
+    # Simulates an already-provisioned host that still carries the
+    # pre-migration platform-compose-deploy script and sudoers entry
+    # (design.md's Migration Plan: present-but-unreachable until tasks.md
+    # 5.6's cleanup runs) -- exercises the role's absent tasks actually
+    # removing something, not just confirming a fresh host never had it.
+    - name: Seed a pre-migration platform-compose-deploy script (tasks.md 5.6 fixture)
+      ansible.builtin.copy:
+        dest: /usr/local/bin/platform-compose-deploy
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          cd /opt/platform
+          docker compose pull
+          docker compose up -d --wait
+
+    - name: Seed a pre-migration sudoers entry (tasks.md 5.6 fixture)
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/deploy
+        owner: root
+        group: root
+        mode: "0440"
+        content: |
+          deploy ALL=(root) NOPASSWD: /usr/local/bin/platform-compose-deploy
+        validate: "visudo -cf %s"
   roles:
     - role: docker
     - role: deploy_user

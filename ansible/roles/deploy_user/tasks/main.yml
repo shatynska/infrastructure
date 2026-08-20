@@ -125,3 +125,20 @@
     registry_url: ghcr.io
     username: "{{ ghcr_pull_username }}"
     password: "{{ ghcr_pull_token }}"
+
+# tasks.md 5.6: removes the fully-superseded single-application mechanism
+# left present-but-unreachable since the migration (design.md's Migration
+# Plan) -- deliberately not part of the tasks above, and only run once
+# 5.2's live validation of the generic mechanism has already passed. Safe
+# to leave as a permanent, idempotent cleanup step: a host that never had
+# these (every host provisioned after this change) simply finds nothing to
+# remove.
+- name: Remove the fully-superseded platform-compose-deploy script
+  ansible.builtin.file:
+    path: /usr/local/bin/platform-compose-deploy
+    state: absent
+
+- name: Remove the fully-superseded platform-compose-deploy sudoers entry
+  ansible.builtin.file:
+    path: /etc/sudoers.d/deploy
+    state: absent
