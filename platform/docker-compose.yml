@@ -50,3 +50,4 @@ networks:
 volumes:
   traefik_letsencrypt:
   postgres_data:
+services: [this is not valid yaml: {{{
