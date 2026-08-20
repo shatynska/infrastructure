@@ -41,7 +41,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth,
       # and this org's free tier has no team-scoped tokens to split by
@@ -174,7 +174,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # This job declares `environment: production`, so HCLOUD_TOKEN
       # resolves to the write-capable Environment secret. TF_API_TOKEN

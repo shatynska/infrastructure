@@ -17,7 +17,7 @@ jobs:
       issues: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # No `environment:` on this job, so TF_API_TOKEN resolves to its
       # repository-scoped secret. It's a single unsplit HCP Terraform
