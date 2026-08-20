@@ -1,98 +1,449 @@
 ---
-# Verifies all four scenarios under the ADDED "Restricted Deploy Account
-# for Platform Stack Access" requirement
-# (openspec/changes/bootstrap-ansible-host-baseline/specs/
-# iac-host-configuration/spec.md). Each block below is labeled with the
-# scenario it covers.
+# Verifies the ADDED "Restricted Deploy Account Supports Per-Application
+# Forced-Command Deploys" (7 scenarios) and "Host Authenticates to GHCR
+# for Application Image Pulls" (2 scenarios) requirements
+# (openspec/changes/add-per-app-deploy-keys/specs/iac-host-configuration/
+# spec.md). Each block is labeled with the scenario it covers. See
+# test-manifest.md for the full scenario-accounting table, including which
+# parts of some scenarios are proxy coverage or deliberately left to
+# tasks.md's Rollout section's live/manual verification instead of
+# Molecule.
+#
+# Three tasks near the end of this file (denial of raw `docker`/arbitrary
+# `sudo` access, and the private-key-marker scan) are carried forward from
+# the old, now-replaced `default` scenario's verify.yml -- their normative
+# content is not superseded by this change (test-manifest.md's "Obsolete
+# tests": flagged as "not superseded", not dropped) and remains true under
+# the new per-application model, so they were kept rather than lost when
+# that scenario's converge/verify (which assumed the retired single-key
+# interface) were replaced by this one.
 - name: Verify
   hosts: all
   become: true
   tasks:
     # ============================================================
-    # Scenario: Deploy account's privileged access is a single fixed
-    # action, not arbitrary command injection
+    # Setup: build the two test archives `deploy-receive` will be fed.
+    # Piped directly at the script (as `deploy`), not over an actual `ssh`
+    # session -- the SSH-layer forced-command binding itself is verified
+    # separately below as a static `authorized_keys` content check, per
+    # tasks.md 3.2's own framing ("exercising deploy-receive directly").
     # ============================================================
-    - name: Confirm the deploy account exists
-      ansible.builtin.command: id deploy
-      register: deploy_user_id_deploy
+    - name: Build a valid deploy archive (docker-compose.yml + .env only) for commerce-ops
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p /tmp/deploy_user_valid_archive
+        printf 'services: {}\n' > /tmp/deploy_user_valid_archive/docker-compose.yml
+        printf 'FOO=bar\n' > /tmp/deploy_user_valid_archive/.env
+        tar -czf /tmp/deploy_user_valid_archive.tar.gz -C /tmp/deploy_user_valid_archive docker-compose.yml .env
+      args:
+        executable: /bin/bash
       changed_when: false
 
-    - name: Assert deploy is not a member of the docker group (root-equivalent membership rejected on review, design.md)
+    - name: Build a decoy-bearing deploy archive (docker-compose.yml + .env + an unexpected member) for platform
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p /tmp/deploy_user_decoy_archive
+        printf 'services: {}\n' > /tmp/deploy_user_decoy_archive/docker-compose.yml
+        printf 'FOO=bar\n' > /tmp/deploy_user_decoy_archive/.env
+        printf 'echo pwned\n' > /tmp/deploy_user_decoy_archive/evil.sh
+        tar -czf /tmp/deploy_user_decoy_archive.tar.gz -C /tmp/deploy_user_decoy_archive docker-compose.yml .env evil.sh
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ============================================================
+    # Scenario: A single SSH session delivers content and triggers deploy
+    # ============================================================
+    - name: Pipe the valid archive into deploy-receive commerce-ops, as deploy, non-interactively
+      ansible.builtin.shell: cat /tmp/deploy_user_valid_archive.tar.gz | /usr/local/bin/deploy-receive commerce-ops
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_per_app_valid_pipe
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the pipe was not rejected by sudo (the deploy trigger was permitted, not blocked at the authorization layer)
       ansible.builtin.assert:
         that:
-          - "'docker' not in deploy_user_id_deploy.stdout"
-        fail_msg: "deploy is a member of the docker group -- design.md explicitly rejects this as root-equivalent"
-
-    - name: Read the sudoers.d drop-in for deploy
-      ansible.builtin.slurp:
-        src: /etc/sudoers.d/deploy
-      register: deploy_user_sudoers_drop_in
-
-    - name: Assert the sudoers rule is exactly the fixed, argument-free, wildcard-free invocation (design.md / tasks.md 3.3)
-      vars:
-        sudoers_content: "{{ deploy_user_sudoers_drop_in.content | b64decode }}"
-      ansible.builtin.assert:
-        that:
-          - "'deploy ALL=(root) NOPASSWD: /usr/local/bin/platform-compose-deploy' in sudoers_content"
-          - "'*' not in sudoers_content"
+          - "'password is required' not in deploy_user_per_app_valid_pipe.stderr"
+          - "'not allowed' not in deploy_user_per_app_valid_pipe.stderr"
         fail_msg: >-
-          /etc/sudoers.d/deploy is not an exact match on
-          '/usr/local/bin/platform-compose-deploy' with no wildcard --
-          either the exact line is missing or a wildcard/argument-forwarding
-          form was used, both rejected on review per design.md.
+          deploy-receive's own `sudo app-deploy commerce-ops` trigger was
+          denied by sudo ({{ deploy_user_per_app_valid_pipe.stderr }}) --
+          the sudoers rule for commerce-ops does not actually grant it.
 
-    - name: Confirm the wrapper script's ownership and permissions (root:root, 0755 -- tasks.md 3.3)
+    - name: Assert deploy-receive's full pipeline (extract, permission, trigger) succeeded end to end
+      ansible.builtin.assert:
+        that:
+          - deploy_user_per_app_valid_pipe.rc == 0
+        fail_msg: >-
+          deploy-receive exited non-zero ({{ deploy_user_per_app_valid_pipe.rc }}) for
+          a single-session pipe of a valid archive. Because this converge
+          installs Docker and the test Compose file declares zero services
+          ("services: {}"), `docker compose pull && docker compose up -d
+          --wait` inside app-deploy is a real, fast, no-registry-needed
+          success when the whole chain (extraction, permissions, sudo
+          escalation, trigger) actually works -- a non-zero rc here means
+          some step in that one-session chain did not complete, not merely
+          that Docker/GHCR content was unavailable.
+
+    - name: Confirm commerce-ops's docker-compose.yml and .env landed under /opt/commerce-ops
+      ansible.builtin.stat:
+        path: "/opt/commerce-ops/{{ item }}"
+      loop:
+        - docker-compose.yml
+        - .env
+      register: deploy_user_commerce_ops_extracted_files
+
+    - name: Assert both expected members were extracted
+      ansible.builtin.assert:
+        that:
+          - deploy_user_commerce_ops_extracted_files.results[0].stat.exists
+          - deploy_user_commerce_ops_extracted_files.results[1].stat.exists
+        fail_msg: "docker-compose.yml and/or .env were not extracted into /opt/commerce-ops by the single-session pipe"
+
+    - name: Assert the extracted .env has restrictive permissions (tasks.md 1.3 -- chmod 600)
+      ansible.builtin.assert:
+        that:
+          - deploy_user_commerce_ops_extracted_files.results[1].stat.mode == "0600"
+        fail_msg: >-
+          /opt/commerce-ops/.env is mode
+          {{ deploy_user_commerce_ops_extracted_files.results[1].stat.mode }},
+          not 0600 -- deploy-receive SHALL set restrictive permissions on
+          the extracted .env
+
+    # ============================================================
+    # Scenario: Archive members outside the expected set are ignored
+    # ============================================================
+    - name: Pipe the decoy-bearing archive into deploy-receive platform, as deploy, non-interactively
+      ansible.builtin.shell: cat /tmp/deploy_user_decoy_archive.tar.gz | /usr/local/bin/deploy-receive platform
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_per_app_decoy_pipe
+      changed_when: false
+      failed_when: false
+
+    - name: Confirm whether the decoy member was extracted alongside the real members
+      ansible.builtin.stat:
+        path: "/opt/platform/{{ item }}"
+      loop:
+        - docker-compose.yml
+        - .env
+        - evil.sh
+      register: deploy_user_platform_decoy_check
+
+    - name: Assert the two real members were extracted and the decoy member was not, regardless of its name
+      ansible.builtin.assert:
+        that:
+          - deploy_user_platform_decoy_check.results[0].stat.exists
+          - deploy_user_platform_decoy_check.results[1].stat.exists
+          - not deploy_user_platform_decoy_check.results[2].stat.exists
+        fail_msg: >-
+          Either a real member (docker-compose.yml/.env) failed to extract,
+          or the decoy member (evil.sh) was extracted when it SHALL NOT
+          have been -- deploy-receive SHALL extract only the two named
+          members, regardless of what else the archive contains.
+
+    # ============================================================
+    # Scenario: An application's key can only ever deploy that application
+    # Scenario: A leaked key cannot be used to pivot into the host's network
+    # Scenario: Platform deploys through the same mechanism as every other
+    #           application (authorized_keys half)
+    #
+    # The actual channel-forwarding-refusal half of "leaked key cannot
+    # pivot" is live OpenSSH `restrict` enforcement, not this role's own
+    # logic, and is verified live against a real SSH client/session by
+    # tasks.md 5.4's Rollout step -- not reproduced here (see
+    # test-manifest.md). This static content check is the proxy: it
+    # confirms the `restrict` option this enforcement depends on is
+    # actually present per key, and that each key's forced command is
+    # bound to that key's own, and only its own, application name -- which
+    # is the entirety of what this role's own tasks control.
+    # ============================================================
+    - name: Read deploy's authorized_keys
+      ansible.builtin.slurp:
+        src: /opt/platform/.ssh/authorized_keys
+      register: deploy_user_per_app_authorized_keys_file
+
+    - name: Assert each key's line carries restrict,command= bound to its own application name only
+      vars:
+        authorized_keys_content: "{{ deploy_user_per_app_authorized_keys_file.content | b64decode }}"
+        platform_line: "{{ authorized_keys_content.split('\n') | select('search', 'platform-molecule@ci') | list | first | default('') }}"
+        commerce_ops_line: "{{ authorized_keys_content.split('\n') | select('search', 'commerce-ops-molecule@ci') | list | first | default('') }}"
+      ansible.builtin.assert:
+        that:
+          - platform_line != ""
+          - "'restrict' in platform_line"
+          - "'command=\"/usr/local/bin/deploy-receive platform\"' in platform_line"
+          - "'commerce-ops' not in platform_line"
+          - commerce_ops_line != ""
+          - "'restrict' in commerce_ops_line"
+          - "'command=\"/usr/local/bin/deploy-receive commerce-ops\"' in commerce_ops_line"
+        fail_msg: >-
+          authorized_keys does not carry a restrict,command=... entry
+          binding each key to exactly its own application name -- either
+          `restrict` is missing (leaked-key forwarding not closed), the
+          forced command is missing/wrong (an application's key would not
+          deploy only that application), or one key's line references the
+          other application's name (cross-key contamination). platform
+          line: '{{ platform_line }}'; commerce-ops line:
+          '{{ commerce_ops_line }}'
+
+    # ============================================================
+    # Scenario: An unenumerated application name is rejected
+    # ============================================================
+    - name: Attempt sudo app-deploy for an application with no sudoers.d entry, as deploy, non-interactively
+      ansible.builtin.command: sudo -n /usr/local/bin/app-deploy nonexistent-app
+      become: true
+      become_user: deploy
+      register: deploy_user_per_app_unenumerated_attempt
+      changed_when: false
+      failed_when: false
+
+    - name: Assert sudo refuses the unenumerated application name
+      ansible.builtin.assert:
+        that:
+          - deploy_user_per_app_unenumerated_attempt.rc != 0
+          - "'password is required' in deploy_user_per_app_unenumerated_attempt.stderr or 'not allowed' in deploy_user_per_app_unenumerated_attempt.stderr"
+        fail_msg: "sudo permitted app-deploy for an application name with no matching sudoers.d entry"
+
+    # ============================================================
+    # Scenario: New applications are onboarded without a new account
+    # ============================================================
+    - name: Confirm /opt/<name> for both platform and commerce-ops (tasks.md 1.1)
+      ansible.builtin.stat:
+        path: "/opt/{{ item }}"
+      loop:
+        - platform
+        - commerce-ops
+      register: deploy_user_per_app_opt_dirs
+
+    - name: Assert each /opt/<name> directory is owned deploy:deploy, mode 0750
+      ansible.builtin.assert:
+        that:
+          - deploy_user_per_app_opt_dirs.results[0].stat.exists
+          - deploy_user_per_app_opt_dirs.results[0].stat.pw_name == "deploy"
+          - deploy_user_per_app_opt_dirs.results[0].stat.gr_name == "deploy"
+          - deploy_user_per_app_opt_dirs.results[0].stat.mode == "0750"
+          - deploy_user_per_app_opt_dirs.results[1].stat.exists
+          - deploy_user_per_app_opt_dirs.results[1].stat.pw_name == "deploy"
+          - deploy_user_per_app_opt_dirs.results[1].stat.gr_name == "deploy"
+          - deploy_user_per_app_opt_dirs.results[1].stat.mode == "0750"
+        fail_msg: "/opt/platform and/or /opt/commerce-ops is missing, or not owned deploy:deploy mode 0750"
+
+    - name: Read each application's sudoers.d entry, /etc/sudoers.d/app-deploy-<name> per tasks.md 1.4
+      ansible.builtin.slurp:
+        src: "/etc/sudoers.d/app-deploy-{{ item }}"
+      loop:
+        - platform
+        - commerce-ops
+      register: deploy_user_per_app_sudoers_files
+
+    - name: Assert each sudoers.d entry is the exact, fully-qualified, wildcard-free line for that application
+      vars:
+        platform_sudoers: "{{ deploy_user_per_app_sudoers_files.results[0].content | b64decode }}"
+        commerce_ops_sudoers: "{{ deploy_user_per_app_sudoers_files.results[1].content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'deploy ALL=(root) NOPASSWD: /usr/local/bin/app-deploy platform' in platform_sudoers"
+          - "'*' not in platform_sudoers"
+          - "'deploy ALL=(root) NOPASSWD: /usr/local/bin/app-deploy commerce-ops' in commerce_ops_sudoers"
+          - "'*' not in commerce_ops_sudoers"
+        fail_msg: >-
+          A sudoers.d entry is not an exact match on its own application's
+          app-deploy invocation with no wildcard -- either the exact line
+          is missing or a wildcard/argument-forwarding form was used.
+
+    - name: Validate each sudoers.d entry with visudo (derived -- tasks.md 3.1)
+      ansible.builtin.command: "visudo -cf /etc/sudoers.d/app-deploy-{{ item }}"
+      loop:
+        - platform
+        - commerce-ops
+      register: deploy_user_per_app_visudo_check
+      changed_when: false
+
+    - name: Assert exactly one `deploy` system account exists -- no per-application account was created
+      ansible.builtin.command: getent passwd
+      register: deploy_user_per_app_passwd
+      changed_when: false
+
+    - name: Assert onboarding commerce-ops required no new Unix account, home directory, or sudoers structure
+      vars:
+        passwd_lines: "{{ deploy_user_per_app_passwd.stdout_lines }}"
+        deploy_account_lines: "{{ passwd_lines | select('match', '^deploy:') | list }}"
+      ansible.builtin.assert:
+        that:
+          - deploy_account_lines | length == 1
+          - "'deploy-commerce-ops:' not in deploy_user_per_app_passwd.stdout"
+          - "'deploy-platform:' not in deploy_user_per_app_passwd.stdout"
+        fail_msg: >-
+          Expected exactly one `deploy` account and none named after a
+          specific application -- onboarding commerce-ops SHALL require
+          only a new keypair, authorized_keys line, sudoers.d entry, and
+          /opt/<app_name> directory, not a new Unix account.
+
+    # ============================================================
+    # Scenario: Platform deploys through the same mechanism as every other
+    # application
+    #
+    # This fresh Molecule instance never had the retired
+    # platform-compose-deploy script installed on it in the first place
+    # (this role's tasks no longer install it), so its absence here is a
+    # legitimate assertion in this isolated context. This is NOT the same
+    # claim as "the live production migration has already deleted it" --
+    # production deliberately keeps that script present-but-unreachable
+    # until tasks.md 5.6's separate, later, validation-gated playbook run
+    # (design.md's Migration Plan). See test-manifest.md.
+    # ============================================================
+    - name: Assert the retired platform-compose-deploy script does not exist on this fresh instance
       ansible.builtin.stat:
         path: /usr/local/bin/platform-compose-deploy
-      register: deploy_user_wrapper_stat
+      register: deploy_user_per_app_old_wrapper_stat
 
-    - name: Assert the wrapper script is root-owned, mode 0755
+    - name: Assert no separate platform-specific script is installed by this role's tasks
       ansible.builtin.assert:
         that:
-          - deploy_user_wrapper_stat.stat.exists
-          - deploy_user_wrapper_stat.stat.pw_name == "root"
-          - deploy_user_wrapper_stat.stat.gr_name == "root"
-          - deploy_user_wrapper_stat.stat.mode == "0755"
+          - not deploy_user_per_app_old_wrapper_stat.stat.exists
         fail_msg: >-
-          the wrapper script is not root:root mode 0755 -- if deploy could
-          write to it, the 'fixed script' guarantee this scenario depends
-          on would not hold
+          /usr/local/bin/platform-compose-deploy exists on a fresh
+          convergence of this role -- platform SHALL deploy through the
+          same generic app-deploy/deploy-receive mechanism as every other
+          application, with no separate platform-specific script.
 
-    - name: Attempt the one permitted invocation as deploy, non-interactively (no PTY, matching how CI will invoke it -- design.md Risks)
-      ansible.builtin.command: sudo -n /usr/local/bin/platform-compose-deploy
-      become: true
-      become_user: deploy
-      register: deploy_user_permitted_invocation
-      changed_when: false
-      failed_when: false
+    - name: Assert the generic app-deploy script exists (root:root, mode 0755 -- tasks.md 1.2)
+      ansible.builtin.stat:
+        path: /usr/local/bin/app-deploy
+      register: deploy_user_per_app_app_deploy_stat
 
-    - name: Assert sudo itself did not reject the permitted invocation
+    - name: Assert app-deploy is root-owned, mode 0755
       ansible.builtin.assert:
         that:
-          - "'password is required' not in deploy_user_permitted_invocation.stderr"
-          - "'not allowed' not in deploy_user_permitted_invocation.stderr"
+          - deploy_user_per_app_app_deploy_stat.stat.exists
+          - deploy_user_per_app_app_deploy_stat.stat.pw_name == "root"
+          - deploy_user_per_app_app_deploy_stat.stat.gr_name == "root"
+          - deploy_user_per_app_app_deploy_stat.stat.mode == "0755"
+        fail_msg: "/usr/local/bin/app-deploy is missing or not root:root mode 0755"
+
+    - name: Assert deploy-receive exists (deploy:deploy, mode 0755 -- tasks.md 1.3)
+      ansible.builtin.stat:
+        path: /usr/local/bin/deploy-receive
+      register: deploy_user_per_app_deploy_receive_stat
+
+    - name: Assert deploy-receive is deploy-owned, mode 0755
+      ansible.builtin.assert:
+        that:
+          - deploy_user_per_app_deploy_receive_stat.stat.exists
+          - deploy_user_per_app_deploy_receive_stat.stat.pw_name == "deploy"
+          - deploy_user_per_app_deploy_receive_stat.stat.gr_name == "deploy"
+          - deploy_user_per_app_deploy_receive_stat.stat.mode == "0755"
+        fail_msg: "/usr/local/bin/deploy-receive is missing or not deploy:deploy mode 0755"
+
+    # ============================================================
+    # Scenario: A private GHCR package can be pulled during deploy
+    #
+    # DELIBERATELY conditional / best-effort. A real pull-success proof
+    # needs a real private GHCR package and a real, valid, non-placeholder
+    # read:packages token -- neither of which this pass can safely commit
+    # (a real token is a credential; a fake one legitimately fails
+    # authentication, which would not be a defect in the role). tasks.md
+    # 5.5 assigns the actual pull-success proof to a manual Rollout step
+    # against real infrastructure. This structural check only runs when
+    # MOLECULE_GHCR_PULL_TOKEN is supplied at test-run time (e.g. a CI
+    # secret); otherwise it is skipped, not silently passed. See
+    # test-manifest.md's unresolved-questions section.
+    # ============================================================
+    - name: Report whether the live GHCR credential-store check will run
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Running the GHCR credential-store check against a real supplied token.'
+          if (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
+          else 'MOLECULE_GHCR_PULL_TOKEN not set -- skipping the GHCR credential-store check (see test-manifest.md); the actual pull-success scenario is verified operationally per tasks.md 5.5, not by this Molecule scenario.' }}
+
+    - name: Read root's Docker credential store (only when a real token was supplied)
+      ansible.builtin.slurp:
+        src: /root/.docker/config.json
+      register: deploy_user_per_app_docker_config
+      when: (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
+      ignore_errors: true
+
+    - name: Assert root's Docker credential store contains a ghcr.io entry (only when a real token was supplied)
+      vars:
+        docker_config_content: "{{ deploy_user_per_app_docker_config.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'ghcr.io' in docker_config_content"
         fail_msg: >-
-          sudo denied deploy's one permitted invocation of the wrapper
-          script ({{ deploy_user_permitted_invocation.stderr }}) -- the sudoers rule
-          does not actually grant it. (This does not assert the wrapper's
-          own `docker compose` commands succeed: Docker is not installed in
-          this role's isolated scenario by design -- see molecule.yml.)
+          /root/.docker/config.json does not contain a ghcr.io entry after
+          convergence, even though a real GHCR pull token was supplied via
+          MOLECULE_GHCR_PULL_TOKEN.
+      when: (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
 
-    - name: Attempt to append an argument to the wrapper invocation as deploy, non-interactively
-      ansible.builtin.command: sudo -n /usr/local/bin/platform-compose-deploy --extra-argument
-      become: true
-      become_user: deploy
-      register: deploy_user_argument_injection_attempt
+    # ============================================================
+    # Scenario: GHCR token is never committed
+    #
+    # Not host-state to converge against (the token only ever reaches the
+    # host as a decrypted Vault value, per tasks.md 2.3) -- checked as a
+    # static scan of the committed repository, delegated to localhost,
+    # same technique as the private-key-marker scan further below.
+    # ============================================================
+    - name: Scan the repository for literal GitHub/GHCR token markers
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -rlE "gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}" "{{ playbook_dir }}/../../../../.." || true
+      args:
+        executable: /bin/bash
+      register: deploy_user_per_app_ghcr_token_marker_scan
       changed_when: false
-      failed_when: false
+      delegate_to: localhost
+      become: false
 
-    - name: Assert appending an argument to the wrapper invocation is denied
+    - name: Assert no literal GitHub/GHCR token is committed anywhere in the repository
       ansible.builtin.assert:
         that:
-          - deploy_user_argument_injection_attempt.rc != 0
-          - "'password is required' in deploy_user_argument_injection_attempt.stderr or 'not allowed' in deploy_user_argument_injection_attempt.stderr"
-        fail_msg: "deploy was able to invoke the wrapper with an appended argument -- the sudoers rule accepts argument injection"
+          - deploy_user_per_app_ghcr_token_marker_scan.stdout | trim == ""
+        fail_msg: >-
+          A GitHub/GHCR token-shaped marker was found committed in:
+          {{ deploy_user_per_app_ghcr_token_marker_scan.stdout }} -- the GHCR
+          pull token SHALL be stored outside version control and SHALL NOT
+          appear in plaintext anywhere in the repository.
 
+    - name: Find any ghcr_pull_token assignment that lives outside a Vault-encrypted file
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -rlE "ghcr_pull_token *:" --include="*.yml" --include="*.yaml" "{{ playbook_dir }}/../../../../.." | while read -r f; do
+          head -c 15 "$f" | grep -q '^\$ANSIBLE_VAULT' || echo "$f"
+        done || true
+      args:
+        executable: /bin/bash
+      register: deploy_user_per_app_ghcr_token_plaintext_scan
+      changed_when: false
+      delegate_to: localhost
+      become: false
+
+    - name: Assert every ghcr_pull_token assignment found in the repository is inside a Vault-encrypted file
+      ansible.builtin.assert:
+        that:
+          - deploy_user_per_app_ghcr_token_plaintext_scan.stdout | trim == ""
+        fail_msg: >-
+          ghcr_pull_token is assigned a value outside an Ansible-Vault-
+          encrypted file in: {{ deploy_user_per_app_ghcr_token_plaintext_scan.stdout }}
+          -- per the GHCR requirement, it SHALL be stored outside version
+          control (Ansible Vault), not merely referenced without a
+          committed default.
+
+    # ============================================================
+    # Carried forward from the old `default` scenario (test-manifest.md's
+    # "Obsolete tests": flagged "not directly superseded" / "likely not
+    # superseded"). Not required by either of this change's own scenarios,
+    # but still true under the new per-application model -- `deploy`'s only
+    # privileged capability is the named app-deploy sudoers rules, no raw
+    # docker access or arbitrary-command escalation is granted, and no
+    # private-key material is committed under this role.
+    # ============================================================
     - name: Attempt sudo docker directly as deploy, non-interactively
       ansible.builtin.command: sudo -n docker ps
       become: true
@@ -105,7 +456,7 @@
       ansible.builtin.assert:
         that:
           - deploy_user_docker_direct_attempt.rc != 0
-        fail_msg: "deploy was able to run `sudo docker` directly -- only the fixed wrapper script SHALL be a privileged option"
+        fail_msg: "deploy was able to run `sudo docker` directly -- only the named app-deploy invocations SHALL be privileged options"
 
     - name: Attempt an arbitrary privileged command (sudo whoami) as deploy, non-interactively
       ansible.builtin.command: sudo -n whoami
@@ -120,142 +471,8 @@
         that:
           - deploy_user_whoami_attempt.rc != 0
           - "'root' not in deploy_user_whoami_attempt.stdout"
-        fail_msg: "deploy was able to run an arbitrary privileged command (sudo whoami) -- only the fixed wrapper script SHALL be a privileged option"
+        fail_msg: "deploy was able to run an arbitrary privileged command (sudo whoami) -- only the named app-deploy invocations SHALL be privileged options"
 
-    - name: Attempt to overwrite the wrapper script as deploy (derived -- supports the 'fixed script' guarantee)
-      ansible.builtin.copy:
-        dest: /usr/local/bin/platform-compose-deploy
-        content: "echo pwned\n"
-        mode: "0644"
-      become: true
-      become_user: deploy
-      register: deploy_user_overwrite_attempt
-      ignore_errors: true
-
-    - name: Assert deploy cannot modify the wrapper script itself
-      ansible.builtin.assert:
-        that:
-          - deploy_user_overwrite_attempt is failed
-        fail_msg: >-
-          deploy was able to overwrite the wrapper script -- the 'one
-          fixed action' guarantee does not hold if the action itself is
-          mutable by this account
-
-    # ============================================================
-    # Scenario: Deploy account can escalate via the content it is
-    # entitled to write
-    #
-    # Per the dispatch instructions for this test-writing pass: this
-    # scenario's normative content is that content-layer escalation is
-    # NOT prevented and NOT this account's restriction mechanism's
-    # responsibility. The assertions below therefore demonstrate the
-    # actual normative content -- deploy is entitled to write here, and
-    # the wrapper performs no content validation -- rather than asserting
-    # escalation is blocked.
-    # ============================================================
-    - name: Confirm /opt/platform's ownership and permissions (deploy:deploy, 0750 -- tasks.md 3.1)
-      ansible.builtin.stat:
-        path: /opt/platform
-      register: deploy_user_opt_platform_stat
-
-    - name: Assert /opt/platform is owned deploy:deploy, mode 0750
-      ansible.builtin.assert:
-        that:
-          - deploy_user_opt_platform_stat.stat.exists
-          - deploy_user_opt_platform_stat.stat.pw_name == "deploy"
-          - deploy_user_opt_platform_stat.stat.gr_name == "deploy"
-          - deploy_user_opt_platform_stat.stat.mode == "0750"
-        fail_msg: "/opt/platform is not owned deploy:deploy mode 0750 per tasks.md 3.1"
-
-    - name: Deploy writes a new Compose file into the directory the wrapper operates on
-      ansible.builtin.copy:
-        dest: /opt/platform/docker-compose.yml
-        content: "services: {}\n"
-        owner: deploy
-        group: deploy
-        mode: "0640"
-      become: true
-      become_user: deploy
-      register: deploy_user_compose_write
-
-    - name: Assert the write succeeded -- deploy is entitled to place content the wrapper will later apply
-      ansible.builtin.assert:
-        that:
-          - deploy_user_compose_write is not failed
-        fail_msg: >-
-          deploy could not write a Compose file into /opt/platform -- this
-          is the write access the requirement's own text says is how a
-          deployment mechanism gets new content onto the host at all
-
-    - name: Read the wrapper script's content from the managed node
-      ansible.builtin.slurp:
-        src: /usr/local/bin/platform-compose-deploy
-      register: deploy_user_wrapper_script_file
-
-    - name: Assert the wrapper applies whatever Compose content is present, with no content validation of its own
-      vars:
-        wrapper_content: "{{ deploy_user_wrapper_script_file.content | b64decode }}"
-      ansible.builtin.assert:
-        that:
-          - "'docker compose pull' in wrapper_content"
-          - "'docker compose up -d --wait' in wrapper_content"
-          - "'grep' not in wrapper_content"
-          - "'privileged' not in wrapper_content"
-        fail_msg: >-
-          The wrapper script appears to perform content inspection on the
-          Compose file it applies. Per the "Deploy account can escalate via
-          the content it is entitled to write" scenario, no such validation
-          is required or guaranteed by this account's restriction mechanism
-          -- containment of what content reaches this directory is
-          explicitly out of scope for this requirement (design.md's
-          accepted-risk decision), so finding validation logic here would
-          contradict the scenario's own stated normative content, not
-          exceed it safely.
-
-    # ============================================================
-    # Scenario: Deploy account is provisioned independently of any
-    # operator
-    # ============================================================
-    - name: Assert the deploy account resolves with the fixed /opt/platform home, using only this converge's deploy_user_public_key
-      ansible.builtin.command: getent passwd deploy
-      register: deploy_user_deploy_passwd
-      changed_when: false
-
-    - name: Assert deploy is a real account with home /opt/platform
-      ansible.builtin.assert:
-        that:
-          - deploy_user_deploy_passwd.rc == 0
-          - "'/opt/platform' in deploy_user_deploy_passwd.stdout"
-        fail_msg: >-
-          The deploy account does not exist with home /opt/platform, even
-          though this converge supplied no operator/personal key variable
-          at all -- provisioning SHALL NOT require one.
-
-    - name: Read deploy's authorized_keys
-      ansible.builtin.slurp:
-        src: /opt/platform/.ssh/authorized_keys
-      register: deploy_user_authorized_keys_file
-
-    - name: Assert only the test-supplied deploy key is authorized
-      vars:
-        authorized_keys_content: "{{ deploy_user_authorized_keys_file.content | b64decode }}"
-      ansible.builtin.assert:
-        that:
-          - "'test-molecule@ci' in authorized_keys_content"
-        fail_msg: >-
-          deploy's authorized_keys does not contain the key supplied via
-          deploy_user_public_key in this scenario's converge.yml -- that
-          converge deliberately supplies no operator/personal key, so the
-          account's provisioning must not depend on one.
-
-    # ============================================================
-    # Scenario: Deploy private key is never committed
-    #
-    # Not host-state to converge against (the playbook only ever installs
-    # the *public* key -- tasks.md 3.2 generates the keypair out-of-band).
-    # Checked as a static scan of this role's committed files on the
-    # controller, delegated to localhost.
-    # ============================================================
     - name: Scan this role's committed files for embedded private-key material
       ansible.builtin.shell: |
         set -o pipefail
@@ -273,8 +490,8 @@
           - deploy_user_committed_private_key_scan.stdout | trim == ""
         fail_msg: >-
           A private-key marker was found under the deploy_user role's
-          committed files: {{ deploy_user_committed_private_key_scan.stdout }} -- the
-          deploy keypair's private half SHALL be stored outside version
-          control (Ansible Vault or a GitHub Actions Environment secret,
-          per tasks.md 3.2) and SHALL NOT appear in plaintext in the
-          repository.
+          committed files: {{ deploy_user_committed_private_key_scan.stdout }} -- every
+          application's keypair's private half SHALL be stored outside
+          version control (Ansible Vault or a GitHub Actions Environment
+          secret, per tasks.md 2.2) and SHALL NOT appear in plaintext in
+          the repository.

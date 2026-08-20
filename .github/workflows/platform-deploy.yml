@@ -88,16 +88,17 @@ jobs:
             echo "POSTGRES_PASSWORD=${{ secrets.PLATFORM_POSTGRES_PASSWORD }}"
           } >platform/.env
 
-      # PLATFORM_DEPLOY_SSH_KEY is the private half of the keypair
-      # bootstrap-ansible-host-baseline's deploy_user role installs the
-      # public half of -- generated out-of-band there (its tasks.md 3.2),
-      # not here. Both this key and the three secrets above SHALL be
-      # scoped to the `production` Environment specifically (GitHub
-      # resolves an Environment-scoped secret ahead of a repository-scoped
-      # one of the same name, mirroring apply.yml's HCLOUD_TOKEN pattern),
-      # since the sibling change's accepted content-layer trust boundary
-      # depends on this key being unreadable before this job's approval
-      # gate is passed.
+      # PLATFORM_DEPLOY_SSH_KEY is the private half of the platform
+      # keypair add-per-app-deploy-keys's deploy_user role installs the
+      # public half of (as this key's own `deploy_apps` entry) -- generated
+      # out-of-band there (its tasks.md 2.2's sibling generation for
+      # platform), not here. Both this key and the three secrets above
+      # SHALL be scoped to the `production` Environment specifically
+      # (GitHub resolves an Environment-scoped secret ahead of a
+      # repository-scoped one of the same name, mirroring apply.yml's
+      # HCLOUD_TOKEN pattern), since the accepted content-layer trust
+      # boundary depends on this key being unreadable before this job's
+      # approval gate is passed.
       - name: Set up the deploy SSH key
         run: |
           umask 077
@@ -106,30 +107,24 @@ jobs:
           chmod 600 ~/.ssh/platform_deploy_key
           ssh-keyscan -H "${{ secrets.PLATFORM_DEPLOY_HOST }}" >>~/.ssh/known_hosts
 
-      # /opt/platform is deploy's home directory, already provisioned
-      # deploy-owned by bootstrap-ansible-host-baseline -- this workflow
-      # creates nothing there itself.
-      - name: Copy docker-compose.yml and .env to the host
+      # One SSH session carries both the content and the trigger: this
+      # key's `authorized_keys` entry is now restricted to the forced
+      # command `deploy-receive platform` (add-per-app-deploy-keys), which
+      # overrides any command sent over the session -- a separate `scp`
+      # plus separate `ssh` commands (the previous three-step shape) would
+      # no longer work at all against that restriction. `deploy-receive`
+      # itself extracts docker-compose.yml/.env into /opt/platform, sets
+      # the extracted .env's permissions (satisfying
+      # iac-platform-services's restrictive-permissions requirement --
+      # replacing the separate "Tighten .env permissions" step this
+      # workflow used to run), and triggers `sudo /usr/local/bin/app-deploy
+      # platform` -- all within this one connection, so no second command
+      # ever needs to reach the host over this key. `docker compose up -d
+      # --wait` inside app-deploy blocks until every service is
+      # running/healthy and exits non-zero otherwise, which is what fails
+      # this step (and therefore this job) on a partial deploy -- no
+      # separate post-deploy health check is added here.
+      - name: Deliver docker-compose.yml and .env, and trigger the deploy
         run: |
-          scp -i ~/.ssh/platform_deploy_key \
-            platform/docker-compose.yml platform/.env \
-            "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}:/opt/platform/"
-
-      # Satisfies iac-platform-services's restrictive-permissions
-      # requirement on rendered secret files.
-      - name: Tighten .env permissions on the host
-        run: |
-          ssh -i ~/.ssh/platform_deploy_key "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}" \
-            'chmod 600 /opt/platform/.env'
-
-      # The one fixed, argument-free command bootstrap-ansible-host-
-      # baseline's sudoers.d rule permits -- no `-f`, no working
-      # directory, no other argument. `docker compose up -d --wait`
-      # inside that script blocks until every service is running/healthy
-      # and exits non-zero otherwise, which is what fails this step (and
-      # therefore this job) on a partial deploy -- no separate
-      # post-deploy health check is added here.
-      - name: Trigger the deploy wrapper script
-        run: |
-          ssh -i ~/.ssh/platform_deploy_key "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}" \
-            'sudo /usr/local/bin/platform-compose-deploy'
+          tar -czf - -C platform docker-compose.yml .env | \
+            ssh -i ~/.ssh/platform_deploy_key "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}"

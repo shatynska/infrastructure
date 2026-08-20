@@ -1,4 +1,16 @@
 ---
-# deploy_user_public_key has no default -- it must be supplied by the
-# caller (Ansible Vault or a run-time variable, per tasks.md 3.1). There
-# is no safe default for a login credential.
+# None of the three variables below has a committed default -- there is no
+# safe default for a login credential, an application's own SSH public
+# key, or a registry token. All are supplied by the caller (Ansible Vault
+# or a run-time variable), per tasks.md 2.1/2.3.
+
+# deploy_apps: list of {name, public_key} -- one entry per application
+# allowed to deploy to this host, `platform` included. Drives every
+# per-application resource this role renders: the /opt/<name> directory,
+# the app-deploy sudoers.d rule, and the authorized_keys forced-command
+# entry (openspec/changes/add-per-app-deploy-keys).
+
+# ghcr_pull_token / ghcr_pull_username: the read-only (`read:packages`),
+# shared GHCR credential `docker login`'d into root's Docker credential
+# store, so app-deploy's `docker compose pull` can pull a private package
+# (openspec/changes/add-per-app-deploy-keys).

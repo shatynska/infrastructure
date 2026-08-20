@@ -1,23 +1,39 @@
 ---
-# Deliberately supplies ONLY the deploy public key variable -- no
-# operator/personal SSH key or credential variable is defined anywhere in
-# this converge. That absence is how the "Deploy account is provisioned
-# independently of any operator" scenario is exercised in verify.yml: the
-# role must succeed and produce a working account without one.
+# Converges Docker Engine first (see molecule.yml for why this scenario
+# needs it), then `deploy_user` with the `deploy_apps` interface tasks.md
+# 1.1/2.1 describes: a list of {name, public_key} entries, seeded here
+# with `platform` (mirroring the existing production entry, per tasks.md
+# 2.1) plus `commerce-ops` as the sample new-application entry -- the same
+# pairing tasks.md 2.1 itself names, so this is not an invented example.
 #
-# ASSUMPTION (role variable interface -- the role doesn't exist yet, so
-# this name is this test author's invented interface, not a stated
-# requirement; see test-manifest.md): `deploy_user_public_key` (a single
-# public key string installed into deploy's authorized_keys). The private
-# half is never supplied here or anywhere in this repo, per tasks.md 3.2
-# (generated out-of-band).
+# Role variable interface, confirmed against ansible/roles/deploy_user/
+# tasks/main.yml and defaults/main.yml as implemented:
+#   - `deploy_apps`: list of {name, public_key}, no default.
+#   - `ghcr_pull_token` / `ghcr_pull_username`: no default -- the
+#     credentials community.docker.docker_login uses to authenticate root's
+#     Docker credential store to GHCR.
+#
+# GHCR_PULL_TOKEN and GHCR_PULL_USERNAME are read from the environment
+# with a placeholder fallback, never committed as real credentials --
+# see test-manifest.md for why the GHCR-credential-store assertion in
+# verify.yml is conditioned on a real value being supplied this way.
 - name: Converge
   hosts: all
   become: true
   vars:
-    deploy_user_public_key: >-
-      ssh-ed25519
-      AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeTestKeyOnlyNotARealCredential
-      test-molecule@ci
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+    ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('dummy-molecule-placeholder-token-not-real', true) }}"
+    ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('dummy-molecule-placeholder-user-not-real', true) }}"
   roles:
+    - role: docker
     - role: deploy_user

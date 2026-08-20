@@ -1,12 +1,19 @@
 ---
 # Provisions the restricted `deploy` account per iac-host-configuration's
-# ADDED "Restricted Deploy Account for Platform Stack Access" requirement
-# (openspec/changes/bootstrap-ansible-host-baseline). See that change's
-# design.md for why this account is scoped the way it is: a plain
-# restricted user whose only privileged capability is a single fixed,
-# argument-free wrapper script via `sudo` -- not `docker`-group
-# membership, and not a `sudo` rule that forwards raw `docker compose`
-# arguments (both rejected as root-equivalent).
+# "Restricted Deploy Account Supports Per-Application Forced-Command
+# Deploys" and "Host Authenticates to GHCR for Application Image Pulls"
+# requirements (openspec/changes/add-per-app-deploy-keys). See that
+# change's design.md for why every application -- platform included --
+# shares one account, isolated per application by a forced-command SSH key
+# plus a named `sudoers` rule, rather than one account per application.
+#
+# `platform-compose-deploy` and its dedicated `/etc/sudoers.d/deploy` rule
+# (the account's original, single-application shape from
+# bootstrap-ansible-host-baseline) are deliberately not created by these
+# tasks any more -- see design.md's Migration Plan: an already-provisioned
+# host keeps them present-but-unreachable until a later, separate,
+# validation-gated playbook run removes them (tasks.md 5.6), which is not
+# part of this role.
 
 - name: Create the deploy group
   ansible.builtin.group:
@@ -23,14 +30,6 @@
     password: "!"
     create_home: true
 
-- name: Ensure /opt/platform is owned deploy:deploy, mode 0750
-  ansible.builtin.file:
-    path: /opt/platform
-    state: directory
-    owner: deploy
-    group: deploy
-    mode: "0750"
-
 - name: Ensure deploy's .ssh directory exists
   ansible.builtin.file:
     path: /opt/platform/.ssh
@@ -39,45 +38,90 @@
     group: deploy
     mode: "0700"
 
-- name: Install deploy's authorized public key
-  ansible.builtin.copy:
-    dest: /opt/platform/.ssh/authorized_keys
-    content: "{{ deploy_user_public_key }}\n"
+- name: Ensure each application's /opt/<name> directory exists, owned deploy:deploy, mode 0750
+  ansible.builtin.file:
+    path: "/opt/{{ item.name }}"
+    state: directory
     owner: deploy
     group: deploy
-    mode: "0600"
+    mode: "0750"
+  loop: "{{ deploy_apps }}"
+  loop_control:
+    label: "{{ item.name }}"
 
-- name: Install the fixed, argument-free deploy wrapper script
+# root:root, 0755 -- unchanged in shape from the original
+# platform-compose-deploy, only now taking the application name as its one
+# argument instead of having it fixed in the script body.
+- name: Install the generic app-deploy script
   ansible.builtin.copy:
-    dest: /usr/local/bin/platform-compose-deploy
+    dest: /usr/local/bin/app-deploy
     owner: root
     group: root
     mode: "0755"
     content: |
       #!/bin/bash
       set -euo pipefail
-      cd /opt/platform
+      cd "/opt/$1"
       docker compose pull
       docker compose up -d --wait
 
-# No wildcard, no arguments accepted -- a bare command with no argument
-# specification in sudoers matches only an invocation with zero
-# arguments, so appending anything to this command is denied by sudo
-# itself, not by anything this task does at runtime.
-#
-# No `Defaults:deploy !requiretty` line: on the actual target (Ubuntu
-# 26.04's sudo build), visudo rejects `requiretty` outright as an
-# "unknown setting" -- not merely inapplicable here, genuinely absent
-# from this sudo's grammar. Since Debian/Ubuntu's stock sudoers has never
-# set `Defaults requiretty` globally either, there was never a state this
-# override needed to counteract; see design.md's Risks entry, corrected
-# to match what this run found.
-- name: Grant deploy a NOPASSWD sudo rule scoped to exactly the wrapper script
+# deploy:deploy, 0755 -- the SSH-layer forced command for every key
+# (authorized_keys task below). Explicit member list, not a general
+# extraction: GNU tar with named members extracts only those names,
+# ignoring anything else the archive contains (design.md's "explicit,
+# fixed member list" decision).
+- name: Install the deploy-receive script
   ansible.builtin.copy:
-    dest: /etc/sudoers.d/deploy
+    dest: /usr/local/bin/deploy-receive
+    owner: deploy
+    group: deploy
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      app="$1"
+      tar -xzf - -C "/opt/$app" --no-same-owner -- docker-compose.yml .env
+      chmod 600 "/opt/$app/.env"
+      sudo /usr/local/bin/app-deploy "$app"
+
+# One file per application, each an exact, fully-qualified line -- no
+# wildcard, no argument forwarding. This is the second of the two
+# independent layers (design.md's "Two independent layers still pin the
+# application name") that together bound a key to its own application.
+- name: Render each application's sudoers.d NOPASSWD rule for app-deploy
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/app-deploy-{{ item.name }}"
     owner: root
     group: root
     mode: "0440"
     content: |
-      deploy ALL=(root) NOPASSWD: /usr/local/bin/platform-compose-deploy
+      deploy ALL=(root) NOPASSWD: /usr/local/bin/app-deploy {{ item.name }}
     validate: "visudo -cf %s"
+  loop: "{{ deploy_apps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# `restrict` (OpenSSH >= 7.2), in addition to `command=`, also disables
+# port/agent/X11 forwarding and pty allocation for this key -- closing the
+# gap a bare `command=` leaves open (design.md: a leaked key with only
+# `command=` set could still open a forwarding channel even though it can
+# never run anything but the forced invocation). `exclusive` is left at
+# its default (false): each loop iteration manages only its own key,
+# leaving every other application's entry untouched.
+- name: Install each application's forced-command, forwarding-restricted authorized_keys entry
+  ansible.posix.authorized_key:
+    user: deploy
+    key: "{{ item.public_key }}"
+    key_options: 'restrict,command="/usr/local/bin/deploy-receive {{ item.name }}"'
+  loop: "{{ deploy_apps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Read-only (`read:packages`-scoped), shared across every application --
+# not a per-application credential, since it grants no capability beyond
+# reading package contents (design.md's GHCR decision).
+- name: Authenticate root's Docker credential store to GHCR
+  community.docker.docker_login:
+    registry_url: ghcr.io
+    username: "{{ ghcr_pull_username }}"
+    password: "{{ ghcr_pull_token }}"

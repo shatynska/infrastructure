@@ -1,15 +1,29 @@
 ---
-# Molecule scenario for the `deploy_user` role. Same convention as the
-# other two roles' scenarios -- see docker/molecule/default/molecule.yml
-# for the shared rationale. Run via `molecule test` from
-# ansible/roles/deploy_user/.
+# Molecule scenario for the ADDED "Restricted Deploy Account Supports
+# Per-Application Forced-Command Deploys" and "Host Authenticates to GHCR
+# for Application Image Pulls" requirements
+# (openspec/changes/add-per-app-deploy-keys/specs/iac-host-configuration/
+# spec.md). Originally written as a sibling `per_app_deploy` scenario by
+# the test-writing pass ahead of implementation (which never edits or
+# deletes an existing test); folded into `default` here, at implementation
+# time, as test-manifest.md's own "Obsolete tests" section anticipated --
+# the old `default`'s converge/verify assumed the single-key,
+# single-wrapper-script shape this change retires, so it could not
+# converge against this role's new `deploy_apps` interface at all. A
+# handful of the old `default`'s assertions whose normative content is not
+# superseded (no raw `docker`/arbitrary-`sudo` access, no committed
+# private-key material) were carried forward into verify.yml below rather
+# than dropped; see that file's own comments for which.
 #
-# Deliberately does NOT install Docker in this instance: this role's own
-# tests are scoped to account/sudoers/wrapper-script provisioning, kept
-# independent of the `docker` role per design.md's "each can be
-# run/tested independently" rationale. See test-manifest.md for what that
-# means is out of scope here (an end-to-end `docker compose` run through
-# the wrapper).
+# This scenario installs Docker Engine (via the sibling `docker` role,
+# converged first, mirroring host-baseline.yml's own `docker` -> ... ->
+# `deploy_user` ordering) -- unlike the old `default`, which stayed
+# independent of it. Two things in this change's scope need a real
+# `docker` CLI to be meaningfully exercised at all: `app-deploy`'s trigger
+# (assert it actually runs, not just that sudo permits it) and the GHCR
+# credential-store check (task 3.3). An empty `services: {}` Compose file
+# keeps `docker compose pull && up -d --wait` a real, fast,
+# no-registry-needed success even with Docker actually installed.
 dependency:
   name: galaxy
   options:
@@ -19,8 +33,6 @@ driver:
   name: docker
 
 platforms:
-  # systemd for a real sudo/PAM environment; nothing here needs Docker
-  # itself running.
   - name: deploy_user-role-instance
     image: geerlingguy/docker-ubuntu2204-ansible:latest
     command: /lib/systemd/systemd
@@ -35,8 +47,6 @@ platforms:
 provisioner:
   name: ansible
   env:
-    # See ansible/roles/docker/molecule/default/molecule.yml for why this
-    # is needed -- same reasoning, applies to every role's scenario.
     ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
 
 verifier:
