@@ -25,7 +25,7 @@ jobs:
       pull-requests: write # only this job posts the plan comment
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Detect Terraform and platform changes
         id: changes
