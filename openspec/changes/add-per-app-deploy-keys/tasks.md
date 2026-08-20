@@ -24,7 +24,7 @@
 
 - [x] 4.1 Rewrite `.github/workflows/platform-deploy.yml`'s deploy job: replace the `scp` + `ssh chmod` + `ssh sudo` sequence with `tar -czf - docker-compose.yml .env | ssh -i ~/.ssh/platform_deploy_key deploy@$HOST` (host resolved from the existing `PLATFORM_DEPLOY_HOST` secret).
 - [x] 4.2 Remove the now-redundant "Tighten .env permissions on the host" step — `deploy-receive` handles this itself (task 1.3).
-- [ ] 4.3 Merge this workflow rewrite to `main`. This is inert on its own: `platform-deploy.yml`'s trigger is `paths: ["platform/**"]`, and the workflow file itself lives outside that path, so merging it alone does not fire a deploy. Do this *before* task 5.1, not after — see the ordering note in Rollout.
+- [x] 4.3 Merge this workflow rewrite to `main`. This is inert on its own: `platform-deploy.yml`'s trigger is `paths: ["platform/**"]`, and the workflow file itself lives outside that path, so merging it alone does not fire a deploy. Do this *before* task 5.1, not after — see the ordering note in Rollout.
 
 ## 5. Rollout
 
