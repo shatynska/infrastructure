@@ -1,3 +1,7 @@
+# Comment-only change (no image/config changes) -- exercises
+# add-per-app-deploy-keys tasks.md 5.2's validation deploy: confirms
+# platform-deploy.yml's new tar-pipe delivery and deploy-receive's forced
+# command actually complete a real deploy end to end.
 services:
   traefik:
     image: traefik:v3.7.10
