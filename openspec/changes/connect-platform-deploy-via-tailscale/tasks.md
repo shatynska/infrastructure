@@ -18,10 +18,9 @@
 - [x] 2.1 Added a UFW rule to the `hardening` role allowing SSH (22) via
       `src: 100.64.0.0/10` — additive, `hardening_ssh_allowed_cidrs` and
       the existing public-interface rule untouched.
-- [ ] 2.2 **Blocked — needs a real playbook run against the host** (see
-      task 4.3). Verify: `ufw status verbose` shows both the original
-      public-interface SSH rule (unchanged) and the new tailnet-scoped
-      one.
+- [x] 2.2 Verified against the real host: `ufw status verbose` shows
+      `22/tcp ALLOW IN 176.104.184.0/24` (unchanged) and
+      `22/tcp ALLOW IN 100.64.0.0/10` (new) side by side.
 
 ## 3. GitHub Actions
 
