@@ -150,9 +150,14 @@
       than excluding files by path: accept an assignment whose value is an
       inline `!vault` value or a `lookup('env', ...)` expression. A path
       exclusion would be simpler and is wrong — it would blind the scan
-      permanently in the two files most likely to acquire a pasted real token,
+      permanently in the files most likely to acquire a pasted real token,
       since 7.2 means having a live token at the keyboard while editing
-      exactly those files.
+      exactly those files. Note the scope has grown: `deploy_user`'s two new
+      scenarios also assign `ghcr_pull_token` as a `lookup('env', ...)`
+      expression, deliberately so a value-shape test accepts them. A path
+      exclusion would not list them and `molecule test --all` would go red on
+      the new scenarios — which is the concrete reason this must be a value
+      test, not a location test.
 - [ ] 6.3 Prove both repairs still fail when they should: plant a real
       private-key marker and a real plaintext `ghcr_pull_token` value, confirm
       each scan fires, then remove them. A false-positive repair that also
@@ -189,8 +194,9 @@
 
 - [ ] 7.1 `molecule test --all` green from a clean checkout with **no**
       credentials supplied, for every role that has a scenario in this
-      repository: `ops_user` (both `default` and `revocation-steady-state`),
-      `deploy_user`, `docker`, and `hardening`. `hardening` is included
+      repository: `ops_user` (`default` and `revocation-steady-state`),
+      `deploy_user` (`default`, `ghcr-credential-absent` and
+      `ghcr-credential-rejected`), `docker`, and `hardening`. `hardening` is included
       because it is equally exposed to the toolchain bump, and design.md's
       only mitigation for that risk is every existing scenario being green.
       This is the change's primary success criterion.
@@ -245,7 +251,9 @@
       Docker driver fail during `create`, and the workaround is to point
       `DOCKER_CONFIG` at a directory containing `{}`. Frame it as an
       environment note, not a repository defect (proposal.md, Non-goals).
-- [ ] 9.2 Note in the README that `ops_user` has two Molecule scenarios
-      (`default` and `revocation-steady-state`), so `molecule test -s default`
-      alone silently skips coverage — the suite needs `molecule test --all`,
-      or each scenario named explicitly.
+- [ ] 9.2 Note in the README that several roles now carry more than one
+      Molecule scenario — `ops_user` has `default` and
+      `revocation-steady-state`, and `deploy_user` has `default`,
+      `ghcr-credential-absent` and `ghcr-credential-rejected` — so
+      `molecule test -s default` silently skips most of the suite. It needs
+      `molecule test --all`, or every scenario named explicitly.

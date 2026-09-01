@@ -1,0 +1,86 @@
+---
+# Molecule scenario for the MODIFIED "Host Authenticates to GHCR for
+# Application Image Pulls" requirement, scenario "A supplied credential
+# that the registry rejects still fails the run"
+# (openspec/changes/repair-ansible-test-harness/specs/
+# iac-host-configuration/spec.md).
+#
+# WHY THIS EXISTS AT ALL
+# ----------------------
+# This is the boundary the whole GHCR guard turns on, and design.md states
+# it as such: the guard "tolerates a credential being **absent**, not a
+# supplied credential being **rejected**", and "a guard written as 'ignore
+# errors from docker_login' would have bought the same testability while
+# discarding the fail-fast property entirely". Nothing in the suite
+# currently distinguishes those two implementations -- both make
+# `molecule test` green. This scenario is what makes them distinguishable.
+#
+# WHY IT CANNOT LIVE IN ANOTHER SCENARIO
+# --------------------------------------
+# Its converge must experience a role failure. Molecule has no
+# "expect converge to fail" action, so converge.yml catches the failure in
+# a rescue and records the outcome for verify.yml to assert on. Folding
+# that into a scenario whose premise is a SUCCESSFUL converge
+# (`default`, `ghcr-credential-absent`) would make a red run there
+# ambiguous. This pass is additive only and edits no existing scenario.
+#
+# WHY `idempotence` AND `side_effect` ARE OMITTED FROM test_sequence
+# ------------------------------------------------------------------
+# Not to make anything pass that would otherwise fail. `idempotence` is
+# meaningless -- and would fail for a reason unrelated to this scenario --
+# because this converge deliberately aborts the role partway through: any
+# role task after the registry login never runs on the first converge and
+# necessarily reports `changed` on the second. Role idempotence is covered
+# by `default` and by `ghcr-credential-absent`, both of which converge the
+# role to completion. `side_effect` is omitted because this scenario has no
+# side_effect.yml.
+#
+# NOTE, RECORDED HONESTLY: this scenario PASSES against the current,
+# unimplemented tree, because today's unconditional login already fails on
+# a rejected credential. It is a regression guard on a property the change
+# must PRESERVE, not one it introduces -- see test-manifest.md's baseline
+# section, where that is recorded rather than reported as coverage of new
+# behaviour.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s `deploy_user-role-instance` and
+  # from the sibling `ghcr-credential-absent` scenario, so all three can be
+  # created side by side without colliding.
+  - name: deploy_user-ghcr-rejected-instance
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - cleanup
+    - destroy
+
+verifier:
+  name: ansible

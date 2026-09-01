@@ -1,0 +1,209 @@
+---
+# Verifies the MODIFIED "Host Authenticates to GHCR for Application Image
+# Pulls" requirement's scenario "Host configuration completes when no GHCR
+# credential is supplied"
+# (openspec/changes/repair-ansible-test-harness/specs/
+# iac-host-configuration/spec.md).
+#
+# The scenario's THEN has three limbs, and each is asserted below:
+#
+#   a. "the registry authentication step SHALL be skipped"
+#      -> root's Docker credential store carries no ghcr.io entry.
+#   b. "the run SHALL complete successfully"
+#      -> asserted by molecule's own sequence, not by a task here: this
+#         playbook only runs at all if converge.yml's three role inclusions
+#         all completed. Stated explicitly so the absence of a task for
+#         this limb is not read as an omission.
+#   c. "every other host configuration step SHALL be applied as it would be
+#      with a credential present"
+#      -> the role's full on-host artifact set is asserted present, with
+#         the same ownership and modes the `default` scenario asserts for a
+#         credential-carrying converge. The artifact list and its expected
+#         ownership/modes are taken from `default`'s verify.yml, which is
+#         what "as it would be with a credential present" refers to.
+#
+# See test-manifest.md for the per-assertion specified/derived
+# classification and for what this scenario deliberately leaves untested.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    # Mirrors converge.yml's `deploy_apps` names.
+    verify_deploy_app_names:
+      - platform
+      - commerce-ops
+  tasks:
+    # ============================================================
+    # THEN limb (a): the registry authentication step SHALL be skipped
+    # ============================================================
+    - name: Stat root's Docker credential store
+      ansible.builtin.stat:
+        path: /root/.docker/config.json
+      register: deploy_user_ghcr_absent_docker_config_stat
+
+    - name: Read root's Docker credential store when one exists
+      ansible.builtin.slurp:
+        src: /root/.docker/config.json
+      register: deploy_user_ghcr_absent_docker_config
+      when: deploy_user_ghcr_absent_docker_config_stat.stat.exists
+
+    - name: Assert no ghcr.io credential was written when no credential was supplied
+      vars:
+        docker_config_text: >-
+          {{ (deploy_user_ghcr_absent_docker_config.content | b64decode)
+             if (deploy_user_ghcr_absent_docker_config_stat.stat.exists
+                 and deploy_user_ghcr_absent_docker_config.content is defined)
+             else '' }}
+      ansible.builtin.assert:
+        that:
+          - "'ghcr.io' not in docker_config_text"
+        fail_msg: >-
+          /root/.docker/config.json carries a ghcr.io entry after a converge
+          in which no GHCR credential was supplied. The registry
+          authentication step was not skipped -- either the guard on the
+          login does not test both credential halves as non-empty, or it
+          does not exist at all. Credential store contents:
+          '{{ docker_config_text }}'
+        success_msg: >-
+          No ghcr.io entry in root's Docker credential store, as required
+          when no credential is supplied.
+        quiet: true
+
+    # ============================================================
+    # THEN limb (c): every other host configuration step SHALL be applied
+    # as it would be with a credential present.
+    #
+    # The artifact set below is `default`'s verify.yml's, minus the
+    # behavioural checks that need a real `docker` CLI (deploy-receive's
+    # extraction pipeline and app-deploy's trigger) -- those are `default`'s
+    # subject and are not re-run here. What is asserted is that a
+    # credential-free converge lands the same host state, not that that
+    # state behaves correctly, which `default` already establishes.
+    # ============================================================
+    - name: Read the passwd database
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Assert the deploy account exists after a credential-free converge
+      ansible.builtin.assert:
+        that:
+          - "'deploy' in ansible_facts.getent_passwd"
+        fail_msg: >-
+          The `deploy` account does not exist after a converge with no GHCR
+          credential supplied. A skipped registry login must not stop any
+          other host configuration step from being applied.
+        quiet: true
+
+    - name: Stat the two role-provided scripts
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: deploy_user_ghcr_absent_scripts
+      loop:
+        - /usr/local/bin/app-deploy
+        - /usr/local/bin/deploy-receive
+
+    - name: Assert app-deploy landed root-owned, mode 0755
+      vars:
+        app_deploy_stat: "{{ deploy_user_ghcr_absent_scripts.results[0].stat }}"
+      ansible.builtin.assert:
+        that:
+          - app_deploy_stat.exists
+          - app_deploy_stat.pw_name == "root"
+          - app_deploy_stat.gr_name == "root"
+          - app_deploy_stat.mode == "0755"
+        fail_msg: >-
+          /usr/local/bin/app-deploy is missing or not root:root mode 0755
+          after a converge with no GHCR credential supplied.
+        quiet: true
+
+    - name: Assert deploy-receive landed deploy-owned, mode 0755
+      vars:
+        deploy_receive_stat: "{{ deploy_user_ghcr_absent_scripts.results[1].stat }}"
+      ansible.builtin.assert:
+        that:
+          - deploy_receive_stat.exists
+          - deploy_receive_stat.pw_name == "deploy"
+          - deploy_receive_stat.gr_name == "deploy"
+          - deploy_receive_stat.mode == "0755"
+        fail_msg: >-
+          /usr/local/bin/deploy-receive is missing or not deploy:deploy mode
+          0755 after a converge with no GHCR credential supplied.
+        quiet: true
+
+    - name: Stat each application's /opt directory
+      ansible.builtin.stat:
+        path: "/opt/{{ item }}"
+      register: deploy_user_ghcr_absent_app_dirs
+      loop: "{{ verify_deploy_app_names }}"
+
+    - name: Assert each application directory landed deploy:deploy, mode 0750
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == "deploy"
+          - item.stat.gr_name == "deploy"
+          - item.stat.mode == "0750"
+        fail_msg: >-
+          /opt/{{ item.item }} is missing or not a deploy:deploy mode 0750
+          directory after a converge with no GHCR credential supplied.
+        quiet: true
+      loop: "{{ deploy_user_ghcr_absent_app_dirs.results }}"
+      loop_control:
+        label: "/opt/{{ item.item }}"
+
+    - name: Stat each application's sudoers.d entry
+      ansible.builtin.stat:
+        path: "/etc/sudoers.d/app-deploy-{{ item }}"
+      register: deploy_user_ghcr_absent_sudoers
+      loop: "{{ verify_deploy_app_names }}"
+
+    - name: Assert each application's sudoers.d entry landed
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          /etc/sudoers.d/app-deploy-{{ item.item }} is missing after a
+          converge with no GHCR credential supplied.
+        quiet: true
+      loop: "{{ deploy_user_ghcr_absent_sudoers.results }}"
+      loop_control:
+        label: "/etc/sudoers.d/app-deploy-{{ item.item }}"
+
+    - name: Stat deploy's authorized_keys
+      ansible.builtin.stat:
+        path: "{{ ansible_facts.getent_passwd['deploy'][4] }}/.ssh/authorized_keys"
+      register: deploy_user_ghcr_absent_authorized_keys_stat
+
+    - name: Assert deploy's authorized_keys exists
+      ansible.builtin.assert:
+        that:
+          - deploy_user_ghcr_absent_authorized_keys_stat.stat.exists
+        fail_msg: >-
+          {{ ansible_facts.getent_passwd['deploy'][4] }}/.ssh/authorized_keys
+          does not exist after a converge with no GHCR credential supplied,
+          so no application key was installed at all.
+        quiet: true
+
+    - name: Read deploy's authorized_keys
+      ansible.builtin.slurp:
+        src: "{{ ansible_facts.getent_passwd['deploy'][4] }}/.ssh/authorized_keys"
+      register: deploy_user_ghcr_absent_authorized_keys
+
+    - name: Assert each application's forced-command key landed
+      vars:
+        authorized_keys_content: "{{ deploy_user_ghcr_absent_authorized_keys.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'restrict' in authorized_keys_content"
+          - >-
+            'command="/usr/local/bin/deploy-receive platform"'
+            in authorized_keys_content
+          - >-
+            'command="/usr/local/bin/deploy-receive commerce-ops"'
+            in authorized_keys_content
+        fail_msg: >-
+          deploy's authorized_keys does not carry a restrict,command= entry
+          for each application after a converge with no GHCR credential
+          supplied. Contents: '{{ authorized_keys_content }}'
+        quiet: true

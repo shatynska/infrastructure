@@ -1,0 +1,70 @@
+---
+# Verifies the MODIFIED "Host Authenticates to GHCR for Application Image
+# Pulls" requirement's scenario "A supplied credential that the registry
+# rejects still fails the run"
+# (openspec/changes/repair-ansible-test-harness/specs/
+# iac-host-configuration/spec.md).
+#
+# The scenario's THEN has one limb with two halves, and both are asserted:
+#   "the run SHALL fail"                     -> outcome == 'failed'
+#   "rather than continuing as though no     -> the failure came from the
+#    credential had been supplied"              registry login itself,
+#                                               i.e. the login was
+#                                               attempted, not skipped.
+#
+# See test-manifest.md for the per-assertion specified/derived
+# classification, and for what this scenario can and cannot distinguish
+# when the instance has no route to ghcr.io.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the outcome converge.yml recorded for the supplied-credential run
+      ansible.builtin.slurp:
+        src: /var/tmp/molecule-ghcr-rejected-outcome.json
+      register: deploy_user_ghcr_rejected_outcome_raw
+
+    - name: Report the recorded outcome
+      ansible.builtin.debug:
+        var: deploy_user_ghcr_rejected_outcome_raw.content | b64decode | from_json
+
+    - name: Assert the run failed rather than continuing as though no credential had been supplied
+      vars:
+        ghcr_rejected_outcome: "{{ deploy_user_ghcr_rejected_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - ghcr_rejected_outcome.outcome == "failed"
+        fail_msg: >-
+          The deploy_user role completed successfully with a GHCR credential
+          supplied that the registry does not accept. The requirement's
+          tolerance is for a credential being ABSENT, never for one that is
+          present and rejected: an authentication failure against a supplied
+          credential SHALL remain a failure of the run, not a skipped step.
+          This is what a guard widened into "ignore errors from the login"
+          -- or a `failed_when: false` / `ignore_errors: true` on it --
+          looks like from the outside.
+        success_msg: >-
+          A supplied-but-rejected GHCR credential failed the run, as
+          required.
+        quiet: true
+
+    - name: Assert the failure came from the registry login itself, not from somewhere else in the role
+      vars:
+        ghcr_rejected_outcome: "{{ deploy_user_ghcr_rejected_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'docker_login' in ghcr_rejected_outcome.failed_action"
+        fail_msg: >-
+          The run failed, but not at the registry authentication step -- the
+          failing task was '{{ ghcr_rejected_outcome.failed_task_name }}'
+          (action '{{ ghcr_rejected_outcome.failed_action }}',
+          message '{{ ghcr_rejected_outcome.failed_msg }}'). Without this
+          check the scenario would go green on any unrelated converge
+          failure, which would establish nothing about how a rejected
+          credential is treated. If the login step's module has legitimately
+          changed, this assertion is the one to revisit -- see
+          test-manifest.md, where it is classified DERIVED.
+        success_msg: >-
+          The failure came from the registry login step, so the supplied
+          credential was actually used rather than skipped.
+        quiet: true
