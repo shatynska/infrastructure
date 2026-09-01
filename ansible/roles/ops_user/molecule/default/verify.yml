@@ -1,0 +1,659 @@
+---
+# Verifies the ADDED "Unprivileged Operator Accounts Support Interactive
+# Host Inspection" requirement (9 scenarios)
+# (openspec/changes/add-ops-account/specs/iac-host-configuration/spec.md).
+#
+# Each block below is labelled with the scenario it covers, and every
+# scenario in that requirement has a block here. Where a block is proxy
+# coverage rather than a direct demonstration -- an interactive pty, a live
+# SSH session, `docker logs`/`docker exec` against a running container --
+# the comment says so, and test-manifest.md records what the live proof is
+# assigned to instead (tasks.md 5.2/5.3's operator-run Rollout steps).
+#
+# Written before ansible/roles/ops_user/ exists. Nothing here was shaped to
+# match an implementation; the assertions trace to the delta spec's scenario
+# text, to the requirement's own normative prose, or -- where marked
+# DERIVED -- to this pass's own judgement. See test-manifest.md's assertion
+# classification.
+#
+# EDITED AT IMPLEMENTATION TIME, by the implementer rather than this file's
+# original author (2026-09-01, openspec/changes/add-ops-account tasks.md
+# §3). One change only: the private-key-marker scan near the end of this
+# file matched THIS FILE, because a scan whose pattern is written out
+# literally necessarily contains the string it searches for. The pattern is
+# now assembled from two halves at run time. No assertion was added,
+# removed, loosened or re-scoped, and the same three key markers are still
+# matched -- confirmed by planting synthetic OpenSSH, RSA and PKCS#8 keys
+# and observing the scan fire on each, then fall silent once removed. The
+# same self-match is latent in deploy_user's equivalent scan; out of scope
+# to fix there.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    # The comment field of each dummy key converged by converge.yml /
+    # side_effect.yml, used as the searchable marker for that key. Redeclared
+    # here because a verify playbook does not inherit converge's vars.
+    ops_claude_key_marker: ops-claude-molecule@ci
+    ops_rotate_old_key_marker: ops-rotate-old-molecule@ci
+    ops_rotate_new_key_marker: ops-rotate-new-molecule@ci
+    deploy_forced_command_prefix: 'restrict,command="/usr/local/bin/deploy-receive '
+  tasks:
+    # ============================================================
+    # Shared reads
+    # ============================================================
+    - name: Read ops-claude's passwd entry
+      ansible.builtin.getent:
+        database: passwd
+        key: ops-claude
+
+    - name: Keep ops-claude's passwd fields for later assertions
+      ansible.builtin.set_fact:
+        ops_user_claude_passwd: "{{ ansible_facts.getent_passwd['ops-claude'] }}"
+
+    - name: Read ops-claude's shadow entry
+      ansible.builtin.getent:
+        database: shadow
+        key: ops-claude
+
+    - name: Keep ops-claude's shadow fields for later assertions
+      ansible.builtin.set_fact:
+        ops_user_claude_shadow: "{{ ansible_facts.getent_shadow['ops-claude'] }}"
+
+    - name: Read ops-claude's authorized_keys
+      ansible.builtin.slurp:
+        src: /home/ops-claude/.ssh/authorized_keys
+      register: ops_user_claude_authorized_keys
+
+    - name: Read deploy's authorized_keys
+      ansible.builtin.slurp:
+        src: /opt/platform/.ssh/authorized_keys
+      register: ops_user_deploy_authorized_keys
+
+    - name: Read the groups ops-claude belongs to
+      ansible.builtin.command: id -nG ops-claude
+      register: ops_user_claude_groups
+      changed_when: false
+
+    # ============================================================
+    # Scenario: An operator key opens an interactive session
+    #
+    # PROXY. Whether sshd actually grants a pty is live OpenSSH behaviour,
+    # not this role's own logic, and needs a real client connecting to a
+    # real sshd -- assigned to tasks.md 5.2's Rollout step. What this role
+    # controls, and what is asserted here, is the whole of what that
+    # behaviour depends on: an interactive shell in the passwd entry, a real
+    # home directory, no password-based login, and an authorized_keys line
+    # carrying neither a forced command nor `restrict` (the option that
+    # disables pty allocation on every `deploy` key).
+    # ============================================================
+    - name: Assert ops-claude has a real home directory and an interactive shell
+      ansible.builtin.assert:
+        that:
+          - ops_user_claude_passwd[4] == "/home/ops-claude"
+          - ops_user_claude_passwd[5] == "/bin/bash"
+        fail_msg: >-
+          ops-claude resolves with home '{{ ops_user_claude_passwd[4] }}' and
+          shell '{{ ops_user_claude_passwd[5] }}' -- the requirement is a
+          Unix account with a home directory and an interactive shell,
+          unlike the shell-less, `restrict`-ed deploy account.
+
+    - name: Confirm ops-claude's home directory exists on disk and is its own
+      ansible.builtin.stat:
+        path: /home/ops-claude
+      register: ops_user_claude_home_stat
+
+    - name: Assert ops-claude's home directory exists and is owned by ops-claude
+      ansible.builtin.assert:
+        that:
+          - ops_user_claude_home_stat.stat.exists
+          - ops_user_claude_home_stat.stat.isdir
+          - ops_user_claude_home_stat.stat.pw_name == "ops-claude"
+        fail_msg: "/home/ops-claude is missing, is not a directory, or is not owned by ops-claude"
+
+    - name: Assert ops-claude has no usable password (password-based login is not provisioned)
+      ansible.builtin.assert:
+        that:
+          - ops_user_claude_shadow[0] == "!"
+        fail_msg: >-
+          ops-claude's shadow password field is
+          '{{ ops_user_claude_shadow[0] }}', not '!' -- the account SHALL
+          have no password-based login (tasks.md 2.2: password "!").
+
+    - name: Assert ops-claude's authorized_keys line carries neither a forced command nor restrict
+      vars:
+        claude_keys: "{{ ops_user_claude_authorized_keys.content | b64decode }}"
+        claude_line: "{{ claude_keys.split('\n') | select('search', ops_claude_key_marker) | list | first | default('') }}"
+      ansible.builtin.assert:
+        that:
+          - claude_line != ""
+          - "'command=' not in claude_line"
+          - "'restrict' not in claude_line"
+          - claude_line is search('^ssh-ed25519 ')
+        fail_msg: >-
+          ops-claude's authorized_keys line is '{{ claude_line }}'. It SHALL
+          carry the operator's public key with neither a forced command nor
+          the `restrict` option, so the key can open an interactive session
+          -- an empty line here means the key was never installed, and a
+          `restrict`/`command=` on it would reproduce the deploy account's
+          non-interactive model on an account that must not have it.
+
+    # ============================================================
+    # Scenario: Container state and logs are inspectable without privilege
+    #           escalation
+    #
+    # `docker ps` is exercised for real, as the account, with no `sudo` in
+    # the command. The `docker logs` / `docker exec` half is PROXY: this
+    # scenario deliberately runs no application container (deploy_user's own
+    # scenario keeps its Compose file at `services: {}` so nothing has to be
+    # pulled from a registry), so both are aimed at a container that does not
+    # exist. That still discriminates: reaching the daemon and being told
+    # "No such container" is an authorised API call, whereas a socket
+    # permission failure reports a connection/permission error instead. The
+    # live proof against a real running container is tasks.md 5.2's Rollout
+    # step.
+    # ============================================================
+    - name: Assert ops-claude is a member of the docker group
+      ansible.builtin.assert:
+        that:
+          - "'docker' in ops_user_claude_groups.stdout.split()"
+        fail_msg: >-
+          ops-claude's groups are '{{ ops_user_claude_groups.stdout }}' --
+          membership of the `docker` group is the entire capability this
+          account is granted, and without it every Docker operation below
+          fails for the wrong reason.
+
+    - name: Run docker ps as ops-claude, with no sudo anywhere in the invocation
+      ansible.builtin.command: docker ps
+      become: true
+      become_user: ops-claude
+      register: ops_user_claude_docker_ps
+      changed_when: false
+      failed_when: false
+
+    - name: Assert docker ps succeeded by group membership alone
+      ansible.builtin.assert:
+        that:
+          - ops_user_claude_docker_ps.rc == 0
+        fail_msg: >-
+          `docker ps` as ops-claude exited
+          {{ ops_user_claude_docker_ps.rc }}: {{ ops_user_claude_docker_ps.stderr }}.
+          Inspecting running containers SHALL succeed by virtue of `docker`
+          group membership alone, without `sudo` being invoked.
+
+    - name: Attempt docker logs against a non-existent container as ops-claude
+      ansible.builtin.command: docker logs ops-user-no-such-container
+      become: true
+      become_user: ops-claude
+      register: ops_user_claude_docker_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Attempt docker exec against a non-existent container as ops-claude
+      ansible.builtin.command: docker exec ops-user-no-such-container true
+      become: true
+      become_user: ops-claude
+      register: ops_user_claude_docker_exec
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the log and exec attempts reached the daemon rather than being refused at the socket
+      ansible.builtin.assert:
+        that:
+          - "'permission denied' not in (ops_user_claude_docker_logs.stderr | lower)"
+          - "'cannot connect to the docker daemon' not in (ops_user_claude_docker_logs.stderr | lower)"
+          - "'no such container' in (ops_user_claude_docker_logs.stderr | lower)"
+          - "'permission denied' not in (ops_user_claude_docker_exec.stderr | lower)"
+          - "'cannot connect to the docker daemon' not in (ops_user_claude_docker_exec.stderr | lower)"
+          - "'no such container' in (ops_user_claude_docker_exec.stderr | lower)"
+        fail_msg: >-
+          Reading a container's logs or executing inside one was refused at
+          the Docker socket rather than answered by the daemon (logs:
+          '{{ ops_user_claude_docker_logs.stderr }}'; exec:
+          '{{ ops_user_claude_docker_exec.stderr }}'). Those operations SHALL
+          be authorised by `docker` group membership alone.
+
+    # ============================================================
+    # Scenario: The account has no sudo capability
+    # ============================================================
+    - name: Attempt a sudo invocation as ops-claude, non-interactively
+      ansible.builtin.command: sudo -n true
+      become: true
+      become_user: ops-claude
+      register: ops_user_claude_sudo_attempt
+      changed_when: false
+      failed_when: false
+
+    - name: Assert sudo refuses ops-claude
+      ansible.builtin.assert:
+        that:
+          - ops_user_claude_sudo_attempt.rc != 0
+          - "'password is required' in ops_user_claude_sudo_attempt.stderr or 'not allowed' in ops_user_claude_sudo_attempt.stderr"
+        fail_msg: >-
+          `sudo -n true` as ops-claude exited
+          {{ ops_user_claude_sudo_attempt.rc }} -- any sudo invocation from an
+          operator session SHALL be refused. The account SHALL have no
+          sudoers entry of any kind, passwordless or password-protected,
+          narrow or otherwise.
+
+    - name: Confirm no sudoers.d file is named after an operator account
+      ansible.builtin.stat:
+        path: "/etc/sudoers.d/{{ item }}"
+      loop:
+        - ops-claude
+        - ops-rotate
+        - ops-revoke
+      register: ops_user_sudoers_named_files
+
+    - name: Search every sudoers file on the host for an operator account name
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -rlE 'ops-claude|ops-rotate|ops-revoke' /etc/sudoers /etc/sudoers.d/ || true
+      args:
+        executable: /bin/bash
+      register: ops_user_sudoers_name_scan
+      changed_when: false
+
+    - name: Assert no sudoers file exists that names an operator account
+      ansible.builtin.assert:
+        that:
+          - ops_user_sudoers_named_files.results | map(attribute='stat.exists') | select | list | length == 0
+          - ops_user_sudoers_name_scan.stdout | trim == ""
+        fail_msg: >-
+          A sudoers rule naming an operator account was found
+          ('{{ ops_user_sudoers_name_scan.stdout }}'). No `sudoers.d` file
+          naming that account SHALL exist on the host -- this is an omission
+          the role must never acquire (tasks.md 2.4), not merely a rule that
+          happens to grant nothing today.
+
+    - name: Assert ops-claude is in no privilege-granting group
+      ansible.builtin.assert:
+        that:
+          - "'sudo' not in ops_user_claude_groups.stdout.split()"
+          - "'admin' not in ops_user_claude_groups.stdout.split()"
+          - "'root' not in ops_user_claude_groups.stdout.split()"
+        fail_msg: >-
+          ops-claude belongs to a privilege-granting group
+          ('{{ ops_user_claude_groups.stdout }}'). Its only group grant SHALL
+          be `docker`.
+
+    # ============================================================
+    # Scenario: An operator cannot read another application's deployed
+    #           secrets from the filesystem
+    #
+    # Both halves of the scenario are asserted: the read refusal on
+    # /opt/<app>/.env and the overwrite refusal on
+    # /opt/<app>/docker-compose.yml. Both files are the real artefacts
+    # deploy-receive placed there during converge, not fixtures this
+    # scenario chose the modes of.
+    # ============================================================
+    - name: Confirm each /opt/<app> directory's ownership and mode
+      ansible.builtin.stat:
+        path: "/opt/{{ item }}"
+      loop:
+        - platform
+        - commerce-ops
+      register: ops_user_opt_dirs
+
+    - name: Assert every /opt/<app> path is deploy-owned and closed to others
+      ansible.builtin.assert:
+        that:
+          - ops_user_opt_dirs.results | map(attribute='stat.pw_name') | unique | list == ["deploy"]
+          - ops_user_opt_dirs.results | map(attribute='stat.gr_name') | unique | list == ["deploy"]
+          - ops_user_opt_dirs.results | map(attribute='stat.mode') | unique | list == ["0750"]
+        fail_msg: >-
+          An /opt/<app> directory is not deploy:deploy mode 0750 -- the
+          operator account's inability to read another application's secrets
+          rests on those permissions.
+
+    - name: Assert no operator account owns or has group access to any /opt/<app> path
+      ansible.builtin.command: >-
+        find /opt -maxdepth 2 ( -user ops-claude -o -group ops-claude -o -user ops-rotate -o -group ops-rotate )
+      register: ops_user_opt_ownership_scan
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the /opt ownership scan found nothing (tasks.md 3.3)
+      ansible.builtin.assert:
+        that:
+          - ops_user_opt_ownership_scan.stdout | trim == ""
+        fail_msg: >-
+          Operator accounts own or have group access to
+          '{{ ops_user_opt_ownership_scan.stdout }}'. These accounts SHALL NOT
+          be granted ownership of, or group access to, any /opt/<app_name>
+          directory or its contents.
+
+    - name: Assert ops-claude is not a member of the deploy group
+      ansible.builtin.assert:
+        that:
+          - "'deploy' not in ops_user_claude_groups.stdout.split()"
+        fail_msg: >-
+          ops-claude is a member of the `deploy` group
+          ('{{ ops_user_claude_groups.stdout }}') -- group access to
+          /opt/<app_name> is exactly what the requirement forbids.
+
+    - name: Attempt to read commerce-ops's deployed .env as ops-claude
+      ansible.builtin.command: cat /opt/commerce-ops/.env
+      become: true
+      become_user: ops-claude
+      register: ops_user_claude_env_read
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the .env read was refused by filesystem permissions
+      ansible.builtin.assert:
+        that:
+          - ops_user_claude_env_read.rc != 0
+          - "'COMMERCE_OPS_DB_PASSWORD' not in ops_user_claude_env_read.stdout"
+          - "'permission denied' in (ops_user_claude_env_read.stderr | lower)"
+        fail_msg: >-
+          ops-claude read /opt/commerce-ops/.env (rc
+          {{ ops_user_claude_env_read.rc }}). An operator SHALL NOT be able
+          to read another application's deployed secrets from the filesystem
+          -- it is neither the owner of that path nor a member of a group
+          granted access to it.
+
+    - name: Attempt to overwrite commerce-ops's docker-compose.yml as ops-claude
+      ansible.builtin.shell: echo overwritten-by-ops-claude > /opt/commerce-ops/docker-compose.yml
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: ops-claude
+      register: ops_user_claude_compose_write
+      changed_when: false
+      failed_when: false
+
+    - name: Read commerce-ops's docker-compose.yml back as root
+      ansible.builtin.slurp:
+        src: /opt/commerce-ops/docker-compose.yml
+      register: ops_user_commerce_compose
+
+    - name: Assert the overwrite was refused and the file is unchanged
+      vars:
+        compose_content: "{{ ops_user_commerce_compose.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - ops_user_claude_compose_write.rc != 0
+          - "'overwritten-by-ops-claude' not in compose_content"
+          - "'services' in compose_content"
+        fail_msg: >-
+          ops-claude overwrote /opt/commerce-ops/docker-compose.yml (rc
+          {{ ops_user_claude_compose_write.rc }}; content now
+          '{{ compose_content }}'). An operator SHALL NOT be able to alter
+          what a future deploy will run.
+
+    # ============================================================
+    # Scenario: Revoking an operator is a converge, not a manual cleanup
+    #
+    # side_effect.yml marked ops-revoke `absent` and re-ran the role -- one
+    # playbook run, no hand-run command on the host. What is asserted here is
+    # the removal itself plus its blast radius: ops-claude, ops-rotate and
+    # the deploy account all survive it untouched.
+    # ============================================================
+    - name: Look up ops-revoke's passwd entry after revocation
+      ansible.builtin.command: getent passwd ops-revoke
+      register: ops_user_revoke_passwd
+      changed_when: false
+      failed_when: false
+
+    - name: Confirm ops-revoke's home directory after revocation
+      ansible.builtin.stat:
+        path: /home/ops-revoke
+      register: ops_user_revoke_home_stat
+
+    - name: Assert ops-revoke's account and home directory are gone
+      ansible.builtin.assert:
+        that:
+          - ops_user_revoke_passwd.rc != 0
+          - not ops_user_revoke_home_stat.stat.exists
+        fail_msg: >-
+          ops-revoke still resolves ('{{ ops_user_revoke_passwd.stdout }}')
+          or its home directory still exists. Marking an entry absent and
+          re-running the playbook SHALL remove that account and its
+          authorized key from the host by that run.
+
+    - name: Look up the surviving operator accounts
+      ansible.builtin.command: "getent passwd {{ item }}"
+      loop:
+        - ops-claude
+        - ops-rotate
+        - deploy
+      register: ops_user_surviving_accounts
+      changed_when: false
+      failed_when: false
+
+    - name: Assert revoking one operator affected no other entry and not the deploy account
+      ansible.builtin.assert:
+        that:
+          - ops_user_surviving_accounts.results | map(attribute='rc') | unique | list == [0]
+        fail_msg: >-
+          Revoking ops-revoke removed or broke another account. The run SHALL
+          NOT affect any other operator entry or the deploy account.
+
+    # ============================================================
+    # Scenario: Revoking an operator who is currently logged in still
+    #           completes
+    #
+    # PROXY on one point: side_effect.yml established a process owned by
+    # ops-revoke under a full PAM session rather than a live SSH session,
+    # since running sshd and connecting to it is not reproducible inside this
+    # Molecule instance. The load-bearing half is not a proxy -- the account
+    # was genuinely in use at revocation time, which is the case design.md
+    # says a bare `state: absent` fails on (userdel exit 8), and the
+    # completion marker below only exists if the role's own run finished.
+    # ============================================================
+    - name: Read the pre-revocation pid side_effect.yml recorded
+      ansible.builtin.slurp:
+        src: /var/tmp/ops_user_revoke_pid
+      register: ops_user_revoke_recorded_pid
+
+    - name: Read the pre-revocation uid side_effect.yml recorded
+      ansible.builtin.slurp:
+        src: /var/tmp/ops_user_revoke_uid
+      register: ops_user_revoke_recorded_uid
+
+    - name: Confirm the single-run completion marker side_effect.yml wrote
+      ansible.builtin.stat:
+        path: /var/tmp/ops_user_revocation_run_completed
+      register: ops_user_revocation_completed_marker
+
+    - name: Check whether the process ops-revoke owned is still alive
+      ansible.builtin.command: "kill -0 {{ ops_user_revoke_recorded_pid.content | b64decode | trim }}"
+      register: ops_user_revoke_pid_alive
+      changed_when: false
+      failed_when: false
+
+    - name: Check whether any process still runs under the revoked account's uid
+      ansible.builtin.command: "pgrep -u {{ ops_user_revoke_recorded_uid.content | b64decode | trim }}"
+      register: ops_user_revoke_uid_processes
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the run completed and left the revoked account with no surviving process
+      ansible.builtin.assert:
+        that:
+          - ops_user_revocation_completed_marker.stat.exists
+          - ops_user_revoke_pid_alive.rc != 0
+          - ops_user_revoke_uid_processes.rc != 0
+          - ops_user_revoke_uid_processes.stdout | trim == ""
+        fail_msg: >-
+          Revocation against an in-use account did not do what the scenario
+          requires. Completion marker present:
+          {{ ops_user_revocation_completed_marker.stat.exists }}; recorded pid
+          still alive: {{ ops_user_revoke_pid_alive.rc == 0 }}; processes
+          still running under the revoked uid:
+          '{{ ops_user_revoke_uid_processes.stdout }}'. The run SHALL
+          terminate that session and its processes and then remove the
+          account, completing rather than failing on an in-use account, and
+          SHALL NOT leave an established session with continued access after
+          reporting the account removed.
+
+    # ============================================================
+    # Scenario: Rotating an operator's key removes the previous one
+    #
+    # converge.yml installed ops-rotate's OLD key; side_effect.yml re-ran the
+    # role with a NEW one. Asserting the old marker is absent is the point --
+    # an `authorized_key` task left at the module default (exclusive: false)
+    # passes a "the new key is present" check while accumulating both.
+    # ============================================================
+    - name: Read ops-rotate's authorized_keys after rotation
+      ansible.builtin.slurp:
+        src: /home/ops-rotate/.ssh/authorized_keys
+      register: ops_user_rotate_authorized_keys
+
+    - name: Assert the rotated key replaced the previous one rather than being appended to it
+      vars:
+        rotate_keys: "{{ ops_user_rotate_authorized_keys.content | b64decode }}"
+        rotate_lines: "{{ rotate_keys.split('\n') | select('search', 'ssh-ed25519') | list }}"
+      ansible.builtin.assert:
+        that:
+          - ops_rotate_new_key_marker in rotate_keys
+          - ops_rotate_old_key_marker not in rotate_keys
+          - rotate_lines | length == 1
+        fail_msg: >-
+          ops-rotate's authorized_keys holds {{ rotate_lines | length }}
+          key line(s): '{{ rotate_keys }}'. After a key is replaced in the
+          list and the playbook re-run, authorized_keys SHALL contain only
+          the new key, the superseded key having been removed rather than
+          left alongside it (`exclusive: true`).
+
+    # ============================================================
+    # Scenario: The deploy account's restrictions are unaffected
+    #
+    # Asserted against the real deploy account this converge provisioned via
+    # the deploy_user role, not against a fixture. The expected option string
+    # traces to openspec/specs/iac-host-configuration/spec.md's existing
+    # "Restricted Deploy Account Supports Per-Application Forced-Command
+    # Deploys" requirement, which this change explicitly does not modify.
+    # ============================================================
+    - name: Assert every key on deploy still carries restrict and its own forced command
+      vars:
+        deploy_keys: "{{ ops_user_deploy_authorized_keys.content | b64decode }}"
+        deploy_lines: "{{ deploy_keys.split('\n') | select('search', 'ssh-ed25519') | list }}"
+        unrestricted: "{{ deploy_lines | reject('search', deploy_forced_command_prefix) | list }}"
+      ansible.builtin.assert:
+        that:
+          - deploy_lines | length == 2
+          - unrestricted | length == 0
+          - (deploy_forced_command_prefix ~ 'platform"') in deploy_keys
+          - (deploy_forced_command_prefix ~ 'commerce-ops"') in deploy_keys
+        fail_msg: >-
+          deploy's authorized_keys no longer binds every key to
+          `restrict` plus its own per-application forced command. Lines
+          without that prefix: '{{ unrestricted }}'. Every key on the deploy
+          account SHALL still carry `restrict` and its per-application forced
+          command, and this change SHALL NOT relax that model.
+
+    - name: Assert no operator key was installed onto the deploy account
+      vars:
+        deploy_keys: "{{ ops_user_deploy_authorized_keys.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - ops_claude_key_marker not in deploy_keys
+          - ops_rotate_new_key_marker not in deploy_keys
+          - ops_rotate_old_key_marker not in deploy_keys
+        fail_msg: >-
+          An operator's key was installed onto the deploy account. Operator
+          accounts SHALL be distinct from deploy, and no new interactive path
+          onto the deploy account SHALL exist -- adding an unrestricted key
+          there is precisely the alternative design.md rejected.
+
+    # ============================================================
+    # Scenario: Operator private keys are never committed
+    #
+    # Not host state: checked as a static scan of the committed repository,
+    # delegated to localhost, mirroring deploy_user's equivalent (tasks.md
+    # 3.2).
+    #
+    # The search pattern is assembled from two halves at run time, and that
+    # is load-bearing rather than stylistic: a scan whose pattern is spelled
+    # out literally matches THIS FILE, because this file necessarily
+    # contains the string it searches for. Written out, the scan fails on
+    # its own text and reports verify.yml as committed key material, which
+    # is a false positive no implementation can clear. Splitting the
+    # delimiter means the assembled regex appears nowhere in the file, while
+    # still matching every real key -- an OpenSSH, RSA or PKCS#8 private key
+    # opens with exactly that delimiter line. deploy_user's equivalent scan
+    # has the same self-match latent in it (its own scenario has never run
+    # far enough to reach the assertion); out of scope to fix there.
+    #
+    # The second scan, over ansible/inventory/, is DERIVED -- no
+    # scenario names that path, but it is where `ops_user_accounts` and therefore the
+    # committed key material actually lives, so a scan confined to the role
+    # directory would not look where the risk is.
+    # ============================================================
+    - name: Scan this role's committed files for embedded private-key material
+      ansible.builtin.shell: |
+        set -o pipefail
+        head='-----BEGIN'
+        tail='PRIVATE KEY-----'
+        grep -rlE -- "${head} (OPENSSH |RSA )?${tail}" "{{ playbook_dir }}/../.." || true
+      args:
+        executable: /bin/bash
+      register: ops_user_role_private_key_scan
+      changed_when: false
+      delegate_to: localhost
+      become: false
+
+    - name: Scan the committed inventory for embedded private-key material (DERIVED)
+      ansible.builtin.shell: |
+        set -o pipefail
+        head='-----BEGIN'
+        tail='PRIVATE KEY-----'
+        grep -rlE -- "${head} (OPENSSH |RSA )?${tail}" "{{ playbook_dir }}/../../../../inventory" || true
+      args:
+        executable: /bin/bash
+      register: ops_user_inventory_private_key_scan
+      changed_when: false
+      delegate_to: localhost
+      become: false
+
+    - name: Assert no operator private key is committed under the role or the inventory
+      ansible.builtin.assert:
+        that:
+          - ops_user_role_private_key_scan.stdout | trim == ""
+          - ops_user_inventory_private_key_scan.stdout | trim == ""
+        fail_msg: >-
+          A private-key marker was found in
+          '{{ ops_user_role_private_key_scan.stdout }}{{ ops_user_inventory_private_key_scan.stdout }}'.
+          Only an operator keypair's public half SHALL be committed to this
+          repository; the private half SHALL remain on the operator's own
+          machine.
+
+    # ============================================================
+    # Requirement prose, not a numbered scenario -- DERIVED.
+    #
+    # The requirement states that the capability SHALL be documented as
+    # `docker` group membership being root-equivalent by escalation, and that
+    # the account SHALL NOT be described as a confidentiality or integrity
+    # boundary against its own key holder; tasks.md 2.4 puts that, the
+    # never-a-sudoers-file omission, and the standing sshd AllowUsers/
+    # AllowGroups obligation in the role's README.md. Those are the only
+    # normative sentences in the requirement that no scenario reaches, and a
+    # description that quietly drifts from the grant is the specific failure
+    # design.md says is worse than no description at all. Matching is
+    # deliberately loose -- presence of the load-bearing terms, not wording.
+    # ============================================================
+    - name: Read the role's README
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../README.md"
+      register: ops_user_role_readme
+      delegate_to: localhost
+      become: false
+
+    - name: Assert the README records the escalation grant, the sudoers omission, and the sshd obligation
+      vars:
+        readme: "{{ ops_user_role_readme.content | b64decode | lower }}"
+      ansible.builtin.assert:
+        that:
+          - "'root-equivalent' in readme"
+          - "'sudoers' in readme"
+          - "'allowusers' in readme or 'allowgroups' in readme"
+        fail_msg: >-
+          The role's README.md does not record all three things it is
+          required to: that `docker` group membership is root-equivalent by
+          escalation (so the account is not described as a boundary against
+          its own key holder), that this role writes no sudoers file of any
+          kind, and that any future sshd AllowUsers/AllowGroups directive
+          must include every ops_user_accounts account or these accounts are silently
+          locked out.

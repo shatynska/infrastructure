@@ -1,0 +1,58 @@
+---
+# Molecule scenario for the ADDED "Unprivileged Operator Accounts Support
+# Interactive Host Inspection" requirement
+# (openspec/changes/add-ops-account/specs/iac-host-configuration/spec.md).
+# Written by the openspec-test-writer pass BEFORE `ansible/roles/ops_user/`
+# exists -- see openspec/changes/add-ops-account/test-manifest.md for the
+# scenario-by-scenario accounting, the assertion classification, and the
+# baseline that was (and was not) taken.
+#
+# Shape mirrors ansible/roles/deploy_user/molecule/default/molecule.yml:
+# a systemd-capable image, the project's own pinned galaxy requirements
+# file, and ANSIBLE_ROLES_PATH pointing at ansible/roles/ so sibling roles
+# resolve by name. systemd is load-bearing here beyond "Docker needs it":
+# tasks.md 2.3 has revocation call `loginctl terminate-user`, which is a
+# no-op-or-error without a live systemd-logind on the instance.
+#
+# Docker Engine is really installed (via the sibling `docker` role), not
+# stubbed, because the central capability this requirement grants -- talking
+# to the Docker socket by group membership alone -- cannot be observed
+# against a stub. `deploy_user` is converged too, deliberately (tasks.md
+# 3.1): the "/opt/<app>/.env is unreadable" and "deploy's restrictions are
+# unaffected" scenarios are only meaningful against the real `deploy`
+# account, its real forced-command authorized_keys entries, and real
+# /opt/<app> directories that role creates.
+#
+# The default test_sequence is used unchanged, which matters here: it runs
+# `idempotence` (a second converge) before `side_effect`. That second
+# converge is what exercises tasks.md 2.3's requirement that the
+# session/process-termination step report `changed: false` when there is
+# nothing to terminate -- a role that unconditionally runs `pkill` would
+# fail the idempotence action rather than any single assertion below.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: ops_user-role-instance
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible
