@@ -224,11 +224,29 @@
       changed_when: false
       failed_when: false
 
+    # The refusal is asserted by EXIT STATUS plus a discriminator, not by
+    # matching sudo's wording (openspec/changes/repair-ansible-test-harness,
+    # task 6.4). Two reasons the phrasing cannot carry this assertion:
+    #
+    #   - It is host-dependent. Against prod this exact command produced
+    #     `sudo: I'm sorry ops-claude. I'm afraid I can't do that` -- that
+    #     host has sudo's `insults` option enabled, and with it enabled the
+    #     message is drawn at RANDOM from a compiled-in set, so no fixed
+    #     string list can be reliable there.
+    #   - It is not what the requirement says. The normative content is that
+    #     the account has no sudoers entry and no privilege-granting group;
+    #     both are asserted separately below and are what actually prove the
+    #     policy.
+    #
+    # The discriminator exists because `rc != 0` alone would also be
+    # satisfied by sudo being absent or broken -- a refusal for entirely the
+    # wrong reason. `command not found` separates those.
     - name: Assert sudo refuses ops-claude
       ansible.builtin.assert:
         that:
           - ops_user_claude_sudo_attempt.rc != 0
-          - "'password is required' in ops_user_claude_sudo_attempt.stderr or 'not allowed' in ops_user_claude_sudo_attempt.stderr"
+          - "'command not found' not in (ops_user_claude_sudo_attempt.stderr | lower)"
+          - "'root' not in ops_user_claude_sudo_attempt.stdout"
         fail_msg: >-
           `sudo -n true` as ops-claude exited
           {{ ops_user_claude_sudo_attempt.rc }} -- any sudo invocation from an

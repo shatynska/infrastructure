@@ -129,6 +129,10 @@ match.
 
 ### `deploy_user`'s scenario has two assertions that fail on a correct tree
 
+*(Implementation note: a third defect in the same scenario turned up once it
+could run — its fixture seeding made `idempotence` structurally impossible.
+See tasks.md 6b.2. The count below is the two known at planning time.)*
+
 Both are false positives against the repository as it stands, and neither is
 about this change's subject:
 

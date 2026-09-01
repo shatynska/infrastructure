@@ -32,7 +32,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         mkdir -p /tmp/deploy_user_valid_archive
-        printf 'services: {}\n' > /tmp/deploy_user_valid_archive/docker-compose.yml
+        printf 'services:\n  noop:\n    image: alpine:3.19\n    command: ["sleep", "3600"]\n' > /tmp/deploy_user_valid_archive/docker-compose.yml
         printf 'FOO=bar\n' > /tmp/deploy_user_valid_archive/.env
         tar -czf /tmp/deploy_user_valid_archive.tar.gz -C /tmp/deploy_user_valid_archive docker-compose.yml .env
       args:
@@ -43,7 +43,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         mkdir -p /tmp/deploy_user_decoy_archive
-        printf 'services: {}\n' > /tmp/deploy_user_decoy_archive/docker-compose.yml
+        printf 'services:\n  noop:\n    image: alpine:3.19\n    command: ["sleep", "3600"]\n' > /tmp/deploy_user_decoy_archive/docker-compose.yml
         printf 'FOO=bar\n' > /tmp/deploy_user_decoy_archive/.env
         printf 'echo pwned\n' > /tmp/deploy_user_decoy_archive/evil.sh
         tar -czf /tmp/deploy_user_decoy_archive.tar.gz -C /tmp/deploy_user_decoy_archive docker-compose.yml .env evil.sh
@@ -426,12 +426,61 @@
           pull token SHALL be stored outside version control and SHALL NOT
           appear in plaintext anywhere in the repository.
 
-    - name: Find any ghcr_pull_token assignment that lives outside a Vault-encrypted file
+    # Tests the VALUE of each assignment, wherever the file lives, rather
+    # than the file as a whole. The old form ran `head -c 15 | grep
+    # '^$ANSIBLE_VAULT'` -- a whole-file encryption test -- which flagged
+    # ansible/inventory/group_vars/prod.yml, whose token is an INLINE
+    # `!vault` value inside an otherwise plaintext file. That is this
+    # project's documented and correct pattern, so the scan was reporting a
+    # false positive on a correct tree, and also flagged the scenario
+    # converge files that read the value from the environment.
+    #
+    # Excluding those files by path would have been simpler and is
+    # deliberately not done: it would blind the scan permanently in exactly
+    # the files most likely to acquire a pasted real token, since running
+    # the credentialled verification means having a live token at the
+    # keyboard while editing them. An assignment is acceptable if its value
+    # is an inline `!vault` value or a `lookup('env', ...)` expression;
+    # anything else is a literal and fails.
+    # (openspec/changes/repair-ansible-test-harness, task 6.2.)
+    - name: Find any ghcr_pull_token assignment whose value is a committed literal
       ansible.builtin.shell: |
         set -o pipefail
-        grep -rlE "ghcr_pull_token *:" --include="*.yml" --include="*.yaml" "{{ playbook_dir }}/../../../../.." | while read -r f; do
-          head -c 15 "$f" | grep -q '^\$ANSIBLE_VAULT' || echo "$f"
-        done || true
+        python3 - "{{ playbook_dir }}/../../../../.." <<'SCAN'
+        import pathlib, re, sys
+
+        # A line-oriented grep cannot do this correctly: both scenario
+        # converge files assign the token as a YAML FOLDED scalar, so the
+        # assignment line is just `ghcr_pull_token: >-` and the lookup that
+        # makes it acceptable sits on the following lines. Reading the
+        # assignment together with its continuation is the whole point.
+        root = pathlib.Path(sys.argv[1]).resolve()
+        assign = re.compile(r"^([ \t]*)ghcr_pull_token[ \t]*:(.*)$")
+        offenders = []
+
+        for path in sorted(root.rglob("*.y*ml")):
+            if ".git" in path.parts:
+                continue
+            lines = path.read_text(errors="ignore").splitlines()
+            for i, line in enumerate(lines):
+                m = assign.match(line)
+                if not m:
+                    continue
+                indent, value = len(m.group(1)), m.group(2)
+                # Absorb the folded/block continuation: any following line
+                # indented deeper than the assignment itself.
+                for cont in lines[i + 1:]:
+                    if cont.strip() and (len(cont) - len(cont.lstrip())) <= indent:
+                        break
+                    value += " " + cont.strip()
+                if not value.strip():
+                    continue
+                if "!vault" in value or "lookup('env'" in value or 'lookup("env"' in value:
+                    continue
+                offenders.append(f"{path.relative_to(root)}:{i + 1}")
+
+        print("\n".join(offenders))
+        SCAN
       args:
         executable: /bin/bash
       register: deploy_user_per_app_ghcr_token_plaintext_scan
@@ -439,7 +488,7 @@
       delegate_to: localhost
       become: false
 
-    - name: Assert every ghcr_pull_token assignment found in the repository is inside a Vault-encrypted file
+    - name: Assert no ghcr_pull_token assignment carries a committed literal value
       ansible.builtin.assert:
         that:
           - deploy_user_per_app_ghcr_token_plaintext_scan.stdout | trim == ""
@@ -488,10 +537,22 @@
           - "'root' not in deploy_user_whoami_attempt.stdout"
         fail_msg: "deploy was able to run an arbitrary privileged command (sudo whoami) -- only the named app-deploy invocations SHALL be privileged options"
 
+    # The search pattern is assembled from two halves at run time, and that
+    # is load-bearing rather than stylistic: a scan whose pattern is spelled
+    # out literally matches THIS FILE, because this file necessarily
+    # contains the string it searches for and the scan's target directory
+    # contains the scan. Written out, it fails on its own text and reports
+    # verify.yml as committed key material -- a false positive no
+    # implementation can clear. Splitting the delimiter means the assembled
+    # regex appears nowhere in the file, while still matching every real key:
+    # an OpenSSH, RSA or PKCS#8 private key opens with exactly that line.
+    # (openspec/changes/repair-ansible-test-harness, task 6.1.)
     - name: Scan this role's committed files for embedded private-key material
       ansible.builtin.shell: |
         set -o pipefail
-        grep -rl -e "BEGIN OPENSSH PRIVATE KEY" -e "BEGIN RSA PRIVATE KEY" -e "BEGIN PRIVATE KEY" "{{ playbook_dir }}/../.." || true
+        head='-----BEGIN'
+        tail='PRIVATE KEY-----'
+        grep -rlE -- "${head} (OPENSSH |RSA )?${tail}" "{{ playbook_dir }}/../.." || true
       args:
         executable: /bin/bash
       register: deploy_user_committed_private_key_scan

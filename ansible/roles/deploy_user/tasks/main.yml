@@ -120,11 +120,58 @@
 # Read-only (`read:packages`-scoped), shared across every application --
 # not a per-application credential, since it grants no capability beyond
 # reading package contents (design.md's GHCR decision).
+#
+# Guarded on BOTH credential halves being supplied and non-empty
+# (openspec/changes/repair-ansible-test-harness). What the guard tolerates,
+# and what it deliberately does not:
+#
+#   TOLERATED -- the credential being ABSENT. A host that pulls no private
+#   image needs no GHCR credential, and host configuration is not made
+#   contingent on one existing. `| default('', true)` rather than a bare
+#   `| default('')` because the variable may be *undefined* (no vars file
+#   loaded at all), not merely empty, and `| length` on an undefined value
+#   raises instead of skipping.
+#
+#   NOT TOLERATED -- a credential that is supplied and REJECTED. If both
+#   halves are present, this task runs and a registry refusal fails the run,
+#   exactly as before. The guard must never be widened into `failed_when:
+#   false` or `ignore_errors: true`: that would buy the same testability
+#   while discarding the fail-fast property this task exists for.
+#
+# Both halves are tested, not just the token: a token supplied without a
+# username would otherwise pass a token-only guard and then fail on an
+# undefined variable -- an error matching none of the requirement's
+# scenarios, which reads as a bug rather than as a misconfiguration.
+#
+# The cost of the tolerated case is real and accepted: a revoked token, or a
+# misnamed/unloaded variable, no longer fails here. It surfaces later, at the
+# next `docker compose pull` during a deploy. See this role's README.
 - name: Authenticate root's Docker credential store to GHCR
   community.docker.docker_login:
     registry_url: ghcr.io
     username: "{{ ghcr_pull_username }}"
     password: "{{ ghcr_pull_token }}"
+  when:
+    - (ghcr_pull_token | default('', true)) | length > 0
+    - (ghcr_pull_username | default('', true)) | length > 0
+
+# An absent GHCR credential is a legitimate configuration, but it must never
+# be an INVISIBLE one. The likeliest real-world instance is not a deliberate
+# omission -- it is a misnamed variable or a vars file that did not load, on
+# a host that does need the credential. Before the guard above that aborted
+# the run; now it is an ordinary `skipping:` line, indistinguishable from
+# intent. So say it out loud.
+- name: Report that GHCR authentication was skipped for want of a credential
+  ansible.builtin.debug:
+    msg: >-
+      No GHCR credential supplied (ghcr_pull_token / ghcr_pull_username), so
+      registry authentication was skipped. This host will fail to pull any
+      PRIVATE image: `app-deploy`'s `docker compose pull` will error at
+      deploy time, not here. If that is unexpected, check that the variables
+      are named correctly and that their vars file is actually loaded.
+  when:
+    - (ghcr_pull_token | default('', true)) | length == 0
+      or (ghcr_pull_username | default('', true)) | length == 0
 
 # tasks.md 5.6: removes the fully-superseded single-application mechanism
 # left present-but-unreachable since the migration (design.md's Migration

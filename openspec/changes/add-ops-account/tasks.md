@@ -129,70 +129,29 @@
       `ansible/roles/deploy_user/molecule/default/verify.yml`
       (2 × `risky-shell-pipe`, 1 × `yaml[line-length]`), unrelated to this
       change and out of its scope to fix.
-- [ ] 4.2 `molecule test -s default` green for the new role. **Not achieved,
-      and not achievable without a separate change.** Three defects that
-      predate this change stop `molecule test` before the role under test is
-      ever reached, and all three reproduce identically against the existing
-      `deploy_user` scenario on an otherwise unmodified tree — `molecule
-      test` is red on `main` today, independent of this change:
+- [x] 4.2 `molecule test --all` green for the new role. **Achieved
+      2026-09-01**, once `repair-ansible-test-harness` fixed the defects that
+      made it impossible. Both scenarios pass from a clean checkout with no
+      credentials supplied: `default` (actions=12, failed=0) and
+      `revocation-steady-state` (actions=12, failed=0).
 
-      1. `geerlingguy.docker` 8.0.0 (pinned in `ansible/requirements.yml`)
-         installs `python3-debian` with no `update_cache`, so it fails
-         against a fresh container's empty apt cache.
-      2. `deploy_user`'s `docker_login` receives a real 403 from ghcr.io
-         using the placeholder credentials that scenario's own converge
-         supplies, aborting the converge two tasks from the end — before
-         `ops_user` runs at all.
-      3. `ansible/requirements-test.txt` pins `molecule` and
-         `molecule-plugins` but not `ansible-core`, so a fresh install
-         resolves 2.21, whose docker driver `molecule-plugins` 23.5.3 is
-         incompatible with.
+      Note the command changed: this role has two scenarios, so
+      `molecule test -s default` alone silently skips half its coverage.
 
-      Fixing those is a separate change. **What was run instead**, so the
-      result is reproducible rather than asserted:
-
-      - Toolchain: a throwaway venv with `ansible-core~=2.18.0` (works with
-        both `molecule-plugins` 23.5.3 and `ansible-lint` 26.8.0, unlike
-        2.21), `molecule==24.12.0`, `molecule-plugins[docker]==23.5.3`,
-        `ansible-lint==26.8.0`, plus `ansible-galaxy install -r
-        ansible/requirements.yml`.
-      - `DOCKER_CONFIG` pointed at a directory holding `{}` — this
-        machine's own `~/.docker/config.json` names credential helpers that
-        make molecule's docker driver fail during `create`. Environment
-        specific, not a repository concern.
-      - Instance created by hand with the same properties
-        `molecule/default/molecule.yml` declares, since `molecule create`
-        was unusable: `docker run -d --name ops-user-manual --privileged
-        --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run
-        --tmpfs /run/lock geerlingguy/docker-ubuntu2204-ansible:latest
-        /lib/systemd/systemd`. Privileged + systemd + host cgroupns is
-        load-bearing: revocation's `loginctl` half needs a live
-        systemd-logind.
-      - Inventory: one host over `community.docker.docker`;
-        `ANSIBLE_ROLES_PATH` set to `ansible/roles`.
-      - Blocker 1 worked around by a scratch `prepare.yml` that runs
-        `apt update` and installs `python3-requests` (the latter for
-        `community.docker.docker_login`, absent from the base image).
-      - Blocker 2 worked around by splitting the converge: `docker` +
-        `deploy_user` first (run for its side effects, expected to abort at
-        `docker_login`; everything `verify.yml` depends on — the `deploy`
-        account, its `restrict`/forced-command keys, the `/opt/<app>`
-        directories, `deploy-receive` — is created before that point), then
-        `ops_user` plus `converge.yml`'s own `/opt/commerce-ops` fixture
-        post-tasks verbatim.
-      - Then, in molecule's own `test_sequence` order, using the scenario's
-        real playbooks unmodified: converge → converge again (the
-        `idempotence` equivalent) → `side_effect.yml` → `verify.yml`.
-
-      Result, reproduced from a freshly created container: converge passed;
-      the second converge reported `changed=0`; `side_effect` passed (key
-      rotation, and revocation of an account with a live process); `verify`
-      passed — 54 tasks, 23 of them `assert` tasks carrying 58 `that`
-      conditions, 0 failed.
-
-      Not covered by any of this, and still assigned to §5's operator-run
-      steps: the pty itself, a live SSH session, and `docker logs`/`exec`
-      against a real running container.
+      Recorded for history, because it shaped how this change was verified:
+      when this change was implemented, `molecule test` could not run at all,
+      for three defects that predated it and were reproduced here — an
+      unpinned `ansible-core` resolving against a 2023-era Molecule docker
+      driver, `geerlingguy.docker` installing a package with no
+      `update_cache`, and `deploy_user`'s `docker_login` taking a real 403
+      from the placeholder its own scenario supplied. All three reproduced
+      identically against the existing `deploy_user` scenario on an
+      unmodified tree, so `molecule test` was red on `main` independently of
+      this change. The role was therefore verified by driving the scenario's
+      own playbooks by hand — converge, a second converge reporting
+      `changed=0`, `side_effect`, then `verify` at 0 failures, reproduced
+      from a clean container. That workaround is no longer needed; see
+      `openspec/changes/repair-ansible-test-harness`.
 
 ## 5. Rollout (operator-run; there is no CI for Ansible)
 
@@ -238,9 +197,9 @@ The account is live and behaves as the delta spec requires. Every assertion
 - The operator's own root access confirmed still working before the session
   that proved it was closed.
 
-**5.5 had to be scoped to this role, and why.** The full
-`host-baseline.yml --check` run cannot reach `ops_user`: the `tailscale`
-role is not check-mode safe. Its "Check current tailnet connection status"
+**5.5 had to be scoped to this role, and why — no longer true, see below.**
+The full `host-baseline.yml --check` run could not reach `ops_user`: the
+`tailscale` role was not check-mode safe. Its "Check current tailnet connection status"
 task is a plain `command`, which Ansible skips in check mode, and the next
 task's `when` then calls `from_json` on an empty string and fails the run —
 in a role that runs *before* `deploy_user` and `ops_user`. So `--check`
@@ -250,6 +209,14 @@ fix is `check_mode: false` on the read-only status task, and it wants its
 own change. Idempotence for `ops_user` was therefore verified by a
 one-off check-mode play running only this role against `prod`:
 `changed=0`.
+
+**Superseded 2026-09-01.** `repair-ansible-test-harness` fixed that defect
+(`check_mode: false` on the read-only status probe, plus a guard so the
+consumer cannot parse an empty result). The full
+`ansible-playbook playbooks/host-baseline.yml --check --diff` now completes
+end to end against prod — `ok=44 failed=0` — and a real converge reports
+`changed=0`. The scoped one-off play is no longer necessary; this role is
+covered by the full playbook's own check run.
 
 ## 6. Consumer wiring (in the operator's environment, not this repository)
 

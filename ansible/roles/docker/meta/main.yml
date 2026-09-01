@@ -5,5 +5,31 @@
 # requirement. This role itself adds no tasks of its own — it exists so
 # the playbook composes three same-shaped roles (docker, hardening,
 # deploy_user) rather than referencing the external role directly.
+#
+# `galaxy_info` exists only to give this role a resolvable fully-qualified
+# name, and was added by openspec/changes/repair-ansible-test-harness. It is
+# not a step towards publishing this role anywhere. Molecule 26.x's bundled
+# ansible-compat resolves an FQRN for any role carrying a meta/main.yml
+# before it will install it locally, and without these two keys it refuses
+# the whole scenario with "Computed fully qualified role name of docker does
+# not follow current galaxy requirements". This is the one genuine
+# incompatibility the toolchain bump surfaced; it is a metadata gap in this
+# role, not a defect in the new Molecule, so it is fixed here rather than by
+# reconsidering the pin.
+galaxy_info:
+  namespace: shatynska
+  role_name: docker
+  author: shatynska
+  description: >-
+    Installs the container runtime by depending on the pinned external
+    geerlingguy.docker role.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+
 dependencies:
   - role: geerlingguy.docker

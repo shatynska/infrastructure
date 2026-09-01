@@ -1,0 +1,117 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing
+# here may set up the thing under test. It exists to work around two gaps in
+# what this scenario converges on top of, both of which stop `converge`
+# before the role under test ever runs
+# (openspec/changes/repair-ansible-test-harness).
+#
+# 1. geerlingguy.docker 8.0.0's tasks/setup-Debian.yml installs
+#    `ca-certificates` and `python3-debian` with `state: present` and NO
+#    `update_cache`. Against a freshly created container, whose apt cache is
+#    empty, that fails with "No package matching 'python3-debian' is
+#    available". Checked against upstream at 8.0.0 (the latest release) and
+#    against master: both still lack `update_cache`, so there is no version
+#    bump that resolves this and no reason to expect one soon. If a later
+#    release adds it, this file's first reason disappears -- compare the
+#    pinned version in ansible/requirements.yml against that task before
+#    deleting anything.
+#
+# 2. The geerlingguy/docker-ubuntu2204-ansible image does not carry
+#    python3-requests, which community.docker.docker_login needs ON THE
+#    TARGET. Installed here rather than through a separate mechanism because
+#    it is the same kind of gap -- a base image missing something a converged
+#    role's module needs -- and belongs beside the apt refresh.
+#
+# `prepare` runs once, after `create` and before `converge`, and is NOT
+# re-run for the `idempotence` action, so nothing here can mask a role's own
+# non-idempotence.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Refresh the apt cache and install the target-side Python dependency
+      ansible.builtin.apt:
+        name:
+          - python3-requests
+        state: present
+        update_cache: true
+        cache_valid_time: 0
+
+    # ================================================================
+    # Nested-container support, written BEFORE the docker role installs and
+    # first starts dockerd so the daemon comes up with it already in place.
+    #
+    # This scenario is the only one that runs a real container INSIDE the
+    # Molecule instance: deploy-receive triggers app-deploy, which runs
+    # `docker compose up -d --wait`, and the requirement scenario "A single
+    # SSH session delivers content and triggers deploy" is only demonstrated
+    # if that actually succeeds. Under the default overlayfs snapshotter
+    # that fails with "failed to mount ... fstype: overlay ... invalid
+    # argument" -- docker-in-docker cannot stack another overlay here. vfs
+    # is slower but mounts anywhere, which is the right trade for a fixture.
+    # (openspec/changes/repair-ansible-test-harness, task 6b.4.)
+    # ================================================================
+    - name: Ensure /etc/docker exists before writing the daemon config
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Configure dockerd for nested containers before it is installed
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {
+            "storage-driver": "vfs",
+            "features": {"containerd-snapshotter": false}
+          }
+
+    # ================================================================
+    # Pre-migration fixture, relocated here from converge.yml's
+    # `pre_tasks` by openspec/changes/repair-ansible-test-harness.
+    #
+    # It simulates an already-provisioned host still carrying the
+    # pre-migration platform-compose-deploy script and sudoers entry
+    # (add-per-app-deploy-keys' design.md Migration Plan), so the role's
+    # `state: absent` tasks are seen removing something rather than merely
+    # confirming a fresh host never had it. That coverage is unchanged --
+    # verify.yml still asserts against real seeded artifacts.
+    #
+    # What changed is WHERE it runs, and it is load-bearing. In `pre_tasks`
+    # the seeding re-ran on every converge while the role removed it again,
+    # so all four tasks reported `changed` every time and the scenario could
+    # never pass molecule's `idempotence` action -- by construction, not by
+    # accident. `prepare` runs once, before `converge`, and is NOT re-run for
+    # `idempotence`: the artifacts exist for converge 1 and are gone for
+    # converge 2, which is exactly what the fixture is for.
+    #
+    # This defect had never been observed because this scenario had never
+    # run far enough to reach `idempotence`.
+    # ================================================================
+    - name: Seed a pre-migration platform-compose-deploy script (fixture)
+      ansible.builtin.copy:
+        dest: /usr/local/bin/platform-compose-deploy
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          cd /opt/platform
+          docker compose pull
+          docker compose up -d --wait
+
+    - name: Seed a pre-migration sudoers entry (fixture)
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/deploy
+        owner: root
+        group: root
+        mode: "0440"
+        content: |
+          deploy ALL=(root) NOPASSWD: /usr/local/bin/platform-compose-deploy
+        validate: "visudo -cf %s"

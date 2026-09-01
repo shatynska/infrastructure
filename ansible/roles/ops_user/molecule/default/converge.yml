@@ -26,9 +26,14 @@
 #
 # `deploy_apps` mirrors ansible/roles/deploy_user/molecule/default/
 # converge.yml's own pairing (platform + commerce-ops) rather than inventing
-# a different one. GHCR credentials use that scenario's proven
-# env-lookup-with-placeholder-fallback pattern (tasks.md 3.1): a placeholder
-# is enough here because nothing in this scenario pulls a private image.
+# a different one. GHCR credentials fall back to an EMPTY string, not to a
+# placeholder: deploy_user's login task is guarded on both halves being
+# non-empty, so an empty fallback is what makes this scenario runnable with
+# no credential at all. A non-empty dummy would satisfy the guard, reach
+# ghcr.io, and abort the converge on a 403 -- which is exactly what it used
+# to do (openspec/changes/repair-ansible-test-harness). Setting
+# MOLECULE_GHCR_PULL_TOKEN and MOLECULE_GHCR_PULL_USERNAME together still
+# exercises the real login path.
 #
 # Every public key below is a dummy, structurally shaped like an ed25519 key
 # and labelled as not a credential. No private key exists for any of them,
@@ -66,8 +71,8 @@
           AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsRevokeKeyOnlyNotARealCreden
           ops-revoke-molecule@ci
         state: present
-    ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('dummy-molecule-placeholder-token-not-real', true) }}"
-    ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('dummy-molecule-placeholder-user-not-real', true) }}"
+    ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true) }}"
+    ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('', true) }}"
   roles:
     - role: docker
     - role: deploy_user
