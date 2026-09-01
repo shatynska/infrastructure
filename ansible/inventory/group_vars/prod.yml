@@ -35,6 +35,26 @@ deploy_apps:
   - name: commerce-ops
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvqBXstDCjAlYAZ3i92iLanC+lDe44eNpS0UGa6N4jw commerce-ops-deploy"
 
+# Operator identities allowed an unprivileged, interactive login on this
+# host (add-ops-account). Safe to commit for the same reason deploy_apps's
+# entries are: these are public keys, not secrets. Each private half is
+# generated out-of-band on the operator's own workstation and never enters
+# this repository.
+#
+# `state` is per-entry and defaults to `present`. To revoke an operator,
+# set its `state` to `absent` and LEAVE THE ENTRY HERE until the next
+# converge has removed the account -- deleting the entry outright is not
+# revocation, it just stops the role from acting on it. See
+# ansible/roles/ops_user/README.md.
+#
+# NOTE: `docker` group membership is root-equivalent by escalation, so this
+# is not a boundary against the key holder -- it buys blast-radius
+# containment against mistakes, attribution, and revocability. Read the
+# role README before adding an entry.
+ops_user_accounts:
+  - name: ops-claude
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICc/YzvZTHHNETGGAy89vD7IpzTU3jDAphOeKD6q5Kiu ops-claude"
+
 # ghcr_pull_username is not secret (it's the GitHub account the token
 # below belongs to) and is committed in plain text. ghcr_pull_token is a
 # genuine secret (a read:packages-scoped GHCR token, tasks.md 2.3:

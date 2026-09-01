@@ -71,7 +71,7 @@ What the account does buy, accurately stated:
   container), not a typo.
 - **Attribution.** Its logins are its own in `auth.log`/`last`, distinguishable
   from the operator's root sessions.
-- **Independent revocation.** Removing its entry from `ops_users` and
+- **Independent revocation.** Removing its entry from `ops_user_accounts` and
   re-converging revokes it without touching the operator's own key, and without
   a key rotation on the deploy path.
 - **Separation from deploy.** It cannot read another application's `.env` from
@@ -85,7 +85,7 @@ account by way of `docker inspect`/`docker exec` even though the host-side
 
 ### One account per operator identity, driven by a committed list
 
-`ops_users` is a list of `{name, public_key, state}`, mirroring
+`ops_user_accounts` is a list of `{name, public_key, state}`, mirroring
 `deploy_user`'s `deploy_apps` rather than inventing a second shape. One Unix
 account per identity (rather than one shared `ops` account with several keys)
 is what makes `auth.log` attribution and independent revocation real: with a
@@ -213,7 +213,7 @@ and stays there.
 - **A future sshd-hardening change can silently lock these accounts out.**
   This host's `sshd_config` carries no `AllowUsers`/`AllowGroups` today, which
   is why this change needs no sshd edit. Whoever adds one later must include
-  every `ops_users` account, or they stop being able to log in with no
-  configuration in this role having changed. Recorded in the role's
+  every `ops_user_accounts` entry's account, or they stop being able to log in
+  with no configuration in this role having changed. Recorded in the role's
   `README.md` as a standing obligation (tasks.md 2.4), where the next person
   editing SSH access is likelier to see it than in an archived change.

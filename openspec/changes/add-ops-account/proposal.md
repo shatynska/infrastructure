@@ -23,8 +23,8 @@ relaying screenshots of it.
 ## What Changes
 
 - Add an `ops_user` Ansible role provisioning one or more **unprivileged,
-  interactive** operator accounts, driven by a committed `ops_users` list of
-  `{name, public_key, state}` entries — the same loop shape `deploy_user`
+  interactive** operator accounts, driven by a committed `ops_user_accounts`
+  list of `{name, public_key, state}` entries — the same loop shape `deploy_user`
   already uses for `deploy_apps`.
 - Each account: a normal home directory, `/bin/bash`, no password (`!`),
   membership of the `docker` group, its own `authorized_keys` entry with **no**
@@ -51,8 +51,9 @@ None.
 
 - `ansible/roles/ops_user/` — new role (tasks, defaults, README, molecule).
 - `ansible/playbooks/host-baseline.yml` — one added role entry.
-- `ansible/inventory/group_vars/prod.yml` — new `ops_users` list. Public keys
-  only; safe to commit, exactly as `deploy_apps`'s public keys already are.
+- `ansible/inventory/group_vars/prod.yml` — new `ops_user_accounts` list.
+  Public keys only; safe to commit, exactly as `deploy_apps`'s public keys
+  already are.
 - `.ansible-lint` — `ops_user` appended to `mock_roles`, as every role
   referenced by name in `host-baseline.yml` already is (standalone
   `ansible-lint` does not resolve role references via `ansible.cfg`'s
