@@ -196,10 +196,10 @@
 
 ## 5. Rollout (operator-run; there is no CI for Ansible)
 
-- [ ] 5.1 Converge: `ansible-playbook playbooks/host-baseline.yml`, with the
+- [x] 5.1 Converge: `ansible-playbook playbooks/host-baseline.yml`, with the
       Vault password and the tailnet auth key available (the whole playbook
       re-runs, not just the new role — see design.md's Risks).
-- [ ] 5.2 Verify from the workstation, in one deliberate attempt rather than a
+- [x] 5.2 Verify from the workstation, in one deliberate attempt rather than a
       retry loop (fail2ban's sshd jail is active, and a self-ban locks out root
       too — see design.md's Risks for the recovery route):
       `ssh -i ~/.ssh/ops_claude ops-claude@<host> 'id && docker ps'`, where
@@ -208,12 +208,12 @@
       server_ipv4_address`, or the `ansible_host` the `hcloud` dynamic
       inventory resolves for the `prod` group — not a hostname carried only in
       an operator's own `~/.ssh/config`.
-- [ ] 5.3 Confirm `sudo -n true` fails, `cat /opt/commerce-ops/.env` is
+- [x] 5.3 Confirm `sudo -n true` fails, `cat /opt/commerce-ops/.env` is
       refused, and writing to `/opt/commerce-ops/docker-compose.yml` is
       refused, from that session.
-- [ ] 5.4 Confirm the operator's own root access still works, before closing
+- [x] 5.4 Confirm the operator's own root access still works, before closing
       the session that proved it.
-- [ ] 5.5 Idempotence: re-run `ansible-playbook playbooks/host-baseline.yml
+- [x] 5.5 Idempotence: re-run `ansible-playbook playbooks/host-baseline.yml
       --check --diff` and confirm it reports no remaining change for this
       role. This lives here, after the converge, rather than in §4 with the
       other verification: on a host where the account does not yet exist,
@@ -221,6 +221,35 @@
       `pwd.getpwnam` and errors in check mode rather than reporting a
       would-be change, so a pre-converge `--check` run reports a tooling
       artefact, not a defect.
+
+**Rollout results (2026-09-01, against `main-server` / `2.29.14.98`).**
+The account is live and behaves as the delta spec requires. Every assertion
+`verify.yml` could only cover by proxy is now proven against the real host:
+
+- Interactive session with a pty, and `docker ps` succeeding by `docker`
+  group membership alone — the two things Molecule could not demonstrate.
+- `id -nG` returns exactly `ops-claude docker`: no `sudo`, `admin` or
+  `deploy` group.
+- `sudo -nl` returns "user ops-claude may not run sudo on main-server" —
+  the no-sudoers-entry refusal, not a password prompt. `/etc/sudoers.d/` is
+  not even readable by the account.
+- `cat /opt/commerce-ops/.env` and writing to that application's
+  `docker-compose.yml` both refused by filesystem permissions.
+- The operator's own root access confirmed still working before the session
+  that proved it was closed.
+
+**5.5 had to be scoped to this role, and why.** The full
+`host-baseline.yml --check` run cannot reach `ops_user`: the `tailscale`
+role is not check-mode safe. Its "Check current tailnet connection status"
+task is a plain `command`, which Ansible skips in check mode, and the next
+task's `when` then calls `from_json` on an empty string and fails the run —
+in a role that runs *before* `deploy_user` and `ops_user`. So `--check`
+aborts before this change's role is ever evaluated. This is a pre-existing
+defect in `tailscale`, unrelated to this change and outside its scope; the
+fix is `check_mode: false` on the read-only status task, and it wants its
+own change. Idempotence for `ops_user` was therefore verified by a
+one-off check-mode play running only this role against `prod`:
+`changed=0`.
 
 ## 6. Consumer wiring (in the operator's environment, not this repository)
 
