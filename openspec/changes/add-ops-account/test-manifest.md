@@ -10,6 +10,13 @@ machine-local and would not otherwise reach this repository.)
 
 Location: `openspec/changes/add-ops-account/test-manifest.md`.
 
+**A second, follow-up test pass ran on 2026-09-01, after the role was
+implemented and committed.** It added one scenario and edited nothing.
+Everything above the heading "Follow-up pass" near the end of this file
+describes the state as of the original pre-implementation pass and is left as
+written, except for the one dated correction marked inline below. Read the
+follow-up section too — it supersedes one claim made here.
+
 No implementation exists. `ansible/roles/ops_user/` contained nothing before
 this pass and contains only `molecule/default/` after it — no `tasks/`, no
 `defaults/`, no `README.md`. Every assertion below traces to the change's
@@ -298,6 +305,17 @@ Each is individually droppable without touching scenario coverage:
   `changed: false` when there is nothing to terminate — a role that runs
   `pkill` unconditionally fails the `idempotence` action rather than any
   single assertion here.
+
+  > **CORRECTED 2026-09-01, by the follow-up pass. The delegation was sound;
+  > the fixture state it needed was missing.** `default`'s `converge.yml`
+  > carries an all-`present` list, so the `idempotence` action re-runs an
+  > all-`present` converge, and the termination tasks — guarded on
+  > `state == 'absent'` — are never reached by it. `side_effect.yml` performs
+  > the revocation exactly once and never re-checks its changed-status. So
+  > this paragraph described coverage that did not exist. It exists now, in a
+  > second scenario:
+  > `ansible/roles/ops_user/molecule/revocation-steady-state/`. See
+  > "Follow-up pass" at the end of this file.
 - **`--check` mode behaviour** (`tasks.md` §5.5). Deliberately out of
   Molecule's reach, for the reason that task itself gives.
 - **The out-of-repository consumer wiring** (`tasks.md` §6, `~/.ssh/config`
@@ -390,6 +408,12 @@ Each carries the assumption taken and which tests depend on it.
   cwd — `cd ansible/roles/ops_user && molecule test -s default`.
 - Test-path glob: `ansible/roles/*/molecule/*/`. Nothing was written outside
   it except this manifest.
+- **Added 2026-09-01 by the follow-up pass:** a second scenario, run the same
+  way — `cd ansible/roles/ops_user && molecule test -s revocation-steady-state`.
+  `molecule test -s default` does NOT run it; `molecule test --all` runs both.
+  Whoever wires an Ansible CI job later must invoke both scenarios, or the
+  revocation steady-state coverage sits in the repository and is never
+  executed.
 
 ## What the implementation step must make pass
 
@@ -418,3 +442,352 @@ Each carries the assumption taken and which tests depend on it.
    standing sshd `AllowUsers`/`AllowGroups` obligation — per the DERIVED
    assertion flagged above, which is the one item on this list a reviewer may
    legitimately decide to drop.
+
+---
+
+# Follow-up pass — 2026-09-01
+
+A second `openspec-test-writer` dispatch, run **after** the role was
+implemented and committed (`6b29c0d`), to close one gap an independent
+completion review found in the `default` scenario. Everything above this
+heading is the original, pre-implementation pass and is left as it was
+written, apart from the two dated corrections marked inline there.
+
+**This pass adds tests and never subtracts.** No existing file — test,
+implementation, or planning artifact — was edited, deleted or disabled. The
+only file changed outside the test-path glob is this manifest. `git status`
+after the pass showed exactly one untracked directory and no modifications:
+`ansible/roles/ops_user/molecule/revocation-steady-state/`.
+
+## The gap
+
+`tasks.md` §2.3 requires that revocation's session/process-termination step
+"reports `changed: false` when the account does not exist or has no
+processes". The original manifest delegated that to Molecule's `idempotence`
+action. The delegation was the right mechanism; what was missing was a
+converge for it to re-run in the state the requirement constrains:
+
+- `default`'s `converge.yml` carries an all-`present` `ops_user_accounts`
+  list, and `idempotence` re-runs that same all-`present` converge. The
+  termination tasks are guarded on `(item.state | default('present')) ==
+  'absent'`, so `idempotence` never reaches them.
+- `side_effect.yml` performs the revocation exactly once and never re-runs
+  it, so its changed-status is never re-checked either.
+
+The behaviour was correct by construction, but untested. It is also a
+permanent condition rather than a transient one: `README.md` requires a
+revoked entry be **left in the list** marked `absent`, so a host that has
+ever revoked an operator carries a tombstone entry through every subsequent
+converge forever. A refactor dropping either guard would make every
+steady-state `host-baseline.yml` run report `changed` — or, for the
+passwd-existence guard specifically, abort the whole playbook.
+
+## What was written
+
+Four new files, one new Molecule scenario, all inside the dispatched
+test-path glob (`ansible/roles/*/molecule/*/`):
+
+- `ansible/roles/ops_user/molecule/revocation-steady-state/molecule.yml`
+- `ansible/roles/ops_user/molecule/revocation-steady-state/prepare.yml`
+- `ansible/roles/ops_user/molecule/revocation-steady-state/converge.yml`
+- `ansible/roles/ops_user/molecule/revocation-steady-state/verify.yml`
+
+### Why a second scenario rather than an addition to `default`
+
+Three reasons, in order of weight:
+
+1. This pass is additive only, and `default`'s four playbooks are an
+   existing, passing test. Appending to them is still an edit of an existing
+   test file.
+2. Molecule runs exactly **one** converge per scenario, and `idempotence` is
+   defined as "run that converge again". A converge carrying an `absent`
+   tombstone entry therefore cannot coexist with `default`'s converge in the
+   same scenario — a second scenario is the only place to put it.
+3. `default`'s state is carefully sequenced (`ops-rotate` holds its old key
+   until `side_effect`, `ops-revoke` must be in use at revocation time).
+   Adding a third converge to it would have perturbed that.
+
+### The shape
+
+| Molecule action | What runs | Expected |
+|---|---|---|
+| `prepare` | creates the `docker` group; converges `ops_user` with `[ops-lingering: present]` | fixture; asserts the account really exists |
+| `converge` | `ops_user` with `[ops-steady: (default present), ops-lingering: absent]` | creates `ops-steady`, revokes `ops-lingering`; **changed** |
+| `idempotence` | the same converge again — `ops-lingering` is now gone | **changed=0**; termination tasks skipped by the passwd guard |
+| `verify` | `verify.yml` | 6 assert tasks, 13 `that` conditions |
+
+`prepare` is load-bearing and was chosen deliberately: Molecule runs it once,
+before `converge`, and does **not** re-run it for `idempotence`. That is what
+lets the account exist for converge run 1 and be gone for run 2.
+
+`ops-steady` omits `state` entirely, so the documented default (`present`) is
+exercised rather than assumed — and it demonstrates that a tombstone entry
+sitting beside a live one disturbs neither the live account nor its key.
+
+Docker Engine is **not** installed in this scenario. The role's only host
+prerequisite is that the `docker` group exists, so `prepare.yml` creates just
+the group. Socket access is `default`'s subject, not this scenario's, and
+skipping the engine install is what makes this scenario cheap enough to be
+worth running on its own.
+
+### Two mechanisms, deliberately, and why they are not redundant
+
+1. **Molecule's `idempotence` action** (`molecule idempotence -s
+   revocation-steady-state`), which fails on any `changed=[1-9]` in the
+   re-converge output. This is the idiomatic mechanism and the one the
+   original manifest always named.
+2. **An explicit nested re-converge asserted in `verify.yml`.** `idempotence`
+   is a runner action, not an assertion in a file — and an unreached runner
+   action is precisely the gap this pass exists to close. `verify.yml` runs
+   `ansible-playbook` against the same instance (`delegate_to: localhost`,
+   using `MOLECULE_INVENTORY_FILE` / `MOLECULE_SCENARIO_DIRECTORY`) and
+   asserts the recap shows `changed=0`, `failed=0`, `unreachable=0`, with a
+   failure message naming `tasks.md` §2.3. A future reader can now see the
+   requirement being checked by reading the scenario directory, without
+   knowing Molecule's default `test_sequence` by heart.
+
+If those two environment variables are unset, `verify.yml` **asserts** rather
+than skipping, so a missing harness environment surfaces as a loud, labelled
+failure instead of a silent pass.
+
+Nothing in the new scenario reads the role's internal registered variables
+(`ops_user_terminated_sessions`, `ops_user_killed_processes`). The assertion
+is on the run's own reported changed-count — behaviour, not internals — so
+renaming anything inside `tasks/main.yml` cannot make it pass or fail for the
+wrong reason.
+
+## Scenario accounting
+
+The delta spec's requirement and its nine `#### Scenario:` blocks are
+unchanged by this pass; the table above in the original section still
+accounts for all nine, and the count check (9 of 9) still holds. This pass
+adds no coverage of a delta-spec scenario. What it covers is a `tasks.md`
+§2.3 obligation that the original pass recorded as delegated-but-in-fact-
+unreached:
+
+| Obligation | Source | Test | Status |
+|---|---|---|---|
+| Termination step reports `changed: false` when the account **does not exist** | `tasks.md` §2.3 | `revocation-steady-state`: `molecule idempotence -s revocation-steady-state`, and `verify.yml`'s "Assert the steady-state re-converge reported no change whatsoever" | Covered |
+| A steady-state converge over a tombstone entry does not error | `tasks.md` §2.3, `README.md`'s leave-the-entry rule | `verify.yml`'s "Assert the steady-state re-converge completed without error" | Covered |
+| A tombstone entry does not resurrect the revoked account | `tasks.md` §2.3 | `verify.yml`'s "Assert the revoked account stayed revoked across the re-converge" | Covered |
+| A tombstone entry leaves a live operator untouched | Delta spec scenario 5's "affected no other entry", re-asserted post-revocation | `verify.yml`'s "Assert the tombstone entry left the live operator untouched" | Covered |
+| Termination step reports `changed: false` when the account **exists but has no processes** | `tasks.md` §2.3 | — | **Uncovered, with reason** (below) |
+
+### The one uncovered half, and why
+
+`tasks.md` §2.3's clause has two halves. The "account does not exist" half is
+now covered. The "**has no processes**" half is **not isolable at play
+granularity**, and this is a property of the requirement's shape, not an
+omission:
+
+The only converge in which the role finds an existing account with no
+processes is the converge that then **removes** that account — a real change.
+So a run exercising that half necessarily reports `changed >= 1`, and
+`changed=0` cannot be asserted over it. Ansible offers no way for a play to
+read an individual task's changed-status from inside itself, and the only
+route that would — asserting on the role's own `register:` variable names —
+was rejected as coupling the test to implementation internals it should not
+know about.
+
+It *is* exercised, just not asserted: this scenario's converge run 1 reaches
+both termination tasks against an existing, idle `ops-lingering`, and both
+reported `ok` (i.e. `changed: false`) in the recorded run below. Recorded as
+observed behaviour, not as an assertion.
+
+## Assertion classification
+
+**Specified by `tasks.md` §2.3 / `README.md`** (no delta-spec scenario states
+it, which is why it is listed here rather than in the table above):
+
+- The steady-state re-converge reports `changed=0`.
+- The steady-state re-converge completes with `failed=0`, `unreachable=0`.
+- The revoked account and its home directory stay gone across the
+  re-converge (`README.md`'s "revocation means leaving the entry in the
+  list").
+
+**Derived** — this pass's own judgement, each individually droppable:
+
+- The live operator's `authorized_keys` containing its own key comment and
+  *not* the revoked operator's, and its `docker` group membership. These
+  exist to stop `changed=0` being satisfied vacuously by a role that reports
+  nothing because it *does* nothing — see the mutation results below, where a
+  do-nothing role is caught. They duplicate, in a narrower form, assertions
+  `default`'s `verify.yml` already makes.
+- `pgrep -u ops-lingering` finding nothing after the re-converge.
+- `/home/<name>` as the revoked account's home path. Same DERIVED assumption
+  as unresolved question 2 in the original section, inherited unchanged.
+- The fixture account names `ops-steady` and `ops-lingering`. Test-only
+  inventions, in the same spirit as `ops-rotate` / `ops-revoke`.
+
+**Deliberately untested** — identified and knowingly left uncovered:
+
+- The "has no processes" half of `tasks.md` §2.3, per the reason above.
+- Everything `default` already covers — Docker socket access, `sudo`
+  refusal, `/opt/<app>` secret refusal, key rotation, revoking an account
+  that is currently in use, the private-key scan, `deploy`'s untouched
+  restrictions. This scenario is narrow on purpose and re-tests none of it.
+- Which of `loginctl terminate-user` / `pkill` performed a termination.
+  Unchanged from the original pass.
+
+## Baseline
+
+Both baselines are **scoped**, and both were taken before anything was
+written.
+
+### 1. `ansible-lint ansible/` — unchanged by this pass
+
+- Before (new scenario directory temporarily moved aside): **3 failures**, all
+  in `ansible/roles/deploy_user/molecule/default/verify.yml` —
+  2 × `risky-shell-pipe` (lines 57, 120), 1 × `yaml[line-length]` (line 379).
+  33 files processed. Exactly the pre-existing baseline `tasks.md` §4.1
+  records.
+- After: **3 failures**, the same three, 37 files processed. Exit 2 (that
+  exit code is the pre-existing baseline, not this pass).
+
+This pass introduces **no new lint violation**. Unlike the original pass,
+there is no `syntax-check[specific]` violation this time — `ops_user` is now
+in `.ansible-lint`'s `mock_roles` and the role exists.
+
+### 2. The scenario itself — executed, green, and mutation-checked
+
+`molecule test` still cannot run in this environment, for the three
+pre-existing defects `tasks.md` §4.2 documents. The working procedure that
+task records was followed rather than rediscovered: the toolchain venv, a
+`DOCKER_CONFIG` holding `{}`, `ANSIBLE_ROLES_PATH` pointing at
+`ansible/roles`, and an instance created by hand with the same properties
+`molecule.yml` declares (`--privileged --cgroupns=host -v
+/sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock`,
+`geerlingguy/docker-ubuntu2204-ansible:latest`, `/lib/systemd/systemd`).
+
+One environment note not in `tasks.md` §4.2, recorded so the next run does
+not lose time on it: `ansible/ansible.cfg` sets `enable_plugins =
+hetzner.hcloud.hcloud, auto`, which does **not** include the `ini` inventory
+plugin. A hand-driven `ansible-playbook -i inventory.ini` run started with
+`ansible/` as cwd silently parses **zero hosts**, skips every play, and exits
+**0** — a false green. Run from a directory that does not pick up that
+`ansible.cfg`. Molecule is unaffected: it writes its own ephemeral
+`ansible.cfg` and sets `ANSIBLE_CONFIG` to it.
+
+Blockers 1 and 2 from `tasks.md` §4.2 do not apply to this scenario at all,
+since it converges neither `docker` nor `deploy_user`.
+
+Run from a freshly created container, in Molecule's `test_sequence` order,
+using the scenario's real playbooks unmodified. **Actual exit codes, per
+stage:**
+
+| Stage | Command | Exit | Recap |
+|---|---|---|---|
+| `syntax` | `ansible-playbook --syntax-check` over all three playbooks | **0** | — |
+| `prepare` | `ansible-playbook -i … prepare.yml` | **0** | `ok=9 changed=3 failed=0` |
+| `converge` | `ansible-playbook -i … converge.yml` | **0** | `ok=9 changed=3 failed=0` |
+| `idempotence` | the same converge again | **0** | `ok=6 changed=0 skipped=3 failed=0` — no `changed=[1-9]`, so Molecule's `idempotence` action passes |
+| `verify` | `ansible-playbook -i … verify.yml` | **0** | `ok=14 changed=0 failed=0` — 6 assert tasks, 13 `that` conditions |
+
+In the `idempotence` run, all three session/process-termination tasks were
+skipped by the passwd-existence guard and the account-removal task reported
+`ok`. That is the gap, now reached.
+
+### Mutation results — the assertions discriminate
+
+A green suite against already-implemented code establishes nothing on its own,
+so each new assertion was checked against a deliberately broken role. **The
+repository's role was never modified**: each mutant is a throwaway copy under
+the scratch directory, reached by pointing `ANSIBLE_ROLES_PATH` at it.
+
+| Mutant | Change | Caught by | Result |
+|---|---|---|---|
+| 1 | passwd-existence guard removed from all three termination tasks | `converge` exit **2** (`pkill: invalid user name`, rc 2 → `failed_when`); `verify.yml`'s "completed without error" assertion | verify exit **2** |
+| 2 | `loginctl` task loses only its existence guard and reports `changed_when: true` — a pure "changed with nothing to do" regression that does **not** error | steady-state converge exit **0** but `changed=1` → Molecule `idempotence` would fail; `verify.yml`'s `changed=0` assertion | verify exit **2** |
+| 3 | role emptied to do nothing at all | `prepare.yml`'s fixture guard ("ops-lingering was not created … would pass vacuously") | prepare exit **2** |
+| 4 | account-creation task loses its `present` guard, so a tombstone entry is re-created every converge | `verify.yml`'s `changed=0` assertion | verify exit **2** |
+
+Mutant 2 matters most: it is the only one that produces a *successful* run,
+so it is what establishes that the `changed=0` assertion carries weight
+independently of the error-path assertions. Mutant 3 establishes that
+`changed=0` cannot be satisfied vacuously by a role that does nothing.
+
+## Obsolete tests
+
+**Not applicable, with that reason.** This pass supersedes no test. It
+supersedes one *claim* — the original manifest's "delegated to Molecule's
+`idempotence` action" bullet, corrected inline above — but no assertion, in
+`default`'s scenario or anywhere else, is invalidated by it. The delta spec
+is unchanged since the original pass, and still carries a single `ADDED`
+requirement with no `MODIFIED`, `REMOVED` or `RENAMED` delta, so nothing
+existing is superseded and no existing test can be.
+
+For the avoidance of the ambiguity an empty list creates: this is *"no such
+test can exist"*, not *"none was found by this search."* The four playbooks
+under `ansible/roles/ops_user/molecule/default/` should be neither deleted,
+rewritten nor weakened on account of this pass.
+
+Note for the record, carried forward rather than restated: `default`'s
+`verify.yml` was edited once at implementation time by the implementer, not
+by its author — its private-key-marker scan matched `verify.yml` itself,
+because a scan whose pattern is written out literally necessarily contains
+the string it searches for, and its target directory contains the scan. The
+pattern is now assembled from two halves at run time. No assertion was added,
+removed, loosened or re-scoped, and the same three key markers still match.
+It is attributed in that file's own header and in the original section above.
+**That edit is correct and must not be undone**; this pass left it alone, as
+it left every other existing file alone.
+
+## Unresolved project questions / assumptions taken
+
+Recorded rather than resolved: this pass ran without a channel to ask on.
+
+1. **How a second Molecule scenario is meant to be invoked in this project.**
+   `AGENTS.md` names `terraform test` as the project's test command for
+   Terraform modules and does not state one for Ansible; the dispatch gave
+   `molecule test -s default`. There is no CI for Ansible (`tasks.md` §5).
+   *Assumption:* a second scenario is acceptable, run as
+   `molecule test -s revocation-steady-state` (or `molecule test --all` for
+   both). *What depends on it:* the entire scenario. If the project would
+   rather have exactly one scenario per role, the alternative is appending a
+   third converge to `default` — which this pass could not do, being
+   additive-only, and which would need its `side_effect`/`verify` sequencing
+   re-thought.
+2. **Whether `prepare.yml` may converge the role under test to build its own
+   fixture.** `default` has no `prepare.yml`, so there is no precedent.
+   *Assumption:* yes — creating `ops-lingering` through the role is more
+   faithful than hand-rolling it with `user`/`authorized_key`, and the
+   consequence (a broken creation path fails in `prepare` rather than
+   `converge`) is made loud by an explicit fixture assertion. *What depends
+   on it:* the whole scenario's setup.
+3. **Whether a `verify.yml` may shell out to a nested `ansible-playbook`.**
+   No precedent in this repository. *Assumption:* yes, given the property
+   under test is a property of a run and no in-play mechanism can read it.
+   *What depends on it:* the two nested-re-converge assertions. Drop them and
+   the coverage falls back to Molecule's `idempotence` action alone — which
+   is still sound, but is exactly the arrangement whose unreachedness went
+   unnoticed the first time.
+4. **Whether creating the bare `docker` group is an acceptable stand-in for
+   installing Docker Engine.** *Assumption:* yes, for a scenario that asserts
+   nothing about the Docker socket. *What depends on it:* `prepare.yml`, and
+   the "live operator is in the docker group" assertion — which checks group
+   membership, not socket access.
+5. **No stack skill covering Molecule scenario authoring beyond the floor.**
+   Carried forward from the original pass, unchanged: the `ansible` skill
+   names Molecule as a role-level harness and defers the decision to use it
+   to the project, but carries no scenario-authoring idiom. Recorded as an
+   absence; `default`'s scenario was followed as the reference.
+
+## One disclosure
+
+`ansible/roles/ops_user/tasks/main.yml` and `defaults/main.yml` — the
+implementation of the behaviour under test — **were read** during this pass.
+That crosses the boundary the original pass held, and it is stated here
+rather than left to be noticed.
+
+The mitigating facts, for a reader deciding how much the new assertions are
+worth: the role was already implemented and committed before this pass began,
+so there was no absent target to be resolved by writing one; the gap this
+pass was dispatched to close was itself stated in terms of the
+implementation's `when:` guards, so the load-bearing detail was in the
+dispatch before any file was opened; and the assertions written assert the
+*requirement* (`tasks.md` §2.3's `changed: false`) on the run's own reported
+changed-count, not any internal of the role — deliberately declining the
+easier route of asserting on `ops_user_terminated_sessions.changed`, which
+would have been shaped to the implementation. The mutation results above are
+the check on that: assertions shaped to an implementation do not fail against
+four different mutations of it.

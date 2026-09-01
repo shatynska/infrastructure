@@ -99,6 +99,28 @@
       run alongside `deploy_user`, and that no `ops_user_accounts` entry's
       account owns or has group access to any `/opt/<app>` path.
 
+- [x] 3.4 Second Molecule scenario
+      `ansible/roles/ops_user/molecule/revocation-steady-state/`, closing a
+      gap a completion review found in 3.2: tasks.md 2.3 requires the
+      session/process-termination step to report `changed: false` when the
+      account does not exist, and the manifest delegated that to molecule's
+      `idempotence` action — but every converge in the `default` scenario
+      carries only `present` entries, so `idempotence` never reaches those
+      guarded tasks. Because a revoked entry stays in `ops_user_accounts`
+      permanently (deleting it is not revocation), a list carrying an
+      `absent` tombstone is the steady state of any host that has ever
+      revoked anyone, and it must converge to no change at all. The scenario
+      seeds an account, revokes it on the first converge, and asserts the
+      second reports `changed=0` — via `idempotence` and via an explicit
+      named assertion, since an unreached runner action is exactly what went
+      unnoticed the first time. It also asserts the account stayed gone and
+      the live operator beside it was untouched, so `changed=0` cannot be
+      satisfied by a role that does nothing.
+
+      **This means `molecule test -s default` no longer runs the whole test
+      suite for this role** — `molecule test --all` does, or each scenario
+      by name. Whoever wires Ansible CI must invoke both.
+
 ## 4. Verification
 
 - [x] 4.1 `ansible-lint` / `pre-commit run --all-files` introduces no new
