@@ -257,9 +257,9 @@ Recorded here, and in proposal.md's Impact, because it is a prerequisite for
 the account being usable by its intended holder — not because this repository
 carries it.
 
-- [ ] 6.1 Add a `prod` host entry to `~/.ssh/config` pinning `User ops-claude`,
+- [x] 6.1 Add a `prod` host entry to `~/.ssh/config` pinning `User ops-claude`,
       the identity file, and `IdentitiesOnly yes`.
-- [ ] 6.2 Add a Claude Code permission rule for that command shape — without
+- [x] 6.2 Add a Claude Code permission rule for that command shape — without
       one, prod-targeted SSH is refused outright by the auto-mode classifier
       (`prod` is a configured sensitive remote target), so the account would
       exist but be unusable by its intended holder. The rule is **ask-on-use
@@ -270,3 +270,15 @@ carries it.
       prompt *is* that supervision. A blanket allow would remove the
       mitigation, and would require design.md's Risks section to be re-argued
       without it.
+
+**Consumer wiring done (2026-09-01), and verified end to end.** `~/.ssh/config`
+gained a `Host prod` block pinning `User ops-claude`, the identity file and
+`IdentitiesOnly yes` (`ssh -G prod` confirms all four). The permission rule
+went into `.claude/settings.local.json` as an **`ask`** entry, not `allow`,
+scoped to two command shapes — `Bash(ssh prod:*)` and
+`Bash(ssh -i ~/.ssh/ops_claude ops-claude@:*)`. That file is gitignored (it is
+a personal override), so this is recorded here rather than committed.
+
+Proven working: `ssh prod 'id -nG && hostname && docker ps'` returns
+`ops-claude docker` on `main-server` and lists the running platform and
+commerce-ops containers. The account now does the thing it was created for.
