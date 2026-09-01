@@ -25,8 +25,9 @@
 # removed, loosened or re-scoped, and the same three key markers are still
 # matched -- confirmed by planting synthetic OpenSSH, RSA and PKCS#8 keys
 # and observing the scan fire on each, then fall silent once removed. The
-# same self-match is latent in deploy_user's equivalent scan; out of scope
-# to fix there.
+# The same self-match was latent in deploy_user's equivalent scan and has
+# since been repaired there the same way
+# (openspec/changes/repair-ansible-test-harness, task 6.1).
 - name: Verify
   hosts: all
   become: true
@@ -240,12 +241,21 @@
     #
     # The discriminator exists because `rc != 0` alone would also be
     # satisfied by sudo being absent or broken -- a refusal for entirely the
-    # wrong reason. `command not found` separates those.
+    # wrong reason. It is a POSITIVE check that sudo itself spoke: every
+    # refusal sudo emits is prefixed `sudo:`, whereas a missing binary makes
+    # `ansible.builtin.command` return rc 2 with an EMPTY stderr and the
+    # message on `.msg` instead.
+    #
+    # An earlier form of this assertion tested `'command not found' not in
+    # stderr`, which could never fire: `ansible.builtin.command` runs no
+    # shell, so no shell's not-found wording ever reaches stderr, and the
+    # limb passed unconditionally. Verified against the module's real output
+    # rather than against an invented stderr, which is how it was missed.
     - name: Assert sudo refuses ops-claude
       ansible.builtin.assert:
         that:
           - ops_user_claude_sudo_attempt.rc != 0
-          - "'command not found' not in (ops_user_claude_sudo_attempt.stderr | lower)"
+          - ops_user_claude_sudo_attempt.stderr is search('^sudo:')
           - "'root' not in ops_user_claude_sudo_attempt.stdout"
         fail_msg: >-
           `sudo -n true` as ops-claude exited

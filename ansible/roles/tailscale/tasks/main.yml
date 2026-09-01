@@ -61,11 +61,17 @@
 # because the auth key would otherwise appear in the task's command
 # output.
 #
-# The first two limbs guard the third, and their ORDER is load-bearing:
+# The first three limbs guard the fourth, and their ORDER is load-bearing:
 # `or` short-circuits, so an emptiness check has to be its own earlier limb.
 # A filter wrapped around the `from_json` call is evaluated too late to stop
 # it -- the captured failure showed `from_json` being reached and handed an
 # empty string, which means the `rc` limb had already evaluated false.
+#
+# The third limb exists because absent and empty are not the only ways to
+# reach `from_json` with something it cannot parse: a non-empty, non-JSON
+# stdout with rc 0 -- `tailscaled` answering with a plain-text notice, say --
+# raises the identical "Expecting value: line 1 column 1" abort. Verified by
+# probe. A `^{` shape test is enough to stop it and cannot itself raise.
 #
 # POLARITY: an absent, empty or unparseable status result means NOT
 # CONNECTED, so `tailscale up` is attempted. It must never be read as
@@ -79,6 +85,7 @@
   when: >
     (tailscale_status_check.rc | default(1)) != 0 or
     (tailscale_status_check.stdout | default('') | trim | length) == 0 or
+    not ((tailscale_status_check.stdout | default('') | trim) is match('^\{')) or
     (tailscale_status_check.stdout | from_json).BackendState | default('') != "Running"
   changed_when: true # this task only ever runs when the host wasn't already connected, so it always represents a real state change
   no_log: true

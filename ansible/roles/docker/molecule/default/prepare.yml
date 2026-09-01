@@ -17,10 +17,11 @@
 #    deleting anything.
 #
 # 2. The geerlingguy/docker-ubuntu2204-ansible image does not carry
-#    python3-requests, which community.docker.docker_login needs ON THE
-#    TARGET. Installed here rather than through a separate mechanism because
-#    it is the same kind of gap -- a base image missing something a converged
-#    role's module needs -- and belongs beside the apt refresh.
+#    python3-requests, which community.docker modules need ON THE TARGET.
+#    This scenario performs no registry login of its own, so the install is
+#    insurance rather than a present requirement -- kept so all three
+#    docker-converging scenarios prepare identically, and named here so the
+#    version-comparison test in reason 1 is not muddied by it.
 #
 # `prepare` runs once, after `create` and before `converge`, and is NOT
 # re-run for the `idempotence` action, so nothing here can mask a role's own

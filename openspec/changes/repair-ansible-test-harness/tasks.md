@@ -118,9 +118,20 @@ role. The two scenarios added by the test-writing pass
 (`ghcr-credential-absent`, `ghcr-credential-rejected`) already carry their
 own `prepare.yml` of the same shape and converge no engine.
 
-3.3: each file is fixture-only. It refreshes the apt cache and installs one
-target-side Python library; it creates no account, no directory, no key and
-no file that any `converge` or `verify` in these scenarios asserts on.
+3.3: each file is fixture-only, in the sense that matters -- nothing in it
+is the SUBJECT of an assertion, and nothing in it sets up the role under
+test.
+
+**Amended after 6b.2/6b.4.** As first written this said the files create "no
+file that any `converge` or `verify` asserts on", and that is no longer
+true of `deploy_user`'s: it now also writes `/etc/docker/daemon.json` and
+seeds the two pre-migration artifacts (`platform-compose-deploy` and
+`/etc/sudoers.d/deploy`) whose REMOVAL `verify.yml` asserts. That is
+deliberate and is the point of 6b.2 -- the fixture must exist before
+converge so the role is seen removing something real, and must not be
+re-created between converge and idempotence. The distinction 3.3 exists to
+protect still holds: `prepare` creates the precondition, the role performs
+the behaviour, and `verify` asserts the role's effect, never the fixture's.
 
 **3.4, third baseline.** `molecule test -s default` in `deploy_user/` now
 passes `prepare`, gets through the whole `docker` role and almost all of
@@ -254,9 +265,19 @@ the last of the three harness defects to surface, as predicted.
       account that *can* sudo must not satisfy it.
 
 **§5 results.** `check_mode: false` on the status probe; the consumer's
-condition gained two earlier `or` limbs (`rc | default(1)`, then an
-empty-stdout test) before the `from_json` call, because `or` short-circuits
-and the captured failure showed `from_json` being reached. Polarity verified
+condition gained three earlier `or` limbs (`rc | default(1)`, an
+empty-stdout test, then a `^{` shape test) before the `from_json` call,
+because `or` short-circuits and the captured failure showed `from_json`
+being reached.
+
+**Corrected after completion review.** The first form had only the `rc` and
+empty-stdout limbs, while this record, tasks 5.2/5.3 and the role's own
+comment all claimed an *unparseable* result was covered. It was not: a
+non-empty, non-JSON stdout with rc 0 still reached `from_json` and raised
+the identical `Expecting value: line 1 column 1` abort -- confirmed by
+probe. That is the "same class of failure reachable by a different route"
+design.md said must not be left open. The `^{` shape limb closes it and
+cannot itself raise. Polarity verified
 against five result shapes: already-connected does NOT attempt `tailscale
 up`; needs-login, empty stdout, non-zero rc and a skipped task (no `rc` at
 all) all DO, and none raises.
@@ -270,12 +291,23 @@ scenarios assign the token as a YAML *folded* scalar whose value sits on the
 next line. Verified across four cases: inline literal caught, folded literal
 caught, folded `lookup('env', ...)` accepted, clean tree silent.
 
-6.4 restructured rather than extended the sudo assertion, and it is now
-stricter than before rather than looser: exit status plus a `command not
-found` discriminator. It accepts prod's randomised insult phrasing (which
-the old fixed string list REJECTED), and it now catches two wrong-reason
-passes the old form allowed -- sudo being absent, and sudo actually
-succeeding.
+6.4 restructured rather than extended the sudo assertion: exit status plus a
+discriminator. It accepts prod's randomised insult phrasing, which the old
+fixed string list REJECTED.
+
+**Corrected after completion review.** The first form of the discriminator
+was `'command not found' not in stderr`, and it could never fire:
+`ansible.builtin.command` runs no shell, so no shell's not-found wording
+ever reaches stderr -- a missing binary returns rc 2 with an EMPTY stderr and
+the message on `.msg`. The limb passed unconditionally, and the result
+recorded here claimed it "catches two wrong-reason passes the old form
+allowed", which was false: `sudo` succeeding was already caught by
+`rc != 0`. The check that appeared to prove it was run against a fabricated
+`stderr` that the module cannot produce -- the expression was tested, not
+the behaviour. Replaced with a POSITIVE check that sudo itself spoke
+(`stderr is search('^sudo:')`), verified against the module's real output:
+a missing binary now fails the assertion, and a real refusal
+(`sudo: a password is required`) passes.
 
 ## 6b. Defects surfaced by the toolchain bump (added during implementation)
 
@@ -312,6 +344,12 @@ finding be recorded either way.
       `deploy-receive`'s end-to-end assertion could never pass. Fixture now
       declares one minimal service (`alpine:3.19`, `sleep 3600`). The
       assertion is untouched -- it asserted rc == 0 before and still does.
+      Note the new dependency this introduces: `deploy_user`'s `default`
+      scenario now pulls `alpine:3.19` from Docker Hub inside the instance on
+      every run. The suite still needs no credentials, but it does now need
+      anonymous registry reachability, and a Docker Hub rate-limit would
+      present as `app-deploy` returning non-zero -- i.e. it would look like a
+      role defect rather than an environment one.
 - [x] 6b.4 With a real service declared, container creation then failed under
       the default overlayfs snapshotter: docker-in-docker cannot stack
       another overlay ("failed to mount ... fstype: overlay ... invalid
@@ -407,8 +445,18 @@ Note the `--check` run reported `changed=2` where the real run reported
 (`docker_login` among them) and reporting "would change" where the real run
 finds nothing to do -- not a discrepancy in the roles.
 
-**7.2 is deliberately left unchecked.** It requires a real
-`read:packages` GHCR token, which was not supplied. The offline path is
+**7.2 is partially done; only its credentialled run remains.**
+
+Its harness half needed no token and has been completed after completion
+review flagged the mis-attribution: `deploy_user`'s `verify.yml` conditioned
+its two credential-store `when:` clauses on `MOLECULE_GHCR_PULL_TOKEN`
+alone, so once 4.3 emptied the fallbacks a half-set environment made the
+role skip the login while the assertion still fired -- a red blaming the
+role for what the environment did. Both clauses now require the username
+too, so a half-set environment skips instead.
+
+What remains genuinely needs a real `read:packages` GHCR token, which was
+not supplied. The offline path is
 proven by 7.1, and `ghcr-credential-rejected` already exercises a real
 registry refusal against ghcr.io, so the supplied-credential branch is not
 wholly untested -- but the specific assertion that `deploy_user`'s

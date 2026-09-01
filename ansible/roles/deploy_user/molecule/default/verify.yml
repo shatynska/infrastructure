@@ -382,7 +382,9 @@
       ansible.builtin.slurp:
         src: /root/.docker/config.json
       register: deploy_user_per_app_docker_config
-      when: (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
+      when:
+        - (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
+        - (lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('', true)) != ''
       ignore_errors: true
 
     - name: Assert root's Docker credential store contains a ghcr.io entry (only when a real token was supplied)
@@ -395,7 +397,9 @@
           /root/.docker/config.json does not contain a ghcr.io entry after
           convergence, even though a real GHCR pull token was supplied via
           MOLECULE_GHCR_PULL_TOKEN.
-      when: (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
+      when:
+        - (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
+        - (lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('', true)) != ''
 
     # ============================================================
     # Scenario: GHCR token is never committed

@@ -3,6 +3,8 @@
 ### Requirement: Host Authenticates to GHCR for Application Image Pulls
 Where a GHCR credential is supplied, Ansible SHALL configure root's Docker credential store on the host with that read-only (`read:packages`-scoped) token, so that `docker compose pull` invocations run by `/usr/local/bin/app-deploy` succeed against a private GHCR package. This credential SHALL be shared across every application on the host rather than provisioned per application, since it grants no capability beyond reading package contents.
 
+A credential SHALL be treated as supplied only where both the token and the username it authenticates are present and non-empty; a partial credential SHALL be treated as absent rather than attempted, since attempting it fails on the missing half rather than on anything the registry says.
+
 Where no GHCR credential is supplied, Ansible SHALL skip the registry authentication step and SHALL NOT fail the run. A host that pulls no private image needs no such credential, and host configuration SHALL NOT be made contingent on one being present.
 
 This tolerance applies only to a credential being **absent**. It SHALL NOT be extended to a credential that is present and rejected by the registry: an authentication failure against a supplied credential SHALL remain a failure of the run, not a skipped step. The consequence of skipping SHALL be documented — an absent credential moves the point of failure from configuration time to the next private-image pull during a deploy.
