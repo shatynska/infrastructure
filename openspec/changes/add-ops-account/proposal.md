@@ -53,6 +53,11 @@ None.
 - `ansible/playbooks/host-baseline.yml` — one added role entry.
 - `ansible/inventory/group_vars/prod.yml` — new `ops_users` list. Public keys
   only; safe to commit, exactly as `deploy_apps`'s public keys already are.
+- `.ansible-lint` — `ops_user` appended to `mock_roles`, as every role
+  referenced by name in `host-baseline.yml` already is (standalone
+  `ansible-lint` does not resolve role references via `ansible.cfg`'s
+  `roles_path`, so without it the playbook reports a false-positive
+  "role not found").
 - No Terraform change. No cloud-firewall change. No UFW change: SSH (22) is
   already permitted from the operator CIDR and from the tailnet, and this
   change adds an account on that existing path rather than a new path.
@@ -62,6 +67,14 @@ None.
   touching sshd.
 - Convergence is a manual `ansible-playbook` run by the operator, as every
   Ansible change on this host is — there is no CI pipeline for Ansible.
+- **Out-of-repository consumer wiring** (tasks.md §6), in the operator's own
+  environment: a `~/.ssh/config` entry, and a Claude Code permission rule
+  without which prod-targeted SSH is refused by the auto-mode classifier and
+  the account is unusable by its intended holder. The rule is ask-on-use and
+  scoped to the `ops-claude` command shape, not a blanket allow — that per-
+  command prompt is the "used under the operator's supervision" mitigation
+  design.md's Risks section relies on, so its shape is part of this change's
+  risk posture rather than a local convenience setting.
 
 ## Non-goals
 
