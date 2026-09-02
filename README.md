@@ -84,9 +84,17 @@ addition (see Status below), not a rejected idea.
 5. To run the Ansible tests, install the pinned Molecule toolchain:
 
    ```sh
-   pip install -r ansible/requirements-test.txt
+   uv venv ~/.venvs/molecule                                  # or python -m venv
+   VIRTUAL_ENV=~/.venvs/molecule uv pip install -r ansible/requirements-test.txt
+   export PATH=~/.venvs/molecule/bin:$PATH                    # add to your shell rc
    ansible-galaxy install -r ansible/requirements.yml
    ```
+
+   Install into a virtualenv, not system Python — recent Debian/Ubuntu mark
+   the system interpreter externally-managed and refuse a bare
+   `pip install`. If `python3 -m venv` fails with an `ensurepip` error, that
+   is the `python3-venv` package missing; [`uv`](https://docs.astral.sh/uv/)
+   sidesteps it entirely, which is why it is shown here.
 
    Run them **per role, with `--all`** — several roles now carry more than
    one scenario (`ops_user` has `default` and `revocation-steady-state`;
