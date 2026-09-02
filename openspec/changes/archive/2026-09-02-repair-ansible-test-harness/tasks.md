@@ -375,7 +375,7 @@ finding be recorded either way.
       because it is equally exposed to the toolchain bump, and design.md's
       only mitigation for that risk is every existing scenario being green.
       This is the change's primary success criterion.
-- [ ] 7.2 Re-run with `MOLECULE_GHCR_PULL_TOKEN` **and**
+- [x] 7.2 Re-run with `MOLECULE_GHCR_PULL_TOKEN` **and**
       `MOLECULE_GHCR_PULL_USERNAME` both set to real values, and confirm the
       suite is still green and that `deploy_user`'s existing conditional
       credential-store assertion actually fires rather than skipping. Both
@@ -445,7 +445,7 @@ Note the `--check` run reported `changed=2` where the real run reported
 (`docker_login` among them) and reporting "would change" where the real run
 finds nothing to do -- not a discrepancy in the roles.
 
-**7.2 is partially done; only its credentialled run remains.**
+**7.2 complete (2026-09-02).**
 
 Its harness half needed no token and has been completed after completion
 review flagged the mis-attribution: `deploy_user`'s `verify.yml` conditioned
@@ -455,8 +455,32 @@ role skip the login while the assertion still fired -- a red blaming the
 role for what the environment did. Both clauses now require the username
 too, so a half-set environment skips instead.
 
-What remains genuinely needs a real `read:packages` GHCR token, which was
-not supplied. The offline path is
+Its credentialled run was then done with a real `read:packages` token.
+`molecule test --all` for `deploy_user` is green on all three scenarios
+(`default`, `ghcr-credential-absent`, `ghcr-credential-rejected`,
+`failed=0`), and the credential-store check was confirmed **live rather
+than skipped**:
+
+    TASK [Report whether the live GHCR credential-store check will run]
+    ok: "Running the GHCR credential-store check against a real supplied token."
+
+Both halves of the task are therefore satisfied: the suite stays green with
+a credential supplied, and `deploy_user`'s conditional credential-store
+assertion actually fires. That matters because the assertion is skipped by
+default -- a green suite alone would not have distinguished "the check
+passed" from "the check never ran".
+
+Two findings from getting there, worth keeping:
+
+- **GHCR requires a *classic* PAT with `read:packages`.** A fine-grained
+  token is refused with `403 ... denied: denied`, which reads like an
+  expired or wrongly-scoped credential rather than a wrong *kind* of one.
+- That first, rejected token produced an unplanned and better demonstration
+  of the delta's third scenario than the synthetic one does: the real
+  `deploy_user` role, mid-converge, refused to continue on a credential the
+  registry rejected (`failed=1` at the login task). The guard's narrowness
+  -- tolerating absence, never rejection -- is therefore proven against
+  production code and a real registry, not only against a fixture. The offline path is
 proven by 7.1, and `ghcr-credential-rejected` already exercises a real
 registry refusal against ghcr.io, so the supplied-credential branch is not
 wholly untested -- but the specific assertion that `deploy_user`'s
