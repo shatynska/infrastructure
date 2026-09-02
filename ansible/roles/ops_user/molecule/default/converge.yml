@@ -1,0 +1,132 @@
+---
+# First converge for the ADDED "Unprivileged Operator Accounts Support
+# Interactive Host Inspection" requirement.
+#
+# Role ordering mirrors ansible/playbooks/host-baseline.yml as tasks.md 2.5
+# will amend it: `docker` first (the `docker` group must exist before an
+# account can join it), then `deploy_user`, then `ops_user`.
+#
+# `ops_user`'s variable interface is taken from tasks.md 2.1/2.2/2.3, not
+# from implementation source -- the role does not exist when this file is
+# written:
+#   - `ops_user_accounts`: list of {name, public_key, state}; `state` defaults to
+#     `present`; defaults/main.yml sets `ops_user_accounts: []`.
+# `ops-claude` below deliberately omits `state` entirely, so the documented
+# default is exercised rather than assumed.
+#
+# Three operator entries, each existing for one reason:
+#   - `ops-claude`   the seeded production identity (tasks.md 1.2); every
+#                    steady-state assertion in verify.yml targets it.
+#   - `ops-rotate`   converged here with its OLD key, re-converged in
+#                    side_effect.yml with a NEW one, so the `exclusive: true`
+#                    key-rotation scenario has something to rotate.
+#   - `ops-revoke`   converged here as `present`, then marked `absent` in
+#                    side_effect.yml *while a process it owns is running* --
+#                    the case revocation exists for (tasks.md 3.2).
+#
+# `deploy_apps` mirrors ansible/roles/deploy_user/molecule/default/
+# converge.yml's own pairing (platform + commerce-ops) rather than inventing
+# a different one. GHCR credentials fall back to an EMPTY string, not to a
+# placeholder: deploy_user's login task is guarded on both halves being
+# non-empty, so an empty fallback is what makes this scenario runnable with
+# no credential at all. A non-empty dummy would satisfy the guard, reach
+# ghcr.io, and abort the converge on a 403 -- which is exactly what it used
+# to do (openspec/changes/repair-ansible-test-harness). Setting
+# MOLECULE_GHCR_PULL_TOKEN and MOLECULE_GHCR_PULL_USERNAME together still
+# exercises the real login path.
+#
+# Every public key below is a dummy, structurally shaped like an ed25519 key
+# and labelled as not a credential. No private key exists for any of them,
+# here or anywhere -- see verify.yml's private-key-marker scan.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+    ops_user_accounts:
+      - name: ops-claude
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsClaudeKeyOnlyNotARealCreden
+          ops-claude-molecule@ci
+      - name: ops-rotate
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsRotateOldKeyOnlyNotARealCre
+          ops-rotate-old-molecule@ci
+        state: present
+      - name: ops-revoke
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsRevokeKeyOnlyNotARealCreden
+          ops-revoke-molecule@ci
+        state: present
+    ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true) }}"
+    ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('', true) }}"
+  roles:
+    - role: docker
+    - role: deploy_user
+    - role: ops_user
+  post_tasks:
+    # ================================================================
+    # Fixture, not an assertion: give /opt/commerce-ops the real content
+    # a real deploy puts there, so the "an operator cannot read another
+    # application's deployed secrets" scenario runs against a genuine
+    # `deploy`-owned 0600 .env and a genuine docker-compose.yml, rather
+    # than against files this scenario hand-placed with chosen modes.
+    # `deploy-receive` is fed by redirection rather than a pipe purely so
+    # this file introduces no new `risky-shell-pipe` lint violation
+    # (tasks.md 4.1's baseline).
+    #
+    # An empty `services: {}` Compose file keeps app-deploy's
+    # `docker compose pull && up -d --wait` a real, fast,
+    # no-registry-needed success -- the same technique deploy_user's own
+    # scenario uses.
+    # ================================================================
+    - name: Build the deploy archive deploy-receive will be fed for commerce-ops
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p /tmp/ops_user_deploy_archive
+        printf 'services: {}\n' > /tmp/ops_user_deploy_archive/docker-compose.yml
+        printf 'COMMERCE_OPS_DB_PASSWORD=molecule-fixture-secret-not-real\n' > /tmp/ops_user_deploy_archive/.env
+        tar -czf /tmp/ops_user_deploy_archive.tar.gz -C /tmp/ops_user_deploy_archive docker-compose.yml .env
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Deliver commerce-ops content through the real deploy-receive, as deploy
+      ansible.builtin.shell: /usr/local/bin/deploy-receive commerce-ops < /tmp/ops_user_deploy_archive.tar.gz
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: ops_user_fixture_delivery
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the /opt/commerce-ops fixture is in place before verify runs
+      ansible.builtin.stat:
+        path: /opt/commerce-ops/.env
+      register: ops_user_fixture_env_stat
+
+    - name: Fail loudly if the fixture, not the role under test, is what went wrong
+      ansible.builtin.assert:
+        that:
+          - ops_user_fixture_env_stat.stat.exists
+        fail_msg: >-
+          /opt/commerce-ops/.env was not produced by deploy-receive (rc
+          {{ ops_user_fixture_delivery.rc | default('n/a') }}:
+          {{ ops_user_fixture_delivery.stderr | default('') }}). This is a
+          FIXTURE failure in this scenario's own setup, not evidence about
+          the ops_user role -- verify.yml's secret-refusal assertions have
+          nothing to assert against until it is fixed.

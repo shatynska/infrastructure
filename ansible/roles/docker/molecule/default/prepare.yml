@@ -1,0 +1,39 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing
+# here may set up the thing under test. It exists to work around two gaps in
+# what this scenario converges on top of, both of which stop `converge`
+# before the role under test ever runs
+# (openspec/changes/repair-ansible-test-harness).
+#
+# 1. geerlingguy.docker 8.0.0's tasks/setup-Debian.yml installs
+#    `ca-certificates` and `python3-debian` with `state: present` and NO
+#    `update_cache`. Against a freshly created container, whose apt cache is
+#    empty, that fails with "No package matching 'python3-debian' is
+#    available". Checked against upstream at 8.0.0 (the latest release) and
+#    against master: both still lack `update_cache`, so there is no version
+#    bump that resolves this and no reason to expect one soon. If a later
+#    release adds it, this file's first reason disappears -- compare the
+#    pinned version in ansible/requirements.yml against that task before
+#    deleting anything.
+#
+# 2. The geerlingguy/docker-ubuntu2204-ansible image does not carry
+#    python3-requests, which community.docker modules need ON THE TARGET.
+#    This scenario performs no registry login of its own, so the install is
+#    insurance rather than a present requirement -- kept so all three
+#    docker-converging scenarios prepare identically, and named here so the
+#    version-comparison test in reason 1 is not muddied by it.
+#
+# `prepare` runs once, after `create` and before `converge`, and is NOT
+# re-run for the `idempotence` action, so nothing here can mask a role's own
+# non-idempotence.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Refresh the apt cache and install the target-side Python dependency
+      ansible.builtin.apt:
+        name:
+          - python3-requests
+        state: present
+        update_cache: true
+        cache_valid_time: 0

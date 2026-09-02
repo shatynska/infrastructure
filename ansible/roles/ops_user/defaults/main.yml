@@ -1,0 +1,19 @@
+---
+# ops_user_accounts: list of {name, public_key, state} -- one entry per
+# operator identity allowed an unprivileged, interactive login on this host
+# (openspec/changes/add-ops-account). `state` is per-entry and defaults to
+# `present`; `absent` revokes that identity on the next converge.
+#
+# Defaults to the empty list on purpose. Unlike deploy_user's credential
+# variables -- where there is no safe default for a login credential and an
+# undefined variable should stop the run -- an empty operator list is both
+# safe and fail-safe: a host group that names no operators provisions no
+# interactive accounts and converges cleanly, rather than aborting the whole
+# playbook on an undefined variable.
+#
+# The name carries the role prefix deliberately. `ops_users` would trip
+# ansible-lint's var-naming[no-role-prefix] the moment it is given a default
+# here, which would put a fail-safe default in direct conflict with this
+# change's "no new lint violation" requirement. Prefixed-and-defaulted is
+# what hardening_web_allowed_cidrs already does.
+ops_user_accounts: []

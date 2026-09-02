@@ -13,3 +13,6 @@
     - role: hardening
     - role: tailscale
     - role: deploy_user
+    # After `docker`: the `docker` group must exist before an operator
+    # account can join it (openspec/changes/add-ops-account).
+    - role: ops_user

@@ -1,0 +1,82 @@
+---
+# Molecule scenario for the MODIFIED "Host Authenticates to GHCR for
+# Application Image Pulls" requirement, scenario "Host configuration
+# completes when no GHCR credential is supplied"
+# (openspec/changes/repair-ansible-test-harness/specs/
+# iac-host-configuration/spec.md).
+#
+# WHY THIS EXISTS, SEPARATELY FROM `default`
+# ------------------------------------------
+# `default` is an existing, load-bearing test and this pass is additive
+# only -- it edits none of that scenario's four playbooks (see
+# test-manifest.md). Two further reasons make a separate scenario the only
+# way to cover this delta scenario at all:
+#
+#   1. Molecule runs exactly one `converge` per scenario. This delta
+#      scenario's premise is a converge with NO credential supplied, and
+#      the assertion that the registry authentication step was skipped
+#      only means anything against that converge.
+#   2. `default`'s converge reads MOLECULE_GHCR_PULL_TOKEN /
+#      MOLECULE_GHCR_PULL_USERNAME from the environment, so tasks.md 7.2's
+#      "re-run with real credentials set" run makes `default` a
+#      credential-PRESENT scenario. A scenario that must be
+#      credential-ABSENT cannot share that converge. Nothing in this
+#      scenario reads those two variables, so it behaves identically under
+#      tasks.md 7.1 (no credentials) and 7.2 (real credentials) -- which is
+#      the point.
+#
+# WHAT THIS SCENARIO DELIBERATELY DOES NOT COVER
+# ----------------------------------------------
+# The registry-rejection boundary (`ghcr-credential-rejected`), and
+# everything `default` already covers about the deploy account itself --
+# deploy-receive's extraction pipeline, forced-command SSH binding, the
+# unenumerated-application refusal, the pre-migration cleanup, the
+# repository-wide credential scans. This scenario asserts only that a
+# credential-free converge SKIPS the login and still lands the role's full
+# on-host artifact set.
+#
+# Docker Engine is NOT converged here (unlike `default`, where a real
+# `docker` CLI is needed to exercise app-deploy's trigger and to read a
+# real credential store). Nothing this scenario asserts needs the engine:
+# the login is expected to be skipped, so no credential store is written,
+# and the role's other artifacts are files, accounts and sudoers entries.
+# `default`'s own molecule.yml records that the pre-existing `default`
+# "stayed independent of it", so the role does not require it. Skipping the
+# engine install keeps this scenario cheap enough to be worth running on
+# its own.
+#
+# NOTE ON THE FAILURE THIS SCENARIO PRODUCES BEFORE THE CHANGE IS
+# IMPLEMENTED: against the current tree the GHCR login is unconditional, so
+# converge fails here. That is the expected pre-implementation state and is
+# recorded in test-manifest.md's baseline section -- not a defect in this
+# scenario.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s `deploy_user-role-instance` and
+  # from the sibling `ghcr-credential-rejected` scenario, so all three can
+  # be created side by side without colliding.
+  - name: deploy_user-ghcr-absent-instance
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

@@ -1,0 +1,63 @@
+---
+# FIXTURE ONLY -- nothing here asserts anything about the requirement.
+#
+# Two things have to be true before converge.yml can mean what it is meant
+# to mean:
+#
+#   1. The `docker` group must exist, because ops_user adds every `present`
+#      account to it. This scenario creates the bare group rather than
+#      installing Docker Engine: socket access is the `default` scenario's
+#      subject, not this one's, and skipping the engine install is what
+#      makes this scenario cheap enough to run on its own.
+#
+#   2. `ops-lingering` must already exist as a real, role-created account,
+#      so that converge.yml's FIRST run actually performs a revocation
+#      (rather than skipping straight to the already-revoked steady state
+#      this scenario is about).
+#
+# The account is created by running the role itself, not by hand-rolled
+# `user`/`authorized_key` tasks, so the thing converge.yml then revokes is
+# genuinely what the role produces -- home directory, shell, group
+# membership and key included. The consequence is worth stating: if account
+# creation is broken, this scenario fails HERE, in prepare, which molecule
+# reports separately from converge. That is a fixture failure, and the
+# `default` scenario is what covers account creation on its own account.
+#
+# Molecule runs `prepare` once, before `converge`, and does NOT re-run it
+# for the `idempotence` action. That is exactly what this scenario needs:
+# the account exists for converge run 1 and is gone for converge run 2.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    ops_user_accounts:
+      - name: ops-lingering
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsLingerKeyOnlyNotARealCreden
+          ops-lingering-molecule@ci
+  tasks:
+    - name: Create the docker group ops_user's present entries are appended to
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Seed ops-lingering as a real role-created account
+      ansible.builtin.include_role:
+        name: ops_user
+
+    - name: Confirm the seeded account really exists before converge revokes it
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Fail loudly if the fixture, not the role's revocation path, is what went wrong
+      ansible.builtin.assert:
+        that:
+          - "'ops-lingering' in ansible_facts.getent_passwd"
+        fail_msg: >-
+          ops-lingering was not created by the ops_user role, so converge.yml
+          would have nothing to revoke and the steady-state assertion this
+          scenario exists for would pass vacuously against an account that
+          never existed. This is a FIXTURE failure in this scenario's own
+          setup, not evidence about the revocation path.
+        quiet: true

@@ -60,6 +60,32 @@ since it grants no capability beyond reading package contents. Without
 this, `app-deploy`'s `docker compose pull` cannot pull a private GHCR
 image.
 
+### If a private image suddenly stops pulling, read this first
+
+**The GHCR login is skipped when either half of the credential is missing,
+and the run still reports success.** That is deliberate
+(`openspec/changes/repair-ansible-test-harness`): a host that pulls no
+private image should not need a GHCR credential, and requiring one made the
+whole Molecule suite unrunnable without a live token.
+
+The cost is that a credential problem no longer fails the converge. It
+surfaces later, at the next `docker compose pull` during a deploy -- in a
+different pipeline, further from the change that caused it. Two ways to land
+there:
+
+- the token was **rotated or revoked** since it was encrypted into Vault; or
+- the variable is **misnamed, or its vars file did not load**, on a host that
+  genuinely does need the credential.
+
+The second is the likelier and the quieter of the two. To tell them apart,
+re-run the playbook and look for the task *"Report that GHCR authentication
+was skipped for want of a credential"*. If it fired, the host never
+authenticated at all and the problem is the variables, not the token. If it
+did not fire, the login ran, so the credential reached the registry -- and a
+credential that is supplied and *rejected* still fails the converge loudly,
+exactly as before. That distinction is deliberate: the guard tolerates an
+absent credential, never a refused one.
+
 ## What this account can do
 
 Its only privileged capability, per application, is `sudo`-triggering one

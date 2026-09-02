@@ -1,0 +1,76 @@
+---
+# Second Molecule scenario for the ADDED "Unprivileged Operator Accounts
+# Support Interactive Host Inspection" requirement
+# (openspec/changes/add-ops-account/specs/iac-host-configuration/spec.md).
+#
+# WHY THIS EXISTS, SEPARATELY FROM `default`
+# ------------------------------------------
+# tasks.md 2.3 requires that revocation's session/process-termination step
+# "reports `changed: false` when the account does not exist or has no
+# processes". test-manifest.md delegated that to molecule's `idempotence`
+# action -- correctly in principle, but the `default` scenario never puts
+# an `absent` entry in front of it: `converge.yml`'s list is all-`present`,
+# `idempotence` re-runs that same all-`present` converge, and
+# `side_effect.yml` performs the revocation exactly once and never re-runs
+# it. So the termination tasks are never reached in the state whose
+# changed-status the requirement constrains. This scenario supplies that
+# state.
+#
+# The regression it is aimed at is a real one, and silent: drop the
+# `state == 'absent'` guard or the passwd-existence guard from those tasks
+# and every steady-state converge in production starts reporting `changed`
+# for an `absent` entry that has already been revoked -- an entry README.md
+# requires be LEFT IN THE LIST after revocation, so the condition is the
+# permanent steady state, not a transient one.
+#
+# WHY NOT AN ADDITION TO `default`
+# --------------------------------
+# `default`'s four playbooks are an existing, passing test. This pass is
+# additive only and edits none of them (see test-manifest.md). A separate
+# scenario is also the only place `idempotence` can be given a different
+# converge to re-run, since molecule runs exactly one converge per
+# scenario.
+#
+# WHAT THIS SCENARIO DELIBERATELY DOES NOT COVER
+# ----------------------------------------------
+# Everything `default` already covers: Docker socket access, sudo refusal,
+# /opt/<app> secret refusal, key rotation, revoking an account that is
+# currently in use, the private-key scan, deploy's untouched restrictions.
+# This scenario is narrow on purpose -- it exists for one property.
+#
+# Docker Engine is NOT installed here (unlike `default`, where socket
+# access is the subject). The role's only host prerequisite is that the
+# `docker` group exists, so prepare.yml creates just that group. That keeps
+# this scenario fast enough to be worth running on its own.
+#
+# systemd is still load-bearing: converge.yml's FIRST run revokes an
+# account that really exists, which reaches `loginctl terminate-user`.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s `ops_user-role-instance`, so the
+  # two scenarios can be created side by side without colliding.
+  - name: ops_user-revocation-instance
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

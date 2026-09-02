@@ -76,6 +76,44 @@ addition (see Status below), not a rejected idea.
    lives exclusively in the `production` GitHub Environment secret. See
    `AGENTS.md`.
 
+   Without `direnv`, `source .envrc` from the repo root once per shell —
+   it is a plain `export`. The dynamic inventory needs `HCLOUD_TOKEN` too,
+   not just Terraform: without it `ansible -i inventory/hcloud.yml prod`
+   resolves no hosts.
+
+5. To run the Ansible tests, install the pinned Molecule toolchain:
+
+   ```sh
+   pip install -r ansible/requirements-test.txt
+   ansible-galaxy install -r ansible/requirements.yml
+   ```
+
+   Run them **per role, with `--all`** — several roles now carry more than
+   one scenario (`ops_user` has `default` and `revocation-steady-state`;
+   `deploy_user` has `default`, `ghcr-credential-absent` and
+   `ghcr-credential-rejected`), so `molecule test -s default` silently skips
+   most of the suite:
+
+   ```sh
+   cd ansible/roles/<role> && molecule test --all
+   ```
+
+   The suite runs offline: no GHCR credential is needed. Setting
+   `MOLECULE_GHCR_PULL_TOKEN` and `MOLECULE_GHCR_PULL_USERNAME` **together**
+   additionally exercises the real registry-login path.
+
+   **If `molecule create` fails on your machine before any test runs**, check
+   `~/.docker/config.json`. A `credsStore` or `credHelpers` entry makes
+   Molecule's Docker driver shell out to a credential helper that may not
+   work in your environment, and it fails during `create` with a
+   `StoreError`. This is an environment quirk, not a repository defect —
+   point `DOCKER_CONFIG` at a directory holding an empty `{}` for the run:
+
+   ```sh
+   mkdir -p /tmp/molecule-docker && echo '{}' > /tmp/molecule-docker/config.json
+   DOCKER_CONFIG=/tmp/molecule-docker molecule test --all
+   ```
+
 ## Environment variables and secrets
 
 Each `terraform/environments/<env>/terraform.tfvars` is committed and holds **non-secret**

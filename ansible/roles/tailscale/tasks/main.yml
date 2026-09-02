@@ -41,20 +41,51 @@
     enabled: true
     state: started
 
+# `check_mode: false` so this runs even under `--check`. It is safe to:
+# `tailscale status --json` only reads state. It is also necessary --
+# Ansible skips `command` tasks in check mode, and a skipped task leaves the
+# consumer below parsing a result that has no usable stdout, which used to
+# abort every `--check` run of host-baseline.yml with
+# "The filter plugin 'ansible.builtin.from_json' failed: Expecting value:
+# line 1 column 1 (char 0)". Since tailscale runs third of five, nothing
+# after it was ever evaluated (openspec/changes/repair-ansible-test-harness).
 - name: Check current tailnet connection status
   ansible.builtin.command: tailscale status --json
   register: tailscale_status_check
   changed_when: false
   failed_when: false
+  check_mode: false
 
 # Idempotent: only calls `tailscale up` when not already connected, so a
 # re-run doesn't attempt to re-register an already-joined node. no_log
 # because the auth key would otherwise appear in the task's command
 # output.
+#
+# The first three limbs guard the fourth, and their ORDER is load-bearing:
+# `or` short-circuits, so an emptiness check has to be its own earlier limb.
+# A filter wrapped around the `from_json` call is evaluated too late to stop
+# it -- the captured failure showed `from_json` being reached and handed an
+# empty string, which means the `rc` limb had already evaluated false.
+#
+# The third limb exists because absent and empty are not the only ways to
+# reach `from_json` with something it cannot parse: a non-empty, non-JSON
+# stdout with rc 0 -- `tailscaled` answering with a plain-text notice, say --
+# raises the identical "Expecting value: line 1 column 1" abort. Verified by
+# probe. A `^{` shape test is enough to stop it and cannot itself raise.
+#
+# POLARITY: an absent, empty or unparseable status result means NOT
+# CONNECTED, so `tailscale up` is attempted. It must never be read as
+# "already connected" -- that would silently stop joining the tailnet on a
+# host whose tailscaled is installed but not yet answering, and leave
+# iac-host-configuration's "Host is reachable over the tailnet" scenario
+# unsatisfied on a real run. Skipping is the dangerous direction here;
+# attempting `tailscale up` on an already-connected host is harmless.
 - name: Bring the host onto the tailnet
   ansible.builtin.command: "tailscale up --authkey={{ tailscale_auth_key }}"
   when: >
-    tailscale_status_check.rc != 0 or
-    (tailscale_status_check.stdout | from_json).BackendState != "Running"
+    (tailscale_status_check.rc | default(1)) != 0 or
+    (tailscale_status_check.stdout | default('') | trim | length) == 0 or
+    not ((tailscale_status_check.stdout | default('') | trim) is match('^\{')) or
+    (tailscale_status_check.stdout | from_json).BackendState | default('') != "Running"
   changed_when: true # this task only ever runs when the host wasn't already connected, so it always represents a real state change
   no_log: true

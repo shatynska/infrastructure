@@ -9,11 +9,26 @@
 #
 # Install with: pip install -r ansible/requirements-test.txt
 #
-# NOTE (recorded for the implementer, see test-manifest.md's "unresolved
-# project questions"): these exact versions were chosen without the ability
-# to confirm current PyPI availability from this environment. Confirm they
-# resolve, or bump to whatever exact version does, before relying on this
-# file in CI or locally -- the requirement is an exact pin, not this
-# specific number.
-molecule==24.12.0
-molecule-plugins[docker]==23.5.3
+# ansible-core is pinned here too, and that is the correction this file
+# needed (openspec/changes/repair-ansible-test-harness). Leaving it out did
+# not leave it unconstrained -- it left it resolved by whatever pip picked
+# on the day, which is exactly the failure the convention above exists to
+# prevent. A fresh install used to resolve ansible-core 2.21 against a
+# 2023-era Molecule docker driver, and the suite died at the first `destroy`
+# action with "Conditionals must have a boolean result", before any scenario
+# reached `create`.
+#
+# The fix moved these pins FORWARD rather than pinning ansible-core back to
+# something the old driver tolerated. ansible-core 2.18.19 would have
+# satisfied both molecule-plugins 23.5.3 and ansible-lint 26.8.0, and was
+# rejected: it would freeze this repository's ansible-core at a version
+# chosen by a three-year-old plugin release, and every future tool here
+# would have to be compatible with that choice. A current molecule-plugins
+# exists and works on current ansible-core, so the constraint was never
+# real -- only stale. See that change's design.md, "Pins move forward, not
+# backward".
+#
+# Verified together, in this combination, on Python 3.12.
+ansible-core==2.21.3
+molecule==26.8.0
+molecule-plugins[docker]==26.7.15

@@ -22,3 +22,4 @@ mock_roles:
   - hardening
   - deploy_user
   - tailscale
+  - ops_user

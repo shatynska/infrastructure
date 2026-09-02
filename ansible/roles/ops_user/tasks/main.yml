@@ -1,0 +1,155 @@
+---
+# Provisions unprivileged, interactive operator accounts per
+# iac-host-configuration's "Unprivileged Operator Accounts Support
+# Interactive Host Inspection" requirement
+# (openspec/changes/add-ops-account). See that change's design.md for why
+# this is a separate account rather than another key on `deploy`, and for
+# the honest statement of what it does and does not bound -- `docker` group
+# membership is root-equivalent by escalation, and this role must never be
+# described as a boundary against its own key holder.
+#
+# Note what is deliberately absent: this role writes NO sudoers.d file of
+# any kind, not even a narrow one. That omission is the requirement, not an
+# oversight to be tidied up later -- see README.md.
+
+# Every task below is guarded on `state`, so a typo in one -- `absnet`,
+# `Present` -- would make every guard false: the converge would touch
+# nothing, report success, and leave the account neither created nor
+# revoked. That is the same silent no-op design.md writes down for the
+# delete-the-entry gesture, and it is worth failing loudly on rather than
+# discovering after a revocation that never happened.
+- name: Validate every operator entry before acting on any of them
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name | length > 0
+      - item.public_key is defined
+      - item.public_key | length > 0
+      - (item.state | default('present')) in ['present', 'absent']
+    fail_msg: >-
+      Invalid ops_user_accounts entry {{ item }}. Each entry needs a
+      non-empty `name` and `public_key`, and `state` -- if given -- must be
+      exactly `present` or `absent`.
+    quiet: true
+  loop: "{{ ops_user_accounts }}"
+  loop_control:
+    label: "{{ item.name | default('<unnamed>') }}"
+
+- name: Create each operator's account, with an interactive shell and no password
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    home: "/home/{{ item.name }}"
+    create_home: true
+    shell: /bin/bash
+    # An operator needs a pty, unlike every `deploy` key, whose
+    # authorized_keys entry carries `restrict`.
+    password: "!"
+    system: false
+    # `docker` group membership is the entire capability this account is
+    # granted at the OS layer. `append` so the account keeps its own primary
+    # group and gains nothing else -- never a privilege-granting group, and
+    # never `deploy`, whose members can read every application's /opt/<app>.
+    groups:
+      - docker
+    append: true
+    state: present
+  loop: "{{ ops_user_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (item.state | default('present')) == 'present'
+
+# No `key_options` -- that is the whole point of this account. A forced
+# command would bind the key to one invocation and `restrict` would disable
+# pty allocation, which is exactly the `deploy` model this account exists
+# not to be. `exclusive: true` so replacing an entry's public_key actually
+# rotates the key rather than accumulating both halves of the rotation.
+- name: Install each operator's unrestricted authorized_keys entry
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ item.public_key }}"
+    exclusive: true
+  loop: "{{ ops_user_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (item.state | default('present')) == 'present'
+
+# ---------------------------------------------------------------------
+# Revocation.
+#
+# A bare `state: absent` does not do what it looks like it does, and this
+# is the case revocation exists for: `userdel` REFUSES an account that is
+# currently logged in (exit 8), so the task would error and abort the
+# playbook against exactly the holder being revoked; and even forced, it
+# removes the account without terminating an already-established session,
+# leaving the holder their shell and their Docker socket access with it.
+#
+# So: terminate first, remove second. See design.md's "What revocation
+# actually terminates" for what this still does not reach -- containers the
+# account started run as root under dockerd, not as the account, and are
+# deliberately left alone.
+# ---------------------------------------------------------------------
+
+- name: Read the passwd database, so revocation acts only on accounts that exist
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Terminate any live login session belonging to an operator being revoked
+  ansible.builtin.command: "loginctl terminate-user {{ item.name }}"
+  loop: "{{ ops_user_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - (item.state | default('present')) == 'absent'
+    - item.name in ansible_facts.getent_passwd
+  register: ops_user_terminated_sessions
+  changed_when: ops_user_terminated_sessions.rc == 0
+  # Non-zero here means "no session to terminate", or no systemd-logind on
+  # this host at all. Neither is a failure: the pkill below is what
+  # actually guarantees no process survives, and a host without logind
+  # still revokes correctly.
+  failed_when: false
+
+- name: Kill any remaining process owned by an operator being revoked
+  ansible.builtin.command: "pkill -KILL -u {{ item.name }}"
+  loop: "{{ ops_user_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - (item.state | default('present')) == 'absent'
+    - item.name in ansible_facts.getent_passwd
+  register: ops_user_killed_processes
+  # pkill: 0 = something was signalled, 1 = nothing matched (the ordinary
+  # case, and not a change), >=2 = a real error.
+  changed_when: ops_user_killed_processes.rc == 0
+  failed_when: ops_user_killed_processes.rc not in [0, 1]
+
+- name: Wait for the revoked account's processes to actually exit
+  ansible.builtin.command: "pgrep -u {{ item.name }}"
+  loop: "{{ ops_user_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - (item.state | default('present')) == 'absent'
+    - item.name in ansible_facts.getent_passwd
+  register: ops_user_remaining_processes
+  until: ops_user_remaining_processes.rc != 0
+  retries: 10
+  delay: 1
+  changed_when: false
+  # If something genuinely refuses to die, `force: true` below still
+  # removes the account rather than aborting the run.
+  failed_when: false
+
+- name: Remove each revoked operator's account, home directory and authorized key
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    state: absent
+    # remove: the home directory goes with the account, so no authorized
+    # key is left behind on disk. force: userdel does not refuse an account
+    # whose session has only just been torn down above.
+    remove: true
+    force: true
+  loop: "{{ ops_user_accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (item.state | default('present')) == 'absent'
