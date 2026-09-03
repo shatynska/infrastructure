@@ -76,6 +76,50 @@ jobs:
           tags: tag:ci
           ping: ${{ secrets.PLATFORM_DEPLOY_HOST }}
 
+      # add-platform-monitoring: Grafana's docker-compose.yml `ports:`
+      # entry needs a literal IPv4 tailnet address, not a hostname --
+      # Docker's port-publish host_ip parses only a literal IP, with no
+      # DNS/MagicDNS resolution. PLATFORM_DEPLOY_HOST is documented
+      # (connect-platform-deploy-via-tailscale's design.md) as either a
+      # MagicDNS name or a literal IP, interchangeably, for its other
+      # consumers (tailscale ping/ssh-keyscan/ssh all resolve either form
+      # themselves) -- Docker does not, so this step resolves it once,
+      # here, to whichever form Grafana's bind actually needs. Runs on
+      # this already-tailnet-joined runner, not on the host itself: the
+      # host is only reachable via deploy-receive's forced-command SSH,
+      # which accepts no other command (see design.md's Decisions for the
+      # two rejected earlier drafts of this step).
+      #
+      # Checks whether the secret's value already IS a literal IPv4
+      # address first, and only calls `tailscale ip` (a hostname/FQDN
+      # peer lookup, not documented to also accept an already-literal IP)
+      # when it isn't -- this makes the step correct independent of
+      # whichever way that undocumented case actually behaves. Fails
+      # loudly on an empty or invalid result either way, rather than
+      # writing a bad address into .env.
+      - name: Resolve Grafana's tailnet bind address
+        id: grafana_bind
+        run: |
+          set -euo pipefail
+          # A ValueError from IPv4Address is an uncaught exception, which
+          # python3 -c already exits non-zero on -- no explicit try/except
+          # needed. Stderr is discarded since a rejected value is an
+          # expected, not exceptional, outcome here.
+          is_ipv4() {
+            python3 -c "import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])" "$1" 2>/dev/null
+          }
+          value="${{ secrets.PLATFORM_DEPLOY_HOST }}"
+          if is_ipv4 "$value"; then
+            resolved="$value"
+          else
+            resolved="$(tailscale ip -4 "$value")"
+          fi
+          if ! is_ipv4 "$resolved"; then
+            echo "::error::Resolved Grafana bind address '$resolved' is not a valid IPv4 literal" >&2
+            exit 1
+          fi
+          echo "address=$resolved" >>"$GITHUB_OUTPUT"
+
       # Rendered fresh each run from Environment-scoped secrets -- never
       # committed, never logged. See Platform Secrets Rendered from CI at
       # Deploy Time.
@@ -86,6 +130,11 @@ jobs:
             echo "ACME_EMAIL=${{ secrets.PLATFORM_ACME_EMAIL }}"
             echo "POSTGRES_USER=${{ secrets.PLATFORM_POSTGRES_USER }}"
             echo "POSTGRES_PASSWORD=${{ secrets.PLATFORM_POSTGRES_PASSWORD }}"
+            echo "POSTGRES_EXPORTER_PASSWORD=${{ secrets.PLATFORM_POSTGRES_EXPORTER_PASSWORD }}"
+            echo "SLACK_WEBHOOK_URL=${{ secrets.PLATFORM_SLACK_WEBHOOK_URL }}"
+            echo "DEADMANSWITCH_URL=${{ secrets.PLATFORM_DEADMANSWITCH_URL }}"
+            echo "GRAFANA_ADMIN_PASSWORD=${{ secrets.PLATFORM_GRAFANA_ADMIN_PASSWORD }}"
+            echo "GRAFANA_BIND_ADDRESS=${{ steps.grafana_bind.outputs.address }}"
           } >platform/.env
 
       # PLATFORM_DEPLOY_SSH_KEY is the private half of the platform

@@ -1,0 +1,21 @@
+---
+# Empty string, not omitted/undefined: tasks/main.yml treats an empty value
+# as "not explicitly supplied" and discovers the attached Hetzner Volume's
+# device path on-host instead (see design.md's "The volume's device path is
+# discovered on-host, not hand-copied from Terraform" decision) — there is
+# no safe *literal* default device path, the same reasoning
+# hardening_ssh_allowed_cidrs has none, but unlike that variable this one
+# has a safe *discovery* fallback, so this is not left unset.
+platform_data_volume_device: ""
+
+# design.md's own example path for the platform's dedicated data volume.
+platform_data_volume_mount_path: /mnt/main-data
+
+# ext4 is Ubuntu's own default filesystem choice and needs no extra package
+# beyond e2fsprogs (already present on the base image this host is
+# provisioned from) — no reason to deviate for a single-purpose data volume.
+platform_data_volume_fs_type: ext4
+
+# Empty by default: no subdirectory is created unless the caller declares
+# one. Each entry is {path, owner, group, mode} — see README.md.
+platform_data_volume_subdirs: []

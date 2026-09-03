@@ -23,3 +23,4 @@ mock_roles:
   - deploy_user
   - tailscale
   - ops_user
+  - platform_data_volume

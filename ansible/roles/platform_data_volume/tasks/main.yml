@@ -1,0 +1,76 @@
+---
+# Mounts the platform's dedicated data volume (the Terraform-provisioned
+# `main-data` Hetzner Volume) at a fixed host path, formats it if needed,
+# persists the mount across reboot, and creates the subdirectories
+# monitoring's containers bind-mount into — iac-host-configuration's ADDED
+# "Platform Data Volume Is Mounted at a Fixed Host Path" requirement
+# (openspec/changes/add-platform-monitoring/specs/iac-host-configuration/spec.md).
+#
+# Scope stops at the mount and its filesystem layout: this role never
+# templates or starts a platform/ service, consistent with the existing
+# "Configuration Scope Stops at the Container Runtime" requirement.
+
+- name: Discover the attached data volume's device path, if not explicitly set
+  ansible.builtin.find:
+    paths: /dev/disk/by-id
+    # Hetzner's stable, documented naming for an attached Volume — see
+    # design.md's "The volume's device path is discovered on-host" decision
+    # for why this is preferred over hand-copying Terraform's `linux_device`
+    # output into inventory.
+    patterns: "scsi-0HC_Volume_*"
+    file_type: any
+  register: platform_data_volume_by_id
+  when: platform_data_volume_device | length == 0
+
+- name: Resolve the discovered device path
+  ansible.builtin.set_fact:
+    platform_data_volume_device: "{{ platform_data_volume_by_id.files[0].path }}"
+  when: platform_data_volume_device | length == 0
+
+- name: Fail loudly if no device path is available (neither supplied nor discoverable)
+  ansible.builtin.assert:
+    that:
+      - platform_data_volume_device | length > 0
+    fail_msg: >-
+      No platform_data_volume_device was supplied and no
+      /dev/disk/by-id/scsi-0HC_Volume_* device was found on this host. Is the
+      main-data Hetzner Volume actually attached (volume_enabled in
+      terraform/environments/prod/terraform.tfvars)?
+
+- name: Format the data volume, if it has no filesystem yet
+  community.general.filesystem:
+    dev: "{{ platform_data_volume_device }}"
+    fstype: "{{ platform_data_volume_fs_type }}"
+  # community.general.filesystem is itself idempotent (it checks the
+  # existing filesystem type via blkid before acting) — this is not a
+  # first-attach-only guard, just documenting why no separate "already
+  # formatted?" check precedes it.
+
+- name: Ensure the fixed mount path exists
+  ansible.builtin.file:
+    path: "{{ platform_data_volume_mount_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Mount the data volume at the fixed path and persist it in /etc/fstab
+  ansible.posix.mount:
+    path: "{{ platform_data_volume_mount_path }}"
+    src: "{{ platform_data_volume_device }}"
+    fstype: "{{ platform_data_volume_fs_type }}"
+    state: mounted
+
+- name: Create the dependent subdirectories on the mounted volume, with per-service ownership
+  ansible.builtin.file:
+    path: "{{ platform_data_volume_mount_path }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ platform_data_volume_subdirs }}"
+  loop_control:
+    label: "{{ item.path }}"
+  # Runs after the mount task above, not before: a subdirectory created
+  # before the volume is mounted would be shadowed by the mount rather than
+  # be what a container's bind-mount actually reads from.

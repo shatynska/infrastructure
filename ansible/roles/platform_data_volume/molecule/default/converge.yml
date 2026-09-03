@@ -1,0 +1,66 @@
+---
+# Converges the platform_data_volume role against the fixed loop device
+# prepare.yml set up (standing in for the real, already-attached `main-data`
+# Hetzner Volume -- see prepare.yml's comment for why a loop device at a
+# fixed minor number, not a real block device, and why molecule.yml still
+# needs `privileged: true` despite no systemd requirement of this role's
+# own).
+#
+# ASSUMPTION (role variable interface). ansible/roles/platform_data_volume/
+# has no tasks/defaults yet -- these names are this test-authoring pass's
+# own invented interface, not anything the delta spec states, and are
+# recorded here, and in test-manifest.md, so whoever implements the role
+# next can either adopt them or knowingly diverge and update this scenario.
+# Modeled on design.md's "Storage layout" decision (a fixed mount path, then
+# bind-mount subdirectories with per-service ownership, tasks.md 1.1/1.2)
+# and on the `<role_name>_` variable-prefix convention ansible-lint's
+# var-naming[no-role-prefix] rule already enforces on every other role here
+# (hardening_*, ops_user_*, deploy_user_*):
+#
+#   platform_data_volume_device       -- block device path. Required, no
+#                                         default -- the same reasoning as
+#                                         hardening_ssh_allowed_cidrs having
+#                                         none (ansible/roles/hardening/
+#                                         defaults/main.yml): there is no
+#                                         safe default device path.
+#   platform_data_volume_mount_path   -- fixed host mount point. design.md
+#                                         names /mnt/main-data as its own
+#                                         example.
+#   platform_data_volume_fs_type      -- filesystem to create if the device
+#                                         is unformatted (tasks.md 1.1:
+#                                         "formats (if needed)").
+#   platform_data_volume_subdirs      -- list of {path, owner, group, mode}
+#                                         dicts, one per platform/ service
+#                                         that bind-mounts a subdirectory of
+#                                         the volume (tasks.md 1.2's
+#                                         prometheus/grafana example).
+#
+# The owner/group values below (65534/65534, 472/472) are this scenario's
+# OWN fixture choice, not something proposal.md or design.md specifies --
+# neither names an actual UID/GID for Prometheus's or Grafana's containers.
+# 65534 is a plausible stand-in for Prometheus's upstream image (which runs
+# as "nobody" by default); 472 is Grafana's actual upstream image default
+# UID/GID, used here because it is a real, checkable value rather than an
+# arbitrary one. Whichever UID/GIDs the implementation's actual
+# docker-compose.yml service definitions end up running as, this scenario's
+# values are what verify.yml checks against -- if the implementation departs
+# from them, that is an interface mismatch to reconcile, not evidence the
+# role is wrong (see test-manifest.md).
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_device: /dev/loop87
+    platform_data_volume_mount_path: /mnt/main-data
+    platform_data_volume_fs_type: ext4
+    platform_data_volume_subdirs:
+      - path: prometheus
+        owner: "65534"
+        group: "65534"
+        mode: "0755"
+      - path: grafana
+        owner: "472"
+        group: "472"
+        mode: "0755"
+  roles:
+    - role: platform_data_volume

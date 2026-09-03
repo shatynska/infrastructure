@@ -1,0 +1,55 @@
+## 1. Mount the data volume
+
+- [x] 1.1 Add Ansible content (new role or extension of an existing one) that formats (if needed) and mounts the `main-data` volume at a fixed host path (e.g. `/mnt/main-data`), persisted across reboot (`/etc/fstab` or equivalent). Discover the volume's device path on-host via Hetzner's stable `/dev/disk/by-id/scsi-0HC_Volume_*` naming (glob for the one match), rather than hand-copying Terraform's `linux_device` output (`terraform/modules/volume/outputs.tf`) into `ansible/inventory/group_vars/prod.yml` — that output is Hetzner-computed, not an operator-chosen value like the other hand-copied host variables, so there's no natural point at which a human would remember to copy it, and it can't drift out of sync with Terraform state if nothing ever copies it in the first place
+- [x] 1.2 Create the subdirectories monitoring will bind-mount into containers (e.g. `/mnt/main-data/prometheus`, `/mnt/main-data/grafana`) with ownership/permissions the respective containers need
+- [x] 1.3 Verify via `terraform plan`/`ansible-playbook --syntax-check`/lint that this stays within Ansible's existing host-configuration scope (no Compose/service content)
+- [ ] 1.4 Deploy and confirm the mount is present and persists across a reboot
+
+## 2. Metrics collection
+
+- [x] 2.1 Add a new internal-only Docker network (e.g. `platform_monitoring`) to `platform/docker-compose.yml`, not externally joinable the way `platform_edge` is
+- [x] 2.2 Add `node-exporter` service, attached only to `platform_monitoring`
+- [x] 2.3 Add `cadvisor` service, attached only to `platform_monitoring`, mounting `docker.sock` read-only and required host cgroup paths
+- [x] 2.4 Document (in `platform/README.md`) the one-time manual operator step of creating a dedicated, restricted-privilege Postgres role for monitoring (read-only access to statistics views, not table data or superuser) in the shared Postgres instance
+- [x] 2.5 Add a second internal-only Docker network (e.g. `platform_postgres_metrics`) shared only by `postgres` and `postgres-exporter`; attach `postgres` to it in addition to its existing `platform_edge` membership
+- [x] 2.6 Add `postgres-exporter` service, attached to `platform_postgres_metrics` (to reach Postgres) and `platform_monitoring` (to be scraped) — NOT `platform_edge` — using the dedicated role's credential sourced as a secret, not committed
+- [x] 2.7 Add postgres-exporter's database credential as a new GitHub Actions secret (e.g. `PLATFORM_POSTGRES_EXPORTER_PASSWORD`) and wire it into `.github/workflows/platform-deploy.yml`'s existing `.env`-rendering step, alongside the other platform secrets
+- [x] 2.8 Enable Traefik's metrics endpoint and attach Traefik to `platform_monitoring` in addition to its existing `platform_edge` membership, accepting that its metrics endpoint is therefore reachable from `platform_edge` too (design.md's accepted trade-off)
+- [x] 2.9 Add `prometheus` service, attached only to `platform_monitoring`, with an inline `configs:` block (not an external file — see design.md) scraping: itself, node-exporter, cAdvisor, postgres-exporter, and Traefik's metrics endpoint
+- [x] 2.10 Bind-mount Prometheus's data directory to `/mnt/main-data/prometheus`; set `--storage.tsdb.retention.time` and `--storage.tsdb.retention.size` per design.md's sizing
+- [ ] 2.11 Verify each exporter's target is `up` in Prometheus after deploy, and query one real metric value from each (a host CPU/memory/disk figure from node-exporter, a container's restart/OOM count from cAdvisor) to confirm data is actually flowing, not just that the target is reachable; verify a container attached only to `platform_edge` cannot reach Prometheus's query API, Alertmanager, Grafana, cAdvisor, node-exporter, or postgres-exporter, but can still reach Traefik's metrics endpoint (the stated exception)
+- [ ] 2.12 Generate a 5xx response from a routed application (or a temporary test route) and confirm, via a Prometheus query, that the resulting error-rate metric is attributed to that specific application rather than aggregated across all of them
+- [ ] 2.13 Recreate Prometheus's and Grafana's containers (`docker compose up -d --force-recreate prometheus grafana` or equivalent) and confirm previously collected metrics and dashboard/datasource configuration are still present afterward — proving persistence actually comes from the `main-data` bind mount, not container-local storage that happened to survive a simple restart
+- [ ] 2.14 Confirm the configured retention values actually took effect: query Prometheus's own runtime config/flags (e.g. its `/status` or `/-/config` endpoint) and verify the reported `--storage.tsdb.retention.time`/`--storage.tsdb.retention.size` match what was set in task 2.10, rather than assuming the flags were accepted. (Observing actual data expiry at the configured retention horizon isn't practical to verify at deploy time; this confirms the mechanism is armed correctly instead.)
+
+## 3. Alerting and Slack routing
+
+- [x] 3.1 Add `alertmanager` service, attached only to `platform_monitoring`, with its routing config as an inline `configs:` block (not an external file — see design.md)
+- [x] 3.2 Write Prometheus alert rules (also inline, in Prometheus's `configs:` block): per-application sustained 5xx rate (via Traefik metrics), container restart-loop/OOM (via cAdvisor), host disk/CPU/memory pressure (via node-exporter), and a scrape target being `down` for a sustained period — conservative initial thresholds, per design.md's open question
+- [x] 3.3 Configure Alertmanager with a Slack receiver using an incoming webhook URL sourced from environment/secret, not committed
+- [x] 3.4 Add the Slack webhook as a new GitHub Actions secret (e.g. `PLATFORM_SLACK_WEBHOOK_URL`) and wire it into `.github/workflows/platform-deploy.yml`'s existing `.env`-rendering step, alongside `PLATFORM_ACME_EMAIL`/`PLATFORM_POSTGRES_*`
+- [ ] 3.5 Verify each of the four alert rules independently — not one generic test alert standing in for all of them — confirming each reaches Slack and identifies the right target: (a) force a sustained 5xx rate from one application and confirm the resulting Slack alert names that application; (b) force a container to restart repeatedly and confirm the resulting alert names that container; (c) force sustained host resource pressure (or lower a threshold temporarily) and confirm the resulting alert names the affected resource; (d) stop one exporter and confirm the resulting "target down" alert names that exporter
+
+## 4. Dead-man's-switch heartbeat
+
+- [x] 4.1 Add a permanent "Watchdog" alert rule that always evaluates to firing
+- [x] 4.2 Configure an Alertmanager receiver that pings the external dead-man's-switch heartbeat URL on the alert's repeat interval
+- [x] 4.3 Add the heartbeat URL as a new GitHub Actions secret (e.g. `PLATFORM_DEADMANSWITCH_URL`) and wire it into `.github/workflows/platform-deploy.yml`'s existing `.env`-rendering step, alongside the Slack webhook (task 3.4)
+- [x] 4.4 Document, in `platform/README.md`, the out-of-band operator step of registering the host with the chosen third-party service and configuring its expected heartbeat interval
+- [ ] 4.5 Verify: heartbeat arrives during normal operation, and stopping Alertmanager causes the external service to detect a missed heartbeat
+
+## 5. Dashboards
+
+- [x] 5.1 Add `grafana` service, attached only to `platform_monitoring`, with Prometheus pre-provisioned as a data source via an inline `configs:` block (not an external provisioning file — see design.md)
+- [x] 5.2 Bind-mount Grafana's data directory to `/mnt/main-data/grafana`
+- [x] 5.3 Provision baseline dashboards (also inline, via `configs:`): host resource usage, per-container health, per-application HTTP error rates
+- [x] 5.4 In `.github/workflows/platform-deploy.yml`, add a step (after connecting to the tailnet, before rendering `.env`) that determines Grafana's literal bind IP from `${{ secrets.PLATFORM_DEPLOY_HOST }}`: if the value already matches a full dotted-quad-validating IPv4 regex (each octet range-checked, not just digits-and-dots), use it as-is with no `tailscale ip` call; otherwise, resolve it via `tailscale ip -4 <value>` run on the GitHub Actions runner. Whichever branch produced it, validate the resulting value against that same IPv4 regex and fail the step if it's empty or invalid, rather than writing a bad value into `.env`. Render the resulting literal IP — not the secret's raw value — into `.env` as Grafana's bind address, and bind Grafana's published port to it, not `0.0.0.0` — it is not routed through Traefik and is unreachable from the public interface
+- [x] 5.5 Add Grafana's admin credential as a new GitHub Actions secret (e.g. `PLATFORM_GRAFANA_ADMIN_PASSWORD`) and wire it into `.github/workflows/platform-deploy.yml`'s existing `.env`-rendering step, so Grafana never runs with its default admin credential
+- [ ] 5.6 Verify: the dashboard is reachable over the tailnet with the configured credential, and unreachable via the public interface/Traefik; open each baseline dashboard and confirm its panels render real host, per-container, and per-application data — not just that the dashboard loads
+
+## 6. Documentation and verification
+
+- [x] 6.1 Update `platform/README.md`'s Status section to describe the monitoring/alerting stack now present
+- [ ] 6.2 Confirm the production host's installed `docker compose version` supports inline `configs:`/`content:` (required by tasks 2.9, 3.1, 5.1, 5.3); upgrade `docker-compose-plugin` if it doesn't, since Ansible's `state: present` install won't do so on its own
+- [x] 6.3 Run this project's full verification (`terraform fmt`/`validate`, `docker compose config`, `ansible-lint`, `ansible-playbook --syntax-check`, pre-commit) before considering the change complete
+- [x] 6.4 Confirm `openspec validate --strict` passes for this change

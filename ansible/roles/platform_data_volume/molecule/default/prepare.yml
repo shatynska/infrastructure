@@ -1,0 +1,83 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing
+# here may set up the thing under test (the platform_data_volume role
+# itself, which does not exist yet -- see molecule.yml). It stands in for
+# the one part of this scenario that cannot exist inside a Molecule
+# container: a real, already-attached Hetzner Volume block device.
+#
+# In production the role is pointed at whatever device path Terraform's
+# `hcloud_volume.linux_device` output resolves to
+# (terraform/modules/volume/outputs.tf) for the `main-data` volume
+# (terraform/environments/prod/terraform.tfvars's `volume_name`). This
+# scenario has no such device, so it builds one: a loop device backed by a
+# sparse file, associated at a FIXED, hardcoded minor number
+# (/dev/loop87) rather than the dynamically-allocated device
+# `losetup -f --show` would hand back.
+#
+# The fixed number is deliberate, not a stylistic choice: `prepare` and
+# `converge` run as separate `ansible-playbook` invocations, and this
+# project's ansible.cfg sets no `fact_caching` backend, so a fact set here
+# would not survive into converge.yml. A device path chosen dynamically in
+# THIS play would therefore have no channel to reach converge.yml's
+# `platform_data_volume_device` variable. Hardcoding the same path on both
+# sides sidesteps that gap entirely, at the cost of a small, known
+# flakiness risk: if a CI host's kernel already has /dev/loop87 claimed by
+# something else, this FIXTURE -- not the role under test -- is what would
+# need a different number (recorded as an unresolved project question in
+# test-manifest.md rather than solved here, since the right fix -- e.g. an
+# ansible.cfg fact_caching backend shared by every role's scenarios -- is a
+# repository-wide decision this pass has no authority to make on its own).
+#
+# `prepare` runs once, after `create` and before `converge`, and is NOT
+# re-run for the `idempotence` action (see
+# ansible/roles/docker/molecule/default/prepare.yml's comment for why that
+# matters generically). What that buys here specifically: the role's own
+# converge is what must be idempotent on a SECOND run against the very same,
+# already-mounted loop device -- this file only ever runs once, so it can
+# never be the reason a second converge reports no changes.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Refresh the apt cache and install fixture-only loop/filesystem tooling
+      ansible.builtin.apt:
+        name:
+          - util-linux
+          - e2fsprogs
+        state: present
+        update_cache: true
+        cache_valid_time: 0
+
+    - name: Create a sparse backing file to stand in for the attached Hetzner Volume
+      ansible.builtin.command: truncate -s 512M /root/platform-data-volume-backing.img
+      args:
+        creates: /root/platform-data-volume-backing.img
+
+    - name: Check whether the fixed loop device node already exists
+      ansible.builtin.stat:
+        path: /dev/loop87
+      register: platform_data_volume_loop_node
+
+    - name: Create the fixed loop device node (major 7 = loop) if it does not already exist
+      ansible.builtin.command: mknod -m 0660 /dev/loop87 b 7 87
+      when: not platform_data_volume_loop_node.stat.exists
+      changed_when: true
+
+    - name: Check whether the fixed loop device is already associated with a backing file
+      ansible.builtin.command: losetup /dev/loop87
+      register: platform_data_volume_loop_check
+      changed_when: false
+      failed_when: false
+
+    - name: Associate the backing file with the fixed loop device
+      ansible.builtin.command: losetup /dev/loop87 /root/platform-data-volume-backing.img
+      when: platform_data_volume_loop_check.rc != 0
+      changed_when: true
+
+    # The role itself is responsible for formatting an unformatted device
+    # (tasks.md 1.1: "formats (if needed)", and the delta spec's requirement
+    # text does not restrict that to a pre-formatted device) -- so this
+    # fixture deliberately leaves /dev/loop87 UNFORMATTED. Formatting it here
+    # would test the role against a case production never actually presents
+    # on first attach (an already-formatted volume) and would silently mask
+    # a role that cannot format a raw device at all.

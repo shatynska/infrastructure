@@ -16,3 +16,7 @@
     # After `docker`: the `docker` group must exist before an operator
     # account can join it (openspec/changes/add-ops-account).
     - role: ops_user
+    # Order-independent of every role above: a mount, not a service --
+    # see ansible/roles/platform_data_volume/README.md
+    # (add-platform-monitoring).
+    - role: platform_data_volume
