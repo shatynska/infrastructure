@@ -1,0 +1,61 @@
+---
+# Molecule scenario for the `platform_data_volume` role, written BEFORE that
+# role exists (ansible/roles/platform_data_volume/ has no tasks/defaults yet
+# at the time this scenario was authored -- see
+# openspec/changes/add-platform-monitoring/test-manifest.md for the
+# scenario-by-scenario accounting, the assumed variable interface, and the
+# baseline that was and was not taken). It verifies iac-host-configuration's
+# ADDED "Platform Data Volume Is Mounted at a Fixed Host Path" requirement
+# (openspec/changes/add-platform-monitoring/specs/iac-host-configuration/spec.md).
+#
+# Same overall shape as this project's other role scenarios (see
+# ansible/roles/docker/molecule/default/molecule.yml for the shared
+# rationale on ANSIBLE_ROLES_PATH and the pinned requirements-file). Two
+# things differ here, both explained in prepare.yml and converge.yml:
+#
+#   - `privileged: true` and the /sys/fs/cgroup mount are kept for
+#     consistency with every other role's scenario in this repository, but
+#     the load-bearing reason THIS scenario needs elevated privilege is
+#     different from docker's/hardening's/ops_user's (which need it for
+#     systemd/dockerd/fail2ban): here it is `mount`/`losetup`/`mknod`
+#     requiring CAP_SYS_ADMIN and device-node access, to stand in for a
+#     real, already-attached Hetzner Volume block device (see prepare.yml).
+#   - `command: /lib/systemd/systemd` as PID 1 is not load-bearing for this
+#     role's own behaviour (no service is enabled/started by a fixed-mount
+#     role), but is kept rather than diverging from every sibling role's
+#     platform stanza for no reason connected to this scenario's own needs.
+dependency:
+  name: galaxy
+  options:
+    # ansible.posix (pinned 1.6.2 in requirements.yml already, for
+    # deploy_user's authorized_key key_options) is the natural module family
+    # for a mount role (ansible.posix.mount manages both the live mount and
+    # its /etc/fstab entry in one task) -- no NEW pin is expected for this
+    # role, but the dependency step still runs so whatever the role actually
+    # ends up needing from the pinned set is present before converge.
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: platform-data-volume-role-instance
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml for why this is
+    # needed -- same reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

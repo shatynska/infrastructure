@@ -1,0 +1,228 @@
+---
+# Verifies iac-host-configuration's ADDED "Platform Data Volume Is Mounted
+# at a Fixed Host Path" requirement (3 scenarios) --
+# openspec/changes/add-platform-monitoring/specs/iac-host-configuration/spec.md.
+#
+# Written before ansible/roles/platform_data_volume/ exists. Nothing here
+# was shaped to match an implementation; every assertion traces to the delta
+# spec's scenario text, this requirement's own normative prose, or -- where
+# marked DERIVED -- to this pass's own judgement. See test-manifest.md for
+# the full classification and for what this scenario does NOT establish
+# (a genuine host reboot; see the second block below).
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_mount_path: /mnt/main-data
+    platform_data_volume_device: /dev/loop87
+    platform_data_volume_fs_type: ext4
+    # Redeclared here because a verify playbook does not inherit converge's
+    # vars -- same reasoning as ops_user's verify.yml redeclaring its key
+    # markers.
+    platform_data_volume_subdirs:
+      - path: prometheus
+        owner: "65534"
+        group: "65534"
+        mode: "0755"
+      - path: grafana
+        owner: "472"
+        group: "472"
+        mode: "0755"
+  tasks:
+    # ============================================================
+    # Scenario: Volume is mounted at a known path
+    #
+    # SPECIFIED. Checked with findmnt against the live kernel mount table,
+    # not against the role's own idea of what it did -- findmnt reports
+    # what is actually mounted, independent of any Ansible fact.
+    # ============================================================
+    - name: Read the live mount table entry for the fixed mount path
+      ansible.builtin.command: >-
+        findmnt --noheadings --output SOURCE,TARGET,FSTYPE
+        {{ platform_data_volume_mount_path }}
+      register: platform_data_volume_findmnt
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the data volume is mounted at the fixed path, on the expected device and filesystem
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_findmnt.rc == 0
+          - platform_data_volume_device in platform_data_volume_findmnt.stdout
+          - platform_data_volume_mount_path in platform_data_volume_findmnt.stdout
+          - platform_data_volume_fs_type in platform_data_volume_findmnt.stdout
+        fail_msg: >-
+          {{ platform_data_volume_mount_path }} is not mounted from
+          {{ platform_data_volume_device }} as {{ platform_data_volume_fs_type }}
+          (findmnt rc {{ platform_data_volume_findmnt.rc }}:
+          '{{ platform_data_volume_findmnt.stdout }}'). The data volume SHALL
+          be mounted at a fixed, documented host path.
+
+    # ============================================================
+    # Scenario: Mount survives a reboot
+    #
+    # PARTIAL / PROXY. A genuine host reboot cannot be produced inside a
+    # Molecule container (there is no real init to reboot, and Docker gives
+    # no equivalent action) -- see test-manifest.md, which assigns the
+    # genuine reboot proof to tasks.md 1.4's "Deploy and confirm the mount
+    # is present and persists across a reboot", run against the real
+    # production host. What IS checked here, and is not vacuous, is both
+    # halves of what actually makes a mount survive a reboot on any Linux
+    # host: a well-formed, uncommented /etc/fstab entry for this mount point
+    # (the durable configuration a reboot's init reads), and that unmounting
+    # and then running `mount -a` -- exactly what init does with fstab at
+    # boot, without any other manual step -- brings the same mount back.
+    # A role that mounts the device directly but never writes an fstab entry
+    # would fail the first assertion below; a role whose fstab entry is
+    # malformed (wrong field count, wrong mount point) would fail either
+    # assertion.
+    # ============================================================
+    - name: Read /etc/fstab
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: platform_data_volume_fstab_raw
+
+    - name: Extract the fstab line for the fixed mount path
+      vars:
+        fstab_content: "{{ platform_data_volume_fstab_raw.content | b64decode }}"
+        fstab_lines: "{{ fstab_content.split('\n') }}"
+      ansible.builtin.set_fact:
+        platform_data_volume_fstab_line: >-
+          {{ fstab_lines
+             | select('match', '^[^#]')
+             | select('search', platform_data_volume_mount_path)
+             | list
+             | first
+             | default('') }}
+
+    - name: Assert a well-formed, active fstab entry exists for the fixed mount path
+      vars:
+        fstab_fields: "{{ platform_data_volume_fstab_line.split() }}"
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_fstab_line != ""
+          - fstab_fields | length >= 4
+          - fstab_fields[1] == platform_data_volume_mount_path
+          - fstab_fields[2] == platform_data_volume_fs_type
+        fail_msg: >-
+          No active (uncommented) /etc/fstab entry mounts
+          {{ platform_data_volume_mount_path }} as
+          {{ platform_data_volume_fs_type }} (line found:
+          '{{ platform_data_volume_fstab_line }}'). Without this, the mount
+          does not persist across a reboot without a manual step.
+
+    - name: Unmount the data volume (simulating the pre-boot, not-yet-mounted state)
+      ansible.builtin.command: umount {{ platform_data_volume_mount_path }}
+      changed_when: true
+
+    # Deliberately the raw `mount -a` command, not ansible.posix.mount: this
+    # simulates what a real reboot's init actually runs against the whole of
+    # /etc/fstab, which the mount module (scoped to one mount at a time)
+    # cannot replicate.
+    - name: Re-mount everything from /etc/fstab, exactly as init does at boot, with no other manual step
+      ansible.builtin.command: mount -a  # noqa: command-instead-of-module
+      changed_when: true
+      # Not asserted on rc alone: a base image's /etc/fstab may carry other,
+      # unrelated entries (harmless in this container) that `mount -a` could
+      # complain about without affecting OUR entry. The findmnt check right
+      # after this is what actually decides whether THIS mount came back.
+      failed_when: false
+
+    - name: Re-read the live mount table entry after the simulated reboot
+      ansible.builtin.command: >-
+        findmnt --noheadings --output SOURCE,TARGET,FSTYPE
+        {{ platform_data_volume_mount_path }}
+      register: platform_data_volume_findmnt_after_remount
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the mount comes back at the same path from `mount -a` alone
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_findmnt_after_remount.rc == 0
+          - platform_data_volume_device in platform_data_volume_findmnt_after_remount.stdout
+          - platform_data_volume_mount_path in platform_data_volume_findmnt_after_remount.stdout
+        fail_msg: >-
+          {{ platform_data_volume_mount_path }} did not come back mounted
+          after `umount` + `mount -a` (rc
+          {{ platform_data_volume_findmnt_after_remount.rc }}:
+          '{{ platform_data_volume_findmnt_after_remount.stdout }}'). This is
+          the mechanism a reboot's init actually uses to restore fstab
+          mounts, so a failure here means the mount would not survive a real
+          reboot either.
+
+    # ============================================================
+    # Scenario: Dependent subdirectories exist before a service needs them
+    #
+    # SPECIFIED (existence/ownership/permissions) + DERIVED (the "on the
+    # volume, not merely on the container's root filesystem" check). The
+    # scenario's text is about ordering ("before that service is deployed"),
+    # which this single-converge scenario cannot observe directly -- no
+    # platform/ service is deployed here to race against. What is checked
+    # instead, and is not nothing: that by the time the role's own converge
+    # finishes, each subdirectory already exists, already has the declared
+    # ownership/permissions, AND is genuinely a child of the MOUNTED
+    # filesystem rather than a same-named directory the role created before
+    # the mount happened (which would be silently masked once the real
+    # mount lands on top of it, and would not be what a bind-mount into a
+    # container actually reads from). The device-id comparison below is
+    # what tells those two cases apart; a bare `stat.exists` check could not.
+    # ============================================================
+    - name: Stat the mount point itself, to compare device ids against
+      ansible.builtin.stat:
+        path: "{{ platform_data_volume_mount_path }}"
+      register: platform_data_volume_mount_point_stat
+
+    - name: Stat the container's own root filesystem, as the "wrong" device id to rule out
+      ansible.builtin.stat:
+        path: /
+      register: platform_data_volume_root_stat
+
+    - name: Stat each dependent subdirectory
+      ansible.builtin.stat:
+        path: "{{ platform_data_volume_mount_path }}/{{ item.path }}"
+      loop: "{{ platform_data_volume_subdirs }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: platform_data_volume_subdir_stats
+
+    - name: Assert every dependent subdirectory exists with the ownership and permissions its container requires
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == item.item.owner or item.stat.uid | string == item.item.owner
+          - item.stat.gr_name == item.item.group or item.stat.gid | string == item.item.group
+          - item.stat.mode == item.item.mode
+        fail_msg: >-
+          {{ platform_data_volume_mount_path }}/{{ item.item.path }} is
+          missing, is not a directory, or does not have the declared
+          owner/group/mode (found uid={{ item.stat.uid | default('?') }}
+          gid={{ item.stat.gid | default('?') }}
+          mode={{ item.stat.mode | default('?') }}; wanted
+          owner={{ item.item.owner }} group={{ item.item.group }}
+          mode={{ item.item.mode }}). This subdirectory SHALL already exist,
+          correctly owned, before the service that bind-mounts it is
+          deployed.
+      loop: "{{ platform_data_volume_subdir_stats.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    - name: Assert every dependent subdirectory is genuinely on the mounted volume, not the container's root filesystem
+      ansible.builtin.assert:
+        that:
+          - item.stat.dev == platform_data_volume_mount_point_stat.stat.dev
+          - item.stat.dev != platform_data_volume_root_stat.stat.dev
+        fail_msg: >-
+          {{ platform_data_volume_mount_path }}/{{ item.item.path }} has
+          device id {{ item.stat.dev | default('?') }}, which does not match
+          the mount point's own device id
+          ({{ platform_data_volume_mount_point_stat.stat.dev }}) and/or
+          matches the container root filesystem's
+          ({{ platform_data_volume_root_stat.stat.dev }}). A subdirectory
+          created before the volume was mounted would pass a bare existence
+          check while silently NOT being what a bind-mount into a container
+          actually reads from.
+      loop: "{{ platform_data_volume_subdir_stats.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"

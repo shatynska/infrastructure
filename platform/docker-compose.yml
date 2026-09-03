@@ -2,6 +2,12 @@
 # add-per-app-deploy-keys tasks.md 5.2's validation deploy: confirms
 # platform-deploy.yml's new tar-pipe delivery and deploy-receive's forced
 # command actually complete a real deploy end to end.
+#
+# Monitoring/alerting service image tags below were pinned without the
+# ability to query their registries from this environment (no network
+# access) -- confirm each resolves, or bump to whichever exact version
+# does, before relying on this file in CI or locally (same caveat this
+# project's ansible/requirements.yml already carries for its own pins).
 services:
   traefik:
     image: traefik:v3.7.10
@@ -17,6 +23,18 @@ services:
       - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      # add-platform-monitoring: a separate, unpublished entrypoint for
+      # Traefik's own Prometheus metrics -- reachable only via the Docker
+      # networks below (platform_monitoring for Prometheus's scrape,
+      # platform_edge as an accepted trade-off -- see design.md's
+      # "Traefik's metrics exposure to platform_edge is accepted, not
+      # eliminated"), never published to the host.
+      - --metrics.prometheus=true
+      - --metrics.prometheus.addEntryPointsLabels=true
+      - --metrics.prometheus.addRoutersLabels=true
+      - --metrics.prometheus.addServicesLabels=true
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus.entryPoint=metrics
     ports:
       - "80:80"
       - "443:443"
@@ -28,6 +46,12 @@ services:
       - traefik_letsencrypt:/letsencrypt
     networks:
       - platform_edge
+      # add-platform-monitoring: joined so Prometheus (platform_monitoring
+      # only) can reach the metrics entrypoint above. Traefik's ports are
+      # reachable from every network it's attached to -- this is a
+      # deliberate, accepted exposure of the metrics endpoint to
+      # platform_edge too, not an oversight (design.md's Decisions).
+      - platform_monitoring
 
   postgres:
     image: postgres:16
@@ -39,9 +63,132 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - platform_edge
+      # add-platform-monitoring: a private link to postgres-exporter only
+      # -- see design.md's "postgres-exporter never joins platform_edge at
+      # all". This adds no new exposure to Postgres itself; it's already
+      # reachable from every application on platform_edge.
+      - platform_postgres_metrics
     # No published host port: per-application databases live inside this
     # one shared instance (iac-platform-services), reached only via the
     # platform_edge network, not the host's network interface.
+
+  # ---------------------------------------------------------------------
+  # add-platform-monitoring: metrics collection, alerting, dashboards.
+  # See openspec/changes/add-platform-monitoring/design.md for the full
+  # rationale behind every decision below (network placement, inline
+  # configs:, the Traefik/postgres-exporter split, Grafana's tailnet-only
+  # binding, retention sizing).
+  # ---------------------------------------------------------------------
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    networks:
+      - platform_monitoring
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      # Read-only, same trust boundary Traefik's Docker provider already
+      # relies on (design.md's "cAdvisor for per-container metrics").
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - platform_monitoring
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    restart: unless-stopped
+    environment:
+      # `pgexporter` is a fixed, non-secret role name (documented in
+      # README.md's manual role-creation step below); only its password is
+      # a secret.
+      DATA_SOURCE_NAME: postgresql://pgexporter:${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/postgres?sslmode=disable
+    networks:
+      # Reaches Postgres over the private link, is scraped by Prometheus
+      # over platform_monitoring -- never platform_edge (design.md).
+      - platform_postgres_metrics
+      - platform_monitoring
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Bounded by both time and size (design.md's Retention decision) --
+      # the size cap is the actual backstop if the time-based estimate
+      # undershoots.
+      - --storage.tsdb.retention.time=28d
+      - --storage.tsdb.retention.size=4GB
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+      - source: prometheus_rules
+        target: /etc/prometheus/rules.yml
+    volumes:
+      # platform_data_volume (Ansible) creates this subdirectory, owned by
+      # 65534:65534 (prom/prometheus's own default "nobody" user), before
+      # this service can rely on it -- iac-host-configuration's "Platform
+      # Data Volume Is Mounted at a Fixed Host Path".
+      - /mnt/main-data/prometheus:/prometheus
+    networks:
+      - platform_monitoring
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    configs:
+      - source: alertmanager_config
+        target: /etc/alertmanager/alertmanager.yml
+    networks:
+      - platform_monitoring
+
+  grafana:
+    image: grafana/grafana:12.3.0
+    restart: unless-stopped
+    environment:
+      # Never left at its image default -- see iac-platform-services's
+      # "The dashboard interface has no default credential" scenario.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: http://localhost:3000
+    configs:
+      - source: grafana_datasource
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana_dashboard_provider
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+      - source: grafana_dashboard_host
+        target: /var/lib/grafana/dashboards/host-resources.json
+      - source: grafana_dashboard_containers
+        target: /var/lib/grafana/dashboards/container-health.json
+      - source: grafana_dashboard_apps
+        target: /var/lib/grafana/dashboards/application-errors.json
+    volumes:
+      # platform_data_volume (Ansible) creates this subdirectory, owned by
+      # 472:472 (grafana/grafana's own default user).
+      - /mnt/main-data/grafana:/var/lib/grafana
+    ports:
+      # GRAFANA_BIND_ADDRESS is rendered into .env by platform-deploy.yml
+      # as a literal tailnet IP, never 0.0.0.0 -- see design.md's "Grafana
+      # is reachable only over the existing private tailnet" decision.
+      # Not routed through Traefik at all, and not on platform_edge.
+      - "${GRAFANA_BIND_ADDRESS}:3000:3000"
+    networks:
+      - platform_monitoring
 
 networks:
   platform_edge:
@@ -51,6 +198,307 @@ networks:
     # README.md for how an application repo does that.
     name: platform_edge
 
+  # add-platform-monitoring: deliberately NOT given a fixed, documented
+  # name the way platform_edge is -- these two networks are this stack's
+  # own internal wiring, not a joinable interface for application repos.
+  # See iac-platform-services's "Monitoring Services Are Not Reachable
+  # From Application Containers" requirement.
+  platform_monitoring: {}
+  platform_postgres_metrics:
+    # No route to the outside world: nothing attached to this network
+    # (Postgres, postgres-exporter) needs one -- Postgres reaches the
+    # internet, if it ever needed to, via platform_edge instead.
+    internal: true
+
 volumes:
   traefik_letsencrypt:
   postgres_data:
+
+configs:
+  prometheus_config:
+    content: |
+      global:
+        scrape_interval: 30s
+        evaluation_interval: 30s
+
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ["alertmanager:9093"]
+
+      rule_files:
+        - /etc/prometheus/rules.yml
+
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ["localhost:9090"]
+        - job_name: node-exporter
+          static_configs:
+            - targets: ["node-exporter:9100"]
+        - job_name: cadvisor
+          static_configs:
+            - targets: ["cadvisor:8080"]
+        - job_name: postgres-exporter
+          static_configs:
+            - targets: ["postgres-exporter:9187"]
+        - job_name: traefik
+          static_configs:
+            - targets: ["traefik:8082"]
+
+  # Conservative initial thresholds -- design.md's Open Questions:
+  # tunable later, without a spec change, once real traffic/behavior is
+  # observed. Covers iac-platform-services's "Metrics-Based Alerting
+  # Covers Host and Service Health" requirement's four scenarios plus the
+  # permanent Watchdog (External Dead-Man's-Switch Heartbeat).
+  prometheus_rules:
+    content: |
+      groups:
+        - name: platform-monitoring
+          rules:
+            - alert: ApplicationHighErrorRate
+              expr: >-
+                sum by (router) (rate(traefik_router_requests_total{code=~"5.."}[5m]))
+                /
+                sum by (router) (rate(traefik_router_requests_total[5m]))
+                > 0.1
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High 5xx rate on {{ $$labels.router }}"
+                description: "Router {{ $$labels.router }} has a 5xx rate above 10% for 5 minutes."
+
+            - alert: ContainerRestartingOrOOMKilled
+              expr: >-
+                increase(container_oom_events_total[10m]) > 0
+                or
+                changes(container_start_time_seconds[10m]) > 3
+              for: 0m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Container {{ $$labels.name }} is crash-looping or was OOM-killed"
+                description: "{{ $$labels.name }} has restarted repeatedly or hit an OOM kill in the last 10 minutes."
+
+            - alert: HostDiskPressure
+              expr: >-
+                (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})
+                < 0.1
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Host disk usage above 90% for 10 minutes"
+
+            - alert: HostCPUPressure
+              expr: >-
+                100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+                > 90
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Host CPU usage above 90% for 10 minutes"
+
+            - alert: HostMemoryPressure
+              expr: >-
+                (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))
+                > 0.9
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Host memory usage above 90% for 10 minutes"
+
+            - alert: MetricsTargetDown
+              expr: up == 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Prometheus target {{ $$labels.job }} is down"
+                description: "{{ $$labels.job }} has been unreachable for 5 minutes."
+
+            - alert: Watchdog
+              expr: vector(1)
+              labels:
+                severity: none
+              annotations:
+                summary: "Permanent Watchdog alert, always firing -- routed to the external dead-man's-switch heartbeat."
+
+  alertmanager_config:
+    content: |
+      route:
+        receiver: slack
+        group_by: ["alertname"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        routes:
+          - matchers:
+              - alertname="Watchdog"
+            receiver: deadmansswitch
+            repeat_interval: 5m
+
+      receivers:
+        - name: slack
+          slack_configs:
+            - api_url: ${SLACK_WEBHOOK_URL}
+              channel: "#alerts"
+              send_resolved: true
+              title: "{{ .CommonAnnotations.summary }}"
+              text: "{{ .CommonAnnotations.description }}"
+        - name: deadmansswitch
+          webhook_configs:
+            - url: ${DEADMANSWITCH_URL}
+              send_resolved: false
+
+  grafana_datasource:
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          uid: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+          editable: false
+
+  grafana_dashboard_provider:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: platform-monitoring
+          orgId: 1
+          folder: ""
+          type: file
+          disableDeletion: false
+          updateIntervalSeconds: 30
+          allowUiUpdates: true
+          options:
+            path: /var/lib/grafana/dashboards
+
+  grafana_dashboard_host:
+    content: |
+      {
+        "title": "Host resources",
+        "uid": "host-resources",
+        "schemaVersion": 39,
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "CPU usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "CPU %" }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Memory usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "Memory %" }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Disk usage (root)",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "1 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})", "legendFormat": "Disk %" }
+            ]
+          }
+        ]
+      }
+
+  grafana_dashboard_containers:
+    content: |
+      {
+        "title": "Container health",
+        "uid": "container-health",
+        "schemaVersion": 39,
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Per-container CPU usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[5m]))", "legendFormat": "{{name}}" }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Per-container memory usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (name) (container_memory_usage_bytes{name!=\"\"})", "legendFormat": "{{name}}" }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Container restarts (start-time changes, 1h)",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "changes(container_start_time_seconds{name!=\"\"}[1h])", "legendFormat": "{{name}}" }
+            ]
+          },
+          {
+            "id": 4,
+            "title": "OOM kill events (1h)",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "increase(container_oom_events_total{name!=\"\"}[1h])", "legendFormat": "{{name}}" }
+            ]
+          }
+        ]
+      }
+
+  grafana_dashboard_apps:
+    content: |
+      {
+        "title": "Application HTTP error rates",
+        "uid": "application-errors",
+        "schemaVersion": 39,
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "5xx rate by router",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (router) (rate(traefik_router_requests_total{code=~\"5..\"}[5m]))", "legendFormat": "{{router}}" }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Total request rate by router",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (router) (rate(traefik_router_requests_total[5m]))", "legendFormat": "{{router}}" }
+            ]
+          }
+        ]
+      }

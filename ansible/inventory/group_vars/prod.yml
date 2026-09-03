@@ -62,6 +62,22 @@ ops_user_accounts:
 # below, not plain text -- decrypting it requires the Vault password,
 # which is not stored anywhere in this repository (per this project's
 # Secrets convention).
+# Subdirectories platform_data_volume creates on the mounted main-data
+# volume for platform/docker-compose.yml's Prometheus and Grafana services
+# to bind-mount (add-platform-monitoring). Owner/group match each image's
+# own upstream default user, so no `user:` override is needed in the
+# Compose service definitions: 65534/65534 is prom/prometheus's default
+# ("nobody"); 472/472 is grafana/grafana's own documented default.
+platform_data_volume_subdirs:
+  - path: prometheus
+    owner: "65534"
+    group: "65534"
+    mode: "0755"
+  - path: grafana
+    owner: "472"
+    group: "472"
+    mode: "0755"
+
 ghcr_pull_username: shatynska
 ghcr_pull_token: !vault |
           $ANSIBLE_VAULT;1.1;AES256
