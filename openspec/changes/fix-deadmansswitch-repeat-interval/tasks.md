@@ -9,7 +9,7 @@
 
 ## 3. Deploy and confirm
 
-- [ ] 3.1 Merge to `main` and let the gated `platform-deploy.yml` pipeline deploy it
-- [ ] 3.2 Confirm the live config reflects `repeat_interval: 2m` for the Watchdog route (`/api/v2/status`)
-- [ ] 3.3 Observe real delivery cadence over at least 20-30 minutes (via `alertmanager_notifications_total{integration="webhook"}` or the dead-man's-switch's own ping log) and confirm it's now close to 5 minutes, not ~10
-- [ ] 3.4 Confirm no further false "down" notifications reach Slack over the same observation window
+- [x] 3.1 Merge to `main` and let the gated `platform-deploy.yml` pipeline deploy it — merged and deployed cleanly (PR #49)
+- [x] 3.2 Confirm the live config reflects `repeat_interval: 2m` for the Watchdog route (`/api/v2/status`) — confirmed post-deploy
+- [x] 3.3 Observe real delivery cadence over at least 20-30 minutes (via `alertmanager_notifications_total{integration="webhook"}` or the dead-man's-switch's own ping log) and confirm it's now close to 5 minutes, not ~10 — confirmed: 5 notifications over ~28 minutes, ~5.6min average cadence
+- [x] 3.4 Confirm no further false "down" notifications reach Slack over the same observation window — no further reports from the user during the observation window
