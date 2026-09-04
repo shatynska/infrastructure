@@ -37,6 +37,20 @@
           - "'203.0.113.0/24' in hardening_ufw_status.stdout"
         fail_msg: "UFW does not allow SSH from hardening_ssh_allowed_cidrs"
 
+    - name: Assert SSH (22) is allowed from the tailnet CGNAT range
+      ansible.builtin.assert:
+        that:
+          - "'22' in hardening_ufw_status.stdout"
+          - "'100.64.0.0/10' in hardening_ufw_status.stdout"
+        fail_msg: "UFW does not allow SSH from the tailnet CGNAT range (100.64.0.0/10)"
+
+    - name: Assert Grafana (3000) is allowed from the tailnet CGNAT range
+      ansible.builtin.assert:
+        that:
+          - "'3000' in hardening_ufw_status.stdout"
+          - "'100.64.0.0/10' in hardening_ufw_status.stdout"
+        fail_msg: "UFW does not allow Grafana (3000) from the tailnet CGNAT range (100.64.0.0/10) -- add-grafana-tailnet-ufw-rule"
+
     - name: Assert HTTP/HTTPS are NOT open while hardening_web_allowed_cidrs is unset (today's real state)
       ansible.builtin.assert:
         that:
