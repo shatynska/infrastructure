@@ -35,6 +35,12 @@ services:
       - --metrics.prometheus.addServicesLabels=true
       - --entrypoints.metrics.address=:8082
       - --metrics.prometheus.entryPoint=metrics
+      # add-platform-service-healthchecks: enables Traefik's own /ping
+      # endpoint on its implicit internal entrypoint (default port 8080,
+      # unpublished -- same trust boundary as the metrics entrypoint
+      # above), so `traefik healthcheck --ping` below has something to
+      # call. Disabled by default.
+      - --ping=true
     ports:
       - "80:80"
       - "443:443"
@@ -52,6 +58,18 @@ services:
       # deliberate, accepted exposure of the metrics endpoint to
       # platform_edge too, not an oversight (design.md's Decisions).
       - platform_monitoring
+    healthcheck:
+      # Traefik's own built-in healthcheck subcommand, calling /ping.
+      # docker compose up -d --wait's "reached running" fallback for a
+      # non-healthchecked service does NOT reliably catch a crash-looping
+      # service under restart: unless-stopped (confirmed live --
+      # add-platform-service-healthchecks's design.md) -- this closes that
+      # gap for Traefik specifically.
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   postgres:
     image: postgres:16
@@ -71,6 +89,15 @@ services:
     # No published host port: per-application databases live inside this
     # one shared instance (iac-platform-services), reached only via the
     # platform_edge network, not the host's network interface.
+    healthcheck:
+      # pg_isready is shipped by the official postgres image for exactly
+      # this use. Same rationale as Traefik's healthcheck above --
+      # add-platform-service-healthchecks's design.md.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ---------------------------------------------------------------------
   # add-platform-monitoring: metrics collection, alerting, dashboards.
@@ -93,6 +120,15 @@ services:
       - /:/host/root:ro
     networks:
       - platform_monitoring
+    healthcheck:
+      # No dedicated readiness endpoint exists; successfully serving its
+      # metrics page is the closest real signal that it's doing its job,
+      # not just that the binary launched (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9100/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   cadvisor:
     # gcr.io/cadvisor/cadvisor is shut down (Google Container Registry was
@@ -118,6 +154,13 @@ services:
       - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
     networks:
       - platform_monitoring
+    healthcheck:
+      # cAdvisor's own documented health endpoint (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
@@ -132,6 +175,17 @@ services:
       # over platform_monitoring -- never platform_edge (design.md).
       - platform_postgres_metrics
       - platform_monitoring
+    healthcheck:
+      # Only confirms the exporter's own HTTP server is up -- postgres_exporter
+      # serves /metrics with HTTP 200 regardless of database connectivity, so
+      # this deliberately does NOT catch a bad DATA_SOURCE_NAME; that gap is
+      # covered by MetricsTargetDown instead (add-platform-service-healthchecks's
+      # design.md).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9187/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   prometheus:
     image: prom/prometheus:v3.7.3
@@ -157,6 +211,15 @@ services:
       - /mnt/main-data/prometheus:/prometheus
     networks:
       - platform_monitoring
+    healthcheck:
+      # Prometheus's own documented readiness endpoint -- distinct from
+      # /-/healthy, which reports healthy before the TSDB and rule manager
+      # are actually ready (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   alertmanager:
     image: prom/alertmanager:v0.28.1
@@ -168,6 +231,14 @@ services:
         target: /etc/alertmanager/alertmanager.yml
     networks:
       - platform_monitoring
+    healthcheck:
+      # Alertmanager's own readiness endpoint, not just "is the process up"
+      # (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   grafana:
     image: grafana/grafana:12.3.0
@@ -200,6 +271,16 @@ services:
       - "${GRAFANA_BIND_ADDRESS}:3000:3000"
     networks:
       - platform_monitoring
+    healthcheck:
+      # Grafana's documented health endpoint -- this is exactly the check
+      # that would have caught this change's originating incident, since
+      # Grafana fails to reach a ready state when its data directory isn't
+      # writable (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 networks:
   platform_edge:

@@ -123,3 +123,11 @@ built the original stack, `openspec/changes/integrate-ansible-host-config/`
 for the change that established the boundary above, and
 `openspec/changes/add-platform-monitoring/` for the monitoring/alerting
 stack.
+
+Every service in this stack defines a real Docker `healthcheck:` reflecting
+its own readiness, not just that its process is running -- this is what
+lets `docker compose up -d --wait` (in `app-deploy` on the host) actually
+fail the deploy job when a service comes up broken, instead of reporting
+false success. When adding a new service here, give it a real healthcheck
+too (see `openspec/changes/add-platform-service-healthchecks/` for why this
+matters and what it does and doesn't catch).
