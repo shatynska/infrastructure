@@ -3,7 +3,7 @@
 - [x] 1.1 Add Ansible content (new role or extension of an existing one) that formats (if needed) and mounts the `main-data` volume at a fixed host path (e.g. `/mnt/main-data`), persisted across reboot (`/etc/fstab` or equivalent). Discover the volume's device path on-host via Hetzner's stable `/dev/disk/by-id/scsi-0HC_Volume_*` naming (glob for the one match), rather than hand-copying Terraform's `linux_device` output (`terraform/modules/volume/outputs.tf`) into `ansible/inventory/group_vars/prod.yml` — that output is Hetzner-computed, not an operator-chosen value like the other hand-copied host variables, so there's no natural point at which a human would remember to copy it, and it can't drift out of sync with Terraform state if nothing ever copies it in the first place
 - [x] 1.2 Create the subdirectories monitoring will bind-mount into containers (e.g. `/mnt/main-data/prometheus`, `/mnt/main-data/grafana`) with ownership/permissions the respective containers need
 - [x] 1.3 Verify via `terraform plan`/`ansible-playbook --syntax-check`/lint that this stays within Ansible's existing host-configuration scope (no Compose/service content)
-- [ ] 1.4 Deploy and confirm the mount is present and persists across a reboot
+- [x] 1.4 Deploy and confirm the mount is present and persists across a reboot — confirmed via a real reboot of `main-server`: `/mnt/main-data` remounted automatically via `/etc/fstab`, all containers restarted on their own (`restart: unless-stopped`), all 8 platform services reached `healthy` within about a minute (first real-world proof of `add-platform-service-healthchecks` after a cold boot, not just a container recreate), and the actual data survived (Prometheus serving historical `node_memory_MemAvailable_bytes`, Grafana's 3 dashboards still present)
 
 ## 2. Metrics collection
 
@@ -50,6 +50,6 @@
 ## 6. Documentation and verification
 
 - [x] 6.1 Update `platform/README.md`'s Status section to describe the monitoring/alerting stack now present
-- [ ] 6.2 Confirm the production host's installed `docker compose version` supports inline `configs:`/`content:` (required by tasks 2.9, 3.1, 5.1, 5.3); upgrade `docker-compose-plugin` if it doesn't, since Ansible's `state: present` install won't do so on its own
+- [x] 6.2 Confirm the production host's installed `docker compose version` supports inline `configs:`/`content:` (required by tasks 2.9, 3.1, 5.1, 5.3); upgrade `docker-compose-plugin` if it doesn't, since Ansible's `state: present` install won't do so on its own — confirmed, `v5.5.0`, well past when inline `configs:` support landed; the whole stack has been deploying successfully with inline configs all session
 - [x] 6.3 Run this project's full verification (`terraform fmt`/`validate`, `docker compose config`, `ansible-lint`, `ansible-playbook --syntax-check`, pre-commit) before considering the change complete
 - [x] 6.4 Confirm `openspec validate --strict` passes for this change
