@@ -30,5 +30,5 @@ All of 2.1-2.7 below were verified live in a local scratch Docker environment (t
 
 ## 4. Deploy and confirm
 
-- [ ] 4.1 Merge to `main` and let the gated `platform-deploy.yml` pipeline deploy it
-- [ ] 4.2 Confirm all eight services report `healthy`/`running` as expected in production, matching the local verification in section 2
+- [x] 4.1 Merge to `main` and let the gated `platform-deploy.yml` pipeline deploy it — merged and deployed successfully (PR #52)
+- [x] 4.2 Confirm all eight services report `healthy`/`running` as expected in production, matching the local verification in section 2 — confirmed twice: immediately post-deploy, and again after a full reboot of `main-server` (see `add-platform-monitoring`'s task 1.4) — all 8 (`traefik`, `postgres`, `prometheus`, `alertmanager`, `grafana`, `node-exporter`, `cadvisor`, `postgres-exporter`) reached `healthy` within about a minute of a cold boot, the first real-world proof of this change working outside a local test
