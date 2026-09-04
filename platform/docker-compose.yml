@@ -95,7 +95,14 @@ services:
       - platform_monitoring
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    # gcr.io/cadvisor/cadvisor is shut down (Google Container Registry was
+    # deprecated in March 2024, shut down March 2025); versions from
+    # v0.53.0 onward publish to ghcr.io/google/cadvisor instead. v0.49.1
+    # also predates the fix (google/cadvisor#3643/#3709, in v0.54.0+) for
+    # reading container layer metadata under Docker's containerd-snapshotter
+    # storage backend, which this host uses -- see
+    # fix-cadvisor-containerd-snapshotter's design.md.
+    image: ghcr.io/google/cadvisor:v0.60.5
     restart: unless-stopped
     volumes:
       - /:/rootfs:ro
@@ -105,6 +112,10 @@ services:
       # Read-only, same trust boundary Traefik's Docker provider already
       # relies on (design.md's "cAdvisor for per-container metrics").
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Needed by the containerd-snapshotter fix above: cAdvisor's Docker
+      # factory resolves each container's read-write layer via a
+      # containerd client instead of parsing on-disk layerdb files.
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
     networks:
       - platform_monitoring
 
