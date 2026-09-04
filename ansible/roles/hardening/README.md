@@ -26,6 +26,24 @@ Leaving UFW looser than the cloud firewall doesn't expose anything new
 (the cloud layer still blocks it first), but defeats the point of having
 host-level defense-in-depth at all.
 
+## Tailnet-scoped rules
+
+UFW's default-deny-incoming policy applies to the `tailscale0` interface
+the same as the public one, so any service meant to be reachable only from
+tailnet peers needs its own explicit allow rule here, in addition to
+whatever binds it to the tailnet interface at the application level. Two
+such rules exist today, both restricted to `100.64.0.0/10` (the tailnet's
+CGNAT range — not publicly routable, so only authenticated tailnet peers
+can present it as a source):
+
+- SSH (22) — additive to the public-interface SSH rule above, not a
+  replacement for it. See `connect-platform-deploy-via-tailscale`'s
+  design.md for why this is needed.
+- Grafana (3000) — the platform monitoring stack's dashboard, added by
+  `add-platform-monitoring`. Grafana binds to the host's tailnet-literal
+  IP rather than `0.0.0.0`; this rule is what actually lets tailnet peers
+  reach it despite that binding.
+
 ## Variables
 
 | Variable | Default | Description |
