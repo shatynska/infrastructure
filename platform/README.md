@@ -104,9 +104,12 @@ Register this host with a third-party heartbeat/dead-man's-switch service
 (e.g. Healthchecks.io) and put the ping URL it gives you in the
 `PLATFORM_DEADMANSWITCH_URL` GitHub Actions secret. Configure that service's
 expected check-in interval to comfortably exceed Alertmanager's Watchdog
-`repeat_interval` (5 minutes, per `platform/docker-compose.yml`'s
-`alertmanager_config`), so a single delayed gossip round doesn't produce a
-false page. This is the actual implementation of the mitigation named in
+`repeat_interval` (2 minutes, per `platform/docker-compose.yml`'s
+`alertmanager_config` -- lowered from an original 5 minutes after
+`fix-deadmansswitch-repeat-interval` found that value, equal to the
+inherited `group_interval`, caused real delivery to silently halve to
+every ~10 minutes instead), so a single delayed gossip round doesn't
+produce a false page. This is the actual implementation of the mitigation named in
 "No dedicated monitoring server" above — if the host, Alertmanager, or the
 whole platform stack goes down, this is what notices.
 
