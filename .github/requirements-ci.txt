@@ -1,0 +1,23 @@
+# Pinned pip dependencies for continuous integration itself, as distinct from
+# ansible/requirements-test.txt, which pins the Ansible test framework.
+#
+# Both pins are exact, per AGENTS.md: "any external role or collection used for
+# any purpose is pinned to an exact version, never a floating range". Two
+# installs at different times must not resolve different versions and silently
+# change what a check actually checks.
+#
+# pre-commit: pr-validation.yml runs the ansible-lint and syntax-check hooks
+# through pre-commit rather than re-expressing their invocations, so the hook
+# pins in .pre-commit-config.yaml stay the single source of truth. Nothing in
+# this repository pinned pre-commit before this file existed;
+# .github/workflows/pre-commit-autoupdate.yml still installs it with a bare
+# `pip install pre-commit`. Bringing that onto this file is a one-line fix in a
+# workflow this change does not otherwise touch, and it is recorded in
+# docs/change-queue.md rather than folded in here.
+#
+# PyYAML: the CI-configuration test suite (.github/tests/) parses workflow YAML
+# with it. It previously reached this repository only transitively, via
+# ansible-core -- which is not a pin, merely a version that happened to be
+# resolved. 6.0.1 is the version those tests were verified against.
+pre-commit==4.6.2
+PyYAML==6.0.1

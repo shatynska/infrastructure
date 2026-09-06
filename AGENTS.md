@@ -145,7 +145,16 @@ These are specific to this repository, not part of the generated workflow block 
 
 ### Testing
 
-There is no traditional unit-test layer for the Terraform code yet. Verification is static analysis (`terraform fmt`, `terraform validate`, `tflint`, Trivy, `gitleaks`) plus mandatory human review of an exact `terraform plan`. Each module under `terraform/modules/` carries its own module-level tests as `terraform/modules/<name>/tests/*.tftest.hcl`, run via `terraform test` — that is this project's test command and test-path glob for the independent-test-authoring step in the workflow above.
+There is no traditional unit-test layer for the Terraform code yet. Verification is static analysis (`terraform fmt`, `terraform validate`, `tflint`, Trivy, `gitleaks`) plus mandatory human review of an exact `terraform plan`.
+
+This project has **two** test commands, and a change may owe tests under either. The independent-test-authoring step in the workflow above must be dispatched with the pair that fits what the change touches — a dispatch carrying only the Terraform glob cannot place a test for anything else, and a test author who cannot place a file will report the gap rather than inventing a destination:
+
+| Subject | Test command | Test-path glob |
+|---|---|---|
+| Terraform modules | `terraform test`, run from each module directory | `terraform/modules/<name>/tests/*.tftest.hcl` |
+| CI configuration — workflows, `dependabot.yml`, `.pre-commit-config.yaml` | `python3 -m unittest discover --start-directory .github/tests`, run from the repository root | `.github/tests/*.py` |
+
+The second exists because `terraform test` can only exercise Terraform modules, so the guarantees this pipeline makes about its own configuration were unverifiable by anything the project had. Its dependencies are pinned in `.github/requirements-ci.txt`.
 
 ### Development tooling
 

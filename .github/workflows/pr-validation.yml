@@ -37,6 +37,29 @@ jobs:
               - 'terraform/modules/**'
             platform:
               - 'platform/**'
+            ansible:
+              - 'ansible/**'
+
+      # Unconditional, and deliberately so. This suite asserts the properties
+      # this pipeline's own requirements state -- which checks are gated on
+      # which paths, which versions are pinned where, which jobs declare an
+      # `environment:`, which directories Dependabot covers. A pull request
+      # touching nothing under .github/ can still violate them: adding a module
+      # under terraform/modules/ breaks Dependabot coverage without editing a
+      # workflow. It needs no network, credential, container runtime or
+      # Terraform binary. See the Continuous-Integration Configuration Is
+      # Itself Verified requirement.
+      - name: Setup Python (CI configuration tests)
+        id: setup_python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install CI test dependencies
+        run: pip install -r .github/requirements-ci.txt
+
+      - name: CI configuration tests
+        run: python3 -m unittest discover --start-directory .github/tests --verbose
 
       # Validates platform/docker-compose.yml renders and parses
       # correctly. No SSH credential, no `environment:` declared anywhere
@@ -50,6 +73,50 @@ jobs:
           cp platform/.env.example platform/.env
           docker compose -f platform/docker-compose.yml config
           rm platform/.env
+
+      # Unconditional. A secret scanner whose entire value is being
+      # unconditional cannot be gated on a path filter -- a credential
+      # committed under ansible/, platform/ or docs/ is exactly as exposed as
+      # one under terraform/. The version is read out of
+      # .pre-commit-config.yaml at run time rather than hardcoded, so the local
+      # hook and this scan cannot drift apart; a comment asking people to keep
+      # two numbers in sync is what produced the drift this replaces.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          version=$(awk '/gitleaks\/gitleaks/{found=1} found && /rev:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' .pre-commit-config.yaml)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the pinned gitleaks revision from .pre-commit-config.yaml. Refusing to install an unverified version."
+            exit 1
+          fi
+          echo "Installing gitleaks ${version}, the revision .pre-commit-config.yaml pins."
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+          # Extracted outside the workspace: the next step scans the working
+          # tree, and a binary sitting at the repository root would be scanned
+          # by itself -- ~30 MB whose embedded rule config is dense in exactly
+          # the keywords the generic-api-key rule keys on. Keeping it out also
+          # makes this invocation equivalent to the one verified locally,
+          # where no such file exists.
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
+          rm gitleaks.tar.gz
+
+      # Invokes the gitleaks CLI binary directly, not
+      # gitleaks/gitleaks-action@v2 — that action requires a paid
+      # GITLEAKS_LICENSE for org-owned repos and runs on Node 20, which
+      # GitHub-hosted runners drop on 2026-09-16. See design.md
+      # Decision 6.
+      # `dir` scans the working tree; `detect` (removed from the documented CLI
+      # by 8.30.0, surviving only as an alias for `git`) scans history, and on
+      # actions/checkout's default shallow clone a history scan sees one commit
+      # and reports success on everything else. Verified: run where git fails,
+      # `detect` logs the failure and still concludes "no leaks found" -- the
+      # same "could not tell, therefore fine" shape as the destroy gate. What
+      # matters on a pull request is whether a secret is in the tree being
+      # merged, not when it entered.
+      - name: gitleaks
+        run: |
+          "$RUNNER_TEMP/gitleaks" dir . --redact --exit-code 1
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth
       # (its "dynamic credentials" feature authenticates providers during
@@ -131,23 +198,65 @@ jobs:
           exit-code: "1"
           severity: "CRITICAL,HIGH"
 
-      - name: Install gitleaks
-        if: steps.changes.outputs.terraform == 'true'
+
+      # Ansible's blocking tier. These run through `pre-commit` rather than
+      # being re-expressed here: both hooks are already pinned in
+      # .pre-commit-config.yaml with non-obvious arguments (ansible-lint needs
+      # an explicit `ansible/` target or it scans the whole repo;
+      # --syntax-check must run with cwd ansible/ or ansible.cfg's roles_path
+      # never resolves), and duplicating them here would duplicate the pins
+      # too. gitleaks is deliberately NOT run this way: its upstream hook uses
+      # `--staged`, and nothing is staged in a CI checkout, so it would scan
+      # zero changes and pass vacuously.
+      #
+      # requirements-test.txt supplies ansible-core (pinned 2.21.3), which is
+      # what provides ansible-galaxy and ansible-playbook. It also carries
+      # Molecule, unused here -- installing a subset would mean either a second
+      # copy of the ansible-core pin or extracting one line out of a pinned
+      # manifest, both of which reintroduce the drift the gitleaks step above
+      # exists to close.
+      - name: Install Ansible toolchain
+        if: steps.changes.outputs.ansible == 'true'
+        run: pip install -r ansible/requirements-test.txt
+
+      # Roles are installed into ansible/roles/ explicitly, NOT to the default
+      # ~/.ansible/roles. `ansible/ansible.cfg` sets `roles_path = roles`,
+      # which REPLACES the default search list rather than extending it, so a
+      # role installed to the default location is invisible to anything
+      # running with cwd `ansible/` -- which the syntax-check hook does, and
+      # must, or ansible.cfg is not found at all. Installing from the
+      # repository root without `-p` puts the role somewhere nothing will look
+      # and the syntax check fails on `- role: geerlingguy.docker`.
+      #
+      # Split into role and collection commands because `-p` applies only to
+      # roles: `ansible-galaxy install -r ... -p ...` silently ignores the
+      # collections in the same manifest, with a warning that is easy to miss
+      # in a CI log.
+      - name: Install Galaxy content
+        if: steps.changes.outputs.ansible == 'true'
         run: |
           set -euo pipefail
-          curl -sSfL -o gitleaks.tar.gz \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz
-          tar -xzf gitleaks.tar.gz gitleaks
-          rm gitleaks.tar.gz
+          ansible-galaxy collection install -r ansible/requirements.yml
+          ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
 
-      # Invokes the gitleaks CLI binary directly, not
-      # gitleaks/gitleaks-action@v2 — that action requires a paid
-      # GITLEAKS_LICENSE for org-owned repos and runs on Node 20, which
-      # GitHub-hosted runners drop on 2026-09-16. See design.md
-      # Decision 6.
-      - name: gitleaks
-        if: steps.changes.outputs.terraform == 'true'
-        run: ./gitleaks detect --source . --redact --exit-code 1
+      - name: Cache pre-commit environments
+        if: steps.changes.outputs.ansible == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          # Keyed on the runner image and Python version as well as the config:
+          # a pre-commit hook environment is built against a specific
+          # interpreter, so a runner-image bump would otherwise restore a cache
+          # that no longer works.
+          key: pre-commit-${{ runner.os }}-py${{ steps.setup_python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: ansible-lint
+        if: steps.changes.outputs.ansible == 'true'
+        run: pre-commit run ansible-lint --all-files --show-diff-on-failure
+
+      - name: ansible-playbook --syntax-check
+        if: steps.changes.outputs.ansible == 'true'
+        run: pre-commit run ansible-playbook-syntax-check --all-files --show-diff-on-failure
 
       - name: terraform plan
         if: steps.changes.outputs.terraform == 'true'

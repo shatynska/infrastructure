@@ -3,9 +3,22 @@ name: Terraform Apply (prod)
 # Runs on merge to main. Split into two jobs in one run so the
 # approving reviewer sees the exact diff before approving, rather than
 # approving a not-yet-computed run. See design.md Decision 8.
+# Path-filtered so a merge that cannot change infrastructure does not raise a
+# `production` Environment approval request. An approval prompt that appears on
+# merges with nothing to approve trains the approver to grant it without
+# reading, which defeats the gate. `drift.yml` still detects out-of-band
+# divergence nightly.
+#
+# This filter is permissible ONLY because this workflow is not a required
+# status check. The opposite rule governs `pr-validation.yml`, which IS one: a
+# workflow-level `paths:` filter there would leave non-matching pull requests
+# permanently pending and unmergeable. See the Required Status Checks Report on
+# Every Pull Request requirement, and do not copy this block into it.
 on:
   push:
     branches: [main]
+    paths:
+      - "terraform/**"
 
 # State locking alone doesn't prevent runs applying out of order; queue
 # them instead of allowing overlap or cancellation.
@@ -91,14 +104,61 @@ jobs:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
-          terraform show -json tfplan >plan.json
-          has_destructive=$(jq -e '[.resource_changes[]? | select(.change.actions | index("delete") != null)] | length > 0' plan.json || true)
 
-          if [ "$has_destructive" != "true" ]; then
-            echo "has_destructive_changes=false" >>"$GITHUB_OUTPUT"
-            echo "No delete/replace actions in the plan."
-            exit 0
+          # This gate fails CLOSED. It proceeds only on a positive
+          # determination that the plan holds no destructive action; every
+          # route to "I could not tell" ends in a failed workflow carrying a
+          # message that names plan inspection as the cause, distinct from the
+          # message a plan inspected and found clean produces. Treating "could
+          # not inspect" as "safe" removes the gate exactly when something is
+          # already wrong. Three routes have to be closed, in this order.
+
+          # Route 1: the plan cannot be rendered. Not tolerated -- `set -e`
+          # aborts the step.
+          terraform show -json tfplan >plan.json
+
+          # Route 2: the document is well-formed JSON but is not a plan -- an
+          # empty object, a truncated-then-valid artifact, the wrong file.
+          # `.resource_changes[]?` below suppresses the missing-key error, so
+          # such a document would evaluate to a legitimate `false` and be
+          # reported as inspected-and-clean. The `?` cannot be dropped:
+          # `terraform show -json` genuinely omits `resource_changes` for a
+          # no-op plan. Identity is asserted separately instead.
+          if ! jq -e . plan.json >/dev/null 2>&1; then
+            echo "::error::Destroy-policy gate: could not inspect the plan — plan.json is not valid JSON. Refusing to conclude the plan is clean."
+            exit 1
           fi
+
+          if ! jq -e 'has("format_version")' plan.json >/dev/null 2>&1; then
+            echo "::error::Destroy-policy gate: could not inspect the plan — plan.json parses but carries no 'format_version', so it is not a Terraform plan. Refusing to conclude the plan is clean."
+            exit 1
+          fi
+
+          # Route 3: jq itself fails. Its status is captured explicitly rather
+          # than left to `set -e`: under `bash -e` (the default shell for a
+          # `run:` step) a failing command substitution in an assignment aborts
+          # at the assignment, so the branch below would never run and the
+          # message above would never print. `-e` is deliberately NOT used
+          # here -- it exits non-zero on a `false` result, which is the good
+          # outcome, conflating "the answer is no" with "the inspection failed".
+          if ! has_destructive=$(jq -r '[.resource_changes[]? | select(.change.actions | index("delete") != null)] | length > 0' plan.json 2>&1); then
+            echo "::error::Destroy-policy gate: could not inspect the plan — jq failed: ${has_destructive}. Refusing to conclude the plan is clean."
+            exit 1
+          fi
+
+          case "$has_destructive" in
+            false)
+              echo "has_destructive_changes=false" >>"$GITHUB_OUTPUT"
+              echo "No delete/replace actions in the plan."
+              exit 0
+              ;;
+            true)
+              ;;
+            *)
+              echo "::error::Destroy-policy gate: could not inspect the plan — expected 'true' or 'false', got '${has_destructive}'. Refusing to conclude the plan is clean."
+              exit 1
+              ;;
+          esac
 
           echo "has_destructive_changes=true" >>"$GITHUB_OUTPUT"
           echo "::warning::Plan contains a delete or replace action."

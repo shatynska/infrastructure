@@ -14,8 +14,11 @@ of queued — they have branches and handoffs, not entries here:
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift
 - `refresh-readme-accuracy` — README statements that are no longer true
 
-The entries below are queued because each one is **blocked on something that
-must happen first**. They are listed in dependency order.
+Most entries below are queued because they are **blocked on something that must
+happen first**, and they are listed in dependency order. Where an entry is not
+blocked, it says instead why it was recorded rather than folded into the change
+that found it — usually because it belongs to a different concern than the one
+that change was closing.
 
 ---
 
@@ -83,7 +86,123 @@ Only the first kind survives archiving. Concrete instances of the other two:
 The tailscale role is 48 comment lines against 90 non-blank; this is a style
 question with a real maintenance cost, not a cosmetic one.
 
-## 4. size-platform-container-resource-limits
+## 4. promote-molecule-to-a-required-check
+
+**Blocked on entry 5 landing first, and on evidence.** `close-ci-verification-gaps`
+put the Molecule suite in CI as `ansible-verify.yml`, advisory: it is not a
+required status check, because whether its privileged-systemd scenarios are
+reproducible on a hosted runner had never been observed.
+
+Promotion needs three things, and the middle one is the trap:
+
+1. **Consecutive green runs** on pull requests touching `ansible/`. How many is
+   a judgement call; two or three across different roles is meaningful, one is
+   not.
+2. **Removing the workflow-level `paths:` filter first**, and moving the gating
+   inside an always-running job — the shape `pr-validation.yml` already uses. A
+   `paths:`-filtered required check never reports on a non-matching pull
+   request, leaving it permanently pending and unmergeable under branch
+   protection. This is exactly what the *Required Status Checks Report on Every
+   Pull Request* requirement exists to forbid, and promotion is **not** just a
+   branch-protection toggle. `ansible-verify.yml`'s own top comment says so.
+3. **Entry 5 landing first.** While the platform image floats on `:latest`,
+   "consecutive green runs" is evidence about a moving target, and a red run
+   may be attributable to an upstream image rather than to the runner.
+
+**First observed baseline** — to be filled in from the post-merge
+`workflow_dispatch` run on `main` (that trigger is only exposed once the file is
+on the default branch). Record per-role outcome and duration here, not in the
+change's own artifacts, which are archived:
+
+First run was on PR #57 itself, not a post-merge dispatch — that change
+fixed three lint violations under `ansible/`, so its own pull request matched
+the `ansible/**` filter after all:
+
+| Role | Outcome | Duration |
+|---|---|---|
+| `deploy_user` (3 scenarios) | pass | 6m33s |
+| `ops_user` (2 scenarios) | pass | 4m47s |
+| `hardening` | pass | 3m03s |
+| `docker` | pass | 2m55s |
+| `platform_data_volume` | **fail** — see entry 8 | 2m12s |
+
+So the suite **does** run on a hosted runner: the privileged-systemd
+scenarios, UFW and fail2ban all converge and verify. That was the open
+question the advisory tier existed to answer, and the answer is yes. Longest
+role is under seven minutes, and the roles run in parallel.
+
+The one failure is a defect in a scenario's own assertion, not a runner
+problem. Promotion still waits on entry 8 being resolved and on entry 5.
+
+## 8. fix-platform-data-volume-verify-attribute-access
+
+**Found by the first CI run of the Molecule suite** (PR #57), and the reason
+that tier was made advisory rather than blocking.
+
+`ansible/roles/platform_data_volume/molecule/default/verify.yml:189` asserts:
+
+```yaml
+- item.stat.pw_name == item.item.owner or item.stat.uid | string == item.item.owner
+```
+
+and fails with `object of type 'dict' has no attribute 'pw_name'`. The `or`
+fallback never runs: Jinja evaluates the left operand first, and on a `stat`
+result where the uid does not resolve to a name, `pw_name` is simply absent —
+so the expression raises instead of falling through to the uid comparison the
+author clearly intended as the fallback. The subdirectories in question are
+owned by uid `65534`, which need not resolve inside the container.
+
+The fix is to make the access safe (`item.stat.pw_name is defined and …`, or
+compare on uid/gid alone), not to relax what is asserted.
+
+Worth noting *why* this was never seen: the same assertion presumably passed
+on a developer machine, so either the uid resolves there or it did under an
+earlier `ansible-core` whose undefined-attribute behaviour was laxer. Entry 5
+is relevant either way — the platform image floats on `:latest`, so "it passed
+locally" and "it passes in CI" were never statements about the same image.
+
+## 5. pin-the-molecule-platform-image
+
+**Blocks entry 4.** Every scenario under `ansible/roles/*/molecule/*/molecule.yml`
+pins its platform as `geerlingguy/docker-ubuntu2204-ansible:latest` — a floating
+tag, against AGENTS.md's "any external role or collection used for any purpose
+is pinned to an exact version". Affects all eight scenarios across
+`deploy_user`, `docker`, `hardening`, `ops_user` and `platform_data_volume`.
+
+Noticed while implementing `close-ci-verification-gaps` and deliberately not
+folded in: it changes what the test suite runs against, which is a different
+concern from getting the suite to run at all.
+
+## 6. two-deferred-ci-items
+
+Both noticed during `close-ci-verification-gaps`, neither a verification gap:
+
+- **`.github/workflows/pre-commit-autoupdate.yml` installs `pre-commit`
+  unpinned** (`pip install pre-commit`). That change created
+  `.github/requirements-ci.txt`, which pins it; bringing this workflow onto the
+  same file is a one-line fix in a workflow that change did not otherwise
+  touch.
+- **The destroy-policy gate's inspection logic is inline workflow shell.**
+  Moving it into a version-controlled script with executable fixtures would
+  make the highest-consequence logic in this repository reviewable and testable
+  as code — `design.md` Decision 5 of that change names this as considered and
+  deferred on merit-vs-scope grounds, not as rejected. Four fixtures already
+  exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are
+  described in that change's `tasks.md` 1.1; the structural tests in
+  `.github/tests/test_ci_configuration.py` currently assert the routes are
+  closed, not that each is reached.
+- **`actionlint` is named as a verification means but nothing installs it.**
+  Three tasks in `close-ci-verification-gaps` cite it, and it was run manually
+  from a scratch install. Adding it to `.pre-commit-config.yaml` would close
+  that permanently — but it exits non-zero on two pre-existing `SC2016:info`
+  findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the
+  job-summary step — both single-quoted literal markdown in an `echo`, and both
+  intentional). So landing the hook means dispositioning those two first,
+  by fixing or ignoring them. That is the same trap this change refused to lay
+  for the next person when `ansible-lint` failed on pre-existing violations,
+  and it wants its own decision rather than being folded in.
+
+## 7. size-platform-container-resource-limits
 
 **Blocked on data, not on another change.** No service in
 `platform/docker-compose.yml` declares a memory or CPU limit, on a `cx33`,

@@ -55,7 +55,7 @@
     # Scenario: A single SSH session delivers content and triggers deploy
     # ============================================================
     - name: Pipe the valid archive into deploy-receive commerce-ops, as deploy, non-interactively
-      ansible.builtin.shell: cat /tmp/deploy_user_valid_archive.tar.gz | /usr/local/bin/deploy-receive commerce-ops
+      ansible.builtin.shell: set -o pipefail; cat /tmp/deploy_user_valid_archive.tar.gz | /usr/local/bin/deploy-receive commerce-ops
       args:
         executable: /bin/bash
       become: true
@@ -118,7 +118,7 @@
     # Scenario: Archive members outside the expected set are ignored
     # ============================================================
     - name: Pipe the decoy-bearing archive into deploy-receive platform, as deploy, non-interactively
-      ansible.builtin.shell: cat /tmp/deploy_user_decoy_archive.tar.gz | /usr/local/bin/deploy-receive platform
+      ansible.builtin.shell: set -o pipefail; cat /tmp/deploy_user_decoy_archive.tar.gz | /usr/local/bin/deploy-receive platform
       args:
         executable: /bin/bash
       become: true
@@ -376,7 +376,10 @@
         msg: >-
           {{ 'Running the GHCR credential-store check against a real supplied token.'
           if (lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true)) != ''
-          else 'MOLECULE_GHCR_PULL_TOKEN not set -- skipping the GHCR credential-store check (see test-manifest.md); the actual pull-success scenario is verified operationally per tasks.md 5.5, not by this Molecule scenario.' }}
+          else 'MOLECULE_GHCR_PULL_TOKEN not set -- skipping the GHCR
+          credential-store check (see test-manifest.md); the actual
+          pull-success scenario is verified operationally per tasks.md 5.5,
+          not by this Molecule scenario.' }}
 
     - name: Read root's Docker credential store (only when a real token was supplied)
       ansible.builtin.slurp:
