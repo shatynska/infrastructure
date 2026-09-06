@@ -60,7 +60,43 @@ the groups. The scenario declares two subdirectory fixtures; it is the
 
 ## Decisions
 
-### 1. Pin as `repo:tag@sha256:…`, not `repo@sha256:…`
+### 1. Pin as `repo@sha256:…`, not `repo:tag@sha256:…` — reversed after review
+
+**This decision was made the other way round and reversed on evidence.** What
+follows records both, because the reasoning that produced the wrong answer is
+the reasoning a future reader will be tempted by again.
+
+The original argument was legibility: a bare 64-hex string tells a reader
+nothing about which image it is, the tag alongside it costs nothing because
+Docker ignores it when a digest is present, and `docker pull` accepts the
+combined form — verified. All true, and all beside the point, because Molecule
+does not reach the daemon the way `docker pull` does.
+
+`community.docker`'s `parse_repository_tag` splits on the last `@` **first**,
+so `repo:latest@sha256:…` yields the name `repo:latest` with the tag still
+attached, and `_image_lookup` then searches for
+`geerlingguy/docker-ubuntu2204-ansible:latest@sha256:…`. The image's actual
+`RepoDigests` entry carries no tag, so nothing matches, and the driver pulls an
+image that is already present — on every `create`, for every scenario. The bare
+form reproduces the `RepoDigests` entry exactly and creates the container with
+no registry call.
+
+Two things that cost, both of which the change would otherwise have shipped
+while claiming the opposite:
+
+- `proposal.md`'s "the suite still runs offline against local containers" would
+  have been false of `create`.
+- The `DOCKER_CONFIG` workaround in `README.md`, documented as a fallback for
+  oddly configured machines, would have become mandatory on every run for
+  anyone with a `credsStore` — which is Docker Desktop's default.
+
+So the tag lives in the comment beside the pin instead, where it informs the
+reader without being parsed by anything. This is design decision 1's own
+pre-approved fallback, taken for a reason it did not anticipate: it expected the
+combined form might be *rejected*, and instead it is silently accepted and
+quietly worse.
+
+### 1-original. The reasoning as it stood before that reversal
 
 The digest is what Docker resolves; the tag alongside it is for the human
 reading the file, who would otherwise see a bare 64-hex string with no
@@ -95,11 +131,12 @@ adds. That is a formatting fallback, not a different decision: the digest, the
 manifest-list choice and everything the delta requires are unchanged either
 way, so taking it needs no return to this plan.
 
-*Outcome:* the fallback was **not** taken. `create` did fail, but on the tag
-construction described in decision 2a rather than on the reference form, and
-the bare form would have failed identically. The combined form stands, and the
-derived tests accept either — so this remains a live fallback for anyone who
-later needs it, not a road already travelled.
+*Outcome:* the fallback **was** taken, though not on the trigger written above.
+`create` did fail on the combined form, but on the tag construction described
+in decision 2a — a failure the bare form shares and `pre_build_image: true`
+fixes for both. What actually decided it is the lookup mismatch in decision 1's
+opening: the combined form works, and pulls every time. The derived tests
+accept either form, so no test changed.
 
 ### 2. Pin the manifest-list digest, not the amd64 digest
 
@@ -275,6 +312,15 @@ The fix is:
 and the same shape for `gr_name`/`gid`. `default('')` makes the left operand
 defined in every case, so evaluation reaches the uid comparison that was always
 the branch capable of passing.
+
+*Revised after code review:* the guard is `item.stat.pw_name is defined and …`,
+not `(item.stat.pw_name | default('')) == …` as originally written. Both stop
+the raise, but `default('')` makes an absent `pw_name` compare equal to a
+declared `owner: ""`, so a subdirectory declaring an empty owner would pass the
+assertion having verified nothing — a case the unguarded expression at least
+failed loudly on. The role does not constrain `owner` to be non-empty, so this
+was reachable. The two forms are otherwise identical, including the property
+below of not depending on operand order.
 
 *Alternative considered:* dropping the name branch entirely and comparing on
 uid/gid alone. It would be simpler, and every declared owner in this repository

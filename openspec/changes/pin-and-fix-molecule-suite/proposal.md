@@ -31,8 +31,11 @@ runs" to mean anything.
 publishes exactly one tag — `latest`, and nothing else (Docker Hub tag count
 is 1) — so there is no version tag to pin to and a digest is the only exact
 form available. All eight scenarios move to
-`geerlingguy/docker-ubuntu2204-ansible:latest@sha256:0172e3b5…`, the
-manifest-list digest. That makes the *reference* identical and immutable on
+`geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b5…`, the manifest-list
+digest, written without the tag — see `design.md` decision 1, which was made
+the other way and reversed on evidence: keeping `:latest` alongside the digest
+makes `community.docker` build a lookup that cannot match the local image, so
+every `create` pulls and every machine with a `credsStore` fails. That makes the *reference* identical and immutable on
 every machine; each architecture still resolves to its own image beneath the
 list, which is what lets an amd64 runner and an arm64 developer machine both
 run the suite at all. What the pin removes is the mutability, not the

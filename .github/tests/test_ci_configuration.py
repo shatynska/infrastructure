@@ -1003,11 +1003,21 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
         """SPECIFIED -- same clause, read in the other direction: the obligation
         is over EVERY scenario this repository authors, so no role of its own may
         drop out of discovery. `roles_with_molecule_scenarios()` computes the
-        role set from directory names independently of the glob above."""
+        role set from directory names independently of the glob above.
+
+        `roles_with_molecule_scenarios()` rests on `role_names()`, which excludes
+        a directory whose name contains a `.` -- the older, weaker of this file's
+        two notions of "installed content". Subtracting the manifest-derived set
+        as well keeps this assertion on the same rule the pinning checks use, so
+        a Galaxy entry resolving to a dotless directory name (`ansible-role-docker`,
+        say) cannot make it fail. Neither `role_names()` nor any test resting on
+        it is touched."""
         discovered_roles = {
             path.relative_to(ROOT).parts[2] for path in authored_scenario_files()
         }
-        missing = sorted(roles_with_molecule_scenarios() - discovered_roles)
+        missing = sorted(
+            roles_with_molecule_scenarios() - galaxy_role_directories() - discovered_roles
+        )
         self.assertEqual(
             [],
             missing,
