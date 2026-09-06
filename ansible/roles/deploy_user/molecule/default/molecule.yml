@@ -34,7 +34,11 @@ driver:
 
 platforms:
   - name: deploy_user-role-instance
-    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    # Digest-pinned. See ansible/roles/docker/molecule/default/molecule.yml for
+    # why a digest and not a version tag, and for how to refresh it -- every
+    # scenario must carry the same one.
+    image: geerlingguy/docker-ubuntu2204-ansible:latest@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
     command: /lib/systemd/systemd
     privileged: true
     cgroupns_mode: host

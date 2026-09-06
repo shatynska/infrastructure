@@ -119,6 +119,24 @@ addition (see Status below), not a rejected idea.
    `MOLECULE_GHCR_PULL_TOKEN` and `MOLECULE_GHCR_PULL_USERNAME` **together**
    additionally exercises the real registry-login path.
 
+   **The platform image is pinned by digest, and refreshing it is manual.**
+   Every scenario runs
+   `geerlingguy/docker-ubuntu2204-ansible:latest@sha256:…` with
+   `pre_build_image: true`. That image publishes no versioned tag, so a digest
+   is the only exact pin available, and nothing updates it automatically —
+   Dependabot does not read `molecule.yml`. To refresh:
+
+   ```sh
+   curl -s https://hub.docker.com/v2/repositories/geerlingguy/docker-ubuntu2204-ansible/tags/latest \
+     | jq -r .digest
+   ```
+
+   Put that digest in **every** scenario under `ansible/roles/*/molecule/*/`;
+   they must all agree, and `.github/tests/test_ci_configuration.py` fails the
+   build if they do not. The rationale, including why `pre_build_image` is
+   load-bearing rather than a speed-up, is in
+   `ansible/roles/docker/molecule/default/molecule.yml`.
+
    **If `molecule create` fails on your machine before any test runs**, check
    `~/.docker/config.json`. A `credsStore` or `credHelpers` entry makes
    Molecule's Docker driver shell out to a credential helper that may not

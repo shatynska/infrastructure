@@ -70,9 +70,16 @@ the tag when a digest is present.
 Verified rather than assumed: `docker pull
 geerlingguy/docker-ubuntu2204-ansible:latest@sha256:0172e3b5…` succeeds and
 reports `Downloaded newer image for
-geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b5…`. Molecule's Docker
-driver passes the string through to the daemon, so what works for `docker pull`
-is what the driver gets.
+geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b5…`.
+
+**What that did not establish, and implementation disproved.** This decision
+originally went on to say that Molecule's driver passes the string through to
+the daemon, so what works for `docker pull` is what the driver gets. It does
+not: the driver reuses `image:` as a tag it constructs, and the combined form
+fails at `create` for that reason — not because the reference is malformed.
+Decision 2a records what actually happens and what it costs. The combined form
+is still the right one to write; it just needed `pre_build_image: true` beside
+it, which is a fact about the driver rather than about the reference.
 
 *Alternative considered:* the bare `repo@sha256:…` form. Unambiguous, but
 strictly less legible for no gain — the tag carries no authority in the
@@ -87,6 +94,12 @@ and unmistakable, every scenario failing at `create` — the pin becomes the bar
 adds. That is a formatting fallback, not a different decision: the digest, the
 manifest-list choice and everything the delta requires are unchanged either
 way, so taking it needs no return to this plan.
+
+*Outcome:* the fallback was **not** taken. `create` did fail, but on the tag
+construction described in decision 2a rather than on the reference form, and
+the bare form would have failed identically. The combined form stands, and the
+derived tests accept either — so this remains a live fallback for anyone who
+later needs it, not a road already travelled.
 
 ### 2. Pin the manifest-list digest, not the amd64 digest
 
@@ -128,6 +141,47 @@ alternative, so it cannot live outside the specification. It is scoped to
 *same repository, same digest* rather than *one digest everywhere*, so a future
 scenario that legitimately needs a different base image (a Debian-based role,
 say) is not blocked by a rule written for a drift problem it does not have.
+
+### 2a. The pin forces `pre_build_image: true`, discovered during implementation
+
+Planned as a one-line edit per scenario; it is not. The Docker driver reuses
+`image:` as the *tag* of an image it builds locally —
+`molecule_local/{{ item.image }}`, at `create.yml:109` and `:146` of
+`molecule_plugins/docker/playbooks/` — and a digest reference cannot be a tag.
+With the digest in `image:` and the build step active, `create` fails trying to
+pull `molecule_local/geerlingguy/docker-ubuntu2204-ansible:latest:sha256:0172…`,
+having split the reference on its last colon. Observed, not predicted.
+
+`pre_build_image: true` skips the build and runs the named image directly
+(`create.yml:58`, `:71`, `:86`, `:99`), which is what makes the digest usable.
+No scenario in this repository set it before; none carries a custom
+`Dockerfile.j2` either, so all eight were running the driver's default template.
+
+That template is the part worth knowing about. It is `FROM {{ item.image }}`
+followed by `apt-get update && apt-get install -y python3 sudo bash
+ca-certificates iproute2 python3-apt aptitude rsync`, executed at container
+build time on every `molecule create`. **So the suite was never reproducible,
+and pinning the base image alone would not have made it so** — each run
+installed whatever those packages resolved to that day. Adopting
+`pre_build_image: true` removes that layer, which means this change pins the
+whole container rather than only its base, and the suite stops reaching the
+Ubuntu archives during `create` at all. That is a larger gain than the change
+set out to make, and it arrives as a consequence rather than as scope added.
+
+What it costs: the container no longer gets `aptitude` and `rsync`, the only two
+of that list absent from the pinned image (verified with `dpkg-query` against
+the digest; the other six are present). Nothing in `ansible/roles/`, in the
+pinned `geerlingguy.docker` role, or in `ansible/playbooks/` uses
+`ansible.posix.synchronize`, `aptitude`, or an apt `upgrade:` — the three things
+that would need them. Verified by search before adopting, not assumed.
+
+*Alternative considered:* keeping the build layer and pinning the base in a
+per-scenario `Dockerfile.j2` whose `FROM` carries the digest, leaving `image:`
+as the tag-shaped string the driver wants. It preserves today's behaviour
+exactly. Rejected: the pin would then live outside `molecule.yml`, where the
+delta requires the platform image to be declared by digest and where the derived
+test reads it — so it would need a spec change to permit, and it would keep the
+unpinned `apt-get` layer this project's conventions object to anyway.
 
 ### 3a. The check's discovery is bounded by `ansible/requirements.yml`
 
@@ -173,6 +227,21 @@ into `ansible/roles/` that is **not** pinned in `ansible/requirements.yml` is
 not excluded, and its scenarios are held to the pinning obligation. That is the
 correct answer under this project's conventions — unpinned external content has
 no business there — so the boundary fails in the safe direction.
+
+**The suite already contains the rejected heuristic, and it stays.**
+`.github/tests/test_ci_configuration.py`'s existing `role_names()` helper
+excludes directory names containing a `.`, and `roles_with_molecule_scenarios()`
+builds on it; both serve the pre-existing tests about `ansible-verify.yml`'s
+role discovery. Those tests are not this change's to edit, and rewriting a
+passing helper to reach a boundary the new checks can establish for themselves
+would put unrelated assertions at risk for a tidiness gain.
+
+So the file will carry two exclusion rules with different strengths. That is
+stated here rather than left for a reader to trip over: the new checks use the
+manifest-derived rule because they gate a pinning obligation and must fail safe;
+the older helper's weaker rule is adequate for what it does. Unifying them is
+worth doing and is not done here — it edits existing tests, which is a
+different change.
 
 ### 4. The derived test lives in `.github/tests/`, and no second spec delta is needed for that
 
@@ -282,3 +351,42 @@ change already opened, and this change does not wait on it.
 None. No production infrastructure, no deployed service, and no role behaviour
 changes; nothing to roll back beyond reverting the commit. The Compose stack is
 untouched, so merging this triggers no `platform-deploy.yml` run.
+
+## Local verification results
+
+Recorded here because task 6.1 requires them to be kept as **local** results.
+They are deliberately not entered in `docs/change-queue.md` entry 4's baseline
+table, which asks for runs on pull requests: a developer machine cannot answer
+the question that table exists to answer. Entry 4's third data point comes from
+this branch's own `ansible-verify.yml` run (task 6.5).
+
+All eight scenarios pass, across all five roles carrying them. CI durations from
+`docs/change-queue.md` entry 4 are shown only to make the comparison legible —
+different machine, different conditions.
+
+| Role | Scenarios | Local | CI, before this change |
+|---|---|---|---|
+| `deploy_user` | 3 | 25m41s | 6m33s |
+| `docker` | 1 | 1m34s | 2m41s |
+| `hardening` | 1 | 1m38s | 2m36s |
+| `ops_user` | 2 | 16m33s | 4m42s |
+| `platform_data_volume` | 1 | pass | **fail**, 2m07s |
+
+Two observations worth keeping, neither of them a claim about CI:
+
+- `docker` and `hardening` completed faster here than they did on a hosted
+  runner beforehand, on a machine that is otherwise several times slower on the
+  other roles. That is consistent with decision 2a removing an `apt-get update`
+  plus eight-package install from every `create`, and inconsistent with it being
+  noise.
+- `deploy_user` and `ops_user` remain slow locally. Both spend that time in
+  scenarios that exercise registry-login failure paths and their retries; the
+  ratio to CI is what this machine does to everything, not something this change
+  introduced.
+
+Alongside: the CI-configuration suite passes at 68 tests, and
+`pre-commit run --all-files` passes every hook — `terraform fmt`, `tflint`,
+`terraform validate`, `gitleaks`, `ansible-lint`, `ansible-playbook
+--syntax-check`. `tflint` had to be installed to get a real result from that
+hook rather than an error; before that it was failing on absence, not on
+content.

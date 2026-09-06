@@ -38,6 +38,23 @@ list, which is what lets an amd64 runner and an arm64 developer machine both
 run the suite at all. What the pin removes is the mutability, not the
 architecture split.
 
+**Every scenario also gains `pre_build_image: true`, and this is the larger
+change.** Discovered during implementation, not planned: the Docker driver
+reuses `image:` as the tag of an image it builds locally, so a digest there
+makes `create` fail outright. `pre_build_image: true` skips that build and runs
+the pinned image directly, which is what makes the digest usable at all.
+
+Skipping the build removes the driver's default `Dockerfile.j2` layer — which
+no scenario had overridden, and which ran `apt-get update && apt-get install -y
+python3 sudo bash ca-certificates iproute2 python3-apt aptitude rsync` inside
+every container on every `molecule create`. So the suite was never
+reproducible, and the image pin alone would not have made it so: each run
+installed whatever those eight packages resolved to that day. It now reaches no
+package archive during `create`, and what is pinned is the whole container
+rather than only its base. Of that package list only `aptitude` and `rsync` are
+absent from the pinned image, and nothing in this repository uses either — see
+`design.md` decision 2a for how that was established.
+
 **The `platform_data_volume` verify assertion is made safe, without being
 weakened.** The line reads:
 
@@ -113,6 +130,11 @@ None.
   role code changes.
 - `.github/tests/test_ci_configuration.py` — the derived assertions over the
   scenario image pins, and the manifest-derived exclusion that bounds them.
+- `test-plan.md` beside this proposal — the independent test author's manifest:
+  which scenario each assertion derives from, what was verified out-of-band,
+  and the two assertions marked DERIVED rather than SPECIFIED. Not an
+  OpenSpec-schema artifact, so it does not travel with the four a reviewer or
+  implementing session is dispatched with, and has to be opened deliberately.
 - `AGENTS.md` — the Testing table's "Subject" column, widened so a future test
   author dispatched with it can tell that a static assertion over a
   `molecule.yml` belongs in `.github/tests/`. Without this the table names two

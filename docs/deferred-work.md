@@ -79,3 +79,50 @@ already inside the tailnet.
 
 **Revisit if** the deploy ever runs over the public internet, at which point
 this stops being defence-in-depth and becomes the only check.
+
+## Automatic refresh of the Molecule platform image digest
+
+Every scenario under `ansible/roles/*/molecule/*/` pins its platform image to
+`geerlingguy/docker-ubuntu2204-ansible:latest@sha256:0172e3b5…`, and nothing
+updates that digest. It will age indefinitely until a person refreshes it by
+hand (`ansible/roles/docker/molecule/default/molecule.yml` carries the
+procedure).
+
+Dependabot cannot see it: its `docker` ecosystem scans Dockerfiles and Compose
+files, not `molecule.yml`. Closing this would mean a bespoke scheduled workflow
+that queries the registry, rewrites eight files and opens a pull request —
+machinery out of proportion to a test-only base image, and machinery that would
+itself need pinning, testing and a credential story.
+
+The trade is deliberate rather than reluctant. A known-stale image the suite
+runs against reproducibly is worth more than a current one it cannot make the
+same claim about twice; that reproducibility is the whole point of the pin, and
+an automatic refresh partly gives it back. The digest is identical across all
+eight scenarios and `.github/tests/test_ci_configuration.py` fails the build if
+they disagree, so a manual refresh is one find-and-replace, not eight
+decisions.
+
+**Revisit if** the image ages far enough that a scenario fails for a reason
+traceable to the base image rather than to the role under test, or if this
+repository grows a second hand-pinned digest — one is a manageable exception,
+two is a pattern that wants a mechanism.
+
+## Two exclusion rules for `ansible/roles/` in the CI test suite
+
+`.github/tests/test_ci_configuration.py` now decides twice, differently, which
+directories under `ansible/roles/` are this repository's own. `role_names()`
+excludes any name containing a `.` — the Galaxy `namespace.role` convention —
+and the newer image-pinning checks exclude names appearing in
+`ansible/requirements.yml`'s `roles:` list.
+
+The newer rule is the stronger one: content vendored into `ansible/roles/` that
+is *not* pinned in the manifest stays inside the pinning obligation, where the
+dot heuristic would silently exempt it. The older rule is adequate for what it
+does — reasoning about `ansible-verify.yml`'s role discovery — and the tests
+built on it pass.
+
+Unifying them is deliberately not done here. It means editing existing, passing
+tests, which is a change of its own rather than a rider on one whose subject is
+the pins. **Revisit when** something else needs to reason about that boundary, or
+when a directory appears that the two rules would classify differently — at
+which point the disagreement stops being theoretical.

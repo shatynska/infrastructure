@@ -22,8 +22,42 @@ platforms:
   # (terraform.tfvars pins image = "ubuntu-26.04"); exact OS-version parity
   # with production is not guaranteed by this image and is left as a
   # question for the implementer (see test-manifest.md).
+  #
+  # WHY A DIGEST AND NOT A VERSION TAG (this is the shared rationale; the
+  # other scenarios' platform stanzas point here). geerlingguy/docker-
+  # ubuntu2204-ansible publishes exactly one tag -- `latest` -- and no
+  # versioned tag at all, so a content digest is the only exact form
+  # available, and AGENTS.md admits no floating one. The digest below is
+  # the multi-architecture manifest list, not a single architecture's
+  # image: each architecture still resolves beneath it, so an amd64 runner
+  # and an arm64 developer machine can both run this suite while pinning
+  # one immutable reference.
+  #
+  # REFRESHING IT IS MANUAL, and nothing warns you when it is stale.
+  # Dependabot's docker ecosystem scans Dockerfiles and Compose files, not
+  # molecule.yml, so this pin is invisible to it -- deliberately, see
+  # docs/deferred-work.md. To refresh:
+  #
+  #   curl -s https://hub.docker.com/v2/repositories/geerlingguy/\
+  #   docker-ubuntu2204-ansible/tags/latest | jq -r .digest
+  #
+  # then replace the digest in every scenario under ansible/roles/*/
+  # molecule/*/. All of them must agree: .github/tests/
+  # test_ci_configuration.py fails the build on a partial refresh.
+  #
+  # `pre_build_image: true` below is LOAD-BEARING for the digest, not a
+  # performance tweak. Without it the driver reuses `image:` as the tag of an
+  # image it builds locally (`molecule_local/<image>`), and a digest cannot be
+  # a tag -- `create` then fails trying to pull a reference it made by
+  # splitting ours on its last colon. Setting it also drops the driver's
+  # default build layer, which ran `apt-get update && apt-get install ...` on
+  # every create; that is why this suite now reaches no package archive during
+  # create, and why the container's contents are pinned and not just its base.
+  # Of what that layer installed, only aptitude and rsync are absent from this
+  # image, and nothing here uses either.
   - name: docker-role-instance
-    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    image: geerlingguy/docker-ubuntu2204-ansible:latest@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
     command: /lib/systemd/systemd
     privileged: true
     cgroupns_mode: host
