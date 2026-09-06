@@ -45,6 +45,22 @@ closes. Constraints that shape the approach:
   recorded as a queue entry and depends on evidence this change produces.
 - Changing any Molecule scenario, role, or `verify.yml`. This change makes the
   existing suite run in CI; it does not modify what it asserts.
+
+  **One departure, taken on the operator's decision at implementation time.**
+  `ansible-lint` failed on three pre-existing violations in
+  `ansible/roles/deploy_user/molecule/default/verify.yml` — two
+  `risky-shell-pipe`, one over-long line. The design checked whether ungating
+  `gitleaks` would surface a pre-existing finding; it did not ask the same of
+  `ansible-lint`, and that was the gap. Because this change's own pull request
+  touches no `ansible/` path, the blocking tier would not have failed here — it
+  would have failed on whoever next touched `ansible/`, which is a trap laid for
+  someone else rather than a cost borne by the change that created it. The three
+  were fixed: a line wrap, and `set -o pipefail` on two `shell` tasks. The
+  wrap changes nothing; `pipefail` does tighten error propagation in those two
+  tasks, so a pipeline whose first stage failed silently would now fail the
+  task. That is a correctness improvement in a test, and it is the reason this
+  is recorded as a departure rather than as housekeeping. No assertion was
+  added, removed or weakened.
 - Changing the destroy-policy gate's mechanism, its `destroy-override` label,
   or its PR-number resolution logic. Only its failure direction changes.
 - Touching Terraform configuration or any production resource.

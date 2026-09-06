@@ -1,9 +1,16 @@
 version: 2
 updates:
   - package-ecosystem: "terraform"
+    # Every directory carrying a .terraform.lock.hcl must appear here.
+    # Dependabot's terraform ecosystem has no discovery mechanism, so a
+    # directory this list omits is not partially covered -- it is uncovered,
+    # and its provider pins rot with no signal at all. Adding a Terraform
+    # module or environment includes adding it here; the CI-configuration test
+    # suite compares the two sets and fails if they diverge.
     directories:
       - "/terraform/environments/prod"
       - "/terraform/modules/server"
+      - "/terraform/modules/volume"
     schedule:
       interval: "weekly"
 

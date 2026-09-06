@@ -14,8 +14,11 @@ of queued — they have branches and handoffs, not entries here:
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift
 - `refresh-readme-accuracy` — README statements that are no longer true
 
-The entries below are queued because each one is **blocked on something that
-must happen first**. They are listed in dependency order.
+Most entries below are queued because they are **blocked on something that must
+happen first**, and they are listed in dependency order. Where an entry is not
+blocked, it says instead why it was recorded rather than folded into the change
+that found it — usually because it belongs to a different concern than the one
+that change was closing.
 
 ---
 
@@ -83,7 +86,70 @@ Only the first kind survives archiving. Concrete instances of the other two:
 The tailscale role is 48 comment lines against 90 non-blank; this is a style
 question with a real maintenance cost, not a cosmetic one.
 
-## 4. size-platform-container-resource-limits
+## 4. promote-molecule-to-a-required-check
+
+**Blocked on entry 5 landing first, and on evidence.** `close-ci-verification-gaps`
+put the Molecule suite in CI as `ansible-verify.yml`, advisory: it is not a
+required status check, because whether its privileged-systemd scenarios are
+reproducible on a hosted runner had never been observed.
+
+Promotion needs three things, and the middle one is the trap:
+
+1. **Consecutive green runs** on pull requests touching `ansible/`. How many is
+   a judgement call; two or three across different roles is meaningful, one is
+   not.
+2. **Removing the workflow-level `paths:` filter first**, and moving the gating
+   inside an always-running job — the shape `pr-validation.yml` already uses. A
+   `paths:`-filtered required check never reports on a non-matching pull
+   request, leaving it permanently pending and unmergeable under branch
+   protection. This is exactly what the *Required Status Checks Report on Every
+   Pull Request* requirement exists to forbid, and promotion is **not** just a
+   branch-protection toggle. `ansible-verify.yml`'s own top comment says so.
+3. **Entry 5 landing first.** While the platform image floats on `:latest`,
+   "consecutive green runs" is evidence about a moving target, and a red run
+   may be attributable to an upstream image rather than to the runner.
+
+**First observed baseline** — to be filled in from the post-merge
+`workflow_dispatch` run on `main` (that trigger is only exposed once the file is
+on the default branch). Record per-role outcome and duration here, not in the
+change's own artifacts, which are archived:
+
+| Role | Outcome | Duration |
+|---|---|---|
+| _pending first dispatch_ | | |
+
+## 5. pin-the-molecule-platform-image
+
+**Blocks entry 4.** Every scenario under `ansible/roles/*/molecule/*/molecule.yml`
+pins its platform as `geerlingguy/docker-ubuntu2204-ansible:latest` — a floating
+tag, against AGENTS.md's "any external role or collection used for any purpose
+is pinned to an exact version". Affects all eight scenarios across
+`deploy_user`, `docker`, `hardening`, `ops_user` and `platform_data_volume`.
+
+Noticed while implementing `close-ci-verification-gaps` and deliberately not
+folded in: it changes what the test suite runs against, which is a different
+concern from getting the suite to run at all.
+
+## 6. two-deferred-ci-items
+
+Both noticed during `close-ci-verification-gaps`, neither a verification gap:
+
+- **`.github/workflows/pre-commit-autoupdate.yml` installs `pre-commit`
+  unpinned** (`pip install pre-commit`). That change created
+  `.github/requirements-ci.txt`, which pins it; bringing this workflow onto the
+  same file is a one-line fix in a workflow that change did not otherwise
+  touch.
+- **The destroy-policy gate's inspection logic is inline workflow shell.**
+  Moving it into a version-controlled script with executable fixtures would
+  make the highest-consequence logic in this repository reviewable and testable
+  as code — `design.md` Decision 5 of that change names this as considered and
+  deferred on merit-vs-scope grounds, not as rejected. Four fixtures already
+  exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are
+  described in that change's `tasks.md` 1.1; the structural tests in
+  `.github/tests/test_ci_configuration.py` currently assert the routes are
+  closed, not that each is reached.
+
+## 7. size-platform-container-resource-limits
 
 **Blocked on data, not on another change.** No service in
 `platform/docker-compose.yml` declares a memory or CPU limit, on a `cx33`,

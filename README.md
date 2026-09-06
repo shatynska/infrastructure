@@ -96,6 +96,15 @@ addition (see Status below), not a rejected idea.
    is the `python3-venv` package missing; [`uv`](https://docs.astral.sh/uv/)
    sidesteps it entirely, which is why it is shown here.
 
+   CI now runs `ansible-lint` and `ansible-playbook --syntax-check` on every
+   pull request touching `ansible/`, and those **block a merge**. The Molecule
+   suite also runs in CI, in a separate `Ansible Verify (advisory)` workflow
+   that is deliberately **not** a required check while it is established
+   whether every scenario is reproducible on a hosted runner — so a red run
+   there is information, not a blocked merge. Running the suite locally is
+   still worthwhile before opening a pull request; it is no longer the only
+   place it runs.
+
    Run them **per role, with `--all`** — several roles now carry more than
    one scenario (`ops_user` has `default` and `revocation-steady-state`;
    `deploy_user` has `default`, `ghcr-credential-absent` and

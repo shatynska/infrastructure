@@ -1,0 +1,106 @@
+name: Ansible Verify (advisory)
+
+# The Molecule suite -- this repository's largest test asset, and until now
+# reachable only by a human remembering to run it locally.
+#
+# ADVISORY: this workflow is deliberately NOT registered as a required status
+# check. Its scenarios exercise host-level firewalling, fail2ban and service
+# management inside privileged containers, and whether every one of them is
+# reproducible on a hosted runner has never been observed. Advisory status
+# comes from branch protection not requiring this workflow -- never from
+# swallowing a step's result, which would report a green conclusion for a
+# failed scenario and destroy the signal this tier exists to collect.
+#
+# PROMOTION IS NOT A BRANCH-PROTECTION TOGGLE. The workflow-level `paths:`
+# filter below is correct while this is advisory and disqualifying the moment
+# it is not: a `paths:`-filtered required check never reports on a
+# non-matching pull request, leaving it permanently pending and unmergeable.
+# See the Required Status Checks Report on Every Pull Request requirement, and
+# `pr-validation.yml`'s top comment. Promoting this workflow means FIRST
+# removing this filter and moving the gating inside an always-running job, then
+# adding it to branch protection. See docs/change-queue.md.
+#
+# `workflow_dispatch` is here because a manual dispatch is resolved through the
+# default branch's workflow listing: this file cannot be dispatched until it is
+# on `main`, and the `ref` input then chooses which branch's code runs, not
+# whether the workflow can be found.
+on:
+  pull_request:
+    paths:
+      - "ansible/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ansible-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: discover
+    runs-on: ubuntu-latest
+    outputs:
+      roles: ${{ steps.discover.outputs.roles }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Discovers rather than enumerates, so a role or scenario added under
+      # ansible/roles/ is covered without a workflow edit -- the same shape the
+      # Terraform checks use. Fails loudly on an empty result: an empty matrix
+      # skips the dependent job and the workflow concludes success having run
+      # nothing, which is a green that verified nothing.
+      #
+      # Free of `${{ }}` on purpose, so it can be run standalone against a
+      # scratch tree.
+      - name: Discover roles carrying scenarios
+        id: discover
+        run: |
+          set -euo pipefail
+          roles=$(find ansible/roles -mindepth 2 -maxdepth 2 -type d -name molecule -printf '%h\n' \
+            | xargs -r -n1 basename \
+            | sort \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          if [ "$roles" = "[]" ] || [ -z "$roles" ]; then
+            echo "::error::Role discovery found nothing under ansible/roles/ carrying a molecule/ directory. Refusing to report success having verified no scenario."
+            exit 1
+          fi
+          echo "Discovered roles: ${roles}"
+          echo "roles=${roles}" >>"$GITHUB_OUTPUT"
+
+  molecule:
+    name: molecule (${{ matrix.role }})
+    needs: discover
+    runs-on: ubuntu-latest
+    # No `environment:` and no secret: the suite runs offline against local
+    # containers. Setting MOLECULE_GHCR_PULL_TOKEN would additionally exercise
+    # the real registry-login path, and is deliberately not done here.
+    strategy:
+      fail-fast: false
+      matrix:
+        role: ${{ fromJSON(needs.discover.outputs.roles) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # Exact pinned manifests, never a fresh resolve. requirements-test.txt
+      # records at length why these pins move forward rather than backward.
+      - name: Install the test toolchain
+        run: pip install -r ansible/requirements-test.txt
+
+      - name: Install Galaxy content
+        run: ansible-galaxy install -r ansible/requirements.yml
+
+      # `--all` is required, not stylistic: several roles carry more than one
+      # scenario, and running without that flag covers only each role's
+      # `default` scenario, silently skipping most of the suite.
+      - name: molecule test --all
+        working-directory: ansible/roles/${{ matrix.role }}
+        run: molecule test --all
