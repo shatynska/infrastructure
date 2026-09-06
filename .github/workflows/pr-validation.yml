@@ -294,7 +294,7 @@ jobs:
 
       - name: Post plan as PR comment
         if: steps.changes.outputs.terraform == 'true' && always() && steps.plan.outcome != 'skipped'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
