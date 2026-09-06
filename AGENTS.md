@@ -152,9 +152,11 @@ This project has **two** test commands, and a change may owe tests under either.
 | Subject | Test command | Test-path glob |
 |---|---|---|
 | Terraform modules | `terraform test`, run from each module directory | `terraform/modules/<name>/tests/*.tftest.hcl` |
-| CI configuration — workflows, `dependabot.yml`, `.pre-commit-config.yaml` | `python3 -m unittest discover --start-directory .github/tests`, run from the repository root | `.github/tests/*.py` |
+| CI configuration, and any committed file the pipeline reads or executes — workflows, `dependabot.yml`, `.pre-commit-config.yaml`, and static properties of what CI runs, such as the image pins in `ansible/roles/*/molecule/*/molecule.yml` | `python3 -m unittest discover --start-directory .github/tests`, run from the repository root | `.github/tests/*.py` |
 
 The second exists because `terraform test` can only exercise Terraform modules, so the guarantees this pipeline makes about its own configuration were unverifiable by anything the project had. Its dependencies are pinned in `.github/requirements-ci.txt`.
+
+Its subject is deliberately wider than `.github/`: a property the pipeline depends on is in scope wherever the file holding it lives, so long as the assertion is a static read of a committed file. What is *not* in scope is anything needing a network call, a credential, a container runtime or a Terraform binary — those constraints are themselves asserted by tests in that suite, and a check that cannot be written within them belongs somewhere else.
 
 ### Development tooling
 

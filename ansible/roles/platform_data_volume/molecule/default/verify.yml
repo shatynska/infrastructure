@@ -186,13 +186,30 @@
         label: "{{ item.path }}"
       register: platform_data_volume_subdir_stats
 
+    # An owner/group may be declared either as a name or as a numeric id --
+    # the role passes the value straight to ansible.builtin.file, which
+    # accepts both -- so each check below admits either form. The
+    # `is defined` guards are load-bearing, not defensive noise: `stat` sets
+    # pw_name/gr_name only when the uid/gid actually resolves on the host, and
+    # inside this container 65534 does resolve (to nobody/nogroup) while 472
+    # does not. An unguarded `item.stat.pw_name` therefore RAISES on the
+    # grafana fixture before the `or` can reach the uid comparison that was
+    # always the branch capable of passing -- which is how this assert failed
+    # in CI while appearing to have a fallback.
+    #
+    # `is defined` rather than `| default('')`: the latter also guards, but it
+    # makes an empty declared owner compare equal to an absent pw_name, so a
+    # subdirectory declaring `owner: ""` would pass having verified nothing.
+    # Do not "simplify" by dropping a guard either, and do not rely on `or`
+    # short-circuiting by putting the uid comparison first -- that works only
+    # until someone reorders the operands back.
     - name: Assert every dependent subdirectory exists with the ownership and permissions its container requires
       ansible.builtin.assert:
         that:
           - item.stat.exists
           - item.stat.isdir
-          - item.stat.pw_name == item.item.owner or item.stat.uid | string == item.item.owner
-          - item.stat.gr_name == item.item.group or item.stat.gid | string == item.item.group
+          - (item.stat.pw_name is defined and item.stat.pw_name == item.item.owner) or (item.stat.uid | string) == item.item.owner
+          - (item.stat.gr_name is defined and item.stat.gr_name == item.item.group) or (item.stat.gid | string) == item.item.group
           - item.stat.mode == item.item.mode
         fail_msg: >-
           {{ platform_data_volume_mount_path }}/{{ item.item.path }} is

@@ -140,12 +140,29 @@ role is under eight minutes, and the roles run in parallel.
 The one failure is a defect in a scenario's own assertion, not a runner
 problem. Promotion still waits on entry 8 being resolved and on entry 5.
 
+**Both named blockers are closed by `pin-and-fix-molecule-suite`**, pending its
+merge: entry 5's pin is applied to all eight scenarios and entry 8's assertion
+is fixed. What promotion still needs after that is the evidence in point 1 —
+consecutive green runs on pull requests — and the `paths:`-filter removal in
+point 2, which is not a branch-protection toggle and remains this entry's real
+work. Record that change's own `ansible-verify.yml` run below when it lands.
+
+One thing that change establishes bears on the evidence question: until now the
+suite installed `python3 sudo bash ca-certificates iproute2 python3-apt
+aptitude rsync` via `apt-get` inside every container on every `molecule
+create`, because no scenario set `pre_build_image` and all used the driver's
+default `Dockerfile.j2`. Runs before that change were therefore not
+reproducible in a second respect beyond the floating image tag, and a red run
+could have been attributable to a package archive. Runs after it reach no
+package archive during `create` at all, so "consecutive green runs" starts
+meaning something stricter than it did.
+
 ## 8. fix-platform-data-volume-verify-attribute-access
 
 **Found by the first CI run of the Molecule suite** (PR #57), and the reason
 that tier was made advisory rather than blocking.
 
-`ansible/roles/platform_data_volume/molecule/default/verify.yml:189` asserts:
+`ansible/roles/platform_data_volume/molecule/default/verify.yml:194` asserts:
 
 ```yaml
 - item.stat.pw_name == item.item.owner or item.stat.uid | string == item.item.owner
@@ -155,8 +172,18 @@ and fails with `object of type 'dict' has no attribute 'pw_name'`. The `or`
 fallback never runs: Jinja evaluates the left operand first, and on a `stat`
 result where the uid does not resolve to a name, `pw_name` is simply absent —
 so the expression raises instead of falling through to the uid comparison the
-author clearly intended as the fallback. The subdirectories in question are
-owned by uid `65534`, which need not resolve inside the container.
+author clearly intended as the fallback.
+
+**Correction, from `pin-and-fix-molecule-suite`'s investigation.** This entry
+originally blamed uid `65534`. That uid *does* resolve inside the image, to
+`nobody` — verified with `getent passwd 65534` against the pinned digest. The
+failing fixture is the other one, `grafana`, whose `472/472` has no `passwd`
+or `group` record at all. The mechanism above is right; the uid named was not.
+Note also that the name comparison could never have passed regardless: the
+declared owners are numeric strings (`"472"`, `"65534"`) in both the scenario
+and `ansible/inventory/group_vars/prod.yml`, so `pw_name == "472"` is false
+even where `pw_name` exists. The uid comparison was always the only branch
+capable of passing.
 
 The fix is to make the access safe (`item.stat.pw_name is defined and …`, or
 compare on uid/gid alone), not to relax what is asserted.
@@ -207,6 +234,28 @@ Both noticed during `close-ci-verification-gaps`, neither a verification gap:
   by fixing or ignoring them. That is the same trap this change refused to lay
   for the next person when `ansible-lint` failed on pre-existing violations,
   and it wants its own decision rather than being folded in.
+
+## 9. README's Galaxy install step does not provision a working local suite
+
+**Belongs to the already-opened `refresh-readme-accuracy`**, not to a new
+change; recorded here so it is not lost, since that branch has a handoff rather
+than a proposal.
+
+`README.md`'s local-setup step 5 says `ansible-galaxy install -r
+ansible/requirements.yml`, which installs the role to `~/.ansible/roles`.
+`ansible-verify.yml:105-112` documents at length why that location is never
+found: every scenario overrides `ANSIBLE_ROLES_PATH` to `ansible/roles/`, so
+Molecule's own galaxy dependency step resolves nothing and converge fails on
+the dependency rather than on anything the scenario asserts. CI therefore uses
+`ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`, and
+`.gitignore:30` ignores `ansible/roles/geerlingguy.docker/` — both consistent
+with the install landing *inside* the repository, which the README's command
+does not do.
+
+Found while provisioning a fresh worktree for `pin-and-fix-molecule-suite`, and
+not folded into it: that change's subject is the suite's pins and one broken
+assertion, and this is a documentation defect in a file it otherwise does not
+touch.
 
 ## 7. size-platform-container-resource-limits
 

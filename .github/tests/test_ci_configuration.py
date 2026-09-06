@@ -7,6 +7,10 @@ to SHALL text in a delta spec) or DERIVED (it traces to `design.md`/`tasks.md`
 rather than to a scenario). See that change's `test-plan.md` for the
 scenario-to-test mapping and for the scenarios deliberately left uncovered.
 
+Sections added later carry their own provenance comment naming the change they
+were derived from and that change's own test-plan.md; the annotation convention
+above holds across all of them.
+
 Runner
 ------
     python3 -m unittest discover -s <dir holding this file> -v
@@ -732,6 +736,713 @@ class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
         text = read_text(ANSIBLE_VERIFY)
         for manifest in ("ansible/requirements-test.txt", "ansible/requirements.yml"):
             self.assertIn(manifest, text, f"ansible-verify.yml never installs from {manifest}")
+
+
+# --------------------------------------------------------------------------
+# iac-cicd-pipeline / Ansible Configuration Is Verified in CI --
+# the container image each scenario executes inside
+# --------------------------------------------------------------------------
+#
+# Derived from the delta spec of the OpenSpec change
+# `pin-and-fix-molecule-suite`
+# (openspec/changes/pin-and-fix-molecule-suite/specs/iac-cicd-pipeline/spec.md),
+# before any implementation of that change existed. See that change's
+# test-plan.md for the scenario-to-test mapping, the baseline, and the
+# scenarios deliberately left uncovered.
+
+GALAXY_MANIFEST = "ansible/requirements.yml"
+SCENARIO_GLOB = "ansible/roles/*/molecule/*/molecule.yml"
+CONTENT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+class ManifestNotUsable(AssertionError):
+    """The Galaxy manifest the exclusion is derived from could not be read, or
+    one of its entries could not be resolved to the directory name
+    `ansible-galaxy` installs it under.
+
+    An `AssertionError` subclass so that an unhandled one fails the calling
+    test rather than erroring it: the requirement is that the check FAIL
+    identifying the entry or the file, never that it yield an empty or partial
+    exclusion set (design.md decision 3a -- a silently widened exclusion lets an
+    unpinned scenario through, which is the vacuous pass this capability
+    forbids elsewhere).
+    """
+
+
+def _galaxy_directory_name(entry: object, position: int) -> str:
+    """Resolve one `roles:` entry to the directory `ansible-galaxy` installs it
+    under: `name` where given, else the `src` basename with any version
+    qualifier and `.git` suffix stripped (design.md decision 3a)."""
+    source: object = None
+    if isinstance(entry, str):
+        source = entry
+    elif isinstance(entry, dict):
+        if entry.get("name"):
+            return str(entry["name"])
+        source = entry.get("src")
+    if not isinstance(source, str) or not source.strip():
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} roles[{position}] gives neither a `name` nor a `src`, "
+            f"so the directory ansible-galaxy installs it under cannot be named and "
+            f"the exclusion cannot be derived from it: {entry!r}"
+        )
+    basename = source.split(",")[0].strip().rstrip("/").rsplit("/", 1)[-1]
+    if basename.endswith(".git"):
+        basename = basename[: -len(".git")]
+    if not basename:
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} roles[{position}] has a `src` that resolves to no "
+            f"directory name: {entry!r}"
+        )
+    return basename
+
+
+def galaxy_role_directories(root: Path | None = None) -> set[str]:
+    """Directory names under `ansible/roles/` that hold installed Galaxy content,
+    derived from `ansible/requirements.yml` rather than from a hardcoded list."""
+    base = ROOT if root is None else root
+    manifest = base / GALAXY_MANIFEST
+    if not manifest.is_file():
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} does not exist, so the set of role directories to "
+            f"exclude from the pinning check cannot be derived; refusing to fall "
+            f"back to an empty exclusion set"
+        )
+    try:
+        parsed = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} could not be parsed, so the exclusion cannot be "
+            f"derived from it: {error}"
+        ) from None
+    if not isinstance(parsed, dict):
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} is not a mapping, so it declares no `roles:` list to "
+            f"derive the exclusion from"
+        )
+    entries = parsed.get("roles")
+    if entries is None:
+        return set()
+    if not isinstance(entries, list):
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST}'s `roles:` is not a list, so its entries cannot be "
+            f"resolved to directory names"
+        )
+    return {_galaxy_directory_name(entry, position) for position, entry in enumerate(entries)}
+
+
+def authored_scenario_files(root: Path | None = None) -> list[Path]:
+    """Every Molecule scenario definition THIS repository authors.
+
+    Scenarios shipped by Galaxy content installed from `ansible/requirements.yml`
+    are excluded: they install beside this repository's own roles, are not
+    committed here, are discarded by the next reinstall, and are already pinned
+    as a whole by that manifest.
+    """
+    base = ROOT if root is None else root
+    installed = galaxy_role_directories(base)
+    return [
+        path
+        for path in sorted(base.glob(SCENARIO_GLOB))
+        if path.relative_to(base).parts[2] not in installed
+    ]
+
+
+def parse_image_reference(image: str) -> tuple[str, str, str]:
+    """Split an image reference into (repository, tag, digest).
+
+    The tag is looked for after the last `/`, so a registry host carrying a port
+    is not mistaken for one. A reference with no digest yields `""` for it.
+    """
+    reference, _, digest = image.partition("@")
+    last_segment = reference.rfind("/") + 1
+    colon = reference.find(":", last_segment)
+    if colon == -1:
+        return reference, "", digest
+    return reference[:colon], reference[colon + 1 :], digest
+
+
+def scenario_platform_images(root: Path | None = None):
+    """Yield (scenario, platform, image) over every authored scenario.
+
+    A scenario declaring no `platforms:`, a platform that is not a mapping, or a
+    platform with no `image:` yields an image of `None` rather than being passed
+    over -- a scenario silently exempted from a pinning check is
+    indistinguishable from one that satisfies it.
+    """
+    base = ROOT if root is None else root
+    for path in authored_scenario_files(base):
+        label = path.relative_to(base).as_posix()
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as error:
+            yield label, f"<unparseable: {error.__class__.__name__}>", None
+            continue
+        platforms = document.get("platforms") if isinstance(document, dict) else None
+        if not isinstance(platforms, list) or not platforms:
+            yield label, "<no platforms declared>", None
+            continue
+        for index, platform in enumerate(platforms):
+            name = platform.get("name") if isinstance(platform, dict) else None
+            plabel = f"platforms[{index}]" + (f" ({name})" if name else "")
+            image = platform.get("image") if isinstance(platform, dict) else None
+            yield label, plabel, image if isinstance(image, str) and image.strip() else None
+
+
+def scenarios_declaring_no_platform_image(root: Path | None = None) -> list[str]:
+    return [
+        f"{scenario}: {platform}"
+        for scenario, platform, image in scenario_platform_images(root)
+        if image is None
+    ]
+
+
+def scenarios_with_an_unpinned_platform_image(root: Path | None = None) -> list[str]:
+    offenders = []
+    for scenario, platform, image in scenario_platform_images(root):
+        if image is None:
+            continue
+        _, _, digest = parse_image_reference(image)
+        if not CONTENT_DIGEST.fullmatch(digest):
+            offenders.append(f"{scenario}: {platform} -> {image}")
+    return offenders
+
+
+def image_repositories_named_at_disagreeing_digests(root: Path | None = None) -> list[str]:
+    """Report each image repository named at more than one digest across the
+    authored scenarios. A scenario carrying no digest counts as its own value,
+    so a partial refresh -- and a partial pin -- is a disagreement."""
+    by_repository: dict[str, dict[str, list[str]]] = {}
+    for scenario, platform, image in scenario_platform_images(root):
+        if image is None:
+            continue
+        repository, _, digest = parse_image_reference(image)
+        by_repository.setdefault(repository, {}).setdefault(digest or "<no digest>", []).append(
+            f"{scenario}: {platform}"
+        )
+    return sorted(
+        f"{repository} is named at {len(by_digest)} different digests: "
+        + "; ".join(f"{digest} by {sorted(where)}" for digest, where in sorted(by_digest.items()))
+        for repository, by_digest in by_repository.items()
+        if len(by_digest) > 1
+    )
+
+
+def scenario_document(image: str | None, extra: str = "") -> str:
+    """A minimal but structurally real scenario definition for a fixture tree."""
+    body = "---\ndriver:\n  name: docker\nplatforms:\n  - name: instance\n"
+    if image is not None:
+        body += f"    image: {image}\n"
+    return body + extra
+
+
+DEFAULT_FIXTURE_MANIFEST = 'roles:\n  - name: geerlingguy.docker\n    version: "8.0.0"\n'
+
+
+class ScenarioTreeFixtureMixin:
+    """Builds throwaway trees shaped like `ansible/`.
+
+    The checks above take their root as an argument, so every negative case
+    below -- an unpinned scenario, a scenario with no image, a partial digest
+    refresh, an unresolvable manifest entry -- is exercised against a fixture
+    rather than by temporarily damaging the real tree.
+    """
+
+    def scratch_tree(
+        self,
+        scenarios: dict[tuple[str, str], str],
+        manifest: str | None = DEFAULT_FIXTURE_MANIFEST,
+    ) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="molecule-pin-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "ansible").mkdir()
+        if manifest is not None:
+            (root / "ansible" / "requirements.yml").write_text(manifest, encoding="utf-8")
+        for (role, scenario), document in scenarios.items():
+            directory = root / "ansible" / "roles" / role / "molecule" / scenario
+            directory.mkdir(parents=True)
+            (directory / "molecule.yml").write_text(document, encoding="utf-8")
+        return root
+
+    def discovered(self, root: Path) -> list[str]:
+        return [path.relative_to(root).as_posix() for path in authored_scenario_files(root)]
+
+
+PINNED_IMAGE = (
+    "geerlingguy/docker-ubuntu2204-ansible:latest"
+    "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+)
+OTHER_PINNED_IMAGE = (
+    "geerlingguy/docker-ubuntu2204-ansible:latest"
+    "@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+)
+
+
+class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
+    ScenarioTreeFixtureMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
+    Integration -- the clause bounding the pinning obligation to the scenarios
+    this repository authors."""
+
+    def test_discovery_finds_the_scenarios_this_repository_authors(self) -> None:
+        """SPECIFIED -- scenario "Every scenario's platform image is pinned by
+        digest" reads "every scenario definition this repository authors under
+        `ansible/roles/*/molecule/`". Guards every check below from passing
+        vacuously over an empty discovery, the same failure mode this
+        requirement's "Discovering no roles fails rather than passes" scenario
+        forbids of the workflow's own discovery."""
+        discovered = self.discovered(ROOT)
+        self.assertTrue(
+            discovered,
+            f"no scenario was discovered under {SCENARIO_GLOB}; every pinning "
+            f"assertion below would pass having checked nothing",
+        )
+
+    def test_every_role_carrying_scenarios_contributes_at_least_one(self) -> None:
+        """SPECIFIED -- same clause, read in the other direction: the obligation
+        is over EVERY scenario this repository authors, so no role of its own may
+        drop out of discovery. `roles_with_molecule_scenarios()` computes the
+        role set from directory names independently of the glob above.
+
+        `roles_with_molecule_scenarios()` rests on `role_names()`, which excludes
+        a directory whose name contains a `.` -- the older, weaker of this file's
+        two notions of "installed content". Subtracting the manifest-derived set
+        as well keeps this assertion on the same rule the pinning checks use, so
+        a Galaxy entry resolving to a dotless directory name (`ansible-role-docker`,
+        say) cannot make it fail. Neither `role_names()` nor any test resting on
+        it is touched."""
+        discovered_roles = {
+            path.relative_to(ROOT).parts[2] for path in authored_scenario_files()
+        }
+        missing = sorted(
+            roles_with_molecule_scenarios() - galaxy_role_directories() - discovered_roles
+        )
+        self.assertEqual(
+            [],
+            missing,
+            f"these roles carry a molecule/ directory but contributed no scenario "
+            f"to the pinning check: {missing}",
+        )
+
+    def test_installed_galaxy_content_is_excluded_from_discovery(self) -> None:
+        """SPECIFIED -- scenario "Installed Galaxy content is not held to this
+        repository's pinning obligation": the checks SHALL exclude it, deriving
+        the exclusion from that manifest.
+
+        Read against the real tree, where the exclusion only has anything to do
+        once the tree is provisioned. The second half runs only where the
+        installed role is actually present, so that the test asserts the same
+        thing on a runner that has installed nothing -- it never skips.
+        """
+        installed = galaxy_role_directories()
+        offenders = [
+            path.relative_to(ROOT).as_posix()
+            for path in authored_scenario_files()
+            if path.relative_to(ROOT).parts[2] in installed
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            f"these scenarios belong to Galaxy content pinned in {GALAXY_MANIFEST} and "
+            f"are not this repository's to pin: {offenders}",
+        )
+        raw = {path.relative_to(ROOT).as_posix() for path in ROOT.glob(SCENARIO_GLOB)}
+        installed_scenarios = {
+            path for path in raw if path.split("/")[2] in installed
+        }
+        if installed_scenarios:
+            self.assertTrue(
+                installed_scenarios - set(self.discovered(ROOT)),
+                "the tree is provisioned and the unbounded glob sees installed Galaxy "
+                "scenarios, but discovery excluded none of them",
+            )
+
+    def test_discovery_is_identical_with_and_without_installed_galaxy_content(self) -> None:
+        """SPECIFIED -- the second half of that scenario: the checks SHALL
+        "report the same result on a provisioned developer machine as on a
+        continuous-integration runner that has installed nothing".
+
+        Two fixture trees differing only by the presence of the installed role's
+        directory. Asserting this on the real tree is impossible: it is in one
+        state or the other, never both.
+        """
+        own = {("docker", "default"): scenario_document(PINNED_IMAGE)}
+        runner = self.scratch_tree(own)
+        provisioned = self.scratch_tree(
+            {
+                **own,
+                ("geerlingguy.docker", "default"): scenario_document(
+                    "geerlingguy/docker-${MOLECULE_DISTRO:-rockylinux9}-ansible:latest"
+                ),
+            }
+        )
+        self.assertEqual(
+            self.discovered(runner),
+            self.discovered(provisioned),
+            "discovery returned a different scenario set on a provisioned tree than "
+            "on one that has installed nothing",
+        )
+        self.assertEqual([], scenarios_with_an_unpinned_platform_image(provisioned))
+
+    def test_the_exclusion_is_derived_from_the_manifest_rather_than_hardcoded(self) -> None:
+        """SPECIFIED -- "SHALL derive that exclusion from the manifest's own
+        contents rather than from a hardcoded list of role names, so that adding
+        or removing pinned Galaxy content cannot leave the exclusion stale in
+        either direction".
+
+        Both directions: a role name added to the manifest drops out of
+        discovery, and `geerlingguy.docker` -- the only name a hardcoded
+        implementation would plausibly carry -- is discovered once the manifest
+        stops naming it. A hardcoded string passes the test above and fails this.
+        """
+        scenarios = {
+            ("some_vendored_role", "default"): scenario_document(PINNED_IMAGE),
+            ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE),
+        }
+        named = self.scratch_tree(
+            scenarios, manifest='roles:\n  - name: some_vendored_role\n    version: "1.0.0"\n'
+        )
+        self.assertEqual(
+            ["ansible/roles/geerlingguy.docker/molecule/default/molecule.yml"],
+            self.discovered(named),
+            "a role named in the manifest was not excluded, or a role the manifest "
+            "does not name was excluded anyway",
+        )
+        unnamed = self.scratch_tree(scenarios, manifest="roles: []\n")
+        self.assertEqual(
+            [
+                "ansible/roles/geerlingguy.docker/molecule/default/molecule.yml",
+                "ansible/roles/some_vendored_role/molecule/default/molecule.yml",
+            ],
+            self.discovered(unnamed),
+            "a manifest naming no role still excluded something, so the exclusion is "
+            "not derived from the manifest",
+        )
+
+    def test_a_manifest_entry_that_cannot_be_named_fails_the_check(self) -> None:
+        """SPECIFIED -- "SHALL NOT be exempt ... rather than being caught by
+        review alone", read with design.md decision 3a: an entry the resolution
+        cannot name SHALL fail the check identifying the entry, never yield a
+        partial exclusion set."""
+        root = self.scratch_tree(
+            {("docker", "default"): scenario_document(PINNED_IMAGE)},
+            manifest='roles:\n  - version: "8.0.0"\n',
+        )
+        with self.assertRaises(ManifestNotUsable) as raised:
+            authored_scenario_files(root)
+        self.assertIn("roles[0]", str(raised.exception))
+
+    def test_a_missing_galaxy_manifest_fails_the_check(self) -> None:
+        """SPECIFIED -- same clause. An absent manifest must not resolve to an
+        empty exclusion set, which would silently hold installed Galaxy content
+        to this repository's obligation, nor to a skipped check."""
+        root = self.scratch_tree(
+            {("docker", "default"): scenario_document(PINNED_IMAGE)}, manifest=None
+        )
+        with self.assertRaises(ManifestNotUsable) as raised:
+            authored_scenario_files(root)
+        self.assertIn(GALAXY_MANIFEST, str(raised.exception))
+
+    def test_an_unparseable_galaxy_manifest_fails_the_check(self) -> None:
+        """SPECIFIED -- same clause, for the other way the manifest can stop
+        being readable."""
+        root = self.scratch_tree(
+            {("docker", "default"): scenario_document(PINNED_IMAGE)},
+            manifest="roles:\n  - name: geerlingguy.docker\n   version: broken\n\t\n",
+        )
+        with self.assertRaises(ManifestNotUsable) as raised:
+            authored_scenario_files(root)
+        self.assertIn(GALAXY_MANIFEST, str(raised.exception))
+
+    def test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name(self) -> None:
+        """DERIVED -- design.md decision 3a states the resolution rule (`name`
+        where given, else the `src` basename with any `.git` suffix and version
+        qualifier stripped). The delta spec requires only that the exclusion be
+        derived from the manifest, so the exact resolution is design-level, not
+        SHALL text.
+
+        Recorded as derived because it constrains the implementation beyond what
+        a scenario states: today's manifest has one entry, in `name` form, so
+        nothing in the repository exercises this path yet.
+        """
+        root = self.scratch_tree(
+            {
+                ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE),
+                ("docker", "default"): scenario_document(PINNED_IMAGE),
+            },
+            manifest=(
+                "roles:\n"
+                "  - src: https://github.com/geerlingguy/ansible-role-docker.git,8.0.0\n"
+            ),
+        )
+        self.assertEqual(
+            {"ansible-role-docker"},
+            galaxy_role_directories(root),
+            "a `src`-only entry did not resolve to the directory name ansible-galaxy "
+            "installs it under",
+        )
+        self.assertEqual(
+            {"geerlingguy.docker", "docker"},
+            {path.relative_to(root).parts[2] for path in authored_scenario_files(root)},
+            "resolving a `src`-only entry excluded a directory the manifest does not "
+            "install to",
+        )
+
+
+class TestMoleculeScenarioImagesArePinnedByDigest(
+    ScenarioTreeFixtureMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
+    Integration -- the extension of the pinned-manifest obligation to the
+    container image each scenario executes inside."""
+
+    def test_every_scenario_declares_its_platform_image_by_immutable_digest(self) -> None:
+        """SPECIFIED -- scenario "Every scenario's platform image is pinned by
+        digest": "every declared platform image SHALL carry an immutable content
+        digest, and a scenario declaring an image by mutable tag alone SHALL
+        fail those checks".
+
+        Also the only observable form scenario "An upstream re-push cannot change
+        what the suite ran against" takes in a suite that makes no network call:
+        the digest is asserted to be a content address (`sha256:` plus 64 hex),
+        which is what makes a re-published tag unable to change what the
+        reference resolves to. The registry's behaviour itself is not observable
+        here -- see test-plan.md.
+
+        Every entry of every scenario's `platforms:` list is checked, not only
+        the first.
+        """
+        offenders = scenarios_with_an_unpinned_platform_image()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these platform images carry no immutable content digest, so what the "
+            f"suite runs against can change with no commit to this repository: "
+            f"{offenders}",
+        )
+
+    def test_no_scenario_declares_a_platform_without_an_image(self) -> None:
+        """SPECIFIED -- scenario "A scenario declaring no platform image fails
+        rather than being skipped", read against the real tree."""
+        offenders = scenarios_declaring_no_platform_image()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these scenarios declare no platform, or a platform with no image, so "
+            f"the pinning check has nothing to read for them: {offenders}",
+        )
+
+    def test_a_scenario_declaring_no_platform_image_is_reported_by_name(self) -> None:
+        """SPECIFIED -- the discriminating half of that scenario: "the checks
+        SHALL fail identifying that scenario, rather than passing over it".
+
+        Three shapes a scenario can take that leave nothing to pin: no
+        `platforms:` key, a platform entry with no `image:`, and an empty
+        `platforms:` list.
+        """
+        root = self.scratch_tree(
+            {
+                ("no_platforms", "default"): "---\ndriver:\n  name: docker\n",
+                ("no_image", "default"): scenario_document(None),
+                ("empty_platforms", "default"): "---\ndriver:\n  name: docker\nplatforms: []\n",
+                ("pinned", "default"): scenario_document(PINNED_IMAGE),
+            }
+        )
+        reported = scenarios_declaring_no_platform_image(root)
+        self.assertEqual(3, len(reported), f"expected three scenarios reported: {reported}")
+        for role in ("no_platforms", "no_image", "empty_platforms"):
+            self.assertTrue(
+                any(f"ansible/roles/{role}/molecule/default/molecule.yml" in entry for entry in reported),
+                f"the scenario under {role}/ was passed over rather than identified: {reported}",
+            )
+        self.assertFalse(
+            any("/pinned/" in entry for entry in reported),
+            f"a scenario that does declare an image was reported anyway: {reported}",
+        )
+
+    def test_scenarios_sharing_an_image_repository_name_the_same_digest(self) -> None:
+        """SPECIFIED -- scenario "Scenarios sharing an image repository agree on
+        its digest", read against the real tree."""
+        offenders = image_repositories_named_at_disagreeing_digests()
+        self.assertEqual(
+            [],
+            offenders,
+            f"a partial refresh has left the suite running against two versions of the "
+            f"same image while appearing pinned: {offenders}",
+        )
+
+    def test_a_partial_digest_refresh_is_reported(self) -> None:
+        """SPECIFIED -- the discriminating half of that scenario: "a partial
+        refresh leaving one at a different digest SHALL fail those checks".
+
+        A pin left behind at a mutable tag is the same defect and is reported
+        too: the surviving `:latest` is a value of its own, not an absence.
+        """
+        refreshed = self.scratch_tree(
+            {
+                ("docker", "default"): scenario_document(PINNED_IMAGE),
+                ("hardening", "default"): scenario_document(OTHER_PINNED_IMAGE),
+            }
+        )
+        offenders = image_repositories_named_at_disagreeing_digests(refreshed)
+        self.assertTrue(
+            offenders and "geerlingguy/docker-ubuntu2204-ansible" in offenders[0],
+            f"two scenarios naming one repository at two digests were not reported: "
+            f"{offenders}",
+        )
+        partly_pinned = self.scratch_tree(
+            {
+                ("docker", "default"): scenario_document(PINNED_IMAGE),
+                ("hardening", "default"): scenario_document(
+                    "geerlingguy/docker-ubuntu2204-ansible:latest"
+                ),
+            }
+        )
+        self.assertTrue(
+            image_repositories_named_at_disagreeing_digests(partly_pinned),
+            "a scenario left at a mutable tag while its sibling was pinned was not "
+            "reported as a disagreement",
+        )
+
+    def test_a_scenario_on_a_different_image_repository_is_not_reported(self) -> None:
+        """SPECIFIED -- the scoping clause: "This constrains only scenarios that
+        already agree on an image; it does not require the suite to standardise
+        on a single base image."
+
+        Without this, an implementation asserting one digest across the whole
+        suite would pass the test above while blocking a future scenario that
+        legitimately needs a different base image.
+        """
+        root = self.scratch_tree(
+            {
+                ("docker", "default"): scenario_document(PINNED_IMAGE),
+                ("debian_role", "default"): scenario_document(
+                    "geerlingguy/docker-debian12-ansible:latest"
+                    "@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                ),
+            }
+        )
+        self.assertEqual(
+            [],
+            image_repositories_named_at_disagreeing_digests(root),
+            "two scenarios on different image repositories were required to name the "
+            "same digest",
+        )
+        self.assertEqual([], scenarios_with_an_unpinned_platform_image(root))
+
+    def test_every_platform_a_scenario_declares_is_checked_not_only_the_first(self) -> None:
+        """SPECIFIED -- "every declared platform image": a scenario declaring two
+        platforms with the first pinned would otherwise pass while running half
+        its suite against a moving target."""
+        root = self.scratch_tree(
+            {
+                ("two_platforms", "default"): (
+                    "---\n"
+                    "driver:\n"
+                    "  name: docker\n"
+                    "platforms:\n"
+                    "  - name: first\n"
+                    f"    image: {PINNED_IMAGE}\n"
+                    "  - name: second\n"
+                    "    image: geerlingguy/docker-ubuntu2204-ansible:latest\n"
+                )
+            }
+        )
+        offenders = scenarios_with_an_unpinned_platform_image(root)
+        self.assertEqual(1, len(offenders), f"expected exactly the second platform: {offenders}")
+        self.assertIn("second", offenders[0])
+
+    def test_the_checks_reach_a_scenario_at_a_role_path_they_do_not_name(self) -> None:
+        """SPECIFIED -- "A scenario SHALL NOT be exempt from this by being newly
+        added: the obligation is over every scenario this repository authors".
+
+        A scenario is placed at a role path that appears nowhere in this file, and
+        the pinning, missing-image and digest-agreement checks are each asserted
+        to reach it with no edit here. Asserting that the glob "is not a fixed
+        list" would not establish this.
+        """
+        root = self.scratch_tree(
+            {
+                ("docker", "default"): scenario_document(PINNED_IMAGE),
+                ("a_role_added_later", "a_scenario_added_later"): scenario_document(
+                    "geerlingguy/docker-ubuntu2204-ansible:latest"
+                ),
+                ("another_role_added_later", "default"): scenario_document(None),
+            }
+        )
+        added = "ansible/roles/a_role_added_later/molecule/a_scenario_added_later/molecule.yml"
+        self.assertIn(added, self.discovered(root))
+        self.assertEqual(
+            [f"{added}: platforms[0] (instance) -> geerlingguy/docker-ubuntu2204-ansible:latest"],
+            scenarios_with_an_unpinned_platform_image(root),
+        )
+        self.assertTrue(
+            any(
+                "another_role_added_later" in entry
+                for entry in scenarios_declaring_no_platform_image(root)
+            ),
+            "a scenario added later declaring no image was passed over",
+        )
+        self.assertTrue(
+            image_repositories_named_at_disagreeing_digests(root),
+            "a scenario added later at a mutable tag did not disagree with its pinned "
+            "sibling on the same repository",
+        )
+
+
+class TestImageReferenceParsing(unittest.TestCase):
+    """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
+    Integration. Unit-level cover for the reference splitting every check above
+    depends on -- the smallest level at which these cases are observable."""
+
+    def test_the_combined_tag_and_digest_form_is_read_as_pinned(self) -> None:
+        """SPECIFIED -- "where a multi-architecture image is published, the
+        digest declared SHALL be the multi-architecture one", together with
+        design.md decision 1's `repo:tag@sha256:...` form. The tag alongside a
+        digest informs the reader and carries no authority; the check must not
+        read it as a mutable pin."""
+        repository, tag, digest = parse_image_reference(PINNED_IMAGE)
+        self.assertEqual("geerlingguy/docker-ubuntu2204-ansible", repository)
+        self.assertEqual("latest", tag)
+        self.assertEqual(PINNED_IMAGE.split("@", 1)[1], digest)
+
+    def test_the_bare_digest_form_is_read_as_pinned(self) -> None:
+        """SPECIFIED -- same clause. design.md decision 1 names
+        `repo@sha256:...` as a fallback if the Docker driver rejects the
+        combined form, so the check must accept either."""
+        bare = "geerlingguy/docker-ubuntu2204-ansible@" + PINNED_IMAGE.split("@", 1)[1]
+        repository, tag, digest = parse_image_reference(bare)
+        self.assertEqual("geerlingguy/docker-ubuntu2204-ansible", repository)
+        self.assertEqual("", tag)
+        self.assertEqual(PINNED_IMAGE.split("@", 1)[1], digest)
+
+    def test_a_registry_port_is_not_mistaken_for_a_tag(self) -> None:
+        """DERIVED -- no scenario states this; it guards the parsing itself
+        against a reference form this repository does not currently use. Nothing
+        in the delta requires a registry host to be supported."""
+        repository, tag, digest = parse_image_reference("registry.example:5000/img:1.2@sha256:abc")
+        self.assertEqual("registry.example:5000/img", repository)
+        self.assertEqual("1.2", tag)
+        self.assertEqual("sha256:abc", digest)
+
+    def test_a_mutable_tag_alone_yields_no_digest(self) -> None:
+        """SPECIFIED -- "a scenario declaring an image by mutable tag alone SHALL
+        fail those checks"."""
+        self.assertEqual(
+            ("geerlingguy/docker-ubuntu2204-ansible", "latest", ""),
+            parse_image_reference("geerlingguy/docker-ubuntu2204-ansible:latest"),
+        )
+
+    def test_a_digest_that_is_not_a_content_address_is_not_accepted(self) -> None:
+        """SPECIFIED -- "immutable content digest". A truncated or non-sha256
+        value is not one, and accepting it would let a pin that resolves to
+        nothing read as satisfying the requirement."""
+        for digest in ("sha256:abc", "latest", "sha512:" + "a" * 128, "sha256:" + "A" * 64):
+            self.assertIsNone(
+                CONTENT_DIGEST.fullmatch(digest), f"{digest} was accepted as a content digest"
+            )
+        self.assertIsNotNone(CONTENT_DIGEST.fullmatch("sha256:" + "0" * 64))
 
 
 # --------------------------------------------------------------------------

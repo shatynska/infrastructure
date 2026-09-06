@@ -22,8 +22,58 @@ platforms:
   # (terraform.tfvars pins image = "ubuntu-26.04"); exact OS-version parity
   # with production is not guaranteed by this image and is left as a
   # question for the implementer (see test-manifest.md).
+  #
+  # WHY A DIGEST AND NOT A VERSION TAG (this is the shared rationale; the
+  # other scenarios' platform stanzas point here). geerlingguy/docker-
+  # ubuntu2204-ansible publishes exactly one tag -- `latest` -- and no
+  # versioned tag at all, so a content digest is the only exact form
+  # available, and AGENTS.md admits no floating one. The digest below is
+  # the multi-architecture manifest list, not a single architecture's
+  # image: each architecture still resolves beneath it, so an amd64 runner
+  # and an arm64 developer machine can both run this suite while pinning
+  # one immutable reference.
+  #
+  # The tag the digest was taken from is `latest`. It is deliberately NOT
+  # written as `...:latest@sha256:...`, legible though that would be:
+  # community.docker's parse_repository_tag splits on the last `@` first, so
+  # the combined form leaves `:latest` glued to the repository name, and the
+  # digest lookup it then builds
+  # (`geerlingguy/docker-ubuntu2204-ansible:latest@sha256:...`) never matches
+  # the image's real RepoDigests entry, which carries no tag. So a locally
+  # present image is pulled again anyway -- which means every create needs
+  # working registry credentials, and fails outright on a machine whose
+  # credsStore helper does not work (Docker Desktop's default; see README).
+  # The bare form matches, so once the image has been fetched once, create
+  # makes no registry call at all. The first fetch on a new machine still
+  # does, and still needs that config to work.
+  #
+  # REFRESHING IT IS MANUAL, and nothing warns you when it is stale.
+  # Dependabot's docker ecosystem scans Dockerfiles and Compose files, not
+  # molecule.yml, so this pin is invisible to it -- deliberately, see
+  # docs/deferred-work.md. To refresh:
+  #
+  #   curl -s https://hub.docker.com/v2/repositories/geerlingguy/docker-ubuntu2204-ansible/tags/latest | jq -r .digest
+  #
+  # then replace the digest in every scenario THIS REPOSITORY OWNS -- the
+  # seven siblings of this file. Not `ansible/roles/*/molecule/*/`: on a
+  # provisioned tree that also matches the gitignored
+  # ansible/roles/geerlingguy.docker/, which is installed content on a
+  # different image entirely and is not ours to edit. All eight must agree:
+  # .github/tests/test_ci_configuration.py fails the build on a partial
+  # refresh.
+  #
+  # `pre_build_image: true` below is LOAD-BEARING for the digest, not a
+  # performance tweak. Without it the driver reuses `image:` as the tag of an
+  # image it builds locally (`molecule_local/<image>`), and a digest cannot be
+  # a tag -- `create` then fails outright. Setting it also drops the driver's
+  # default build layer, which ran `apt-get update && apt-get install ...` on
+  # every create; that is why this suite now reaches no package archive during
+  # create, and why the container's contents are pinned and not just its base.
+  # Of what that layer installed, only aptitude and rsync are absent from this
+  # image, and nothing here uses either.
   - name: docker-role-instance
-    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
     command: /lib/systemd/systemd
     privileged: true
     cgroupns_mode: host
