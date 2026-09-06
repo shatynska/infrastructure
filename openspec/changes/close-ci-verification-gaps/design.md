@@ -51,10 +51,12 @@ closes. Constraints that shape the approach:
   `ansible/roles/deploy_user/molecule/default/verify.yml` — two
   `risky-shell-pipe`, one over-long line. The design checked whether ungating
   `gitleaks` would surface a pre-existing finding; it did not ask the same of
-  `ansible-lint`, and that was the gap. Because this change's own pull request
-  touches no `ansible/` path, the blocking tier would not have failed here — it
-  would have failed on whoever next touched `ansible/`, which is a trap laid for
-  someone else rather than a cost borne by the change that created it. The three
+  `ansible-lint`, and that was the gap. At the time, this change's own pull
+  request touched no `ansible/` path, so the blocking tier would not have failed
+  here — it would have failed on whoever next touched `ansible/`, a trap laid
+  for someone else rather than a cost borne by the change that created it.
+  Fixing them changed that fact as a side effect: the fix itself put `ansible/`
+  into the diff, so the tier now runs on this pull request and passes. The three
   were fixed: a line wrap, and `set -o pipefail` on two `shell` tasks. The
   wrap changes nothing; `pipefail` does tighten error propagation in those two
   tasks, so a pipeline whose first stage failed silently would now fail the
@@ -130,7 +132,16 @@ default `~/.ansible/roles` is invisible to anything running with cwd `ansible/`
 — which the syntax-check hook does, and must, or `ansible.cfg` is not found at
 all. The install therefore targets `ansible/roles/` explicitly.
 
-That also has to be two commands rather than one: `-p` applies only to roles,
+The `ansible-lint` hook is also pinned to `language_version: python3.12`.
+Upstream's hook hardcodes `python3.14`; this project's toolchain is pinned and
+verified on 3.12 (`ansible/requirements-test.txt`). Left alone, the hook passes
+only where a 3.14 interpreter happens to exist — which was true of the
+authoring machine, via a `uv`-managed install, and false on the runner, where
+CI failed with `failed to find interpreter for … python3.14`. That is the third
+instance in this change of local state masking a CI gap, and the same class of
+divergence Decision 2 closes for gitleaks.
+
+The install also has to be two commands rather than one: `-p` applies only to roles,
 and `ansible-galaxy install -r … -p …` silently drops the collections in the
 same manifest with only a warning. So `collection install` and `role install`
 are issued separately.
@@ -415,9 +426,13 @@ exercises needs stating precisely, because it is less than it first appears:
   that filter matches. Their evidence is therefore the local `pre-commit run`
   in task 8.2, not a CI run, and the change reports it that way rather than
   claiming a CI observation that did not occur.
-- **The Molecule workflow does not trigger on the pull request either**, for
-  the same reason, and cannot be dispatched manually before merge — the trigger
-  is only exposed once the file is on the default branch (Decision 4).
+- **The Molecule workflow does trigger on the pull request** — which the plan
+  did not predict, and got wrong for an avoidable reason. Fixing the three
+  `ansible-lint` violations (see Non-Goals) put a path under `ansible/` into
+  this change's own diff, so it matches the advisory workflow's `paths:` filter
+  after all. The prediction that it could not run was written before that fix
+  and never revisited. The consequence is good: the suite's first run happens
+  on this pull request rather than waiting for a post-merge dispatch.
 
 Rollback is reverting the pull request. No infrastructure state is involved.
 

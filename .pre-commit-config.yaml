@@ -18,6 +18,15 @@ repos:
     hooks:
       - id: ansible-lint
         files: ^ansible/
+        # Upstream's hook hardcodes `language_version: python3.14`. This
+        # project targets 3.12 -- ansible/requirements-test.txt pins its whole
+        # toolchain "verified together, in this combination, on Python 3.12" --
+        # so the hook is pinned to the same interpreter rather than pulling a
+        # second one in. Without this the hook passes only on a machine that
+        # happens to have 3.14 installed and fails everywhere else, which is
+        # exactly the local-vs-CI divergence the gitleaks pin below exists to
+        # prevent.
+        language_version: python3.12
         # pass_filenames is false upstream (ansible-lint's own recommendation),
         # so without an explicit target it scans the whole repo, not just
         # `ansible/` — flagging unrelated files like .github/workflows/*.yml.

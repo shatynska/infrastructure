@@ -114,9 +114,52 @@ Promotion needs three things, and the middle one is the trap:
 on the default branch). Record per-role outcome and duration here, not in the
 change's own artifacts, which are archived:
 
+First run was on PR #57 itself, not a post-merge dispatch — that change
+fixed three lint violations under `ansible/`, so its own pull request matched
+the `ansible/**` filter after all:
+
 | Role | Outcome | Duration |
 |---|---|---|
-| _pending first dispatch_ | | |
+| `deploy_user` (3 scenarios) | pass | 6m33s |
+| `ops_user` (2 scenarios) | pass | 4m47s |
+| `hardening` | pass | 3m03s |
+| `docker` | pass | 2m55s |
+| `platform_data_volume` | **fail** — see entry 8 | 2m12s |
+
+So the suite **does** run on a hosted runner: the privileged-systemd
+scenarios, UFW and fail2ban all converge and verify. That was the open
+question the advisory tier existed to answer, and the answer is yes. Longest
+role is under seven minutes, and the roles run in parallel.
+
+The one failure is a defect in a scenario's own assertion, not a runner
+problem. Promotion still waits on entry 8 being resolved and on entry 5.
+
+## 8. fix-platform-data-volume-verify-attribute-access
+
+**Found by the first CI run of the Molecule suite** (PR #57), and the reason
+that tier was made advisory rather than blocking.
+
+`ansible/roles/platform_data_volume/molecule/default/verify.yml:189` asserts:
+
+```yaml
+- item.stat.pw_name == item.item.owner or item.stat.uid | string == item.item.owner
+```
+
+and fails with `object of type 'dict' has no attribute 'pw_name'`. The `or`
+fallback never runs: Jinja evaluates the left operand first, and on a `stat`
+result where the uid does not resolve to a name, `pw_name` is simply absent —
+so the expression raises instead of falling through to the uid comparison the
+author clearly intended as the fallback. The subdirectories in question are
+owned by uid `65534`, which need not resolve inside the container.
+
+The fix is to make the access safe (`item.stat.pw_name is defined and …`, or
+compare on uid/gid alone), not to relax what is asserted.
+
+Worth noting *why* this was never seen: the same assertion presumably passed
+on a developer machine, so either the uid resolves there or it did under an
+earlier `ansible-core` whose undefined-attribute behaviour was laxer. Entry 5
+is relevant either way — the platform image floats on `:latest`, so "it passed
+locally" and "it passes in CI" were never statements about the same image.
 
 ## 5. pin-the-molecule-platform-image
 
