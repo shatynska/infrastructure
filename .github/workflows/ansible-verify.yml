@@ -59,8 +59,15 @@ jobs:
         id: discover
         run: |
           set -euo pipefail
+          # `grep -v '\.'` drops Galaxy-namespaced roles, which carry a dot in
+          # their directory name where this project's own roles never do.
+          # Third-party roles ship their own scenarios, and running them would
+          # verify somebody else's code; the vendored one is gitignored, so
+          # this matters in a provisioned working tree rather than in CI, where
+          # discovery runs on a bare checkout in its own job.
           roles=$(find ansible/roles -mindepth 2 -maxdepth 2 -type d -name molecule -printf '%h\n' \
             | xargs -r -n1 basename \
+            | { grep -v '\.' || true; } \
             | sort \
             | jq -R -s -c 'split("\n") | map(select(length > 0))')
           if [ "$roles" = "[]" ] || [ -z "$roles" ]; then
@@ -95,8 +102,19 @@ jobs:
       - name: Install the test toolchain
         run: pip install -r ansible/requirements-test.txt
 
+      # Into ansible/roles/ explicitly. Each scenario sets
+      # ANSIBLE_ROLES_PATH to its project directory's parent -- ansible/roles/
+      # -- and Molecule does not install this manifest itself: its galaxy
+      # dependency step resolves `role-file` relative to the scenario
+      # directory, finds nothing, and returns without error. So a role
+      # installed to the default ~/.ansible/roles is never found, and converge
+      # fails on the dependency rather than on anything the scenario asserts.
+      # `-p` applies only to roles, hence the split.
       - name: Install Galaxy content
-        run: ansible-galaxy install -r ansible/requirements.yml
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection install -r ansible/requirements.yml
+          ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
 
       # `--all` is required, not stylistic: several roles carry more than one
       # scenario, and running without that flag covers only each role's

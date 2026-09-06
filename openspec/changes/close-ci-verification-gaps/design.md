@@ -122,8 +122,24 @@ and pass unconditionally — a vacuous green exactly where the spec demands a
 real scan. gitleaks therefore keeps its direct CLI invocation, with Decision 2
 supplying version parity instead.
 
-`ansible-galaxy install -r ansible/requirements.yml` runs before the hooks so
-`ansible-lint` can resolve `geerlingguy.docker`.
+Galaxy content is installed before the hooks so `geerlingguy.docker` resolves —
+and **where** it is installed is load-bearing, which code review caught and the
+plan had wrong. `ansible/ansible.cfg` sets `roles_path = roles`, which
+*replaces* the default search list rather than extending it, so a role in the
+default `~/.ansible/roles` is invisible to anything running with cwd `ansible/`
+— which the syntax-check hook does, and must, or `ansible.cfg` is not found at
+all. The install therefore targets `ansible/roles/` explicitly.
+
+That also has to be two commands rather than one: `-p` applies only to roles,
+and `ansible-galaxy install -r … -p …` silently drops the collections in the
+same manifest with only a warning. So `collection install` and `role install`
+are issued separately.
+
+This was invisible to local verification in the obvious way: `ansible/roles/geerlingguy.docker/`
+is gitignored but *present* in a provisioned working tree, so both checks pass
+locally while a CI checkout — tracked files only — fails. It is the
+provisioning trap AGENTS.md names, inverted: local state masking a CI gap
+rather than a missing dependency masking a real result.
 
 The blocking tier installs `ansible/requirements-test.txt` whole, which pins
 `ansible-core==2.21.3` — the source of `ansible-galaxy` and `ansible-playbook`,
@@ -220,7 +236,16 @@ own. Three distinct routes have to be closed, and the ordering matters:
 1. **The plan cannot be rendered.** `terraform show -json tfplan >plan.json`
    runs under `set -e` and is not tolerated; a failure aborts the step.
 
-2. **The document is not a Terraform plan.** A well-formed JSON file that is
+2. **The document is not valid JSON.** Added at implementation time, not
+   planned: testing the four fixtures showed that without it, malformed input
+   falls through to the identity check below and fails with "carries no
+   `format_version`" — true but misleading, since the real cause is that the
+   file will not parse. On the gate that stands between a merge and a destroyed
+   production server, a message pointing at the wrong cause costs debugging
+   time exactly when something is already wrong. `jq -e .` first, with its own
+   message, so unparseable and not-a-plan are distinguishable.
+
+3. **The document is valid JSON but is not a Terraform plan.** A well-formed JSON file that is
    not a plan — an empty object, a truncated-then-valid artifact, the wrong
    file entirely — is the case a naive fix misses: `.resource_changes[]?`
    suppresses the missing-key error, `length > 0` evaluates to a legitimate
@@ -230,7 +255,7 @@ own. Three distinct routes have to be closed, and the ordering matters:
    therefore first requires `format_version` to be present, and fails to the
    inspection-failure branch if it is not.
 
-3. **`jq` itself fails.** Its exit status is captured explicitly with
+4. **`jq` itself fails.** Its exit status is captured explicitly with
    `if ! has_destructive=$(jq ... 2>&1); then` rather than left to `set -e`.
    This matters: under `bash -e` — the default shell for a `run:` step — a
    failing command substitution in an assignment aborts the step *at the
@@ -242,7 +267,7 @@ own. Three distinct routes have to be closed, and the ordering matters:
    result — the *good* outcome here — which would conflate "the answer is no"
    with "the inspection failed".
 
-Only after those three does the result get matched against exactly `true` and
+Only after those four does the result get matched against exactly `true` and
 exactly `false`, with any other value falling to the same inspection-failure
 branch. Every route to "we could not tell" ends in a failed workflow carrying a
 message that names plan inspection as the cause, distinct from the message a

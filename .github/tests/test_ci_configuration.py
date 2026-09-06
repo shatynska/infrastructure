@@ -15,10 +15,21 @@ Runner
     python3 -m unittest test_ci_configuration.TestDependabotCoverage \
         .test_every_terraform_lockfile_directory_appears_in_dependabot_config
 
-This is NOT `terraform test`. It requires Python 3.9+ and PyYAML, and nothing
-else -- no network, no credential, no Terraform, no Docker. The repository root
-is found by walking up from this file for `openspec/config.yaml`, or taken from
-the `REPO_ROOT` environment variable when set.
+This is NOT `terraform test`. It needs Python 3.9+ and PyYAML -- no network, no
+credential, no Terraform, no Docker.
+
+One test, `TestMoleculeDiscoveryAndScenarioCoverage
+.test_role_discovery_fails_when_it_finds_nothing`, additionally shells out to a
+workflow's own discovery snippet, so it needs `bash` and the external tools that
+snippet calls: `find`, `xargs`, `basename`, `grep`, `sort` and `jq`. Where any of
+those is missing, that one test skips and names it -- except under CI (`CI` set
+in the environment), where it fails instead, because a skipped test on a runner
+is a check reporting success having verified nothing. Every other test in this
+file needs Python and PyYAML alone.
+
+The repository root is found by walking up from this file for
+`openspec/config.yaml`, or taken from the `REPO_ROOT` environment variable when
+set.
 """
 
 from __future__ import annotations
@@ -523,9 +534,44 @@ class TestVerificationJobsCarryNoCredential(unittest.TestCase):
 class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
     """ADDED requirement: Ansible Configuration Is Verified in CI."""
 
+    # The discovery snippet is real shell: it calls these before it can reach
+    # its own failure branch. Without them it exits non-zero for a reason that
+    # has nothing to do with discovery.
+    DISCOVERY_SNIPPET_TOOLS = ("find", "xargs", "basename", "grep", "sort", "jq")
+
     def setUp(self) -> None:
         self.workflow = load_yaml(ANSIBLE_VERIFY)
         self.text = read_text(ANSIBLE_VERIFY)
+
+    def _require_discovery_snippet_tools(self) -> None:
+        """Precondition, not an assertion: refuse to read a non-zero exit as
+        evidence about discovery when the snippet could not run at all.
+
+        DERIVED. `assertNotEqual(0, returncode)` passes on an accident when a
+        tool the snippet calls is absent -- `jq: command not found` is also a
+        non-zero exit -- and the message assertion then fails for a cause the
+        workflow is not responsible for. So the tools are checked up front.
+
+        Outside CI a missing tool is a fact about the machine, and the test
+        skips, naming it; unittest reports the skip and its reason rather than
+        counting it a pass. Under CI it fails instead, because a silently
+        skipped check is precisely the "green having verified nothing" failure
+        this change exists to close.
+        """
+        missing = [tool for tool in self.DISCOVERY_SNIPPET_TOOLS if shutil.which(tool) is None]
+        if not missing:
+            return
+        reason = (
+            "cannot exercise ansible-verify.yml's role-discovery snippet: it calls "
+            f"{', '.join(missing)}, absent on this machine, so its exit status would "
+            "say nothing about whether discovery fails on an empty tree"
+        )
+        if os.environ.get("CI"):
+            self.fail(
+                f"{reason}. Running under CI, where skipping this test would report "
+                "success having verified nothing; install the tool on the runner."
+            )
+        self.skipTest(reason)
 
     def test_the_workflow_names_no_role_literally(self) -> None:
         """SPECIFIED -- "The Molecule run SHALL discover role scenarios rather
@@ -609,6 +655,8 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
             "Actions expression, so it cannot be exercised against a scratch tree "
             "as tasks.md 5.2 requires",
         )
+
+        self._require_discovery_snippet_tools()
 
         scratch = Path(tempfile.mkdtemp(prefix="molecule-discovery-"))
         try:

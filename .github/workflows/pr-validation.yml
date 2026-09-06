@@ -50,6 +50,7 @@ jobs:
       # Terraform binary. See the Continuous-Integration Configuration Is
       # Itself Verified requirement.
       - name: Setup Python (CI configuration tests)
+        id: setup_python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -72,6 +73,43 @@ jobs:
           cp platform/.env.example platform/.env
           docker compose -f platform/docker-compose.yml config
           rm platform/.env
+
+      # Unconditional. A secret scanner whose entire value is being
+      # unconditional cannot be gated on a path filter -- a credential
+      # committed under ansible/, platform/ or docs/ is exactly as exposed as
+      # one under terraform/. The version is read out of
+      # .pre-commit-config.yaml at run time rather than hardcoded, so the local
+      # hook and this scan cannot drift apart; a comment asking people to keep
+      # two numbers in sync is what produced the drift this replaces.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          version=$(awk '/gitleaks\/gitleaks/{found=1} found && /rev:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' .pre-commit-config.yaml)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the pinned gitleaks revision from .pre-commit-config.yaml. Refusing to install an unverified version."
+            exit 1
+          fi
+          echo "Installing gitleaks ${version}, the revision .pre-commit-config.yaml pins."
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tar.gz gitleaks
+          rm gitleaks.tar.gz
+
+      # Invokes the gitleaks CLI binary directly, not
+      # gitleaks/gitleaks-action@v2 — that action requires a paid
+      # GITLEAKS_LICENSE for org-owned repos and runs on Node 20, which
+      # GitHub-hosted runners drop on 2026-09-16. See design.md
+      # Decision 6.
+      # `dir` scans the working tree; `detect` (removed from the documented CLI
+      # by 8.30.0, surviving only as an alias for `git`) scans history, and on
+      # actions/checkout's default shallow clone a history scan sees one commit
+      # and reports success on everything else. Verified: run where git fails,
+      # `detect` logs the failure and still concludes "no leaks found" -- the
+      # same "could not tell, therefore fine" shape as the destroy gate. What
+      # matters on a pull request is whether a secret is in the tree being
+      # merged, not when it entered.
+      - name: gitleaks
+        run: ./gitleaks dir . --redact --exit-code 1
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth
       # (its "dynamic credentials" feature authenticates providers during
@@ -153,42 +191,6 @@ jobs:
           exit-code: "1"
           severity: "CRITICAL,HIGH"
 
-      # Unconditional. A secret scanner whose entire value is being
-      # unconditional cannot be gated on a path filter -- a credential
-      # committed under ansible/, platform/ or docs/ is exactly as exposed as
-      # one under terraform/. The version is read out of
-      # .pre-commit-config.yaml at run time rather than hardcoded, so the local
-      # hook and this scan cannot drift apart; a comment asking people to keep
-      # two numbers in sync is what produced the drift this replaces.
-      - name: Install gitleaks
-        run: |
-          set -euo pipefail
-          version=$(awk '/gitleaks\/gitleaks/{found=1} found && /rev:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' .pre-commit-config.yaml)
-          if [ -z "$version" ]; then
-            echo "::error::Could not read the pinned gitleaks revision from .pre-commit-config.yaml. Refusing to install an unverified version."
-            exit 1
-          fi
-          echo "Installing gitleaks ${version}, the revision .pre-commit-config.yaml pins."
-          curl -sSfL -o gitleaks.tar.gz \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
-          tar -xzf gitleaks.tar.gz gitleaks
-          rm gitleaks.tar.gz
-
-      # Invokes the gitleaks CLI binary directly, not
-      # gitleaks/gitleaks-action@v2 — that action requires a paid
-      # GITLEAKS_LICENSE for org-owned repos and runs on Node 20, which
-      # GitHub-hosted runners drop on 2026-09-16. See design.md
-      # Decision 6.
-      # `dir` scans the working tree; `detect` (removed from the documented CLI
-      # by 8.30.0, surviving only as an alias for `git`) scans history, and on
-      # actions/checkout's default shallow clone a history scan sees one commit
-      # and reports success on everything else. Verified: run where git fails,
-      # `detect` logs the failure and still concludes "no leaks found" -- the
-      # same "could not tell, therefore fine" shape as the destroy gate. What
-      # matters on a pull request is whether a secret is in the tree being
-      # merged, not when it entered.
-      - name: gitleaks
-        run: ./gitleaks dir . --redact --exit-code 1
 
       # Ansible's blocking tier. These run through `pre-commit` rather than
       # being re-expressed here: both hooks are already pinned in
@@ -210,16 +212,36 @@ jobs:
         if: steps.changes.outputs.ansible == 'true'
         run: pip install -r ansible/requirements-test.txt
 
+      # Roles are installed into ansible/roles/ explicitly, NOT to the default
+      # ~/.ansible/roles. `ansible/ansible.cfg` sets `roles_path = roles`,
+      # which REPLACES the default search list rather than extending it, so a
+      # role installed to the default location is invisible to anything
+      # running with cwd `ansible/` -- which the syntax-check hook does, and
+      # must, or ansible.cfg is not found at all. Installing from the
+      # repository root without `-p` puts the role somewhere nothing will look
+      # and the syntax check fails on `- role: geerlingguy.docker`.
+      #
+      # Split into role and collection commands because `-p` applies only to
+      # roles: `ansible-galaxy install -r ... -p ...` silently ignores the
+      # collections in the same manifest, with a warning that is easy to miss
+      # in a CI log.
       - name: Install Galaxy content
         if: steps.changes.outputs.ansible == 'true'
-        run: ansible-galaxy install -r ansible/requirements.yml
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection install -r ansible/requirements.yml
+          ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
 
       - name: Cache pre-commit environments
         if: steps.changes.outputs.ansible == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          # Keyed on the runner image and Python version as well as the config:
+          # a pre-commit hook environment is built against a specific
+          # interpreter, so a runner-image bump would otherwise restore a cache
+          # that no longer works.
+          key: pre-commit-${{ runner.os }}-py${{ steps.setup_python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: ansible-lint
         if: steps.changes.outputs.ansible == 'true'

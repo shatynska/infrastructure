@@ -32,7 +32,8 @@ which the module-level Terraform mechanism can reach.
 
 ## 2. Runner and the invocation CI must use
 
-Python standard-library `unittest` plus PyYAML. No network, credential,
+Python standard-library `unittest` plus PyYAML, and — for one test only — the
+external tools listed under *External tools* below. No network, credential,
 container runtime or Terraform binary. Full run: ~0.2 s.
 
 **The exact command the `pr-validation.yml` step should use, with the
@@ -75,6 +76,37 @@ imports is its runtime's standard library, and two tests assert that it
 stays that way
 (§4.6 F3).
 
+### External tools
+
+Beyond Python and PyYAML the suite needs **`bash`, `find`, `xargs`, `basename`,
+`grep`, `sort` and `jq`** — but for **one test only**,
+`TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`
+(A4). That test is behavioral: it executes `ansible-verify.yml`'s own discovery
+snippet against a scratch tree, and the snippet calls those tools before it can
+reach the failure branch under test. Every other test in the suite needs Python
+and PyYAML alone.
+
+Where any of those tools is absent, the test **skips and names the missing
+tool** rather than asserting on an exit status that says nothing about
+discovery: `jq: command not found` is also a non-zero exit, so
+`assertNotEqual(0, returncode)` would pass on an accident and the message
+assertion would then fail for a cause the workflow is not responsible for.
+`unittest` reports the skip and its reason in the run output — it is not
+counted as a pass.
+
+**Under CI (`CI` set in the environment) it fails instead of skipping.** A
+skipped check on a runner is exactly the "green having verified nothing"
+failure this change exists to close, so on a runner whose image stopped
+shipping `jq` the suite must go red, not quietly drop the test. GitHub-hosted
+`ubuntu-latest` images ship all seven today; the guard exists so that ceasing
+to is visible.
+
+This dependency is a property of the *implemented* discovery snippet, recorded
+after the fact: the snippet's final form pipes `find` through `xargs basename`,
+`grep -v '\.'` and `sort` into `jq -R -s -c`. Nothing in the delta specs
+requires that shape — see Q4 — so a reimplementation that drops `jq` would
+narrow this list rather than violate anything.
+
 ## 3. Baseline
 
 **Full baseline, taken before any test was written**, and **re-confirmed after
@@ -106,7 +138,7 @@ uncovered, with reason.
 | A1 | Ansible-only pull request is linted and syntax-checked | P | `TestAnsibleBlockingTier.test_an_ansible_path_filter_selects_changes_under_ansible`, `.test_the_blocking_tier_runs_ansible_lint`, `.test_the_blocking_tier_runs_an_ansible_syntax_check`. Asserts that an `ansible/**` filter selects the checks and that both checks are invoked. **Not covered:** that `ansible-lint` actually reports an error on bad content — that is `ansible-lint`'s behavior, not this repository's to assert. |
 | A2 | A newly added role scenario runs without a workflow change | P | `TestMoleculeDiscoveryAndScenarioCoverage.test_the_workflow_names_no_role_literally`. Proves the negative the requirement states ("discover ... rather than enumerate"): no role currently carrying a `molecule/` directory is named in the workflow. The role list is read from the tree at test time, so the test stays correct as roles are added. **Not covered:** that a hypothetical new scenario is in fact executed — that needs a real runner. |
 | A3 | Every scenario a role declares is executed | C | `TestMoleculeDiscoveryAndScenarioCoverage.test_molecule_is_invoked_across_all_scenarios`. The requirement names the mechanism (`--all` rather than the `default` scenario), so the static assertion is the scenario. |
-| A4 | Discovering no roles fails rather than passes | C | `TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`. **Behavioral**: extracts the discovery step's shell, executes it under `bash -e` against a scratch tree containing an empty `ansible/roles/`, and asserts a non-zero exit carrying a message that names discovery. See §7 Q4. |
+| A4 | Discovering no roles fails rather than passes | C | `TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`. **Behavioral**: extracts the discovery step's shell, executes it under `bash -e` against a scratch tree containing an empty `ansible/roles/`, and asserts a non-zero exit carrying a message that names discovery. Because it runs the real snippet it needs that snippet's external tools — `bash`, `find`, `xargs`, `basename`, `grep`, `sort`, `jq` — and skips (fails, under CI) when one is absent rather than reading an accidental non-zero exit as evidence; see §2 *External tools*. See also §7 Q4. |
 | A5 | A failing Molecule scenario does not block a merge | P | `TestMoleculeDiscoveryAndScenarioCoverage.test_the_workflow_uses_no_continue_on_error`. Asserts the visibility half — the run reports its true conclusion. **Not covered:** that the workflow is absent from branch protection's required checks. Branch protection is GitHub-side configuration, not repository state. |
 | A6 | Ansible verification receives no production credential | C | `TestVerificationJobsCarryNoCredential.test_no_pull_request_validation_job_declares_an_environment`, `.test_the_molecule_workflow_declares_no_environment`, `.test_the_molecule_workflow_consumes_no_secret`. The scenario is itself a statement about configuration ("without ... a declared deployment `environment:`"), so these assertions are the scenario. |
 
