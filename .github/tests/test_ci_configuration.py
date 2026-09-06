@@ -1115,9 +1115,15 @@ class TestTheSuiteNeedsNoPrivilegedResource(unittest.TestCase):
     ALLOWED_THIRD_PARTY = {"yaml"}
 
     def test_the_suite_imports_only_the_standard_library_and_pinned_dependencies(self) -> None:
-        """SPECIFIED -- "SHALL depend only on the standard library and on
-        dependencies pinned exactly in a repository manifest", and scenario
-        "The suite needs no privileged or external resource"."""
+        """SPECIFIED -- "SHALL depend only on its runtime's standard library
+        and on dependencies pinned exactly in a repository manifest", and
+        scenario "The suite needs no privileged or external resource".
+
+        The requirement is language-agnostic. This suite's runtime is Python
+        (design Decision 7), so "its runtime's standard library" resolves to
+        `sys.stdlib_module_names` below. The method name is left unchanged: it
+        is a runner-selectable identifier that `test-plan.md` cites.
+        """
         tree = ast.parse(SUITE_PATH.read_text(encoding="utf-8"))
         roots = set()
         for node in ast.walk(tree):

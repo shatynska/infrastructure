@@ -71,7 +71,8 @@ python3 -m unittest discover --start-directory .github/tests \
 **PyYAML, pinned exactly in `.github/requirements-ci.txt`** alongside
 `pre-commit` (`tasks.md` 4.2). **Verified against PyYAML 6.0.1** — pin that
 version, so the pin and this verification agree. Everything else the suite
-imports is standard library, and two tests assert that it stays that way
+imports is its runtime's standard library, and two tests assert that it
+stays that way
 (§4.6 F3).
 
 ## 3. Baseline
@@ -160,7 +161,7 @@ deferred, so the scenario count stays complete.
 | --- | --- | --- | --- |
 | F1 | A regression in CI configuration fails the pull request that introduces it | C | Two halves, both covered. **Does the suite discriminate:** `TestTheSuiteDiscriminates.test_the_suite_fails_a_configuration_that_violates_a_required_property` and `.test_the_suite_passes_a_configuration_that_satisfies_it` build two synthetic repositories differing in exactly one property — whether `dependabot.yml` names every lockfile-bearing directory — run the suite as a subprocess against each, and assert the verdicts differ. **Does a failure reach the check:** `TestTheSuiteIsWiredIntoTheRequiredCheck.test_the_step_invoking_the_suite_does_not_swallow_its_result`, guarded by `.test_the_required_check_invokes_the_suite`. The discriminating pair is the executable form of the "absence of evidence read as evidence of absence" objection this capability raises against its own destroy gate and its own secret scanning; without it, a suite that is always green satisfies every other test here. |
 | F2 | The suite runs regardless of what a pull request touched | C | `TestTheSuiteIsWiredIntoTheRequiredCheck.test_the_step_invoking_the_suite_is_unconditional` — no `if:` on the step and none on its job — together with `TestRequiredCheckIsNotPathFiltered.test_the_required_check_declares_no_workflow_level_path_filter`, which is what stops the workflow itself from being filtered out. |
-| F3 | The suite needs no privileged or external resource | C | `TestTheSuiteNeedsNoPrivilegedResource.test_the_suite_imports_only_the_standard_library_and_pinned_dependencies` (every import is stdlib or the pinned `yaml`), `.test_the_suite_imports_no_network_capable_module` (stdlib-only does not establish this — `urllib` is stdlib), `.test_the_suite_spawns_no_terraform_binary_or_container_runtime` (reads the suite's own `subprocess` calls out of its AST; the only command it spawns is `bash`, to exercise a workflow snippet). Self-asserting by construction, which is the point: the requirement constrains the suite, so the suite is what must be inspected. |
+| F3 | The suite needs no privileged or external resource | C | `TestTheSuiteNeedsNoPrivilegedResource.test_the_suite_imports_only_the_standard_library_and_pinned_dependencies` (every import is its runtime's standard library or the pinned `yaml`), `.test_the_suite_imports_no_network_capable_module` (stdlib-only does not establish this — `urllib` is stdlib), `.test_the_suite_spawns_no_terraform_binary_or_container_runtime` (reads the suite's own `subprocess` calls out of its AST; the only command it spawns is `bash`, to exercise a workflow snippet). Self-asserting by construction, which is the point: the requirement constrains the suite, so the suite is what must be inspected. |
 
 **Count:** 6 + 7 + 5 + 4 + 4 + 3 = 29 scenarios. Covered 14 · partial 10 ·
 uncovered 5. All 29 accounted for.
