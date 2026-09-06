@@ -145,7 +145,31 @@ merge: entry 5's pin is applied to all eight scenarios and entry 8's assertion
 is fixed. What promotion still needs after that is the evidence in point 1 —
 consecutive green runs on pull requests — and the `paths:`-filter removal in
 point 2, which is not a branch-protection toggle and remains this entry's real
-work. Record that change's own `ansible-verify.yml` run below when it lands.
+work.
+
+**Third run — the first fully green one.** On PR #64
+([run 34057674462](https://github.com/shatynska/infrastructure/actions/runs/34057674462)),
+which pinned the platform image and fixed the assertion:
+
+| Role | Outcome | Duration | Was |
+|---|---|---|---|
+| `deploy_user` (3 scenarios) | pass | 6m06s | 6m33s |
+| `ops_user` (2 scenarios) | pass | 4m29s | 4m42s |
+| `docker` | pass | 2m31s | 2m41s |
+| `hardening` | pass | 2m11s | 2m36s |
+| `platform_data_volume` | **pass** | 1m40s | **fail** 2m07s |
+
+Every scenario green, and modestly faster across the board. The speed-up is
+smaller than the same change produced locally, which is what one would expect:
+removing an `apt-get` install helps a developer's connection more than a hosted
+runner sitting next to a package mirror.
+
+Point 1's "how many is a judgement call" now has two green runs behind it — the
+runs on PRs #57 and the `main` dispatch were green **except** for
+`platform_data_volume`, so they establish the privileged-systemd scenarios are
+reproducible on a hosted runner but are not themselves green runs. This is the
+first. One more on an unrelated `ansible/`-touching pull request would make the
+evidence real rather than a single observation of the change that fixed it.
 
 One thing that change establishes bears on the evidence question: until now the
 suite installed `python3 sudo bash ca-certificates iproute2 python3-apt
