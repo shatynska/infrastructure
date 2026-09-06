@@ -92,7 +92,13 @@ jobs:
           echo "Installing gitleaks ${version}, the revision .pre-commit-config.yaml pins."
           curl -sSfL -o gitleaks.tar.gz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
-          tar -xzf gitleaks.tar.gz gitleaks
+          # Extracted outside the workspace: the next step scans the working
+          # tree, and a binary sitting at the repository root would be scanned
+          # by itself -- ~30 MB whose embedded rule config is dense in exactly
+          # the keywords the generic-api-key rule keys on. Keeping it out also
+          # makes this invocation equivalent to the one verified locally,
+          # where no such file exists.
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
           rm gitleaks.tar.gz
 
       # Invokes the gitleaks CLI binary directly, not
@@ -109,7 +115,8 @@ jobs:
       # matters on a pull request is whether a secret is in the tree being
       # merged, not when it entered.
       - name: gitleaks
-        run: ./gitleaks dir . --redact --exit-code 1
+        run: |
+          "$RUNNER_TEMP/gitleaks" dir . --redact --exit-code 1
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth
       # (its "dynamic credentials" feature authenticates providers during

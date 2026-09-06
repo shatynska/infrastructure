@@ -148,6 +148,16 @@ Both noticed during `close-ci-verification-gaps`, neither a verification gap:
   described in that change's `tasks.md` 1.1; the structural tests in
   `.github/tests/test_ci_configuration.py` currently assert the routes are
   closed, not that each is reached.
+- **`actionlint` is named as a verification means but nothing installs it.**
+  Three tasks in `close-ci-verification-gaps` cite it, and it was run manually
+  from a scratch install. Adding it to `.pre-commit-config.yaml` would close
+  that permanently — but it exits non-zero on two pre-existing `SC2016:info`
+  findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the
+  job-summary step — both single-quoted literal markdown in an `echo`, and both
+  intentional). So landing the hook means dispositioning those two first,
+  by fixing or ignoring them. That is the same trap this change refused to lay
+  for the next person when `ansible-lint` failed on pre-existing violations,
+  and it wants its own decision rather than being folded in.
 
 ## 7. size-platform-container-resource-limits
 
