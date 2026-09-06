@@ -55,7 +55,7 @@
 - [x] 7.2 Add an entry to `docs/change-queue.md` for pinning the Molecule platform image: every scenario uses `geerlingguy/docker-ubuntu2204-ansible:latest`, a floating tag, against AGENTS.md's exact-pinning convention. Noticed while implementing this change and deliberately not folded into it. Verify the entry names the affected scenario files.
 - [x] 7.3 Add an entry to `docs/change-queue.md` for the two deferred CI items: `pre-commit-autoupdate.yml`'s unpinned `pip install pre-commit`, and moving the destroy-policy gate's inspection logic into a version-controlled script with executable fixtures rather than inline workflow shell (design Decision 5's second rejected alternative). Verify each names its file.
 - [x] 7.4 Update `README.md`'s Ansible testing section to state that lint and syntax checks now run in CI on pull requests touching `ansible/`, and that Molecule runs there advisorily. Verify the local `molecule test --all` instructions are preserved unchanged.
-- [ ] 7.5 **At archive time, not in the implementation pull request**: extend `openspec/specs/iac-cicd-pipeline/spec.md`'s `## Purpose` to name **both** requirements this change adds to the capability — Ansible lint, syntax and Molecule verification, *and* the executable suite that verifies the pipeline's own configuration — alongside the Terraform scope it currently lists. A capability's Purpose cannot be expressed as a delta, so it is hand-edited — but it belongs in the same pull request as the rest of the spec record, so the Purpose does not advertise Ansible verification during the window before the requirements themselves land. Verify by reading the archived `openspec/specs/iac-cicd-pipeline/spec.md` and confirming its Purpose names both new subjects and its requirements include both archived ADDED requirements.
+- [x] 7.5 **At archive time, not in the implementation pull request**: extend `openspec/specs/iac-cicd-pipeline/spec.md`'s `## Purpose` to name **both** requirements this change adds to the capability — Ansible lint, syntax and Molecule verification, *and* the executable suite that verifies the pipeline's own configuration — alongside the Terraform scope it currently lists. A capability's Purpose cannot be expressed as a delta, so it is hand-edited — but it belongs in the same pull request as the rest of the spec record, so the Purpose does not advertise Ansible verification during the window before the requirements themselves land. Verify by reading the archived `openspec/specs/iac-cicd-pipeline/spec.md` and confirming its Purpose names both new subjects and its requirements include both archived ADDED requirements.
 
 ## 8. Verification
 
@@ -65,5 +65,25 @@
 - [x] 8.3 Run `molecule test --all` locally for at least one multi-scenario role (`ops_user`) to confirm the suite the advisory workflow will run is green at this commit, so a CI failure is attributable to the runner rather than to the suite. Record the result; if it cannot be run locally, report it as not run and why.
 - [x] 8.4 Re-run the CI-configuration suite now that groups 1-6 are complete, and confirm every state-1 failure recorded in task 0.1 has turned green. Confirm the 8 state-2 tests now **execute their assertions** rather than failing on a missing `ansible-verify.yml` — a green first run is the first evidence those eight discriminate at all, so read it as that and not as coverage already established. Re-check the one pass `test-plan.md` flags as vacuous (`test_the_validation_workflow_installs_only_from_requirement_manifests`): it passes today because `pr-validation.yml` has no `pip install`, and only task 4.3 makes it meaningful.
 - [x] 8.5 Open the pull request and confirm on it: the required check reports a conclusion, the gitleaks step ran despite no Terraform change, and the Terraform and Ansible steps skipped for the stated reasons. Confirm no check is left permanently pending, and that the CI-configuration suite step ran and passed — it is the only new check this pull request actually exercises besides gitleaks. `ansible-verify.yml` will not appear on this pull request and cannot be dispatched yet — see 8.7.
-- [ ] 8.6 After merge, confirm `apply.yml` did **not** run for this pull request and no `production` Environment approval was requested, since it touches no `terraform/**` path.
-- [ ] 8.7 After merge, dispatch `ansible-verify.yml` manually on `main` — the trigger is only exposed once the workflow file is on the default branch (design Decision 4), so this cannot be done earlier. Record the per-role outcome and duration **into task 7.1's promotion entry in `docs/change-queue.md`**, not only in the run log or this change's artifacts — the artifacts are archived immediately after, and the promotion condition is evaluated by a later session that will read the queue file and nothing else. That record is this change's confirm-gate evidence and the baseline the promotion depends on. If the run is red, record which scenarios failed and how, in the same place, and report that as the change's finding rather than as a defect to fix here.
+- [x] 8.6 After merge, confirm `apply.yml` did **not** run for this pull request and no `production` Environment approval was requested, since it touches no `terraform/**` path.
+- [x] 8.7 After merge, dispatch `ansible-verify.yml` manually on `main` — the trigger is only exposed once the workflow file is on the default branch (design Decision 4), so this cannot be done earlier. Record the per-role outcome and duration **into task 7.1's promotion entry in `docs/change-queue.md`**, not only in the run log or this change's artifacts — the artifacts are archived immediately after, and the promotion condition is evaluated by a later session that will read the queue file and nothing else. That record is this change's confirm-gate evidence and the baseline the promotion depends on. If the run is red, record which scenarios failed and how, in the same place, and report that as the change's finding rather than as a defect to fix here.
+
+## Outcomes recorded at archive
+
+- **8.6** — merge commit `c7e516d` triggered only Dependabot Updates. No
+  `Terraform Apply (prod)` run and no `production` Environment approval
+  request, where the preceding merge `4242127` did produce one. The path
+  filter works.
+- **8.7** — dispatched on `main` as run `34046099603`, confirming
+  `workflow_dispatch` resolves once the file is on the default branch. Four
+  roles pass, `platform_data_volume` fails identically to its pull-request
+  run; both results are in `docs/change-queue.md` entry 4, and the failure
+  itself is entry 8.
+- **7.5** — `openspec/specs/iac-cicd-pipeline/spec.md`'s Purpose extended to
+  name both added subjects, in this archive pull request.
+- **Confirm gate** — the operator confirmed the change working on the evidence
+  above and instructed archiving. The destroy-policy gate remains unexercised
+  in the pipeline: it fires only on a merge touching `terraform/**`, and this
+  change touched none. Its four routes were verified against fixtures locally;
+  the next Terraform change exercises it for real.
+

@@ -10,7 +10,6 @@ no restructuring; what follows is maintenance, not redesign.
 Three of the audit's findings were ready to act on and were **opened** instead
 of queued — they have branches and handoffs, not entries here:
 
-- `close-ci-verification-gaps` — CI verification holes and a fail-open gate
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift
 - `refresh-readme-accuracy` — README statements that are no longer true
 
@@ -126,10 +125,17 @@ the `ansible/**` filter after all:
 | `docker` | pass | 2m55s |
 | `platform_data_volume` | **fail** — see entry 8 | 2m12s |
 
+Repeated post-merge as a manual `workflow_dispatch` on `main`
+([run 34046099603](https://github.com/shatynska/infrastructure/actions/runs/34046099603)),
+which also confirmed that trigger works — promotion depends on it. Same
+outcome, same single failure: `deploy_user` 7m38s, `ops_user` 4m42s,
+`hardening` 2m36s, `docker` 2m41s, `platform_data_volume` fail 2m07s. Two
+independent runs agreeing means the failure is deterministic, not flaky.
+
 So the suite **does** run on a hosted runner: the privileged-systemd
 scenarios, UFW and fail2ban all converge and verify. That was the open
 question the advisory tier existed to answer, and the answer is yes. Longest
-role is under seven minutes, and the roles run in parallel.
+role is under eight minutes, and the roles run in parallel.
 
 The one failure is a defect in a scenario's own assertion, not a runner
 problem. Promotion still waits on entry 8 being resolved and on entry 5.
