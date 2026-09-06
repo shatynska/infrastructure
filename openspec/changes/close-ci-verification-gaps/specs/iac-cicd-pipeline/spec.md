@@ -39,6 +39,25 @@ Neither tier SHALL declare a deployment `environment:` or receive any production
 - **WHEN** any Ansible verification job runs on a pull request
 - **THEN** it SHALL complete without a Hetzner API token, an SSH deploy key, a registry credential, or a declared deployment `environment:`
 
+### Requirement: The Continuous-Integration Configuration Is Itself Verified
+The properties this capability requires of its own configuration — which checks are gated on which paths, which versions are pinned where, which jobs declare a deployment `environment:`, and which directories a dependency-update configuration covers — SHALL be asserted by an executable test suite, and that suite SHALL run on every pull request as part of the required status check, unconditionally.
+
+These properties are assertions about repository files rather than about infrastructure, so the project's module-level Terraform test mechanism cannot reach them. A capability whose guarantees are checked only by a reviewer noticing is guaranteed only until someone does not notice; the gaps this change closes were each introduced that way.
+
+The suite SHALL depend only on its runtime's standard library and on dependencies pinned exactly in a repository manifest, and SHALL require no network access, credential, container runtime or Terraform binary — it gates every pull request, including those that change nothing it asserts about.
+
+#### Scenario: A regression in CI configuration fails the pull request that introduces it
+- **WHEN** a pull request changes the continuous-integration configuration such that a property this capability requires no longer holds
+- **THEN** the required status check SHALL fail on that pull request
+
+#### Scenario: The suite runs regardless of what a pull request touched
+- **WHEN** a pull request changes no file under `.github/`
+- **THEN** the required status check SHALL still run the suite and report its result
+
+#### Scenario: The suite needs no privileged or external resource
+- **WHEN** the suite runs in continuous integration
+- **THEN** it SHALL complete without a network call, a credential, a container runtime or a Terraform binary
+
 ## MODIFIED Requirements
 
 ### Requirement: Pull Request Validation Checks

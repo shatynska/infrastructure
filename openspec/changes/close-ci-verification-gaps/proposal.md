@@ -56,6 +56,28 @@ leave a pull request unmergeable — the opposite constraint that governs
 `.terraform.lock.hcl` and is currently unlisted, so its provider pin rots
 silently.
 
+**The CI configuration gains executable tests, and CI runs them.** The
+requirements this change adds are assertions about workflow YAML,
+`.github/dependabot.yml` and `.pre-commit-config.yaml` — none of which
+`terraform test` can reach, which is why this repository has never had a check
+over its own CI configuration. A stdlib `unittest` suite at
+`.github/tests/test_ci_configuration.py` asserts them directly, and
+`pr-validation.yml` runs it unconditionally.
+
+This scope was added after the plan's review rounds, deliberately: deriving the
+tests established that most of these scenarios reduce to static assertions that
+*are* the scenario, and shipping a change about closing CI verification gaps
+whose own guarantees nothing verifies would reproduce the defect it exists to
+fix. The suite discriminates — fifteen of its assertions fail on the tree as it
+stands today, and it carries a test that runs itself against two synthetic
+repositories to establish that it can fail at all.
+
+The derivation, the per-scenario accounting and the pre-implementation baseline
+are recorded in `test-plan.md` beside this proposal. It is not an
+OpenSpec-schema artifact, so it does not travel with the four that a reviewer
+or an implementing session is dispatched with, and it has to be opened
+deliberately.
+
 ## Capabilities
 
 ### New Capabilities
@@ -65,12 +87,13 @@ to perform.
 
 ### Modified Capabilities
 
-- `iac-cicd-pipeline`: secret scanning is required on *every* pull request
-  rather than only Terraform ones, and its version is tied to the pre-commit
-  pin; a new requirement covers Ansible verification and its two tiers; the
-  destroy-policy gate must fail closed on an indeterminate plan inspection;
-  the gated apply workflow triggers only on pushes that can affect the
-  Terraform configuration.
+- `iac-cicd-pipeline` — **two added requirements**: Ansible verification in its
+  two tiers, and the continuous-integration configuration being itself verified
+  by an executable suite that runs unconditionally. **Three modified**: secret
+  scanning is required on *every* pull request rather than only Terraform ones,
+  with its version tied to the pre-commit pin; the destroy-policy gate must
+  fail closed on an indeterminate plan inspection; the gated apply workflow
+  triggers only on pushes that can affect the Terraform configuration.
 - `iac-safety-hardening`: automated dependency updates must cover every
   directory carrying a `.terraform.lock.hcl`, enumerated exhaustively and kept
   in agreement with the lockfile set, so a newly added module cannot be
@@ -87,17 +110,27 @@ to perform.
 - `.github/workflows/apply.yml` — `paths:` filter on the push trigger;
   destroy-policy gate rewritten to fail closed.
 - `.github/dependabot.yml` — `/terraform/modules/volume` added.
+- `.github/tests/test_ci_configuration.py` — new; the executable assertions
+  behind this change's requirements, derived from the delta specs before
+  implementation.
 - `.github/requirements-ci.txt` — new; pins the `pre-commit` version CI
-  installs, since nothing pinned it before.
+  installs, since nothing pinned it before, and pins PyYAML, which the test
+  suite needs and which currently arrives only transitively via
+  `ansible-core`.
 - `.pre-commit-config.yaml` — gitleaks pin is the source of truth CI follows;
   changed only if reconciliation moves it.
+- `AGENTS.md` — the "Testing" section gains this project's second test command
+  and its glob, since `terraform test` no longer covers everything.
+- `.gitignore` — `__pycache__/`, which this repository has never needed before
+  and which running the suite creates.
 - `README.md` — the Ansible testing section stops describing the suite as
   local-only.
 - `docs/change-queue.md` — three entries: promoting Molecule to a required
   check, pinning the floating Molecule platform image, and the unpinned
   `pip install pre-commit` in `pre-commit-autoupdate.yml`.
 - `openspec/specs/iac-cicd-pipeline/spec.md` — `## Purpose` extended to name
-  Ansible verification. A capability's Purpose is not expressible as a delta,
+  both subjects this change adds to the capability: Ansible verification, and
+  the pipeline's own configuration being verified. A capability's Purpose is not expressible as a delta,
   so it is hand-edited, in the archive pull request alongside the rest of the
   spec record rather than in the implementation one.
 - No production infrastructure changes. No credential or `environment:`

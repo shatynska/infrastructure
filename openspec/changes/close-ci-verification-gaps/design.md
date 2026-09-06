@@ -32,6 +32,8 @@ closes. Constraints that shape the approach:
 **Goals:**
 
 - No verification hole that depends on which directory a pull request touched.
+- The capability's guarantees about its own configuration become machine-checked
+  rather than resting on a reviewer noticing.
 - The destroy-policy gate fails closed, with an uninspectable plan clearly
   distinguishable from an inspected-and-clean one.
 - One pinned version per tool, in one place, for both local and CI runs.
@@ -253,6 +255,47 @@ this decision removes for the case that needs it least.
 `drift.yml` continues to run nightly, so nothing that a per-merge plan would
 have caught goes undetected for longer than a day.
 
+### Decision 7: The CI configuration is tested by a stdlib `unittest` suite
+
+Deriving this change's tests from its delta specs established that most of its
+scenarios are not analogies to assertions — they *are* assertions over
+repository files. "No gitleaks step carries the Terraform condition", "the CI
+gitleaks version equals the pre-commit pin", "every `.terraform.lock.hcl`
+directory appears in `dependabot.yml`" are each one line of YAML parsing. So
+the suite exists, and this change is the right place for it: fifteen of its
+assertions fail on the tree as it stands and discriminate, which is
+what makes it a test suite rather than a description.
+
+**Location:** `.github/tests/test_ci_configuration.py`. Everything it asserts
+about lives in `.github/` bar `.pre-commit-config.yaml`, and the repository's
+only other tests are module-local `terraform/modules/*/tests/*.tftest.hcl` — a
+top-level `tests/` root would imply a general test tree this project does not
+have.
+
+**Runner:** `python3 -m unittest discover -s .github/tests`. Not
+`terraform test`, which can only exercise Terraform modules and cannot reach a
+workflow file. This change therefore introduces a *second* test command, and
+the project's conventions say so explicitly rather than leaving a reader to
+infer that `terraform test` covers everything.
+
+**Dependencies:** the standard library plus PyYAML. PyYAML currently reaches
+this repository only transitively through `ansible-core==2.21.3`, which is not
+a pin under AGENTS.md's convention — a transitive dependency is not pinned, it
+is merely currently resolved. It is pinned exactly in
+`.github/requirements-ci.txt` alongside `pre-commit`.
+
+**Gating:** unconditional, not path-filtered. The suite asserts invariants that
+a pull request touching nothing under `.github/` can still violate — a module
+added under `terraform/modules/` breaks Dependabot coverage without editing a
+workflow. The suite's own runtime is negligible — a fraction of a second; the
+step's real cost is Python setup plus a two-package install, still far below
+anything gating would save.
+
+This scope was not in the reviewed plan. It was added on the operator's
+decision after test derivation, and the plan-review gate is re-run over the
+addition rather than the change proceeding on the strength of the earlier
+verdict.
+
 ## Risks / Trade-offs
 
 - **Molecule does not survive a hosted runner** (privileged systemd containers,
@@ -290,6 +333,19 @@ have caught goes undetected for longer than a day.
   remove → The floating tag is out of this change's scope and is queued
   separately; the promotion entry records that it depends on that pin landing
   first, so the condition is not evaluated against a moving base.
+- **The CI-configuration suite asserts today's workflow shape and becomes a
+  brake on legitimate restructuring** — a test that fails whenever a workflow
+  is reorganised, rather than when a guarantee breaks → The assertions are
+  written against properties the specs state (which step is gated on what,
+  which version equals which, which job declares no `environment:`), not
+  against step ordering or naming. The one exception is the gitleaks/plan
+  ordering check, which the spec does require. Where a future restructuring
+  makes an assertion wrong, the spec it came from is the thing to change first.
+- **Eight of the suite's tests cannot execute their assertions until
+  `ansible-verify.yml` exists** → They fail on a missing file today. That is
+  the correct state before implementation, and it is recorded in
+  `test-plan.md` so those eight are not read as coverage until the workflow
+  lands.
 - **The blocking Ansible tier reaches production CI unexercised in CI** → Its
   behavior is verified locally on the branch and reported as such. The residual
   risk is a workflow-syntax or runner-environment error that a local
@@ -305,6 +361,12 @@ exercises needs stating precisely, because it is less than it first appears:
 
 - **The ungated gitleaks scan runs.** It is unconditional now, and the pull
   request changes files. This is a real exercise of the primary fix.
+- **The CI-configuration suite runs, unconditionally, and passes.** It is the
+  second check this pull request genuinely exercises, and the only one
+  asserting the change's own guarantees — fifteen of its assertions were
+  failing before the implementation landed. This is a real exercise of the
+  second added requirement, including its "runs regardless of what the pull
+  request touched" scenario.
 - **The Terraform steps skip**, as they do today — no `terraform/**` path is
   touched.
 - **The blocking Ansible steps skip.** They are gated on `ansible/**`, and this

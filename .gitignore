@@ -28,3 +28,6 @@ secrets.auto.tfvars
 # `ansible-galaxy install -r ansible/requirements.yml`), pinned by exact
 # version in that file, not committed itself.
 ansible/roles/geerlingguy.docker/
+
+# Python bytecode from the CI-configuration test suite (.github/tests/).
+__pycache__/
