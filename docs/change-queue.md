@@ -8,9 +8,11 @@ Everything here came out of a full-repository audit on 2026-09-06 (trunk at
 no restructuring; what follows is maintenance, not redesign.
 
 Three of the audit's findings were ready to act on and were **opened** instead
-of queued — they have branches and handoffs, not entries here:
+of queued — they had branches and handoffs, not entries here:
 
-- `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift
+- `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift.
+  **Archived 2026-09-07** (PR #66). Entries 3a, 3b, 3c and 3d below were opened
+  by it, and the note under entry 4 comes from verifying it.
 - `refresh-readme-accuracy` — README statements that are no longer true
 
 Most entries below are queued because they are **blocked on something that must
@@ -295,7 +297,31 @@ at `d635965`. All five roles green, workflow conclusion success:
 concluded **failure** two runs earlier, so it is a direct before/after on the
 trunk rather than an inference from a green pull request.
 
-**Where point 1 actually stands: two green runs, both of the same change.**
+**Fifth run — the independent observation point 1 was waiting for.** On PR #66
+([`fix-volume-discovery-and-consistency`](https://github.com/shatynska/infrastructure/pull/66)),
+a change about Ansible role behaviour rather than about the suite itself:
+
+| Role | Outcome | Duration |
+|---|---|---|
+| `deploy_user` (3 scenarios) | pass | 7m05s |
+| `ops_user` (2 scenarios) | pass | 5m07s |
+| `platform_data_volume` (4 scenarios) | pass | 4m53s |
+| `hardening` (2 scenarios) | pass | 4m20s |
+| `docker` | pass | 3m19s |
+
+This is the run the paragraph below asks for: green, and observing a **different
+subject** than runs three and four did. Point 1 now rests on two independent
+observations rather than one seen twice. That change also added three scenarios
+(`platform_data_volume` went from one to four, `hardening` from one to two), so
+the suite is larger than when the earlier runs were recorded — the durations
+above are not comparable with them role for role.
+
+Note also that a `platform_data_volume` job passing now means something stricter
+than it did: two of its four scenarios assert a *failure* path, and one of those
+would go red if the role stopped failing. See the abort caveat above for why a
+recap must be read scenario by scenario rather than by exit code.
+
+**Where point 1 stood before that run: two green runs, both of the same change.**
 Runs one and two carried a failing job and are not evidence toward
 "consecutive green". Runs three and four are green, but both observe
 `pin-and-fix-molecule-suite` — the change that fixed the failure — from a
