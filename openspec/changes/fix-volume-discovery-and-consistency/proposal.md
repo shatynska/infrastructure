@@ -113,6 +113,8 @@ None.
   and that the dashboard's base URL is not a literal address. The first is a
   necessary condition, not the whole pinning obligation — see design.md
   Decision 7.
+- `AGENTS.md` — the "Testing" section gains a Molecule row, so a test-authoring
+  dispatch can place a role scenario without being told the pair by hand.
 - `docs/change-queue.md` — two entries recorded rather than folded in, and one
   correction to an existing entry.
 
