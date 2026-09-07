@@ -87,16 +87,20 @@ question with a real maintenance cost, not a cosmetic one.
 
 ## 4. promote-molecule-to-a-required-check
 
-**Blocked on entry 5 landing first, and on evidence.** `close-ci-verification-gaps`
-put the Molecule suite in CI as `ansible-verify.yml`, advisory: it is not a
-required status check, because whether its privileged-systemd scenarios are
-reproducible on a hosted runner had never been observed.
+**Blocked on evidence only.** `close-ci-verification-gaps` put the Molecule
+suite in CI as `ansible-verify.yml`, advisory: it is not a required status
+check, because whether its privileged-systemd scenarios are reproducible on a
+hosted runner had never been observed.
 
-Promotion needs three things, and the middle one is the trap:
+This entry originally had a third blocker — the platform image floating on
+`:latest`, and a scenario assertion that failed deterministically. Both were
+delivered by `pin-and-fix-molecule-suite` (archived 2026-09-07), and their
+queue entries are gone with it. Two things remain:
 
 1. **Consecutive green runs** on pull requests touching `ansible/`. How many is
    a judgement call; two or three across different roles is meaningful, one is
-   not.
+   not. See the run log below for what has actually been observed — it is less
+   than it first appears.
 2. **Removing the workflow-level `paths:` filter first**, and moving the gating
    inside an always-running job — the shape `pr-validation.yml` already uses. A
    `paths:`-filtered required check never reports on a non-matching pull
@@ -104,9 +108,7 @@ Promotion needs three things, and the middle one is the trap:
    protection. This is exactly what the *Required Status Checks Report on Every
    Pull Request* requirement exists to forbid, and promotion is **not** just a
    branch-protection toggle. `ansible-verify.yml`'s own top comment says so.
-3. **Entry 5 landing first.** While the platform image floats on `:latest`,
-   "consecutive green runs" is evidence about a moving target, and a red run
-   may be attributable to an upstream image rather than to the runner.
+   **This is the real remaining work.**
 
 **First observed baseline** — to be filled in from the post-merge
 `workflow_dispatch` run on `main` (that trigger is only exposed once the file is
@@ -123,7 +125,7 @@ the `ansible/**` filter after all:
 | `ops_user` (2 scenarios) | pass | 4m47s |
 | `hardening` | pass | 3m03s |
 | `docker` | pass | 2m55s |
-| `platform_data_volume` | **fail** — see entry 8 | 2m12s |
+| `platform_data_volume` | **fail** — a defect in its own assertion, fixed by `pin-and-fix-molecule-suite` | 2m12s |
 
 Repeated post-merge as a manual `workflow_dispatch` on `main`
 ([run 34046099603](https://github.com/shatynska/infrastructure/actions/runs/34046099603)),
@@ -138,14 +140,48 @@ question the advisory tier existed to answer, and the answer is yes. Longest
 role is under eight minutes, and the roles run in parallel.
 
 The one failure is a defect in a scenario's own assertion, not a runner
-problem. Promotion still waits on entry 8 being resolved and on entry 5.
+problem.
 
-**Both named blockers are closed by `pin-and-fix-molecule-suite`**, pending its
-merge: entry 5's pin is applied to all eight scenarios and entry 8's assertion
-is fixed. What promotion still needs after that is the evidence in point 1 —
-consecutive green runs on pull requests — and the `paths:`-filter removal in
-point 2, which is not a branch-protection toggle and remains this entry's real
-work. Record that change's own `ansible-verify.yml` run below when it lands.
+**Neither of those two runs is a green run**, and that matters for point 1:
+they establish that the privileged-systemd scenarios work on a hosted runner,
+which was the question the advisory tier existed to answer, but a run with a
+failing job is not evidence toward "consecutive green".
+
+**Third run — the first fully green one.** On PR #64
+([run 34057674462](https://github.com/shatynska/infrastructure/actions/runs/34057674462)),
+which pinned the platform image and fixed the assertion:
+
+| Role | Outcome | Duration | Was |
+|---|---|---|---|
+| `deploy_user` (3 scenarios) | pass | 6m06s | 6m33s |
+| `ops_user` (2 scenarios) | pass | 4m29s | 4m42s |
+| `docker` | pass | 2m31s | 2m41s |
+| `hardening` | pass | 2m11s | 2m36s |
+| `platform_data_volume` | **pass** | 1m40s | **fail** 2m07s |
+
+Every scenario green, and modestly faster across the board. The speed-up is
+smaller than the same change produced locally, which is what one would expect:
+removing an `apt-get` install helps a developer's connection more than a hosted
+runner sitting next to a package mirror.
+
+**Fourth run — post-merge `workflow_dispatch` on `main`**
+([run 34058142743](https://github.com/shatynska/infrastructure/actions/runs/34058142743)),
+at `d635965`. All five roles green, workflow conclusion success:
+`deploy_user` 5m53s, `ops_user` 4m20s, `hardening` 2m32s, `docker` 2m23s,
+`platform_data_volume` 1m35s. This is the same trigger on the same branch that
+concluded **failure** two runs earlier, so it is a direct before/after on the
+trunk rather than an inference from a green pull request.
+
+**Where point 1 actually stands: two green runs, both of the same change.**
+Runs one and two carried a failing job and are not evidence toward
+"consecutive green". Runs three and four are green, but both observe
+`pin-and-fix-molecule-suite` — the change that fixed the failure — from a
+pull request and then from the trunk. That is one subject observed twice, not
+two independent observations.
+
+What would settle it is a green run on the next unrelated pull request
+touching `ansible/`. Until then, treat point 1 as **partially** satisfied and
+resist reading the run log as three-of-four green.
 
 One thing that change establishes bears on the evidence question: until now the
 suite installed `python3 sudo bash ca-certificates iproute2 python3-apt
@@ -156,55 +192,6 @@ reproducible in a second respect beyond the floating image tag, and a red run
 could have been attributable to a package archive. Runs after it reach no
 package archive during `create` at all, so "consecutive green runs" starts
 meaning something stricter than it did.
-
-## 8. fix-platform-data-volume-verify-attribute-access
-
-**Found by the first CI run of the Molecule suite** (PR #57), and the reason
-that tier was made advisory rather than blocking.
-
-`ansible/roles/platform_data_volume/molecule/default/verify.yml:194` asserts:
-
-```yaml
-- item.stat.pw_name == item.item.owner or item.stat.uid | string == item.item.owner
-```
-
-and fails with `object of type 'dict' has no attribute 'pw_name'`. The `or`
-fallback never runs: Jinja evaluates the left operand first, and on a `stat`
-result where the uid does not resolve to a name, `pw_name` is simply absent —
-so the expression raises instead of falling through to the uid comparison the
-author clearly intended as the fallback.
-
-**Correction, from `pin-and-fix-molecule-suite`'s investigation.** This entry
-originally blamed uid `65534`. That uid *does* resolve inside the image, to
-`nobody` — verified with `getent passwd 65534` against the pinned digest. The
-failing fixture is the other one, `grafana`, whose `472/472` has no `passwd`
-or `group` record at all. The mechanism above is right; the uid named was not.
-Note also that the name comparison could never have passed regardless: the
-declared owners are numeric strings (`"472"`, `"65534"`) in both the scenario
-and `ansible/inventory/group_vars/prod.yml`, so `pw_name == "472"` is false
-even where `pw_name` exists. The uid comparison was always the only branch
-capable of passing.
-
-The fix is to make the access safe (`item.stat.pw_name is defined and …`, or
-compare on uid/gid alone), not to relax what is asserted.
-
-Worth noting *why* this was never seen: the same assertion presumably passed
-on a developer machine, so either the uid resolves there or it did under an
-earlier `ansible-core` whose undefined-attribute behaviour was laxer. Entry 5
-is relevant either way — the platform image floats on `:latest`, so "it passed
-locally" and "it passes in CI" were never statements about the same image.
-
-## 5. pin-the-molecule-platform-image
-
-**Blocks entry 4.** Every scenario under `ansible/roles/*/molecule/*/molecule.yml`
-pins its platform as `geerlingguy/docker-ubuntu2204-ansible:latest` — a floating
-tag, against AGENTS.md's "any external role or collection used for any purpose
-is pinned to an exact version". Affects all eight scenarios across
-`deploy_user`, `docker`, `hardening`, `ops_user` and `platform_data_volume`.
-
-Noticed while implementing `close-ci-verification-gaps` and deliberately not
-folded in: it changes what the test suite runs against, which is a different
-concern from getting the suite to run at all.
 
 ## 6. two-deferred-ci-items
 
