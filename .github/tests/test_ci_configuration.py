@@ -2613,5 +2613,516 @@ class TestRequiredRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
                     f"would pass on the default rather than on a supplied value",
                 )
 
+
+# --------------------------------------------------------------------------
+# iac-repo-foundations / Source Files Cite Specifications by Path and Changes
+# by Name
+#
+# Derived from the delta spec of the OpenSpec change
+# `decide-archived-change-reference-policy`, before any implementation of that
+# change existed. See that change's test-plan.md for the scenario-to-test
+# mapping, the baseline, and the scenarios deliberately left uncovered. Both
+# citations in this comment take the second of the two forms the requirement
+# names -- the change's name and the artifact's name, in prose, with no path --
+# because the artifacts they name live only inside a change and so have no
+# permanent path to cite.
+#
+# Reflexivity note (design Decision 6). This suite is itself a committed file
+# outside `openspec/`, so it is inside the set of files the check below reads.
+# No fixture here may therefore carry a literal of the prohibited form: every
+# one is assembled at run time from CHANGE_PATH_PREFIX and a separate segment.
+# The matcher's own patterns need no such treatment -- there the prefix is
+# followed by a regular-expression group rather than by a change-shaped
+# segment, so the pattern does not match itself.
+#
+# These assertions live in THIS suite rather than in `terraform test` or in a
+# Molecule scenario because they are a static read of committed files at
+# repository scope, which is the only thing that can perform them: the
+# requirement obliges the prohibition to be asserted by the executable suite
+# that gates every pull request, and this is that suite (AGENTS.md, "Testing";
+# design Decision 4). They add no import, spawn no subprocess, and need no
+# network call, credential, container runtime or Terraform binary.
+# --------------------------------------------------------------------------
+
+CHANGE_PATH_PREFIX = "openspec/changes/"
+ARCHIVE_SEGMENT = "archive"
+
+# A change name's shape: lowercase kebab-case (design Decision 5). Requiring
+# the shape rather than any segment is what lets documentation state the rule
+# with a metasyntactic placeholder without tripping the check it describes.
+_CHANGE_NAME = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+
+# Across a line break the segment must additionally carry a hyphen. Without
+# that narrowing, any prose line ending in the prefix whose continuation begins
+# with an ordinary lowercase word would be flagged. The requirement records
+# what this excludes: a wrapped citation of a single-word change name.
+_HYPHENATED_CHANGE_NAME = r"[a-z0-9]+(?:-[a-z0-9]+)+"
+
+# Nothing is required after the segment. Twenty-seven of the citations this
+# requirement removes name the change and stop there, and requiring a trailing
+# separator is the exact error that made two earlier counts of the problem low.
+CONTIGUOUS_CITATION = re.compile(
+    re.escape(CHANGE_PATH_PREFIX) + r"(?P<segment>" + _CHANGE_NAME + r")"
+)
+
+WRAPPED_CITATION = re.compile(
+    re.escape(CHANGE_PATH_PREFIX)
+    + r"[ \t]*\r?\n[ \t]*(?:[#>*]+|//|--)?[ \t]*"
+    + r"(?P<segment>"
+    + _HYPHENATED_CHANGE_NAME
+    + r")"
+)
+
+# Pruned wherever they occur, at any depth: `.terraform` in particular exists
+# under each of `terraform/environments/*/`, and a root-anchored reading would
+# leave the walk reading provider binaries.
+#
+# `__pycache__` is here because the requirement is scoped to committed files and
+# `.gitignore` ignores it, so the compiled module is not one -- and because
+# running this suite is what creates it, making it a false positive the check
+# would inflict on itself on every run rather than one a developer provokes and
+# can see. That is what separates it from the untracked scratch file design
+# Decision 7 deliberately accepts.
+PRUNED_ANYWHERE = frozenset({".git", ".terraform", "__pycache__", "node_modules"})
+
+# Pruned only at their path relative to the walk root. `.claude` is NOT pruned
+# wholesale, only its `worktrees` subdirectory: the files tracked under
+# `.claude/commands/` and `.claude/skills/` are committed files outside
+# `openspec/`, and the prohibition covers them (design Decision 7).
+PRUNED_AT_ROOT_RELATIVE = frozenset(
+    {"openspec", "ansible/roles/geerlingguy.docker", ".worktrees", ".claude/worktrees"}
+)
+
+
+def walked_files(root: Path | None = None) -> list[Path]:
+    """Every file the prohibition covers, found by walking rather than by
+    asking the version-control tool.
+
+    `subprocess` is confined to `bash`/`sh` by this suite's own assertions, so
+    a tracked-file listing is unavailable (design Decision 7). The walk is a
+    superset of the tracked files -- an untracked scratch file in the tree is
+    read too -- which is the safe direction for a prohibition.
+    """
+    root = ROOT if root is None else root
+    found: list[Path] = []
+    for directory, subdirectories, filenames in os.walk(root):
+        here = Path(directory)
+        relative = here.relative_to(root).as_posix()
+        kept = []
+        for name in sorted(subdirectories):
+            child = name if relative == "." else f"{relative}/{name}"
+            if name in PRUNED_ANYWHERE or child in PRUNED_AT_ROOT_RELATIVE:
+                continue
+            kept.append(name)
+        subdirectories[:] = kept
+        for name in sorted(filenames):
+            path = here / name
+            if path.is_file():
+                found.append(path)
+    return found
+
+
+def pre_archive_citations(root: Path | None = None) -> list[str]:
+    """Every citation of a change's own directory under `openspec/changes/`,
+    as `<path>:<line>: <matched text>`.
+
+    Raises rather than reporting a clean tree when the walk reaches no file at
+    all: a check that read nothing would otherwise report success having
+    verified nothing.
+    """
+    root = ROOT if root is None else root
+    files = walked_files(root)
+    if not files:
+        raise AssertionError(
+            f"the walk from {root} reached no file at all, so every citation "
+            f"assertion over it would pass having read nothing"
+        )
+    offences: list[str] = []
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        found = []
+        for pattern in (CONTIGUOUS_CITATION, WRAPPED_CITATION):
+            for match in pattern.finditer(text):
+                if match.group("segment") == ARCHIVE_SEGMENT:
+                    continue
+                found.append((match.start(), match.group(0)))
+        for offset, matched in sorted(found):
+            line = text.count("\n", 0, offset) + 1
+            relative = path.relative_to(root).as_posix()
+            offences.append(f"{relative}:{line}: {' '.join(matched.split())}")
+    return offences
+
+
+class TestNoCommittedFileOutsideOpenSpecCarriesAPreArchiveCitation(unittest.TestCase):
+    """ADDED requirement: Source Files Cite Specifications by Path and Changes
+    by Name."""
+
+    def test_the_walk_reaches_the_committed_files_the_prohibition_covers(self) -> None:
+        """DERIVED -- no scenario states it. The requirement is normative over
+        every committed file outside `openspec/`, and a walk that reached none
+        of them would pass the assertion below having read nothing. Anchors on
+        files at four different depths rather than on a count, which any edit
+        to the repository would move."""
+        walked = {path.relative_to(ROOT).as_posix() for path in walked_files()}
+        anchors = {
+            "AGENTS.md",
+            "README.md",
+            "platform/docker-compose.yml",
+            ".github/tests/test_ci_configuration.py",
+        }
+        self.assertEqual(
+            set(),
+            anchors - walked,
+            f"the walk did not reach these committed files: {sorted(anchors - walked)}",
+        )
+
+    def test_the_walk_reaches_the_tracked_files_under_the_agent_directory(self) -> None:
+        """DERIVED -- design Decision 7, which prunes `.claude/worktrees` only
+        and not `.claude` wholesale, because the files tracked beneath it are
+        committed files outside `openspec/` and are the likeliest future source
+        of the prohibited form: they document OpenSpec's change layout."""
+        walked = {path.relative_to(ROOT).as_posix() for path in walked_files()}
+        beneath = sorted(name for name in walked if name.startswith(".claude/"))
+        self.assertTrue(
+            beneath,
+            "the walk reached no file under .claude/, so the prohibition would "
+            "be silently unenforced over the files tracked there",
+        )
+
+    def test_no_committed_file_outside_openspec_carries_a_pre_archive_citation(self) -> None:
+        """SPECIFIED -- "No committed file outside `openspec/` SHALL contain a
+        path naming a change's own directory under `openspec/changes/`", and
+        scenario "Archiving a change breaks no citation": a citation that names
+        no change directory cannot be invalidated by that directory moving."""
+        offences = pre_archive_citations()
+        self.assertEqual(
+            [],
+            offences,
+            f"{len(offences)} citation(s) name a change's own directory and so "
+            f"break when that change is archived:\n" + "\n".join(offences),
+        )
+
+    def test_the_walk_reads_nothing_inside_the_specification_directory(self) -> None:
+        """SPECIFIED -- scenario "A change's own artifacts are out of scope":
+        the prohibition does not apply to a change's planning artifacts, live
+        or archived, since they move together with what they cite."""
+        inside = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in walked_files()
+            if path.relative_to(ROOT).as_posix().startswith("openspec/")
+        )
+        self.assertEqual(
+            [], inside, f"the walk descended into openspec/: {inside[:10]}"
+        )
+
+    def test_a_changes_own_artifacts_do_carry_the_form_the_walk_excludes(self) -> None:
+        """DERIVED -- no scenario states it. Without it, the exclusion above is
+        indistinguishable from an exclusion of a directory that never contained
+        the form, and the scenario it covers would be satisfied vacuously."""
+        specification_root = ROOT / "openspec"
+        if not specification_root.is_dir():
+            self.skipTest("this repository has no openspec/ directory")
+        carrying = []
+        for path in sorted(specification_root.rglob("*.md")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for match in CONTIGUOUS_CITATION.finditer(text):
+                if match.group("segment") != ARCHIVE_SEGMENT:
+                    carrying.append(path.relative_to(ROOT).as_posix())
+                    break
+            if carrying:
+                break
+        self.assertTrue(
+            carrying,
+            "no artifact under openspec/ carries a citation of a change's own "
+            "directory, so excluding openspec/ from the walk demonstrates "
+            "nothing about the exclusion",
+        )
+
+
+class CitationTreeFixtureMixin:
+    """Builds throwaway trees the citation check is run over.
+
+    Every citation is assembled at run time from CHANGE_PATH_PREFIX and a
+    segment, so that no literal of the prohibited form is committed in this
+    file (design Decision 6).
+    """
+
+    def citation(self, segment: str, tail: str = "") -> str:
+        return CHANGE_PATH_PREFIX + segment + tail
+
+    def wrapped_citation(self, segment: str, tail: str = "") -> str:
+        """The same citation split across a line break immediately after the
+        prefix, with a comment marker opening the continuation line."""
+        return CHANGE_PATH_PREFIX + "\n# " + segment + tail
+
+    def citation_tree(self, files: dict[str, str]) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="citation-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for relative, body in files.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        return root
+
+    def offences_over(self, body: str, name: str = "notes.md") -> list[str]:
+        return pre_archive_citations(self.citation_tree({name: body}))
+
+
+class TestThePreArchiveCitationCheckIsARealReadOfTheTree(
+    CitationTreeFixtureMixin, unittest.TestCase
+):
+    """ADDED requirement: Source Files Cite Specifications by Path and Changes
+    by Name.
+
+    The assertion over the committed tree passes identically whether the check
+    reads the files or matches nothing at all, and it will keep passing once
+    the tree is swept. These tests run the same check over throwaway trees
+    differing in exactly one property, so its verdict is shown to depend on
+    what a file says.
+    """
+
+    def test_a_citation_naming_an_artifact_inside_a_change_is_flagged(self) -> None:
+        """SPECIFIED -- scenario "A pull request reintroducing the pre-archive
+        citation form is rejected"."""
+        offences = self.offences_over("# see " + self.citation("some-change", "/design.md"))
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_citation_that_names_the_change_and_stops_is_flagged(self) -> None:
+        """SPECIFIED -- "whether or not a further path component follows it".
+        A prohibition written to require a trailing separator permits this
+        form, and better than a third of the citations the requirement removes
+        take it."""
+        offences = self.offences_over("# see " + self.citation("some-change") + "\n")
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_citation_of_a_delta_specification_inside_a_change_is_flagged(self) -> None:
+        """SPECIFIED -- scenario "A requirement is cited at its permanent
+        location": a requirement is named at `openspec/specs/<capability>/
+        spec.md` "rather than the delta specification inside the change that
+        proposed it"."""
+        offences = self.offences_over(
+            "# see " + self.citation("some-change", "/specs/iac-repo-foundations/spec.md")
+        )
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_wrapped_citation_naming_a_further_component_is_flagged(self) -> None:
+        """SPECIFIED -- the requirement excludes exactly one wrapped rendering,
+        the single-word change name, which entails that a wrapped hyphenated
+        one is inside the check. No citation in the tree wraps in this
+        position, so only a synthesised fixture can exercise it."""
+        offences = self.offences_over(
+            "# a note ending at " + self.wrapped_citation("some-change", "/design.md")
+        )
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_wrapped_citation_that_names_the_change_and_stops_is_flagged(self) -> None:
+        """SPECIFIED -- the same exclusion, combined with "whether or not a
+        further path component follows it"."""
+        offences = self.offences_over(
+            "# a note ending at " + self.wrapped_citation("some-change") + "\n"
+        )
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_an_offence_names_the_file_the_line_and_the_citation(self) -> None:
+        """SPECIFIED -- scenario "A pull request reintroducing the pre-archive
+        citation form is rejected": the check fails "naming the file, the line
+        and the citation". A verdict that named none of the three would leave
+        the author unable to act on it."""
+        body = "first\nsecond\n# see " + self.citation("some-change", "/design.md") + "\n"
+        offences = self.offences_over(body, name="ansible/roles/example/tasks/main.yml")
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+        reported = offences[0]
+        self.assertTrue(
+            reported.startswith("ansible/roles/example/tasks/main.yml:3: "),
+            f"the offence names neither the file nor the line it is on: {reported}",
+        )
+        self.assertIn(CHANGE_PATH_PREFIX + "some-change", reported)
+
+    def test_the_archived_location_is_not_flagged(self) -> None:
+        """SPECIFIED -- "A citation MAY additionally give a change's archived
+        location as `openspec/changes/archive/<date>-<name>/...` once that
+        location exists"."""
+        offences = self.offences_over(
+            "# see "
+            + self.citation(ARCHIVE_SEGMENT, "/2026-08-18-project-foundation/design.md")
+        )
+        self.assertEqual([], offences, f"the archived location was flagged: {offences}")
+
+    def test_a_metasyntactic_placeholder_is_not_flagged(self) -> None:
+        """DERIVED -- design Decision 5, not a scenario. The rule has to be
+        statable in AGENTS.md and in this suite's own prose; a check that
+        flagged its own statement would be unshippable, and exempting those
+        files by name would punch a hole that later drifts into a real
+        violation."""
+        offences = self.offences_over("# never write " + self.citation("<name>", "/design.md"))
+        self.assertEqual([], offences, f"a placeholder was flagged: {offences}")
+
+    def test_a_requirement_cited_at_its_permanent_location_is_not_flagged(self) -> None:
+        """SPECIFIED -- scenario "A requirement is cited at its permanent
+        location": the form the requirement obliges must itself pass, or the
+        check would forbid the only permitted way to cite a requirement."""
+        offences = self.offences_over(
+            "# see openspec/specs/iac-repo-foundations/spec.md, requirement "
+            "Source Files Cite Specifications by Path and Changes by Name"
+        )
+        self.assertEqual([], offences, f"the permitted form was flagged: {offences}")
+
+    def test_prose_ending_in_the_prefix_before_an_ordinary_word_is_not_flagged(self) -> None:
+        """SPECIFIED -- the requirement's own statement of what the wrapped
+        match must not reach: "a continuation line's first word is itself a
+        valid single-word change name". Documentation describing this rule
+        wraps exactly here, and flagging it would redden the required check on
+        the files that state the rule."""
+        offences = self.offences_over(
+            "# a path naming a change's own directory under " + CHANGE_PATH_PREFIX + "\n"
+            "# is not permitted in a committed file\n"
+        )
+        self.assertEqual([], offences, f"prose describing the rule was flagged: {offences}")
+
+    def test_a_wrapped_single_word_change_name_is_knowingly_not_flagged(self) -> None:
+        """SPECIFIED -- and unusual: it asserts a gap the requirement records
+        rather than a behaviour it wants. "One rendering lies outside it: a
+        citation split across a line break immediately after
+        the prefix whose change name is a single word with no hyphen."
+        Pinning it means a later change that closes the gap does so knowingly,
+        and sees that it must also keep the prose case above passing."""
+        offences = self.offences_over(
+            "# a note ending at " + self.wrapped_citation("foundation", "/design.md")
+        )
+        self.assertEqual(
+            [],
+            offences,
+            "the wrapped single-word rendering was flagged; the requirement "
+            f"records it as outside the check: {offences}",
+        )
+
+    def test_a_tree_carrying_no_such_citation_yields_no_offence(self) -> None:
+        """DERIVED -- the converse half. Without it, a check that reported
+        every file as an offender would satisfy every positive case above
+        while failing every pull request regardless of what it changed."""
+        offences = pre_archive_citations(
+            self.citation_tree(
+                {
+                    "README.md": "# see openspec/specs/iac-repo-foundations/spec.md\n",
+                    "ansible/roles/example/tasks/main.yml": (
+                        "# rationale: see the change decide-archived-change-reference-"
+                        "policy, design.md\n"
+                    ),
+                }
+            )
+        )
+        self.assertEqual([], offences, f"a clean tree was reported as offending: {offences}")
+
+    def test_a_tree_the_walk_finds_nothing_in_fails_rather_than_reading_nothing(self) -> None:
+        """DERIVED -- the non-vacuity guard at the tree level, the same one
+        this suite applies to Molecule scenario discovery. A check that read no
+        file would report success having verified nothing."""
+        root = Path(tempfile.mkdtemp(prefix="citation-fixture-empty-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        with self.assertRaises(AssertionError):
+            pre_archive_citations(root)
+
+    def test_the_pruned_directories_are_not_read(self) -> None:
+        """DERIVED -- design Decision 7. Without pruning, the check descends
+        into a second checkout of this repository sitting on another branch and
+        reports every finding twice, and into `openspec/`, whose artifacts the
+        requirement puts out of scope."""
+        citation = "# see " + self.citation("some-change", "/design.md") + "\n"
+        root = self.citation_tree(
+            {
+                CHANGE_PATH_PREFIX + "some-change/design.md": citation,
+                ".claude/worktrees/other/README.md": citation,
+                ".worktrees/other/README.md": citation,
+                "terraform/environments/prod/.terraform/providers/notes.md": citation,
+                "ansible/roles/geerlingguy.docker/README.md": citation,
+                "node_modules/package/readme.md": citation,
+                "README.md": "# see openspec/specs/iac-repo-foundations/spec.md\n",
+            }
+        )
+        self.assertEqual(
+            [],
+            pre_archive_citations(root),
+            "a pruned directory was read",
+        )
+
+    def test_compiled_bytecode_beneath_a_pycache_directory_is_not_read(self) -> None:
+        """DERIVED -- design Decision 7, which prunes `__pycache__` wherever it
+        occurs. The requirement is scoped to committed files and `.gitignore`
+        ignores `__pycache__/`, so a compiled module is not one; and running
+        this suite is what writes it, so a compiled copy of a citation swept
+        out of the source would otherwise keep the check red after the sweep
+        had already made it true. Written over a fixture rather than over this
+        repository's own bytecode, which exists only after a run."""
+        citation = "# see " + self.citation("some-change", "/design.md") + "\n"
+        root = self.citation_tree(
+            {
+                ".github/tests/__pycache__/test_ci_configuration.cpython-312.pyc": citation,
+                "ansible/roles/example/__pycache__/module.cpython-312.pyc": citation,
+                "README.md": "# see openspec/specs/iac-repo-foundations/spec.md\n",
+            }
+        )
+        self.assertEqual(
+            [],
+            pre_archive_citations(root),
+            "compiled bytecode under __pycache__ was read, so every run of this "
+            "suite would report a citation it had just compiled itself",
+        )
+
+    def test_a_file_outside_the_pruned_directories_is_still_read(self) -> None:
+        """DERIVED -- the converse of the test above: a prune list that
+        excluded the whole tree would satisfy it while checking nothing. Pairs
+        with it over one fixture differing in exactly one file."""
+        offences = pre_archive_citations(
+            self.citation_tree(
+                {
+                    CHANGE_PATH_PREFIX + "some-change/design.md": (
+                        "# see " + self.citation("some-change", "/design.md") + "\n"
+                    ),
+                    ".claude/skills/example/SKILL.md": (
+                        "# see " + self.citation("some-change", "/design.md") + "\n"
+                    ),
+                }
+            )
+        )
+        self.assertEqual(
+            # The matched text is the prefix and the change-name segment; the
+            # trailing path component is not part of the match, because nothing
+            # may be required after the segment.
+            [".claude/skills/example/SKILL.md:1: " + CHANGE_PATH_PREFIX + "some-change"],
+            offences,
+            "a tracked file under .claude/ was not read, or openspec/ was",
+        )
+
+
+class TestThePreArchiveCitationCheckGatesEveryPullRequest(unittest.TestCase):
+    """ADDED requirement: Source Files Cite Specifications by Path and Changes
+    by Name -- "This prohibition SHALL be asserted by the executable test suite
+    that gates every pull request, because the author of such a citation cannot
+    detect it"."""
+
+    def test_the_citation_check_lives_in_the_suite_the_required_check_invokes(self) -> None:
+        """SPECIFIED -- scenario "A pull request reintroducing the pre-archive
+        citation form is rejected": the required status check fails on that
+        pull request. The check discriminating correctly establishes nothing if
+        nothing runs it."""
+        module = sys.modules[pre_archive_citations.__module__]
+        location = Path(module.__file__).resolve().as_posix()
+        self.assertIn(
+            SUITE_MARKER,
+            location,
+            f"the citation check is defined in {location}, outside the directory "
+            f"the required status check runs",
+        )
+        workflow = load_yaml(PR_VALIDATION)
+        invoking = [
+            step_label(job, index, step)
+            for job, index, step in steps(workflow)
+            if SUITE_MARKER in str(step.get("run", ""))
+        ]
+        self.assertTrue(
+            invoking,
+            f"no step in pr-validation.yml runs the suite under {SUITE_MARKER}/",
+        )
+
 if __name__ == "__main__":
     unittest.main()

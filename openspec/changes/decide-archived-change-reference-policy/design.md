@@ -240,10 +240,21 @@ the Claude Code binding places it. Each remaining file is read as UTF-8 with
 undecodable bytes replaced.
 
 The prune list is two kinds of entry and the check must treat them differently.
-`.git`, `.terraform` and `node_modules` are pruned wherever they occur, at any
-depth — `.terraform` in particular exists under each of
+`.git`, `.terraform`, `node_modules` and `__pycache__` are pruned wherever they
+occur, at any depth — `.terraform` in particular exists under each of
 `terraform/environments/*/`, and a root-anchored reading would leave the walk
-reading provider binaries. `openspec`, `.worktrees`, `.claude/worktrees` and
+reading provider binaries.
+
+`__pycache__` was added after deriving the tests showed the check reporting
+`.github/tests/__pycache__/test_ci_configuration.cpython-312.pyc` as a 76th
+offence alongside the 75 real ones. It is ignored by `.gitignore:33`, so it is
+not a committed file and the requirement does not reach it; and running the
+suite is what creates it, so it is a false positive the check inflicts on
+itself on every run rather than one a developer occasionally provokes. That
+distinguishes it from the untracked scratch file this decision accepts below:
+a scratch file is a developer's own doing and visible to them, while a stale
+`.pyc` compiled before the sweep would keep the check red after the sweep had
+made it true. `openspec`, `.worktrees`, `.claude/worktrees` and
 `ansible/roles/geerlingguy.docker` are pruned only at their path relative to the
 walk root.
 
