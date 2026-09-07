@@ -409,9 +409,9 @@ from observation.
 ## 10. prune-unreferenced-host-images-periodically
 
 **Not blocked.** Recorded rather than folded into
-`reclaim-superseded-app-images`, whose proposal names both of these as
+`reclaim-superseded-app-images`, whose proposal names all three of these as
 non-goals: that change reclaims an application's superseded images *when it
-deploys*, which by construction cannot reach two classes of image.
+deploys*, which by construction cannot reach three classes of image.
 
 - **Fully dangling images and layers** carry no repository name, so they fall
   outside every application's namespace.
