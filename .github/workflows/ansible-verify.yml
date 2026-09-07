@@ -3,12 +3,18 @@ name: Ansible Verify
 # The Molecule suite -- this repository's largest test asset, and the only
 # thing that observes what a role actually does to a host.
 #
-# REQUIRED STATUS CHECK. The `ansible-verify` job below is registered in
-# `main`'s branch protection; a failing scenario blocks the merge. See the
-# Ansible Configuration Is Verified in Continuous Integration and Gates the
-# Merge requirement. Registration is repository settings, so nothing in this
-# repository can verify it happened -- `.github/tests` makes no network call
-# and asserts only that this file is SHAPED so it can be registered safely.
+# REQUIRED STATUS CHECK. The `ansible-verify` job below is the context to
+# register in `main`'s branch protection, so that a failing scenario blocks the
+# merge. See the Ansible Configuration Is Verified in Continuous Integration
+# and Gates the Merge requirement.
+#
+# Whether it IS registered is repository settings rather than repository
+# content, and nothing here can tell you: `.github/tests` makes no network
+# call, and asserts only that this file is SHAPED so the context can be
+# registered safely. Read the branch protection API if you need to know. This
+# comment is deliberately written to stay true either way, because the setting
+# is applied by hand after this file merges and a comment claiming otherwise
+# would be false for as long as that took.
 #
 # THREE THINGS ABOUT THAT SHAPE, each of which reintroduces a permanently
 # pending pull request if undone:

@@ -98,10 +98,13 @@ addition (see Status below), not a rejected idea.
 
    CI runs `ansible-lint` and `ansible-playbook --syntax-check` on every pull
    request touching `ansible/`, and the Molecule suite in a separate
-   `Ansible Verify` workflow. **All three block a merge**: `ansible-verify` is
-   a required status check on `main`, so a red scenario is a blocked pull
-   request rather than something to notice. A pull request touching nothing
-   under `ansible/` starts no container and the check still reports.
+   `Ansible Verify` workflow. **All three are meant to block a merge**: the
+   `ansible-verify` job is the status check context registered on `main`, so a
+   red scenario is a blocked pull request rather than something to notice. A
+   pull request touching nothing under `ansible/` starts no container and the
+   check still reports. Whether the context is registered is a repository
+   setting rather than anything in this repository — `gh api
+   repos/:owner/:repo/branches/main/protection` is what answers it.
 
    Running the suite locally before opening a pull request is therefore worth
    more, not less: it is roughly six minutes of hosted-runner time to find out

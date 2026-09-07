@@ -777,7 +777,7 @@ class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
 # `pin-and-fix-molecule-suite`, before any implementation of that change
 # existed. The requirement these assertions trace to is
 # `iac-cicd-pipeline`'s "Ansible Configuration Is Verified in Continuous
-# Integration" (openspec/specs/iac-cicd-pipeline/spec.md). See that change's
+# Integration and Gates the Merge" (openspec/specs/iac-cicd-pipeline/spec.md). See that change's
 # test-plan.md for the scenario-to-test mapping, the baseline, and the
 # scenarios deliberately left uncovered.
 
@@ -1013,7 +1013,7 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
     ScenarioTreeFixtureMixin, unittest.TestCase
 ):
     """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
-    Integration -- the clause bounding the pinning obligation to the scenarios
+    Integration and Gates the Merge -- the clause bounding the pinning obligation to the scenarios
     this repository authors."""
 
     def test_discovery_finds_the_scenarios_this_repository_authors(self) -> None:
@@ -1225,7 +1225,7 @@ class TestMoleculeScenarioImagesArePinnedByDigest(
     ScenarioTreeFixtureMixin, unittest.TestCase
 ):
     """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
-    Integration -- the extension of the pinned-manifest obligation to the
+    Integration and Gates the Merge -- the extension of the pinned-manifest obligation to the
     container image each scenario executes inside."""
 
     def test_every_scenario_declares_its_platform_image_by_immutable_digest(self) -> None:
@@ -1424,7 +1424,7 @@ class TestMoleculeScenarioImagesArePinnedByDigest(
 
 class TestImageReferenceParsing(unittest.TestCase):
     """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
-    Integration. Unit-level cover for the reference splitting every check above
+    Integration and Gates the Merge. Unit-level cover for the reference splitting every check above
     depends on -- the smallest level at which these cases are observable."""
 
     def test_the_combined_tag_and_digest_form_is_read_as_pinned(self) -> None:
@@ -1575,6 +1575,20 @@ class TestRequiredCheckIsNotPathFiltered(unittest.TestCase):
     """
 
     LITERALLY_REQUIRED = (PR_VALIDATION, ANSIBLE_VERIFY)
+
+    def test_the_two_lists_of_required_check_workflows_agree(self) -> None:
+        """DERIVED -- no scenario states it. Deliberate duplication has a
+        deliberate failure mode: a third required check added to
+        `REQUIRED_STATUS_CHECK_WORKFLOWS` and not to `LITERALLY_REQUIRED` would
+        leave the literal guard covering two of three workflows, silently. This
+        is the assertion that makes forgetting loud instead."""
+        self.assertEqual(
+            sorted(REQUIRED_STATUS_CHECK_WORKFLOWS.values(), key=str),
+            sorted(self.LITERALLY_REQUIRED, key=str),
+            "the mapping the shape checks iterate and the literal tuple this class "
+            "names have diverged; a workflow in one and not the other is covered by "
+            "only half of the path-filter prohibition",
+        )
 
     def test_the_required_check_declares_no_workflow_level_path_filter(self) -> None:
         """SPECIFIED -- "Any workflow that is registered as a required check
@@ -3354,19 +3368,27 @@ class MoleculeWorkflowShapeMixin:
 
     def _discovery_job(self, workflow: dict):
         """The always-running job that enumerates roles: the one carrying a
-        step whose script reads `ansible/roles`."""
+        step that SEARCHES `ansible/roles` rather than merely naming the path.
+
+        `ansible/roles` alone also matches the matrix job, which installs
+        Galaxy content into that directory -- two matches, and taking the first
+        would make six tests depend on the order the jobs happen to be declared
+        in. `find` is what distinguishes discovering roles from installing
+        into the same directory.
+        """
         matches = [
             (key, job)
             for key, job in jobs(workflow).items()
             if any(
-                re.search(r"ansible/roles", str(step.get("run", "")))
+                re.search(r"find\s+ansible/roles", str(step.get("run", "")))
                 for step in (job.get("steps") or [])
             )
         ]
-        self.assertTrue(
-            matches,
-            "no job in ansible-verify.yml carries a step that discovers roles under "
-            "ansible/roles/",
+        self.assertEqual(
+            1,
+            len(matches),
+            f"expected exactly one job in ansible-verify.yml to discover roles under "
+            f"ansible/roles/, found {len(matches)}: {[key for key, _ in matches]}",
         )
         return matches[0]
 
@@ -3596,6 +3618,24 @@ class TestOnlyTheMoleculeMatrixIsGated(MoleculeWorkflowShapeMixin, unittest.Test
             f"the discovery job `{discovery_key}`, so whatever it is gated on is not "
             "the change detection this requirement places inside that job",
         )
+        # The polarity, not merely the reference. Reading an output of the
+        # discovery job is satisfied equally by the inverse condition, which
+        # runs the whole container matrix on every pull request that touches
+        # nothing under ansible/ -- the outcome this scenario forbids -- while
+        # skipping it on the ones that do.
+        self.assertIn(
+            "=='true'",
+            condition,
+            f"the matrix job's condition {matrix_job.get('if')!r} does not run the "
+            "suite WHERE the change detection says to. Inverted, a documentation-only "
+            "pull request starts every container and an Ansible one starts none",
+        )
+        self.assertNotIn(
+            "!=",
+            condition,
+            f"the matrix job's condition {matrix_job.get('if')!r} negates the change "
+            "detection -- see above",
+        )
 
     def test_no_step_inside_the_matrix_job_carries_its_own_condition(self) -> None:
         """SPECIFIED -- the same scenario, in the half a job-level assertion
@@ -3688,7 +3728,13 @@ class TestDiscoveryDeclaresTheLeastPrivilegeItNeeds(
         workflow = self._workflow()
         offenders = []
         for key, job in jobs(workflow).items():
-            declared = job.get("permissions")
+            # What a job RECEIVES, which is what the requirement is about --
+            # not what it declares. A job-level block replaces the
+            # workflow-level one; a job with no block of its own inherits it
+            # whole, so reading `job.get("permissions")` alone would leave two
+            # of this workflow's three jobs unchecked and a workflow-level
+            # `contents: write` invisible to every test in this file.
+            declared = job.get("permissions", workflow.get("permissions"))
             if isinstance(declared, str):
                 if declared != "read-all":
                     offenders.append(f"{key}: {declared}")
@@ -3775,10 +3821,19 @@ GATE_TABLE = (
     ),
 )
 
-# The row the gate is most likely to get wrong, referenced by name rather than
-# by index so that reordering the table above cannot silently retarget the
-# message assertion onto another row.
-SKIPPED_YET_CHANGED = GATE_TABLE[2]
+# The row the gate is most likely to get wrong, selected by the inputs that
+# DEFINE it rather than by its position, so that reordering the table above
+# cannot silently retarget the message assertion onto another row. An index
+# would have said the same thing in a comment while not doing it: retargeted
+# onto the `changed="false"` skip, the message assertion below passes on that
+# row's SUCCESS message, which also contains the word "skip".
+SKIPPED_YET_CHANGED = next(
+    row
+    for row in GATE_TABLE
+    if row.discovery == "success"
+    and row.changed == "true"
+    and row.matrix_results == ("skipped",)
+)
 
 
 class TestTheAggregatingGateDiscriminates(
@@ -3956,6 +4011,17 @@ class TestTheAggregatingGateDiscriminates(
         require_external_tools(self, ("bash",), "execute ansible-verify.yml's gate")
         result = self._run_gate(script, inputs, SKIPPED_YET_CHANGED, "skipped")
         combined = (result.stdout + result.stderr).lower()
+        # Anchor the message to the refusal. Without this the test reads a
+        # message and never checks what the gate concluded, so it would pass on
+        # a gate that named the skip and then exited 0 -- reporting the vacuous
+        # green in prose while producing it.
+        self.assertNotEqual(
+            0,
+            result.returncode,
+            "the gate concluded success on the skipped-yet-changed row, so this "
+            "message assertion would be describing a green required status check "
+            f"for a suite that verified nothing: {combined.strip()!r}",
+        )
         self.assertIn(
             "skip",
             combined,
@@ -4158,14 +4224,42 @@ class TestChangeDetectionResolvesTheGatesInput(
             "the resolution above has nothing to resolve on a pull request",
         )
         for index, step in filters:
+            condition = compact(step.get("if", ""))
+            label = step_label(discovery_key, index, step)
             self.assertIn(
                 "github.event_name",
-                compact(step.get("if", "")),
-                f"the change-filter step {step_label(discovery_key, index, step)} is "
-                f"conditioned on {step.get('if')!r}, which does not test the event: on "
-                "an event carrying no diff it runs anyway, and what it does there is "
-                "not something this repository has observed",
+                condition,
+                f"the change-filter step {label} is conditioned on "
+                f"{step.get('if')!r}, which does not test the event: on an event "
+                "carrying no diff it runs anyway, and what it does there is not "
+                "something this repository has observed",
             )
+            # The polarity, not merely the mention. Asserting that the condition
+            # names the event would be satisfied by its own negation, and the
+            # negation is not a lesser version of this check -- it is silently
+            # catastrophic. With the filter skipped on a pull request its output
+            # is the empty string, the resolution reads that as `false`, the
+            # matrix skips, and the gate's skipped-and-not-asked-for branch
+            # concludes SUCCESS. That is a green required status check on
+            # exactly the pull requests this workflow exists to gate, and every
+            # other test in this file stays green while it happens.
+            self.assertIn(
+                "=='pull_request'",
+                condition,
+                f"the change-filter step {label} is conditioned on "
+                f"{step.get('if')!r}, which does not run it ON a pull request. "
+                "Inverted, the filter is skipped where the diff exists, its output "
+                "is empty, the matrix is skipped as though nothing changed, and the "
+                "required check reports success having run no scenario",
+            )
+            self.assertNotIn(
+                "!=",
+                condition,
+                f"the change-filter step {label} is conditioned on "
+                f"{step.get('if')!r}, which negates the event test -- see above: "
+                "the failure is a green conclusion, not a red one",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

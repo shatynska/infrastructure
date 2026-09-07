@@ -379,6 +379,14 @@ paragraph about it is deleted when this change is archived.
   correctly-shaped workflow that is still advisory — the status quo, not a
   regression. It is the confirmation step of this change's own `ship` stage,
   and the observation is a direct read of the protection API.
+
+  This is why the workflow's top comment and `README.md` say the
+  `ansible-verify` job is *the context to register* rather than that it *is*
+  registered, and point at the protection API for the answer. A sentence
+  asserting the registration would be false from the moment this merges until
+  the operator applies the edit — and would stay false, silently, in exactly
+  the case this risk describes. Unlike the citation interval recorded under
+  Decision 7, this one does not close on its own.
 - **A pull request open at the moment of registration looks stuck.** Registering
   a context does not retroactively produce one on a head commit that predates
   it, so any open pull request shows `ansible-verify` as expected-but-never-
