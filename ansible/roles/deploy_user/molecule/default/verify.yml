@@ -581,17 +581,17 @@
           the repository.
 
     # ================================================================
-    # ADDED requirement: "Superseded Application Images Are Reclaimed at
-    # Deploy Time" -- openspec/changes/reclaim-superseded-app-images/
-    # specs/iac-host-configuration/spec.md, 11 scenarios.
+    # Requirement: "Superseded Application Images Are Reclaimed at Deploy
+    # Time" -- openspec/specs/iac-host-configuration/spec.md, from
+    # reclaim-superseded-app-images, 11 scenarios.
     #
     # Derived from that delta spec ahead of the implementation, per
     # tasks.md section 2. THESE TASKS FAIL UNTIL tasks.md section 1 IS
     # IMPLEMENTED, and that is the intended state: nothing in app-deploy
     # reclaims anything today.
     #
-    # openspec/changes/reclaim-superseded-app-images/test-plan.md carries
-    # the scenario-accounting table, the two scenarios (plus one half of a
+    # reclaim-superseded-app-images's test-plan.md carries the
+    # scenario-accounting table, the two scenarios (plus one half of a
     # third) deliberately left uncovered and why, and every assertion's
     # specified/derived classification. Read it before changing anything
     # below -- several fixtures look gratuitously specific and are not.
