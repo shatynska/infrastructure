@@ -19,9 +19,11 @@
   protect the wrong image. Normalise both sides to a tagged form first — the
   local listing always emits a tag, a Compose reference without one may not.
 - [x] 1.4 Remove with plain `docker image rm`. Do not pass `-f`, and do not
-  substitute `docker image prune -a`: a refused removal is the expected outcome
-  for the live tag on every run, and that refusal is the design's only backstop
-  against a wrong reference set.
+  substitute `docker image prune -a`: the runtime's refusal to remove an image a
+  container holds is the design's only backstop against a wrong reference set.
+  The live tag is never offered for removal — it is in the reference set and the
+  filter drops it — so a refusal is the exception, and `removed` short of
+  `considered` is a signal to read rather than noise to silence.
 - [x] 1.5 Exclude untagged members of the namespace (`<none>` tags), which are
   digest-referenced images that cannot appear in a tag-shaped reference set.
 - [x] 1.6 Isolate the step's failure as a single unit — a function invoked as
@@ -34,9 +36,10 @@
   usage error that `|| true` then hides — the recurring noise design.md warns
   invites someone to "make it stop".
 - [x] 1.8 Bound the whole reclamation step with `timeout`, enumeration included
-  — `docker images` and `docker compose config` are calls to the same daemon the
-  removals are, so a bound around only the removals leaves the wedged-daemon case
-  reachable. Pick a value generous against a legitimate steady-state run (order
+  — `docker images` is a daemon call exactly as the removals are, so a bound
+  around only the removals leaves the wedged-daemon case reachable.
+  (`docker compose config` is not a daemon call; it parses locally and returns 0
+  against a dead `DOCKER_HOST`, so it is inside the bound for tidiness.) Pick a value generous against a legitimate steady-state run (order
   of a minute, not of a second) and record it in the script comment. Expiry is a
   reclamation failure like any other: swallowed, deploy still successful.
 - [x] 1.9 Report on every exit path, split by path because the paths cannot

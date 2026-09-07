@@ -138,10 +138,9 @@ it means the refusal is a guard on *images*, not on tags, and a fixture built
 without noticing will pass for the wrong reason (see tasks.md 2.4).
 
 Stated as a fact about Docker rather than as a rule about this script, that
-backstop would not survive contact with maintenance. Refused removals are the
-*normal* outcome here — the live tag is refused on every single run — so the
-step routinely prints conflicts while appearing to do nothing wrong, which is
-precisely the shape that invites someone to add `-f` and make the noise stop.
+backstop would not survive contact with maintenance — someone reading a step
+that occasionally reports fewer removals than candidates will reach for `-f` to
+make the numbers line up.
 The requirement therefore says removal SHALL NOT be forced, and tasks.md 2.4
 asserts it.
 
@@ -296,9 +295,11 @@ where the bulk figure would only ever have proved a one-off.
 Separately, and for the steady state rather than the backlog, the whole
 reclamation step is wrapped in a `timeout` — enumeration as well as removal.
 Bounding only the removals would leave the case this is for wide open:
-`docker images` and `docker compose config` are calls to the same daemon the
-removals are, so a daemon that stops answering hangs the step before a
-removal-only bound could ever engage. Expiry is a reclamation failure like any
+`docker images` is a daemon call exactly as the removals are, so a runtime that
+stops answering hangs the step before a removal-only bound could ever engage.
+(`docker compose config` is not a daemon call — checked on 2026-09-07, it
+returns 0 against a dead `DOCKER_HOST` because it parses the file locally — so
+it sits inside the bound for tidiness rather than out of necessity.) Expiry is a reclamation failure like any
 other: swallowed, deploy still successful.
 
 The `timeout` wraps the work, and the *timeout line* does not sit inside it. A

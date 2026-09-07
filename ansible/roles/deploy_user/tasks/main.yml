@@ -114,9 +114,12 @@
       #
       #   * Removal is NEVER forced. The runtime's refusal to remove an
       #     image a container still holds is the only backstop against a
-      #     wrong reference set, and refusals are the NORMAL outcome here --
-      #     the live tag is refused on every run. Adding -f to quiet that
-      #     removes the guard.
+      #     wrong reference set. Note that the LIVE tag is never offered to
+      #     `docker image rm` at all -- it is in the reference set and the
+      #     filter drops it -- so a refusal is the exception, not the rule,
+      #     and `removed` falling short of `considered` is a signal worth
+      #     reading rather than routine noise. Adding -f would silence
+      #     exactly the case the backstop exists for.
       #
       #   * An empty or undeterminable reference set reclaims NOTHING. This
       #     is an explicit early return, not a property of the filter:
@@ -177,11 +180,14 @@
       }
       export -f reclaim
 
-      # The bound covers enumeration as well as removal: `docker images` and
-      # `docker compose config` are calls to the same daemon the removals are,
-      # so a bound around only the removals could never engage against a
-      # daemon that stops answering. 60s is generous against a legitimate
-      # steady-state run, which removes one image.
+      # The bound covers enumeration as well as removal, because
+      # `docker images` is a daemon call exactly as the removals are: against
+      # a runtime that stops answering it hangs, and a bound wrapped around
+      # only the removals would never get the chance to engage.
+      # (`docker compose config` is NOT a daemon call -- it parses the file
+      # locally and returns 0 against a dead DOCKER_HOST -- so it is inside
+      # the bound for tidiness rather than necessity.) 60s is generous
+      # against a legitimate steady-state run, which removes one image.
       #
       # The timeout line is printed HERE, outside the bounded region, because
       # a report emitted inside it cannot survive that region being killed --

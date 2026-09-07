@@ -1155,6 +1155,42 @@
           rc {{ deploy_user_reclaim_degraded_deploy.rc }}, output:
           {{ reclaim_degraded_output }}
 
+    - name: Read the installed app-deploy script
+      ansible.builtin.slurp:
+        src: /usr/local/bin/app-deploy
+      register: deploy_user_reclaim_installed_script
+
+    - name: Assert the installed script keeps its untagged guard, its duration bound, and forces no removal
+      vars:
+        # Line-wise by construction. An earlier form joined the stripped
+        # lines and searched the result, which needed `.split('\n')` -- and in
+        # a folded (>-) scalar that is a LITERAL backslash-n, so it split on
+        # the script's `printf` format strings instead of on lines, leaving
+        # everything before the first `printf` unassertable. Operating on the
+        # list avoids the escaping question entirely.
+        reclaim_code_lines: >-
+          {{ (deploy_user_reclaim_installed_script.content | b64decode).splitlines()
+             | reject('match', '\s*#') | list }}
+      ansible.builtin.assert:
+        that:
+          - reclaim_code_lines | select('search', "grep -v ':<none>\\$'") | list | length > 0
+          - reclaim_code_lines | select('search', 'timeout -k [1-9][0-9]* [1-9][0-9]* bash') | list | length > 0
+          - reclaim_code_lines | select('search', '(rmi|image (rm|remove)).*(\s-f\b|--force)') | list | length == 0
+          - reclaim_code_lines | select('search', '(image|system) prune') | list | length == 0
+        fail_msg: >-
+          The installed app-deploy has lost one of the properties this
+          scenario cannot induce. The `grep -v ':<none>$'` guard keeps a
+          digest-pinned image out of the candidate set -- asserted with its
+          `grep -v` intact, since an inverted guard would still contain the
+          pattern. `timeout -k N M` is what stops a wedged runtime holding
+          the deploy session open; the kill-after is part of it, and the
+          durations must be non-zero, since GNU `timeout 0` disables the
+          bound entirely. A forced removal in any spelling (`-f`, `--force`,
+          `docker rmi`, `image remove`) or any `prune` would destroy the
+          runtime's refusal, which is the only backstop between a defective
+          reference set and an image still in use.
+          Code lines seen: {{ reclaim_code_lines | length }}.
+
     # ------------------------------------------------------------
     # Scenario: A completed run reports what it did (the found-nothing
     # half)
@@ -1185,37 +1221,6 @@
     # `timeout ` matches the comment describing the bound and stays green
     # after the bound itself is deleted -- a guard that cannot fail.
     # ------------------------------------------------------------
-    - name: Read the installed app-deploy script
-      ansible.builtin.slurp:
-        src: /usr/local/bin/app-deploy
-      register: deploy_user_reclaim_installed_script
-
-    - name: Assert the installed script keeps its untagged guard, its duration bound, and forces no removal
-      vars:
-        reclaim_script_code: >-
-          {{ (deploy_user_reclaim_installed_script.content | b64decode).split('\n')
-             | reject('match', '\s*#') | join('\n') }}
-      ansible.builtin.assert:
-        that:
-          - reclaim_script_code is search("grep -v ':<none>\\$'")
-          - reclaim_script_code is search('timeout -k [0-9]+ [0-9]+ bash')
-          - not (reclaim_script_code is search('(rmi|image rm)[^\n]*(\s-f\b|--force)'))
-          - not (reclaim_script_code is search('image prune'))
-        fail_msg: >-
-          The installed app-deploy has lost one of the properties this
-          scenario cannot induce. The `grep -v ':<none>$'` guard keeps a
-          digest-pinned image out of the candidate set -- asserted with its
-          `grep -v` intact, since an inverted guard would still contain the
-          pattern. `timeout -k N M` is what stops a wedged runtime holding
-          the deploy session open, and the kill-after is part of it: SIGTERM
-          alone is only as strong as the signalled process's willingness to
-          return. A forced removal in any spelling (`-f`, `--force`, via
-          `docker rmi`) or a `prune` would destroy the runtime's refusal,
-          which is the only backstop between a defective reference set and
-          an image still in use -- and refused removals are the NORMAL
-          outcome here, so forcing is the likeliest well-intentioned
-          regression.
-
     - name: Assert the platform deploy, whose namespace is empty by design, still reported its counts
       vars:
         reclaim_platform_output: >-
