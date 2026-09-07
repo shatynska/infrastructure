@@ -63,7 +63,7 @@ jobs:
       # Environment secrets; HCLOUD_TOKEN's split (below) is the real
       # security boundary this job's separation into two jobs protects.
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~> 1.9"
           terraform_wrapper: false
@@ -243,7 +243,7 @@ jobs:
       # this org's free HCP Terraform tier has no privilege split to
       # apply here. See design.md Decision 9.
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~> 1.9"
           terraform_wrapper: false

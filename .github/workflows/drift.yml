@@ -26,7 +26,7 @@ jobs:
       # what actually keeps it from mutating infrastructure. See
       # design.md Decision 9.
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~> 1.9"
           terraform_wrapper: false
