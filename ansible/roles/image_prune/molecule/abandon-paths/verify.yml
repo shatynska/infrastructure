@@ -1,0 +1,322 @@
+---
+# Verifies the three abandon branches of the ADDED requirement "Unreferenced
+# Host Images Are Pruned on a Schedule" that the sibling `default` scenario
+# cannot host (tasks.md 2.4). Derived from the delta spec ahead of any
+# implementation; see this change's test-plan.md for the scenario-accounting
+# table and every assertion's classification.
+#
+# THE THREE ARRANGEMENTS MUST REACH THREE DIFFERENT BRANCHES. They are easy to
+# collapse into one that abandons early and reads as covering all three, so the
+# final assertion here compares the three reports PAIRWISE rather than only
+# asserting that each run abandoned. That comparison is also what makes the
+# absent-enumeration guard mutation-visible: delete it and the run falls
+# through to the empty-keep-set guard, reporting arrangement 3's condition for
+# arrangement 2's premise -- which "both runs abandoned" would not notice
+# (tasks.md 2.8).
+#
+# ORDER: arrangement 1 (enumeration present, naming nothing) and arrangement 3
+# (enumeration naming one never-deployed application, empty union) both need
+# the enumeration file to EXIST, so arrangement 2 removes it last.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+
+    # ============================================================
+    # Preconditions. Both are load-bearing rather than hygiene: a container
+    # anywhere on this host makes arrangement 3's branch unreachable, and an
+    # absent fixture image makes every "removed nothing" assertion vacuous.
+    # ============================================================
+    - name: Read this scenario's two preconditions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "CONTAINERS $(docker ps -aq | wc -l)"
+        if docker image inspect imgprune-fixture/abandon-canary:v1 >/dev/null 2>&1; then
+          echo "CANARY present"
+        else
+          echo "CANARY absent"
+        fi
+        if [ -f /etc/prune-host-images/apps ]; then
+          echo "APPS-FILE present"
+        else
+          echo "APPS-FILE absent"
+        fi
+        echo "APPS-NAMES [$(tr '\n' ' ' < /etc/prune-host-images/apps 2>/dev/null || true)]"
+      args:
+        executable: /bin/bash
+      register: image_prune_abandon_pre
+      changed_when: false
+
+    - name: Assert this host carries no container and one unreferenced image
+      ansible.builtin.assert:
+        that:
+          - "'CONTAINERS 0' in image_prune_abandon_pre.stdout_lines"
+          - "'CANARY present' in image_prune_abandon_pre.stdout_lines"
+        fail_msg: >-
+          This scenario's premise is a host with NO containers and at least one
+          unreferenced local image. A container here would make the union
+          non-empty and arrangement 3's branch unreachable -- the run would
+          abandon at a different condition and still read as covered. An absent
+          image would make every "removed nothing" assertion pass over a host
+          with nothing removable. Either way this is a broken fixture, not a
+          defect in the prune. Collected:
+          {{ image_prune_abandon_pre.stdout_lines }}
+
+    # ============================================================
+    # ARRANGEMENT 1 -- the enumeration is present and names no application.
+    #
+    # Delta scenario: An empty enumeration removes nothing.
+    # ============================================================
+    - name: Assert the converge wrote an enumeration that names no application
+      ansible.builtin.assert:
+        that:
+          - "'APPS-FILE present' in image_prune_abandon_pre.stdout_lines"
+          - "'APPS-NAMES []' in image_prune_abandon_pre.stdout_lines"
+        fail_msg: >-
+          A converge with `deploy_apps: []` SHALL still write the enumeration
+          file, empty. If it is absent, arrangement 1 and arrangement 2 are the
+          same arrangement and only one branch is covered. Collected:
+          {{ image_prune_abandon_pre.stdout_lines }}
+
+    - name: Run the prune against an enumeration that names no application
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-empty-enumeration.all 2>&1 || rc=$?
+        echo "RC $rc"
+        echo "HAS-CONSIDERED $(grep -ci considered /var/tmp/image-prune-empty-enumeration.all || true)"
+        if docker image inspect imgprune-fixture/abandon-canary:v1 >/dev/null 2>&1; then
+          echo "CANARY present"
+        else
+          echo "CANARY absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_empty_enumeration_run
+      changed_when: false
+
+    - name: Read the empty-enumeration run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-empty-enumeration.all
+      register: image_prune_empty_enumeration_report
+      changed_when: false
+
+    - name: Assert an enumeration naming no application removed nothing and failed
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' not in image_prune_empty_enumeration_run.stdout_lines"
+          - "'CANARY present' in image_prune_empty_enumeration_run.stdout_lines"
+          - "'HAS-CONSIDERED 0' in image_prune_empty_enumeration_run.stdout_lines"
+          - image_prune_empty_enumeration_report.stdout | trim | length > 0
+        fail_msg: >-
+          Where the enumeration names no application at all, the run SHALL
+          remove no image, SHALL report that condition, and SHALL exit
+          non-zero. This is not a degraded version of the design: with no
+          application enumerated the keep set reduces to the images containers
+          currently hold, which is EXACTLY `docker image prune -a` -- the
+          mechanism design.md rejects -- running weekly and reporting a healthy
+          completed run. The empty-keep-set guard cannot catch it either, since
+          any host with containers has a non-empty union. Collected:
+          {{ image_prune_empty_enumeration_run.stdout_lines }} -- run output:
+          {{ image_prune_empty_enumeration_report.stdout }}
+
+    # ============================================================
+    # ARRANGEMENT 3 -- a NON-EMPTY enumeration naming one never-deployed
+    # application, no containers, and one unreferenced image present. The union
+    # is then genuinely empty.
+    #
+    # The enumeration must be non-empty, or the run abandons at arrangement 1's
+    # condition and never computes a keep set at all -- the branch would read
+    # as covered and never be entered.
+    #
+    # Arranged by re-converging with overridden vars rather than by editing the
+    # on-host file, which would bypass the version-controlled-enumeration
+    # clause that is the whole reason the list is not a glob of /opt.
+    #
+    # Delta scenario: An empty keep set removes nothing.
+    # ============================================================
+    # noqa comment: `deploy_apps` is this role's one required INPUT, named by the
+    # inventory and shared with `deploy_user`; prefixing it would be a different
+    # variable. See design.md, "The application list comes from `deploy_apps`".
+    - name: Re-converge with an enumeration naming one never-deployed application  # noqa: var-naming[no-role-prefix]
+      ansible.builtin.include_role:
+        name: image_prune
+      vars:
+        deploy_apps:
+          - name: undeployed
+            public_key: >-
+              ssh-ed25519
+              AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeUndeployedKeyOnlyNotARealCred
+              undeployed-molecule@ci
+
+    - name: Run the prune against a non-empty enumeration whose union is empty
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "APPS-NAMES [$(tr '\n' ' ' < /etc/prune-host-images/apps)]"
+        if [ -e /opt/undeployed ]; then
+          echo "UNDEPLOYED-DIR present"
+        else
+          echo "UNDEPLOYED-DIR absent"
+        fi
+        echo "CONTAINERS $(docker ps -aq | wc -l)"
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-empty-keepset.all 2>&1 || rc=$?
+        echo "RC $rc"
+        echo "HAS-CONSIDERED $(grep -ci considered /var/tmp/image-prune-empty-keepset.all || true)"
+        if docker image inspect imgprune-fixture/abandon-canary:v1 >/dev/null 2>&1; then
+          echo "CANARY present"
+        else
+          echo "CANARY absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_empty_keepset_run
+      changed_when: false
+
+    - name: Read the empty-keep-set run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-empty-keepset.all
+      register: image_prune_empty_keepset_report
+      changed_when: false
+
+    - name: Assert the empty-keep-set arrangement really is one, and removed nothing
+      ansible.builtin.assert:
+        that:
+          - "'APPS-NAMES [undeployed ]' in image_prune_empty_keepset_run.stdout_lines"
+          - "'UNDEPLOYED-DIR absent' in image_prune_empty_keepset_run.stdout_lines"
+          - "'CONTAINERS 0' in image_prune_empty_keepset_run.stdout_lines"
+          - "'RC 0' not in image_prune_empty_keepset_run.stdout_lines"
+          - "'CANARY present' in image_prune_empty_keepset_run.stdout_lines"
+          - "'HAS-CONSIDERED 0' in image_prune_empty_keepset_run.stdout_lines"
+          - image_prune_empty_keepset_report.stdout | trim | length > 0
+        fail_msg: >-
+          The enumeration names one application, that application has no
+          Compose file on the host so it contributes nothing, and no container
+          exists -- so the union is genuinely empty. Where the union is empty
+          the run SHALL remove no image at all. Note that every filter shape
+          available here degrades the WRONG way on an empty keep set: a
+          `grep -vxF -f` against an empty pattern file matches every line, and
+          a membership test against an empty set is false for everything, so
+          without an explicit guard the whole host becomes a candidate. The
+          first three assertions are the arrangement's own preconditions; if
+          one of those failed, the branch was never entered. Collected:
+          {{ image_prune_empty_keepset_run.stdout_lines }} -- run output:
+          {{ image_prune_empty_keepset_report.stdout }}
+
+    # ============================================================
+    # ARRANGEMENT 2 -- the host carries NO enumeration at all. Last, because it
+    # destroys the file the other two arrangements need.
+    #
+    # Delta scenario: An enumeration the host does not carry is distinguishable
+    # from one naming nothing.
+    # ============================================================
+    - name: Remove the enumeration, as on a host that has never been converged with this role
+      ansible.builtin.file:
+        path: /etc/prune-host-images/apps
+        state: absent
+
+    - name: Run the prune against a host carrying no enumeration
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-absent-enumeration.all 2>&1 || rc=$?
+        echo "RC $rc"
+        echo "HAS-CONSIDERED $(grep -ci considered /var/tmp/image-prune-absent-enumeration.all || true)"
+        if docker image inspect imgprune-fixture/abandon-canary:v1 >/dev/null 2>&1; then
+          echo "CANARY present"
+        else
+          echo "CANARY absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_absent_enumeration_run
+      changed_when: false
+
+    - name: Read the absent-enumeration run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-absent-enumeration.all
+      register: image_prune_absent_enumeration_report
+      changed_when: false
+
+    - name: Assert a host carrying no enumeration removed nothing and failed
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' not in image_prune_absent_enumeration_run.stdout_lines"
+          - "'CANARY present' in image_prune_absent_enumeration_run.stdout_lines"
+          - "'HAS-CONSIDERED 0' in image_prune_absent_enumeration_run.stdout_lines"
+          - image_prune_absent_enumeration_report.stdout | trim | length > 0
+        fail_msg: >-
+          Where the run finds no enumeration on the host at all, it SHALL
+          remove nothing and SHALL report that condition. Letting it die under
+          `set -e` on the one input the whole keep set derives from is not that
+          report; neither is falling through to a container-only keep set.
+          Collected: {{ image_prune_absent_enumeration_run.stdout_lines }} --
+          run output: {{ image_prune_absent_enumeration_report.stdout }}
+
+    # ------------------------------------------------------------
+    # The distinguishability assertion the delta names in its own right, and
+    # the one mutating the absent-enumeration guard has to turn red.
+    #
+    # Asserting only "all three abandoned" would not test it: with that guard
+    # deleted, arrangement 2 falls through to the empty-keep-set guard -- this
+    # scenario carries no containers -- and reports arrangement 3's condition.
+    # The run still abandons, still exits non-zero, still removes nothing. Only
+    # the pairwise comparison notices (tasks.md 2.8).
+    # ------------------------------------------------------------
+    - name: Assert the three abandon branches report three distinguishable conditions
+      ansible.builtin.assert:
+        that:
+          - (image_prune_absent_enumeration_report.stdout | trim)
+            != (image_prune_empty_enumeration_report.stdout | trim)
+          - (image_prune_absent_enumeration_report.stdout | trim)
+            != (image_prune_empty_keepset_report.stdout | trim)
+          - (image_prune_empty_enumeration_report.stdout | trim)
+            != (image_prune_empty_keepset_report.stdout | trim)
+        fail_msg: >-
+          An enumeration the host does not carry SHALL be reported
+          DISTINGUISHABLY from an enumeration that is present and names no
+          application: the first is remedied by configuring the host and the
+          second by editing the version-controlled list, and a report that
+          conflates them sends an operator to the inventory when the host
+          merely needs a converge. All three abandon conditions must be
+          distinguishable from one another, not merely non-empty. Absent
+          enumeration: {{ image_prune_absent_enumeration_report.stdout }} --
+          empty enumeration: {{ image_prune_empty_enumeration_report.stdout }}
+          -- empty keep set: {{ image_prune_empty_keepset_report.stdout }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: An abandoned run says why and fails -- the "so the host
+    # records a failed unit" half, which only the unit can show. The completed
+    # counterpart is asserted in the `default` scenario.
+    # ------------------------------------------------------------
+    - name: Start the installed service on a host whose run must abandon
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        systemctl start prune-host-images.service || rc=$?
+        echo "START-RC $rc"
+        echo "RESULT $(systemctl show prune-host-images.service --property=Result --value)"
+        echo "EXITSTATUS $(systemctl show prune-host-images.service --property=ExecMainStatus --value)"
+        echo "ACTIVESTATE $(systemctl show prune-host-images.service --property=ActiveState --value)"
+      args:
+        executable: /bin/bash
+      register: image_prune_failed_unit
+      changed_when: false
+
+    - name: Assert an abandoned run leaves a failed unit on the host
+      ansible.builtin.assert:
+        that:
+          - "'START-RC 0' not in image_prune_failed_unit.stdout_lines"
+          - "'RESULT success' not in image_prune_failed_unit.stdout_lines"
+          - "'EXITSTATUS 0' not in image_prune_failed_unit.stdout_lines"
+          - "'ACTIVESTATE failed' in image_prune_failed_unit.stdout_lines"
+        fail_msg: >-
+          Unlike deploy-time reclamation, which SHALL NOT change the outcome of
+          a deploy that already succeeded, this unit has no caller to damage
+          and SHALL exit non-zero on an abandoned run, so that the host records
+          a FAILED unit rather than a silent one. A script that reported its
+          condition and exited zero would satisfy every text assertion above
+          and fail here -- and on the real host it would be invisible, since
+          nothing scrapes the journal and `systemctl list-units --failed` is
+          the only signal this design leans on. Collected:
+          {{ image_prune_failed_unit.stdout_lines }}

@@ -176,6 +176,13 @@
   `docker` (the runtime must exist) and with a comment saying why the position
   matters, matching how `ops_user`'s and `platform_data_volume`'s entries
   already explain theirs.
+
+  **Add `image_prune` to `.ansible-lint`'s `mock_roles` in the same commit.**
+  `ansible-lint` does not resolve role references through `ansible.cfg`'s
+  `roles_path`, so without the entry it reports a false `role not found`
+  against `host-baseline.yml` *and* against both new `converge.yml` files, and
+  `pre-commit run --all-files` (task 3.3) fails. That file's own comment states
+  the rule; every existing role is listed there.
 - [ ] 1.13 Write `ansible/roles/image_prune/README.md` covering: what the keep
   set is and that it is a union rendered across every declared profile; that
   `deploy_apps` is read from the same inventory variable `deploy_user` reads and
@@ -195,7 +202,7 @@ Dispatched to an author other than whoever implements section 1, from the
 approved delta rather than from the script. Two of this project's three test
 commands are in scope; the Terraform row is not.
 
-- [ ] 2.1 **Before running Molecule at all**, clear the shared state its runs
+- [x] 2.1 **Before running Molecule at all**, clear the shared state its runs
   collide on and confirm no peer session is mid-run:
   `rm -rf ~/.ansible/tmp/molecule.* ~/.cache/molecule/image_prune`. The instance
   name and these paths are stable per role and shared across worktrees. A
@@ -205,7 +212,7 @@ commands are in scope; the Terraform row is not.
   nowhere in the repository — the queue entry that held it was deleted when its
   change archived — which is why it is written out in full here; task 3.6 queues
   giving it a permanent home.
-- [ ] 2.2 Provision before believing any result: a fresh working tree carries
+- [x] 2.2 Provision before believing any result: a fresh working tree carries
   tracked files only, and this scenario converges the `docker` role, whose
   `meta/main.yml` depends on `geerlingguy.docker`. Without it the run fails at
   `syntax`, before `converge`. `-p ansible/roles` is load-bearing — each
@@ -222,7 +229,7 @@ commands are in scope; the Terraform row is not.
 
   Record the baseline — the run before anything was written — in `test-plan.md`,
   and report verification as **not run, and why** until provisioning completes.
-- [ ] 2.3 Create `ansible/roles/image_prune/molecule/default/`. Fixture images
+- [x] 2.3 Create `ansible/roles/image_prune/molecule/default/`. Fixture images
   are built locally with `docker build`; **no fixture may point at a real GHCR
   or Docker Hub package of this project's, and none may be pulled from one**, so
   the scenario stays deterministic. Build distinct images for: a shared base
@@ -237,7 +244,7 @@ commands are in scope; the Terraform row is not.
   and ~3.2 GB on the host; an image carrying **two tags**, neither referenced;
   and an image carrying **two tags** that a **stopped container** holds and no
   Compose file references.
-- [ ] 2.4 Create a second scenario, `molecule/abandon-paths/`, for the three
+- [x] 2.4 Create a second scenario, `molecule/abandon-paths/`, for the three
   abandon branches `default` cannot host — its fixtures include two stopped
   containers, and design.md's own "any host with containers has a non-empty
   union" puts the empty-union branch out of reach there. Each arrangement must
@@ -266,7 +273,7 @@ commands are in scope; the Terraform row is not.
   the version-controlled-enumeration clause that is the whole reason the list is
   not a glob of `/opt`. This scenario carries the same `iac-cicd-pipeline`
   obligations as `default` (task 2.10).
-- [ ] 2.5 Add the digest-pin fixture, which needs a registry and is therefore
+- [x] 2.5 Add the digest-pin fixture, which needs a registry and is therefore
   called out separately from 2.3: run a `registry:2` container **inside the
   Molecule instance**, pinned by digest rather than by its mutable tag and
   **pre-seeded into the instance** — `prepare` obtains the digest-pinned image
@@ -289,14 +296,14 @@ commands are in scope; the Terraform row is not.
   application is pinned to. If the toolchain makes a local registry unworkable,
   do not quietly drop the scenario — record it in 2.11 with the reason and say
   so in the report.
-- [ ] 2.6 Assert the fixtures are what they claim **before** asserting
+- [x] 2.6 Assert the fixtures are what they claim **before** asserting
   behaviour: distinct image IDs, each two-tag fixture carrying exactly two tags,
   the singly-held stopped-container image carrying exactly one, and the
   untagged and digest-pinned fixtures each carrying none — and that the untagged
   and digest-pinned fixtures are distinct images, since both present as tagless
   and an assertion that conflated them would prove nothing. The previous change records a fixture built without noticing
   the multi-tag case, which passed for the wrong reason.
-- [ ] 2.7 Cover the delta's scenarios that are reachable in a container.
+- [x] 2.7 Cover the delta's scenarios that are reachable in a container.
   **Order matters within this scenario:** make every keep-set and removal
   assertion first, and introduce the unresolvable-Compose-file and
   malformed-reference arrangements only afterwards. An abandoning run removes
@@ -327,7 +334,15 @@ commands are in scope; the Terraform row is not.
   reporting distinguishably from it, and the **empty keep set**; the
   completed-run report with its two counts; and the abandoned-run report plus
   non-zero exit on each branch that takes it.
-- [ ] 2.8 **Mutation-test every guard.** For each of — the no-application-
+- [x] 2.8 **Map every guard to the assertion that must turn red when it is
+  removed**, and record the mapping in `test-plan.md`. This task stops at the
+  mapping: running the mutations needs an implementation to mutate, and writing
+  one here would be writing the code under test, so the round itself is task
+  3.2 and section 2 is not complete until 3.2 has filled the mapping's result
+  column in. Check, while mapping, that each assertion *can* evaluate false —
+  an assertion that cannot fail is the defect this whole exercise is about.
+
+  The guards: the no-application-
   enumerated abandon, the **absent-enumeration abandon** — on a live host,
   mutating it to fall through reaches a container-only keep set, which is
   `docker image prune -a`; in `abandon-paths`, which carries no containers, the
@@ -341,8 +356,7 @@ commands are in scope; the Terraform row is not.
   stopped-container assertion in 2.7 must go red — it is redundant with the
   runtime's refusal for the *image*, not for its tags), removal by tag rather
   than by ID, the `--no-trunc` on the local enumeration, and the absence of
-  `-f` — remove or invert the guard, confirm the corresponding assertion goes
-  **red**, then restore it. Record each result in `test-plan.md`. The previous
+  `-f`. The previous
   change shipped three assertions that were green for reasons unrelated to what
   they claimed: a `regex_search('timeout ')` matching the script's own comment
   about the timeout, a `.split('\n')` over a folded YAML scalar where `\n` was
@@ -350,7 +364,7 @@ commands are in scope; the Terraform row is not.
   `Removed` output. Each read as coverage. Every guard here is over a
   destructive operation, so an assertion that cannot fail is worse than an
   absent one.
-- [ ] 2.9 Assert the *timer* is enabled and the *service* has never run after
+- [x] 2.9 Assert the *timer* is enabled and the *service* has never run after
   converge, and that the fixture images present before the converge are all
   still present after it — the delta's "Configuring the host does not prune it"
   scenario. A scenario that only checks the unit files exist would pass against
@@ -360,7 +374,7 @@ commands are in scope; the Terraform row is not.
   re-converge in 2.7 rewrites it**, that `/etc/prune-host-images/apps` contains
   exactly that converge's `deploy_apps` names — so a defective template cannot
   ship green behind a retired-application case arranged some other way.
-- [ ] 2.10 Both new `molecule.yml` files must satisfy `iac-cicd-pipeline`'s existing
+- [x] 2.10 Both new `molecule.yml` files must satisfy `iac-cicd-pipeline`'s existing
   discovery-based checks in `.github/tests`, which read every scenario this
   repository authors under `ansible/roles/*/molecule/`: each platform image
   pinned by digest, and — where a scenario names an image repository another
@@ -371,7 +385,7 @@ commands are in scope; the Terraform row is not.
   behavioural assertions, which are Molecule's. Run it as
   `python3 -m unittest discover --start-directory .github/tests` from the
   repository root to confirm.
-- [ ] 2.11 Record in `test-plan.md` everything the delta states that no
+- [x] 2.11 Record in `test-plan.md` everything the delta states that no
   scenario reaches, with the reason for each. Five entries are expected.
 
   The **duration bound** and a **wedged runtime**: wedging the daemon inside a
@@ -391,8 +405,8 @@ commands are in scope; the Terraform row is not.
   and a black-box scenario has no seam between the run's enumeration and its
   removal loop at which to change them. A fixture that re-points a tag before
   the run, or an assertion over the script's line order, passes whether or not
-  the guard exists — the false-green shape task 2.8 exists to prevent — so
-  neither is on 2.8's mutation list and neither may be given a placeholder
+  the guard exists — the false-green shape tasks 2.8 and 3.2 exist to prevent — so
+  neither is on 2.8's mutation map and neither may be given a placeholder
   assertion in 2.7. Both are held by review and by a static read of the
   installed script, and `design.md`'s Risks section states that limit rather
   than leaving it here. These two are what close the concurrent-deploy window,
@@ -425,6 +439,14 @@ commands are in scope; the Terraform row is not.
   dead daemon. Only the latter proves the runtime answered.
 - `docker inspect` with no arguments exits 1, so a `docker ps -aq | xargs`
   pipeline abandons the run on a host with no containers.
+- An **apostrophe inside a shell comment** breaks an `ansible.builtin.shell`
+  task at load time. Its free-form body goes through `split_args`, which counts
+  quotes and knows nothing about shell comments, so `# the runtime's own
+  refusal` leaves the count odd and the task never runs — failing with "failed
+  at splitting arguments, either an unbalanced jinja2 block or quotes" pointed
+  at the `name:` line, which reads like a YAML defect and is not. It cost the
+  test-derivation pass a full scenario run to diagnose. Keep prose in YAML
+  comments, not in shell bodies.
 
 ## 3. Verification and rollout
 
@@ -434,16 +456,25 @@ commands are in scope; the Terraform row is not.
   a scenario sorting after a failing one is silently never executed. Confirm the
   recap names every scenario the role has. While the role is red, iterate with
   `-s <name>`.
-- [ ] 3.2 Run `pre-commit run --all-files` (`ansible-lint`,
+- [ ] 3.2 **Run the mutation round** that task 2.8 mapped, now that there is an
+  implementation to mutate: for each guard, remove or invert it, confirm the
+  named assertion goes **red**, restore it, and fill in that row of
+  `test-plan.md`'s mapping. A guard whose assertion stays green is not a
+  passing test — it is an assertion that cannot fail, over a destructive
+  operation. Section 2 is not complete until this is done.
+- [ ] 3.3 Run `pre-commit run --all-files` (`ansible-lint`,
   `ansible-playbook --syntax-check`, `gitleaks`) and the `.github/tests` suite.
-- [ ] 3.3 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
-  diff that already passes 3.1 and 3.2.
-- [ ] 3.4 Ship by merging. The host-configuration half reaches prod by an
+- [ ] 3.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
+  diff that already passes 3.1, 3.2 and 3.3. Ask it to read the installed
+  script's enumerate-before-keep-set ordering and its per-tag re-resolution
+  line by line: `test-plan.md` records both as unverified by any assertion, and
+  this review is the only thing that checks them.
+- [ ] 3.5 Ship by merging. The host-configuration half reaches prod by an
   operator running `ansible-playbook` — this repository has no Ansible pipeline,
   and that is already how every host-configuration change reaches production
   here, including the one that installs `app-deploy`. It needs the Ansible Vault
   password, which only the operator holds.
-- [ ] 3.5 **Confirm the effect** — this change can answer the gate, so it is not
+- [ ] 3.6 **Confirm the effect** — this change can answer the gate, so it is not
   waivable. On the host after the converge: `systemctl list-timers` names
   `prune-host-images.timer` with a next elapse; `systemd-analyze verify` accepts
   both units; `docker system df` is unchanged by the converge itself; then
@@ -456,7 +487,7 @@ commands are in scope; the Terraform row is not.
   keeps every image the eleven running containers hold together with
   `postgres:16-alpine` and `postgres:16.15`. Confirm with `docker system df` and
   by checking each of those eleven containers is still up.
-- [ ] 3.6 Record two follow-ups in `docs/change-queue.md`, neither of which
+- [ ] 3.7 Record two follow-ups in `docs/change-queue.md`, neither of which
   belongs in this change. First, the one this change names as a non-goal:
   node-exporter's textfile collector plus a staleness alert, so a prune that has
   silently stopped working is alertable rather than only journalled — a

@@ -1,0 +1,87 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing here
+# may set up the thing under test.
+#
+# `prepare` runs once, after `create` and before `converge`, and is NOT re-run
+# for the `idempotence` action, so nothing here can mask the role's own
+# non-idempotence.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    # geerlingguy.docker 8.0.0 installs `ca-certificates` and `python3-debian`
+    # with `state: present` and no `update_cache`, which fails against a freshly
+    # created container whose apt cache is empty. Same workaround, same reason,
+    # as ansible/roles/deploy_user/molecule/default/prepare.yml.
+    - name: Refresh the apt cache before the docker role installs from it
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+
+    # Written BEFORE the docker role installs and first starts dockerd, so the
+    # daemon comes up with it already in place. This scenario runs real
+    # containers INSIDE the Molecule instance (two stopped fixture holders and a
+    # local registry). Under the default overlayfs snapshotter that fails with
+    # "failed to mount ... fstype: overlay ... invalid argument" -- Docker-in-
+    # Docker cannot stack another overlay here. vfs is slower but mounts
+    # anywhere, which is the right trade for a fixture.
+    - name: Ensure /etc/docker exists before writing the daemon config
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Configure dockerd for nested containers before it is installed
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {
+            "storage-driver": "vfs",
+            "features": {"containerd-snapshotter": false}
+          }
+
+    # ================================================================
+    # The digest-pin fixture's registry image, obtained ON THE CONTROLLER and
+    # carried into the instance as a tarball (tasks.md 2.5).
+    #
+    # The instance itself therefore pulls no registry image, which is what keeps
+    # `iac-cicd-pipeline`'s "the Molecule suite runs offline against local
+    # containers" true of this scenario. The image is named by content digest
+    # rather than by its mutable `registry:2` tag, so what is loaded is fixed.
+    #
+    # The `docker load` half deliberately does NOT happen here: this scenario's
+    # instance has no container runtime until the `docker` role converges, and
+    # `prepare` runs before `converge`. Loading is the first thing converge.yml's
+    # fixture play does. The controller-side half is here because it is a
+    # provisioning step, exactly like the Galaxy roles in tasks.md 2.2.
+    #
+    # If the controller's Docker credential helper is broken (Docker Desktop's
+    # `credsStore` on WSL, README's "If `molecule create` fails on your machine"),
+    # export DOCKER_CONFIG at a directory holding an empty `{}` for the whole
+    # run -- Ansible passes the controller's environment through to a
+    # `delegate_to: localhost` task.
+    # ================================================================
+    - name: Obtain the digest-pinned registry image on the controller (idempotent)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ref='registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373'
+        docker image inspect "$ref" >/dev/null 2>&1 || docker pull "$ref"
+        docker save --output /tmp/molecule-image-prune-registry.tar "$ref"
+      args:
+        executable: /bin/bash
+        creates: /tmp/molecule-image-prune-registry.tar
+      delegate_to: localhost
+      become: false
+
+    - name: Carry the registry image into the instance, which pulls nothing itself
+      ansible.builtin.copy:
+        src: /tmp/molecule-image-prune-registry.tar
+        dest: /var/tmp/image-prune-registry.tar
+        owner: root
+        group: root
+        mode: "0644"

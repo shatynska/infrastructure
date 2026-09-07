@@ -1,0 +1,265 @@
+---
+# Converges the container runtime, then builds every fixture this scenario's
+# assertions read, then converges `image_prune` itself.
+#
+# THE THREE PLAYS ARE ORDERED, NOT ARBITRARY.
+#
+#   1. The fixtures are real images and real containers, so the runtime has to
+#      exist before they can be built -- and `roles:` runs after `pre_tasks` in
+#      the same play, so the runtime cannot be a role of the fixture play.
+#   2. The fixtures are built BEFORE `image_prune` converges, which is what
+#      makes the delta scenario "Configuring the host does not prune it"
+#      assertable at all: verify.yml compares the image list this play records
+#      against the host's image list after the converge. A scenario that only
+#      checked the unit files exist would pass against a role that runs a prune
+#      on every converge (tasks.md 2.9).
+#   3. `image_prune` converges last, with the four-application `deploy_apps`
+#      verify.yml reads.
+#
+# `deploy_apps` here mirrors the production interface (`ansible/inventory/
+# group_vars/prod.yml`): a list of `{name, public_key}` mappings, which is why
+# tasks.md 1.3 extracts `map(attribute='name')` rather than rendering the list
+# raw. The public keys are dummies and name no real credential.
+#
+# `undeployed` is enumerated and has NO `/opt/undeployed/` at all -- that is the
+# delta scenario "An application that has never deployed does not abandon the
+# run", and it is in place from the first converge rather than arranged later,
+# because the run that must proceed despite it is the very first run.
+#
+# `retiree` is enumerated here and removed from the enumeration by verify.yml's
+# re-converge, which is the delta scenario "A retired application's images
+# become reclaimable". Arranging it by re-converging, rather than by editing
+# /etc/prune-host-images/apps by hand, is what exercises the
+# version-controlled-enumeration clause -- the whole reason the list is not a
+# glob of /opt (tasks.md 2.7).
+
+- name: Install the container runtime the fixtures and the role both need
+  hosts: all
+  become: true
+  roles:
+    - role: docker
+
+- name: Build the fixtures every assertion in this scenario reads
+  hosts: all
+  become: true
+  tasks:
+    # ================================================================
+    # FIXTURE ONLY. Nothing here is the subject of an assertion, but several
+    # fixtures look gratuitously specific and are not -- verify.yml's
+    # "Assert the fixtures are what they claim" block states, for each one,
+    # which assertion would pass for the wrong reason if it were built
+    # differently.
+    #
+    # Built with `docker build`, never `docker tag`, EXCEPT for the two
+    # deliberate multi-tag fixtures, where one image wearing two tags is
+    # precisely the property under test.
+    #
+    # NO FIXTURE POINTS AT A REAL GHCR OR DOCKER HUB PACKAGE OF THIS
+    # PROJECT'S, AND NONE IS PULLED FROM ONE (tasks.md 2.3).
+    # `imgprune-fixture/*` is a Docker Hub namespace that exists nowhere and
+    # is never pushed to or pulled from; `localhost:5000/*` is the local
+    # registry this play starts inside the instance, serving a locally built
+    # image, which tasks.md 2.5 calls out as permitted for exactly this
+    # reason. `alpine:3.19` is the build base, the same one every other
+    # scenario in this repository already uses.
+    #
+    # DOCKER_BUILDKIT=0 is not a preference: prepare.yml puts the nested
+    # daemon on the vfs storage driver with containerd-snapshotter disabled,
+    # and the classic builder is the one that mounts anywhere.
+    # ================================================================
+    - name: Build the fixture images, containers, registry and Compose files
+      ansible.builtin.shell: |
+        {% raw %}
+        set -euo pipefail
+        export DOCKER_BUILDKIT=0
+
+        build() {  # build <reference> <marker>
+          d="/tmp/image-prune-build-$2"
+          rm -rf "$d"
+          mkdir -p "$d"
+          printf 'FROM alpine:3.19\nRUN echo %s > /image-prune-marker\n' "$2" > "$d/Dockerfile"
+          docker build -t "$1" "$d" >/dev/null
+        }
+
+        docker pull alpine:3.19 >/dev/null
+
+        # --- the base repository: :v2 is referenced by `alpha`, :v1 by nothing.
+        # Two SEPARATE builds, so they are two image identities rather than one
+        # image wearing two tags -- otherwise removing :v1 would merely untag a
+        # surviving image and "the older tag was removed" would pass with no
+        # image actually reclaimed.
+        build imgprune-fixture/base:v1 base-v1
+        build imgprune-fixture/base:v2 base-v2
+
+        # --- referenced by `beta`, no container anywhere: the defined-but-never-
+        # started class this design exists to protect.
+        build imgprune-fixture/defined-not-running:v1 defined-not-running
+
+        # --- referenced by `beta` ONLY behind the inactive `debug` profile.
+        build imgprune-fixture/profiled:v1 profiled
+
+        # --- held by a stopped container, referenced by no Compose file, and
+        # carrying EXACTLY ONE tag: with a second tag its removal would succeed
+        # by untagging and the unforced-removal assertion would prove nothing.
+        build imgprune-fixture/held-by-stopped:v1 held-by-stopped
+        docker rm -f image_prune_stopped_holder >/dev/null 2>&1 || true
+        docker run --name image_prune_stopped_holder \
+          imgprune-fixture/held-by-stopped:v1 /bin/true >/dev/null
+
+        # --- tagged, referenced by nothing, held by nothing.
+        build imgprune-fixture/orphan:v1 orphan
+
+        # --- UNTAGGED, referenced by nothing, held by nothing. Built by tagging
+        # one image and then rebuilding different content at the same tag, which
+        # strands the first as `<none>:<none>`. That is the class the proposal
+        # identifies as the largest target this change has (ten images, ~3.2 GB
+        # on the host). The identity is recorded: there is no name to assert on.
+        build imgprune-fixture/stranded:v1 stranded-first
+        STRANDED_ID="$(docker images -q --no-trunc imgprune-fixture/stranded:v1)"
+        build imgprune-fixture/stranded:v1 stranded-second
+
+        # --- ONE image wearing TWO tags, neither referenced, held by nothing.
+        # `docker tag` is correct here: the shared identity is the point. An
+        # implementation that removes by ID fails on this fixture with "must be
+        # forced", which is the whole reason removal is by tag.
+        build imgprune-fixture/twotag:a twotag
+        docker tag imgprune-fixture/twotag:a imgprune-fixture/twotag:b
+        TWOTAG_ID="$(docker images -q --no-trunc imgprune-fixture/twotag:a)"
+
+        # --- ONE image wearing TWO tags that a STOPPED container holds. The
+        # refusal the runtime makes guards the image and not its individual
+        # tags, so this fixture is the only place the container contribution to
+        # the keep set is observable in its own right.
+        build imgprune-fixture/held-twotag:a held-twotag
+        docker tag imgprune-fixture/held-twotag:a imgprune-fixture/held-twotag:b
+        HELD_TWOTAG_ID="$(docker images -q --no-trunc imgprune-fixture/held-twotag:a)"
+        docker rm -f image_prune_stopped_twotag_holder >/dev/null 2>&1 || true
+        docker run --name image_prune_stopped_twotag_holder \
+          imgprune-fixture/held-twotag:a /bin/true >/dev/null
+
+        # --- the only image the retiring application has.
+        build imgprune-fixture/retired-only:v1 retired-only
+
+        # --- the digest-pin fixture (tasks.md 2.5). The registry image was
+        # obtained on the CONTROLLER by prepare.yml and carried in as a tarball,
+        # so the instance pulls no registry image of its own. It is loaded
+        # untagged and given a local name here.
+        REGISTRY_ID="$(docker load -i /var/tmp/image-prune-registry.tar \
+          | sed -n 's/^Loaded image ID: //p; s/^Loaded image: //p' | head -n 1)"
+        test -n "$REGISTRY_ID"
+        docker tag "$REGISTRY_ID" imgprune-fixture/registry:2
+        docker rm -f image_prune_registry >/dev/null 2>&1 || true
+        docker run -d --name image_prune_registry -p 127.0.0.1:5000:5000 \
+          imgprune-fixture/registry:2 >/dev/null
+
+        # The push is the readiness probe: the instance carries no curl, and a
+        # fixed sleep would be a race dressed as a wait.
+        build localhost:5000/imgprune-fixture/pinned:seed pinned
+        pushed=0
+        for _ in $(seq 1 30); do
+          if docker push localhost:5000/imgprune-fixture/pinned:seed >/dev/null 2>&1; then
+            pushed=1
+            break
+          fi
+          sleep 2
+        done
+        if [ "$pushed" -ne 1 ]; then
+          echo "FIXTURE FAILURE: the local registry never accepted a push, so the" >&2
+          echo "digest-pin fixture cannot be built. See tasks.md 2.5: do not drop" >&2
+          echo "the digest-pin scenario quietly -- record it in test-plan.md." >&2
+          exit 1
+        fi
+        PINNED_DIGEST="$(docker image inspect \
+          --format '{{index .RepoDigests 0}}' \
+          localhost:5000/imgprune-fixture/pinned:seed | cut -d@ -f2)"
+        # Untag and re-pull by digest. Without this the pushed image keeps its
+        # build tag, and the fixture would fail its own "carries no tag"
+        # pre-assertion -- relaxing which would lose the property the fixture
+        # exists to prove.
+        docker image rm localhost:5000/imgprune-fixture/pinned:seed >/dev/null 2>&1 || true
+        PINNED_REF="localhost:5000/imgprune-fixture/pinned@${PINNED_DIGEST}"
+        docker pull "$PINNED_REF" >/dev/null
+        PINNED_ID="$(docker image inspect --format '{{.Id}}' "$PINNED_REF")"
+
+        # --- the Compose files of the enumerated applications, on the host.
+        # `alpha` and `beta` between them are the union: `alpha` references the
+        # base image `beta` does not, which is the delta scenario about the
+        # reference set of one application not being authority over another.
+        install -d -o root -g root -m 0755 /opt/alpha /opt/beta /opt/retiree
+        cat > /opt/alpha/docker-compose.yml <<COMPOSE
+        services:
+          api:
+            image: imgprune-fixture/base:v2
+            command: ["sleep", "3600"]
+          pinned:
+            image: ${PINNED_REF}
+            command: ["sleep", "3600"]
+        COMPOSE
+        cat > /opt/beta/docker-compose.yml <<'COMPOSE'
+        services:
+          worker:
+            image: imgprune-fixture/defined-not-running:v1
+            command: ["sleep", "3600"]
+          debugger:
+            profiles: ["debug"]
+            image: imgprune-fixture/profiled:v1
+            command: ["sleep", "3600"]
+        COMPOSE
+        cat > /opt/retiree/docker-compose.yml <<'COMPOSE'
+        services:
+          app:
+            image: imgprune-fixture/retired-only:v1
+            command: ["sleep", "3600"]
+        COMPOSE
+        # Kept for later arrangements, so that the malformed-reference fixture
+        # can restore a known-good file rather than rebuild one.
+        cp /opt/alpha/docker-compose.yml /var/tmp/image-prune-alpha-compose.yml
+        cp /opt/beta/docker-compose.yml /var/tmp/image-prune-beta-compose.yml
+
+        cat > /var/tmp/image-prune-fixtures.env <<VARS
+        STRANDED_ID=${STRANDED_ID}
+        TWOTAG_ID=${TWOTAG_ID}
+        HELD_TWOTAG_ID=${HELD_TWOTAG_ID}
+        PINNED_DIGEST=${PINNED_DIGEST}
+        PINNED_REF=${PINNED_REF}
+        PINNED_ID=${PINNED_ID}
+        VARS
+
+        # The image list AS IT STANDS BEFORE `image_prune` converges. verify.yml
+        # asserts every one of these is still present afterwards -- the delta
+        # scenario "Configuring the host does not prune it".
+        docker images -a --no-trunc -q | sort -u \
+          > /var/tmp/image-prune-images-before-converge
+        {% endraw %}
+      args:
+        executable: /bin/bash
+        creates: /var/tmp/image-prune-fixtures.env
+      changed_when: false
+
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    deploy_apps:
+      - name: alpha
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeAlphaKeyOnlyNotARealCredential
+          alpha-molecule@ci
+      - name: beta
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeBetaKeyOnlyNotARealCredential2
+          beta-molecule@ci
+      - name: retiree
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeRetireeKeyOnlyNotARealCredent
+          retiree-molecule@ci
+      - name: undeployed
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeUndeployedKeyOnlyNotARealCred
+          undeployed-molecule@ci
+  roles:
+    - role: image_prune

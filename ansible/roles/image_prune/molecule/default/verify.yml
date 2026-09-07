@@ -1,0 +1,1008 @@
+---
+# Verifies the ADDED requirement "Unreferenced Host Images Are Pruned on a
+# Schedule" (openspec/changes/prune-unreferenced-host-images-periodically/
+# specs/iac-host-configuration/spec.md).
+#
+# Derived from that delta spec ahead of any implementation, per tasks.md
+# section 2, and WITHOUT reading any implementation of the prune script -- none
+# exists. Read this change's test-plan.md before changing anything below: it
+# carries the scenario-accounting table (24 delta scenarios, all accounted
+# for), every assertion's specified/derived classification, the assumptions
+# taken on report wording, and the mutation-test obligation task 2.8 places on
+# each guard.
+#
+# ORDERING IS LOAD-BEARING (tasks.md 2.7). Every keep-set and removal assertion
+# is made BEFORE the unresolvable-Compose-file and malformed-reference
+# arrangements are introduced at the end of this file. An abandoning run removes
+# nothing, so once either arrangement is in place every "SHALL still be present"
+# assertion above it would pass whether or not the keep set was computed
+# correctly -- eleven positive assertions going green for the reason task 2.8
+# exists to catch.
+#
+# DELIBERATELY NOT ASSERTED HERE, recorded so the absence of a test is
+# distinguishable from the absence of the thought (tasks.md 2.11; design.md's
+# Risks section states the last two as a real limit on its own argument):
+#
+#   * The DURATION BOUND and a WEDGED RUNTIME. Wedging the daemon inside a
+#     Molecule container breaks the same daemon this scenario's own fixtures
+#     need, and the bound is systemd's rather than the run's. Both are held by
+#     the static read of the installed unit below and by review.
+#
+#   * The NO-AGE-CRITERION scenario. Every fixture is built during the run, so
+#     none carries an old `Created`, and a behavioural assertion would pass
+#     against a conforming and a non-conforming script alike. Held by the static
+#     read below that the script calls neither `docker image prune` nor anything
+#     reading a creation timestamp.
+#
+#   * The PRE-REMOVAL TAG RE-RESOLUTION and the ENUMERATE-LOCAL-IMAGES-FIRST
+#     ordering, for one shared reason: both are observable only when the host's
+#     images change MIDWAY THROUGH a run, and a black-box scenario has no seam
+#     between the run's enumeration and its removal loop at which to change
+#     them. A fixture that re-points a tag before the run, or an assertion over
+#     the script's line order, would pass whether or not the guard exists --
+#     the false-green shape task 2.8 exists to prevent -- so neither is given a
+#     placeholder assertion here.
+#
+# The static reads below strip WHOLE-LINE COMMENTS before matching. That is not
+# fastidiousness: the predecessor change shipped a `regex_search('timeout ')`
+# that matched the script's own comment ABOUT the timeout and read as coverage.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+
+    # ============================================================
+    # The installed units and script, read statically. Comment lines are
+    # stripped first (see the file header for why).
+    # ============================================================
+    # The unit paths are resolved through systemd's own FragmentPath rather
+    # than assumed to be /etc/systemd/system/: tasks.md 1.10 and 1.11 name the
+    # units and not the directory they are installed in, and reading the file
+    # systemd actually loaded is both the stronger check and the one that
+    # survives the role choosing a different directory.
+    #
+    # NOTE FOR ANYONE EDITING A SHELL BLOCK IN THIS FILE: an apostrophe inside a
+    # shell COMMENT breaks Ansible's own argument splitter -- the module never
+    # runs, and the error reads "failed at splitting arguments, either an
+    # unbalanced jinja2 block or quotes". Prose belongs in YAML comments like
+    # this one; shell comments here stay apostrophe-free.
+    - name: Read the installed units and script with their comment lines stripped
+      ansible.builtin.shell: |
+        set -euo pipefail
+        service="$(systemctl show prune-host-images.service --property=FragmentPath --value)"
+        timer="$(systemctl show prune-host-images.timer --property=FragmentPath --value)"
+        script=/usr/local/bin/prune-host-images
+        code() { grep -v '^[[:space:]]*#' "$1" | grep -v '^[[:space:]]*$' || true; }
+        for f in "$service" "$timer" "$script"; do
+          if [ -n "$f" ] && [ -f "$f" ]; then
+            echo "FILE-PRESENT $(basename "$f")"
+          else
+            echo "FILE-ABSENT [${f}]"
+          fi
+        done
+        echo "UNIT-TYPE-ONESHOT $(code "$service" | grep -c '^Type=oneshot' || true)"
+        echo "UNIT-EXECSTART $(code "$service" | grep -c '^ExecStart=.*/usr/local/bin/prune-host-images' || true)"
+        echo "UNIT-TIMEOUT $(code "$service" | grep -cE '^TimeoutStartSec=[0-9]+(s|m|min)?$' || true)"
+        echo "TIMER-PERSISTENT $(code "$timer" | grep -c '^Persistent=true' || true)"
+        echo "TIMER-ONCALENDAR-UTC $(code "$timer" | grep -c '^OnCalendar=.*UTC' || true)"
+        echo "TIMER-RANDOMISED $(code "$timer" | grep -cE '^RandomizedDelaySec=[0-9]+' || true)"
+        echo "SCRIPT-USES-IMAGE-PRUNE $(code "$script" | grep -cE 'docker[[:space:]]+(image|system)[[:space:]]+prune' || true)"
+        echo "SCRIPT-READS-AGE $(code "$script" | grep -cE '\.Created|until=' || true)"
+        rmlines="$(code "$script" | grep -E 'docker[[:space:]]+image[[:space:]]+rm' || true)"
+        forced="$(printf '%s\n' "$rmlines" \
+          | grep -cE '(^|[[:space:]])(-f|--force)([[:space:]]|$)' || true)"
+        echo "SCRIPT-FORCES-REMOVAL ${forced}"
+      args:
+        executable: /bin/bash
+      register: image_prune_static
+      changed_when: false
+
+    - name: Assert the unit, timer and script were installed where the role says
+      ansible.builtin.assert:
+        that:
+          - "'FILE-PRESENT prune-host-images.service' in image_prune_static.stdout_lines"
+          - "'FILE-PRESENT prune-host-images.timer' in image_prune_static.stdout_lines"
+          - "'FILE-PRESENT prune-host-images' in image_prune_static.stdout_lines"
+        fail_msg: >-
+          The role did not install one of the three artifacts every assertion
+          below reads. Static read: {{ image_prune_static.stdout_lines }}
+
+    - name: Assert the schedule is the init system's and the service is a bounded oneshot
+      ansible.builtin.assert:
+        that:
+          - "'UNIT-TYPE-ONESHOT 1' in image_prune_static.stdout_lines"
+          - "'UNIT-EXECSTART 1' in image_prune_static.stdout_lines"
+          - "'UNIT-TIMEOUT 1' in image_prune_static.stdout_lines"
+        fail_msg: >-
+          The service unit SHALL be a oneshot running /usr/local/bin/prune-host-images
+          under a TimeoutStartSec= bound. The bound is the ONLY holder of the
+          delta scenario "A non-responding runtime does not leave the unit
+          running indefinitely" -- wedging the daemon inside this container
+          would break the same daemon these fixtures need, so nothing else
+          stands behind this line (tasks.md 2.11). Static read:
+          {{ image_prune_static.stdout_lines }}
+
+    - name: Assert the timer carries the catch-up, UTC and randomised-delay settings
+      ansible.builtin.assert:
+        that:
+          - "'TIMER-PERSISTENT 1' in image_prune_static.stdout_lines"
+          - "'TIMER-ONCALENDAR-UTC 1' in image_prune_static.stdout_lines"
+          - "'TIMER-RANDOMISED 1' in image_prune_static.stdout_lines"
+        fail_msg: >-
+          Persistent=true is the whole of the delta scenario "A host that was
+          down at its scheduled time still runs" -- a Molecule instance cannot
+          be taken down across a scheduled occurrence, so this static read is
+          the only holder of it. Static read: {{ image_prune_static.stdout_lines }}
+
+    - name: Assert the script consults no age criterion and never forces a removal
+      ansible.builtin.assert:
+        that:
+          - "'SCRIPT-USES-IMAGE-PRUNE 0' in image_prune_static.stdout_lines"
+          - "'SCRIPT-READS-AGE 0' in image_prune_static.stdout_lines"
+          - "'SCRIPT-FORCES-REMOVAL 0' in image_prune_static.stdout_lines"
+        fail_msg: >-
+          "Age SHALL NOT be a criterion", and a prune SHALL NOT be performed
+          through a runtime facility that selects images by absence of a tag.
+          Every fixture here is built during the run, so no behavioural
+          assertion can distinguish a conforming script from one consulting a
+          timestamp -- this read is what holds the delta scenario "An old image
+          in active use is not removed for its age" (tasks.md 2.11). Removal is
+          never forced: `-f` removes the runtime's own refusal, which is the
+          last backstop between a defective keep set and a live image. Static
+          read: {{ image_prune_static.stdout_lines }}
+
+    # ============================================================
+    # Delta scenario: Configuring the host does not prune it
+    #
+    # A scenario that only checked the unit files exist would pass against a
+    # role that runs a prune during every converge (tasks.md 2.9). The image
+    # list converge.yml recorded BEFORE `image_prune` ran is compared against
+    # the host's list now.
+    # ============================================================
+    - name: Collect the units' runtime state and the images that survived the converge
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "SERVICE-EXECMAINSTART [$(systemctl show prune-host-images.service --property=ExecMainStartTimestamp --value)]"
+        echo "SERVICE-ACTIVEENTER [$(systemctl show prune-host-images.service --property=ActiveEnterTimestamp --value)]"
+        echo "SERVICE-ISACTIVE $(systemctl is-active prune-host-images.service || true)"
+        echo "TIMER-ISENABLED $(systemctl is-enabled prune-host-images.timer || true)"
+        echo "TIMER-ISACTIVE $(systemctl is-active prune-host-images.timer || true)"
+        docker images -a --no-trunc -q | sort -u > /var/tmp/image-prune-images-after-converge
+        missing="$(comm -23 /var/tmp/image-prune-images-before-converge \
+                            /var/tmp/image-prune-images-after-converge | tr '\n' ' ')"
+        echo "GONE-SINCE-CONVERGE [${missing}]"
+      args:
+        executable: /bin/bash
+      register: image_prune_after_converge
+      changed_when: false
+
+    - name: Assert the converge armed the timer and executed no prune
+      ansible.builtin.assert:
+        that:
+          - "'TIMER-ISENABLED enabled' in image_prune_after_converge.stdout_lines"
+          - "'TIMER-ISACTIVE active' in image_prune_after_converge.stdout_lines"
+          - "'SERVICE-ISACTIVE inactive' in image_prune_after_converge.stdout_lines"
+          - "'SERVICE-EXECMAINSTART []' in image_prune_after_converge.stdout_lines"
+          - "'SERVICE-ACTIVEENTER []' in image_prune_after_converge.stdout_lines"
+          - "'GONE-SINCE-CONVERGE []' in image_prune_after_converge.stdout_lines"
+        fail_msg: >-
+          "Installing or updating the unit SHALL NOT itself remove an image, so
+          that configuring the host is never also a mutation of what it
+          stores", and the unit SHALL be armed for its next occurrence rather
+          than having been executed. Either the timer is not armed, or the
+          service has run at least once, or an image present before the converge
+          is gone after it -- an Ansible run removing images from a host as a
+          side effect of configuring it. Collected:
+          {{ image_prune_after_converge.stdout_lines }}
+
+    # ============================================================
+    # The on-host enumeration, read against THIS converge's `deploy_apps` and
+    # BEFORE the reduced-enumeration re-converge below rewrites it (tasks.md
+    # 2.9). A defective template cannot then ship green behind a
+    # retired-application case arranged some other way.
+    #
+    # The second assertion is the silent failure tasks.md 1.3 names: the
+    # `deploy_apps` elements are {name, public_key} mappings, and rendering
+    # them raw would leave a file that names SOMETHING -- so the
+    # no-application guard would not fire, every name would miss its
+    # /opt/<name>/docker-compose.yml as the benign skip, and the keep set
+    # would silently reduce to container images.
+    # ============================================================
+    - name: Read the enumeration the converge wrote to the host
+      ansible.builtin.command: cat /etc/prune-host-images/apps
+      register: image_prune_apps_file
+      changed_when: false
+
+    - name: Assert the host carries exactly this converge's application names, and nothing else
+      ansible.builtin.assert:
+        that:
+          - image_prune_apps_file.stdout_lines | map('trim') | select('!=', '') | sort | list
+            == ['alpha', 'beta', 'retiree', 'undeployed']
+          - "'ssh-' not in image_prune_apps_file.stdout"
+          - "'public_key' not in image_prune_apps_file.stdout"
+          - "'name' not in image_prune_apps_file.stdout"
+        fail_msg: >-
+          /etc/prune-host-images/apps SHALL carry exactly the application names
+          this converge's `deploy_apps` enumerates, one per line, and nothing
+          else. A file rendering the {name, public_key} mappings raw still names
+          something, so no guard fires and the keep set degrades to container
+          images alone -- `docker image prune -a`, reporting a healthy run.
+          Contents: {{ image_prune_apps_file.stdout_lines }}
+
+    # ============================================================
+    # Fixture pre-assertions (tasks.md 2.6). Asserted BEFORE any behaviour, so
+    # that a fixture built wrong fails as a broken fixture rather than as a
+    # defect in the prune.
+    # ============================================================
+    - name: Collect the fixtures' identities and tag counts
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . /var/tmp/image-prune-fixtures.env
+        {% raw %}
+        idof() { docker images -q --no-trunc "$1"; }
+        tagsof() { docker image inspect --format '{{len .RepoTags}}' "$1"; }
+        echo "ID-BASE-V1 $(idof imgprune-fixture/base:v1)"
+        echo "ID-BASE-V2 $(idof imgprune-fixture/base:v2)"
+        echo "ID-DEFINED $(idof imgprune-fixture/defined-not-running:v1)"
+        echo "ID-PROFILED $(idof imgprune-fixture/profiled:v1)"
+        echo "ID-HELD $(idof imgprune-fixture/held-by-stopped:v1)"
+        echo "ID-ORPHAN $(idof imgprune-fixture/orphan:v1)"
+        echo "ID-RETIRED $(idof imgprune-fixture/retired-only:v1)"
+        echo "ID-STRANDED ${STRANDED_ID}"
+        echo "ID-TWOTAG ${TWOTAG_ID}"
+        echo "ID-HELD-TWOTAG ${HELD_TWOTAG_ID}"
+        echo "ID-PINNED ${PINNED_ID}"
+        echo "TAGS-HELD $(tagsof imgprune-fixture/held-by-stopped:v1)"
+        echo "TAGS-TWOTAG $(tagsof ${TWOTAG_ID})"
+        echo "TAGS-HELD-TWOTAG $(tagsof ${HELD_TWOTAG_ID})"
+        echo "TAGS-STRANDED $(tagsof ${STRANDED_ID})"
+        echo "TAGS-PINNED $(tagsof ${PINNED_ID})"
+        echo "PINNED-REF ${PINNED_REF}"
+        echo "CONTAINERS $(docker ps -aq | wc -l)"
+        {% endraw %}
+      args:
+        executable: /bin/bash
+      register: image_prune_fixtures
+      changed_when: false
+
+    - name: Assert every fixture is a distinct image, so no assertion below reads another's outcome
+      ansible.builtin.assert:
+        that:
+          - image_prune_fixtures.stdout_lines
+            | select('match', '^ID-')
+            | map('regex_replace', '^ID-[A-Z0-9-]+ ', '')
+            | select('!=', '')
+            | list | unique | length == 11
+        fail_msg: >-
+          The eleven fixture images are not eleven distinct identities. Two
+          fixtures sharing an image ID means `docker image rm` untags where the
+          assertion assumes it deletes, and the assertion passes with nothing
+          reclaimed. The untagged fixture and the digest-pinned fixture both
+          present as tagless, so conflating THOSE two in particular would prove
+          nothing at all -- one is meant to be removed and the other kept.
+          Collected: {{ image_prune_fixtures.stdout_lines }}
+
+    - name: Assert each fixture carries exactly the number of tags its scenario needs
+      ansible.builtin.assert:
+        that:
+          - "'TAGS-HELD 1' in image_prune_fixtures.stdout_lines"
+          - "'TAGS-TWOTAG 2' in image_prune_fixtures.stdout_lines"
+          - "'TAGS-HELD-TWOTAG 2' in image_prune_fixtures.stdout_lines"
+          - "'TAGS-STRANDED 0' in image_prune_fixtures.stdout_lines"
+          - "'TAGS-PINNED 0' in image_prune_fixtures.stdout_lines"
+        fail_msg: >-
+          A fixture carries the wrong number of tags, and the assertion it
+          serves would pass for the wrong reason. The singly-held image must
+          carry exactly ONE tag, or its removal succeeds by untagging and the
+          unforced-removal assertion proves nothing. The two-tag fixtures must
+          carry exactly TWO, or the by-tag removal and the tag-of-a-held-image
+          assertions collapse into the single-tag case. The untagged and
+          digest-pinned fixtures must carry NONE -- if the digest-pinned one
+          kept its build tag, the property it exists to prove (kept on its
+          resolved identity, not on carrying a tag) is lost. Collected:
+          {{ image_prune_fixtures.stdout_lines }}
+
+    # ============================================================
+    # RUN 1 -- the completed run every keep-set and removal assertion reads.
+    #
+    # The distinct-identity count is taken immediately before it, with nothing
+    # in between that could change the host's images, because the delta fixes
+    # the considered count as "the number of distinct identities the run
+    # enumerated". `docker images -a` yields a ROW PER TAG, so ROWS exceeding
+    # IDENTITIES here is what makes that assertion discriminate a deduplicated
+    # count from a per-tag one.
+    # ============================================================
+    - name: Count the distinct image identities on the host immediately before the first run
+      ansible.builtin.shell: |
+        {% raw %}
+        set -euo pipefail
+        echo "IDENTITIES $(docker images -a --no-trunc -q | sort -u | wc -l)"
+        echo "ROWS $(docker images -a --no-trunc --format '{{.ID}}' | wc -l)"
+        {% endraw %}
+      args:
+        executable: /bin/bash
+      register: image_prune_identities
+      changed_when: false
+
+    - name: Assert the host carries more image rows than identities, so the count can discriminate
+      ansible.builtin.assert:
+        that:
+          - (image_prune_identities.stdout_lines[1].split(' ')[1] | int)
+            > (image_prune_identities.stdout_lines[0].split(' ')[1] | int)
+        fail_msg: >-
+          `docker images -a` reports no more rows than distinct identities, so
+          the two-tag fixtures are not in place and the deduplicated-count
+          assertion below could not tell a per-identity count from a per-tag
+          one. This is a broken fixture, not a defect in the prune. Collected:
+          {{ image_prune_identities.stdout_lines }}
+
+    - name: Run the prune once, as the completed run every assertion below reads
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-run1.out 2> /var/tmp/image-prune-run1.err || rc=$?
+        cat /var/tmp/image-prune-run1.out /var/tmp/image-prune-run1.err \
+          > /var/tmp/image-prune-run1.all
+        echo "RC $rc"
+        echo "SHAPE $(grep -ciE 'considered[[:space:]]*[0-9]+,[[:space:]]*removed[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all || true)"
+        echo "CONSIDERED $(grep -oiE 'considered[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all | grep -oE '[0-9]+' | head -n 1 || true)"
+        echo "REMOVED $(grep -oiE 'removed[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all | grep -oE '[0-9]+' | head -n 1 || true)"
+      args:
+        executable: /bin/bash
+      register: image_prune_run1
+      changed_when: false
+
+    - name: Read the first run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-run1.all
+      register: image_prune_run1_report
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Delta scenario: A completed run reports what it did
+    # ------------------------------------------------------------
+    - name: Assert the completed run reported both counts, deduplicated by identity, and exited zero
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' in image_prune_run1.stdout_lines"
+          - "'SHAPE 1' in image_prune_run1.stdout_lines"
+          - ('CONSIDERED ' + image_prune_identities.stdout_lines[0].split(' ')[1])
+            in image_prune_run1.stdout_lines
+          - ((image_prune_run1.stdout_lines
+             | select('match', '^REMOVED ') | first).split(' ')[1] | int) >= 1
+        fail_msg: >-
+          A completed run SHALL report how many images it considered and how
+          many it removed, counted over DISTINCT IMAGE IDENTITIES, and SHALL
+          exit zero. The considered count is asserted equal to the number of
+          distinct identities on the host immediately before the run -- an
+          implementation counting `docker images` rows would report the two
+          two-tag fixtures twice each and fail here. Run output:
+          {{ image_prune_run1_report.stdout }}
+
+    - name: Report which fixtures survived the first run
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . /var/tmp/image-prune-fixtures.env
+        report() {
+          if docker image inspect "$2" >/dev/null 2>&1; then
+            echo "PRESENT $1"
+          else
+            echo "ABSENT $1"
+          fi
+        }
+        report base-v1            imgprune-fixture/base:v1
+        report base-v2            imgprune-fixture/base:v2
+        report defined-not-running imgprune-fixture/defined-not-running:v1
+        report profiled           imgprune-fixture/profiled:v1
+        report held-by-stopped    imgprune-fixture/held-by-stopped:v1
+        report orphan             imgprune-fixture/orphan:v1
+        report stranded-untagged  "${STRANDED_ID}"
+        report stranded-current   imgprune-fixture/stranded:v1
+        report pinned             "${PINNED_REF}"
+        report twotag-a           imgprune-fixture/twotag:a
+        report twotag-b           imgprune-fixture/twotag:b
+        report twotag-identity    "${TWOTAG_ID}"
+        report held-twotag-a      imgprune-fixture/held-twotag:a
+        report held-twotag-b      imgprune-fixture/held-twotag:b
+        report held-twotag-identity "${HELD_TWOTAG_ID}"
+        report retired-only       imgprune-fixture/retired-only:v1
+        if [ -n "$(docker ps -aq --filter name=image_prune_stopped_holder)" ]; then
+          echo "HOLDER present"
+        else
+          echo "HOLDER absent"
+        fi
+        if [ -n "$(docker ps -aq --filter name=image_prune_stopped_twotag_holder)" ]; then
+          echo "TWOTAG-HOLDER present"
+        else
+          echo "TWOTAG-HOLDER absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_after_run1
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Delta scenario: An image superseded by a newer pin is removed
+    # ------------------------------------------------------------
+    - name: Assert the superseded tag of the base repository is gone and the referenced one remains
+      ansible.builtin.assert:
+        that:
+          - "'ABSENT base-v1' in image_prune_after_run1.stdout_lines"
+          - "'PRESENT base-v2' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          The host carries two tags of the same base image repository, only the
+          newer of which an enumerated application references, and no container
+          holds the older. The run SHALL remove the older and leave the newer.
+          This is the case a per-deploy reclamation may not reach at all, and
+          the reason this mechanism exists. Present/absent:
+          {{ image_prune_after_run1.stdout_lines }} -- run output:
+          {{ image_prune_run1_report.stdout }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: An image one application references is kept when another
+    # does not
+    # ------------------------------------------------------------
+    - name: Assert an image only one enumerated application references was kept by the union
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT base-v2' in image_prune_after_run1.stdout_lines"
+          - "'PRESENT defined-not-running' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          `alpha` references imgprune-fixture/base:v2 and `beta` does not;
+          `beta` references imgprune-fixture/defined-not-running:v1 and `alpha`
+          does not. The keep set is the UNION across every enumerated
+          application rather than any one of them, so both SHALL survive. A run
+          reading one application's Compose file and comparing the whole host
+          against it removes the other's image and fails here. Present/absent:
+          {{ image_prune_after_run1.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: A defined service that is not running keeps its image
+    # ------------------------------------------------------------
+    - name: Assert an image a defined service references with no container anywhere was kept
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT defined-not-running' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          imgprune-fixture/defined-not-running:v1 is referenced by `beta`'s
+          Compose file and no container of it exists on this host. It SHALL
+          still be present after the run. This is precisely the class
+          `docker image prune -af` loses and the class this union exists to
+          protect. Present/absent: {{ image_prune_after_run1.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: A service behind an inactive profile keeps its image
+    # ------------------------------------------------------------
+    - name: Assert an image referenced only behind an inactive profile was kept
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT profiled' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          `beta`'s Compose file gates imgprune-fixture/profiled:v1 behind the
+          `debug` profile, which is not active, so a single default rendering
+          does not name it. The reference set SHALL span EVERY profile the file
+          declares, so the image SHALL still be present. An implementation
+          calling `docker compose config --images` without first enumerating
+          `--profiles` and passing all of them fails exactly here -- and
+          nowhere else. Present/absent: {{ image_prune_after_run1.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: An image a container holds is never removed
+    # ------------------------------------------------------------
+    - name: Assert an image a stopped container holds was kept and its container still holds it
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT held-by-stopped' in image_prune_after_run1.stdout_lines"
+          - "'HOLDER present' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          imgprune-fixture/held-by-stopped:v1 is referenced by no enumerated
+          application's Compose file and is held by a STOPPED container. It
+          SHALL still be present, and the removal SHALL NOT have been forced.
+          This fixture carries exactly one tag, so the runtime's own refusal
+          is what has to hold -- `-f` or `docker image prune -a` takes it.
+          Present/absent: {{ image_prune_after_run1.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: An image nothing references is removed
+    # ------------------------------------------------------------
+    - name: Assert a tagged image nothing references and nothing holds was removed
+      ansible.builtin.assert:
+        that:
+          - "'ABSENT orphan' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          imgprune-fixture/orphan:v1 is referenced by no enumerated
+          application's Compose file and held by no container. The run SHALL
+          remove it. Present/absent: {{ image_prune_after_run1.stdout_lines }}
+          -- run output: {{ image_prune_run1_report.stdout }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: An untagged image nothing references is removed
+    # ------------------------------------------------------------
+    - name: Assert an untagged image nothing references was removed by its identity
+      ansible.builtin.assert:
+        that:
+          - "'ABSENT stranded-untagged' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          The stranded fixture carries no tag, is resolved to by no enumerated
+          application's Compose file and is held by no container, so the run
+          SHALL remove it BY ITS IDENTITY -- there is no tag to drop. This is
+          the class the proposal identifies as this change's largest target
+          (ten images, ~3.2 GB on the measured host), and the class the
+          predecessor's untagged-image exclusion could not reach. Present/absent:
+          {{ image_prune_after_run1.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: A digest-referenced image an application pins is kept
+    # ------------------------------------------------------------
+    - name: Assert a digest-pinned image an enumerated application references was kept
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT pinned' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          `alpha`'s Compose file references this image BY DIGEST, so it is
+          present on the host carrying no tag. It SHALL still be present,
+          having been kept by resolving the digest reference rather than by
+          carrying a tag. Its absence of a tag SHALL NOT by itself be treated
+          as evidence that nothing references it -- and note that the stranded
+          fixture above, which is equally tagless, SHALL have been removed.
+          Those two outcomes together are the single property justifying not
+          carrying forward the predecessor's untagged-image exclusion, and the
+          failure mode this fixture guards is deleting an image an application
+          is pinned to. Present/absent:
+          {{ image_prune_after_run1.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: An unreferenced image carrying more than one tag is
+    # removed through each of them
+    # ------------------------------------------------------------
+    - name: Assert an unreferenced two-tag image was removed through each of its tags
+      ansible.builtin.assert:
+        that:
+          - "'ABSENT twotag-a' in image_prune_after_run1.stdout_lines"
+          - "'ABSENT twotag-b' in image_prune_after_run1.stdout_lines"
+          - "'ABSENT twotag-identity' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          One image wears imgprune-fixture/twotag:a and :b, neither referenced
+          and neither held. The run SHALL remove it, having dropped each of its
+          tags in turn rather than attempting to remove it by identity -- which
+          the runtime refuses for a multiply-referenced image unless forced.
+          An implementation removing by ID leaves all three of these PRESENT
+          and its run output carries "must be forced"; one that reached for
+          `-f` instead fails the stopped-container assertion above. Both are
+          the failure this fixture exists to separate. Present/absent:
+          {{ image_prune_after_run1.stdout_lines }} -- run output:
+          {{ image_prune_run1_report.stdout }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: A tag of an image a container holds is not dropped
+    # ------------------------------------------------------------
+    - name: Assert both tags of an image a stopped container holds are still present
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT held-twotag-a' in image_prune_after_run1.stdout_lines"
+          - "'PRESENT held-twotag-b' in image_prune_after_run1.stdout_lines"
+          - "'PRESENT held-twotag-identity' in image_prune_after_run1.stdout_lines"
+          - "'TWOTAG-HOLDER present' in image_prune_after_run1.stdout_lines"
+        fail_msg: >-
+          A stopped container holds an image wearing two tags that no
+          enumerated application's Compose file references. EVERY one of those
+          tags SHALL still be present -- the image is kept by the container's
+          own entry in the keep set, not merely by the runtime's refusal, which
+          guards the image and not its individual tags. This is the only place
+          the container contribution to the keep set is observable in its own
+          right: drop it and one of these two tags goes on every run while the
+          image itself survives, which reads as nothing being wrong.
+          Present/absent: {{ image_prune_after_run1.stdout_lines }}
+
+    # ============================================================
+    # Delta scenario: A retired application's images become reclaimable
+    #
+    # Arranged by RE-CONVERGING with a reduced `deploy_apps`, not by editing
+    # /etc/prune-host-images/apps by hand. Editing it directly would bypass the
+    # version-controlled-enumeration clause -- the whole reason the list is not
+    # a glob of /opt -- and leave it never exercised (tasks.md 2.7).
+    #
+    # `retiree`'s directory and last Compose file deliberately REMAIN on the
+    # host, which is the delta scenario's own premise: a filesystem-derived
+    # enumeration would read that stale file and keep the images forever.
+    # ============================================================
+    # noqa comment: `deploy_apps` is this role's one required INPUT, named by the
+    # inventory and shared with `deploy_user`; prefixing it would be a different
+    # variable. See design.md, "The application list comes from `deploy_apps`".
+    - name: Retire an application by re-converging with a reduced enumeration  # noqa: var-naming[no-role-prefix]
+      ansible.builtin.include_role:
+        name: image_prune
+      vars:
+        deploy_apps:
+          - name: alpha
+            public_key: >-
+              ssh-ed25519
+              AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeAlphaKeyOnlyNotARealCredential
+              alpha-molecule@ci
+          - name: beta
+            public_key: >-
+              ssh-ed25519
+              AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeBetaKeyOnlyNotARealCredential2
+              beta-molecule@ci
+          - name: undeployed
+            public_key: >-
+              ssh-ed25519
+              AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeUndeployedKeyOnlyNotARealCred
+              undeployed-molecule@ci
+
+    - name: Read the host state after the retiring converge
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "APPS [$(tr '\n' ' ' < /etc/prune-host-images/apps)]"
+        if [ -f /opt/retiree/docker-compose.yml ]; then
+          echo "STALE-COMPOSE present"
+        else
+          echo "STALE-COMPOSE absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_after_retire_converge
+      changed_when: false
+
+    - name: Assert the retiring converge refreshed the on-host enumeration and left the stale file
+      ansible.builtin.assert:
+        that:
+          - "'retiree' not in image_prune_after_retire_converge.stdout_lines[0]"
+          - "'alpha' in image_prune_after_retire_converge.stdout_lines[0]"
+          - "'STALE-COMPOSE present' in image_prune_after_retire_converge.stdout_lines"
+        fail_msg: >-
+          The on-host enumeration SHALL be refreshed by the configuration
+          management run, and the retired application's directory and last
+          Compose file SHALL still be on the host -- that stale file is the
+          whole premise of the scenario. Collected:
+          {{ image_prune_after_retire_converge.stdout_lines }}
+
+    - name: Run the prune again, now that one application has been retired
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-run2.all 2>&1 || rc=$?
+        echo "RC $rc"
+      args:
+        executable: /bin/bash
+      register: image_prune_run2
+      changed_when: false
+
+    - name: Read the retiring run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-run2.all
+      register: image_prune_run2_report
+      changed_when: false
+
+    - name: Report which fixtures survived the retiring run
+      ansible.builtin.shell: |
+        set -euo pipefail
+        . /var/tmp/image-prune-fixtures.env
+        report() {
+          if docker image inspect "$2" >/dev/null 2>&1; then
+            echo "PRESENT $1"
+          else
+            echo "ABSENT $1"
+          fi
+        }
+        report retired-only        imgprune-fixture/retired-only:v1
+        report base-v2             imgprune-fixture/base:v2
+        report defined-not-running imgprune-fixture/defined-not-running:v1
+        report profiled            imgprune-fixture/profiled:v1
+        report pinned              "${PINNED_REF}"
+        report held-by-stopped     imgprune-fixture/held-by-stopped:v1
+        report held-twotag-a       imgprune-fixture/held-twotag:a
+        report held-twotag-b       imgprune-fixture/held-twotag:b
+      args:
+        executable: /bin/bash
+      register: image_prune_after_run2
+      changed_when: false
+
+    - name: Assert a retired application's image was reclaimed and every kept application's survived
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' in image_prune_run2.stdout_lines"
+          - "'ABSENT retired-only' in image_prune_after_run2.stdout_lines"
+          - "'PRESENT base-v2' in image_prune_after_run2.stdout_lines"
+          - "'PRESENT defined-not-running' in image_prune_after_run2.stdout_lines"
+          - "'PRESENT profiled' in image_prune_after_run2.stdout_lines"
+          - "'PRESENT pinned' in image_prune_after_run2.stdout_lines"
+          - "'PRESENT held-by-stopped' in image_prune_after_run2.stdout_lines"
+          - "'PRESENT held-twotag-a' in image_prune_after_run2.stdout_lines"
+          - "'PRESENT held-twotag-b' in image_prune_after_run2.stdout_lines"
+        fail_msg: >-
+          Removing an application from the version-controlled enumeration, and
+          converging, SHALL make its images reclaimable -- rather than the run
+          reading the stale Compose file still on the host and keeping them.
+          Every remaining application's images SHALL be untouched. Present/absent:
+          {{ image_prune_after_run2.stdout_lines }} -- run output:
+          {{ image_prune_run2_report.stdout }}
+
+    # ============================================================
+    # Delta scenario: An application that has never deployed does not abandon
+    # the run
+    #
+    # `undeployed` has been enumerated since the first converge and has no
+    # /opt/undeployed/ at all. Both completed runs above therefore already
+    # establish this -- an implementation treating a missing Compose file as an
+    # unresolvable reference set could not have reached RC 0 either time. The
+    # assertion is stated in its own right so the scenario is not merely
+    # implied.
+    # ============================================================
+    - name: Assert an enumerated application with no Compose file on the host did not abandon either run
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -e /opt/undeployed ]; then
+          echo "UNDEPLOYED-DIR present"
+        else
+          echo "UNDEPLOYED-DIR absent"
+        fi
+        echo "ENUMERATED $(grep -cx undeployed /etc/prune-host-images/apps || true)"
+      args:
+        executable: /bin/bash
+      register: image_prune_undeployed
+      changed_when: false
+
+    - name: Assert the never-deployed application is enumerated, absent from the filesystem, and harmless
+      ansible.builtin.assert:
+        that:
+          - "'UNDEPLOYED-DIR absent' in image_prune_undeployed.stdout_lines"
+          - "'ENUMERATED 1' in image_prune_undeployed.stdout_lines"
+          - "'RC 0' in image_prune_run1.stdout_lines"
+          - "'RC 0' in image_prune_run2.stdout_lines"
+        fail_msg: >-
+          `undeployed` is enumerated and has no Compose file on the host. The
+          run SHALL proceed, contributing nothing to the keep set for it,
+          rather than treating its absence as an unresolvable reference set.
+          Both completed runs above exited zero with this application enumerated
+          throughout; an implementation that abandoned on a missing file could
+          not have. Collected: {{ image_prune_undeployed.stdout_lines }}
+
+    # ============================================================
+    # The unit itself, exercised end to end on the happy path. Everything above
+    # ran the script directly, which reads its report and exit status
+    # deterministically; this proves the installed unit actually reaches that
+    # script and that a completed run leaves a successful unit -- the
+    # counterpart of the failed unit `abandon-paths` asserts.
+    # ============================================================
+    - name: Start the installed service once, on a host whose keep set is satisfied
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        systemctl start prune-host-images.service || rc=$?
+        echo "START-RC $rc"
+        echo "RESULT $(systemctl show prune-host-images.service --property=Result --value)"
+        echo "EXITSTATUS $(systemctl show prune-host-images.service --property=ExecMainStatus --value)"
+        if [ -n "$(systemctl show prune-host-images.service --property=ExecMainStartTimestamp --value)" ]; then
+          echo "RAN yes"
+        else
+          echo "RAN no"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_unit_run
+      changed_when: false
+
+    - name: Assert the installed unit runs the prune and a completed run leaves it successful
+      ansible.builtin.assert:
+        that:
+          - "'START-RC 0' in image_prune_unit_run.stdout_lines"
+          - "'RESULT success' in image_prune_unit_run.stdout_lines"
+          - "'EXITSTATUS 0' in image_prune_unit_run.stdout_lines"
+          - "'RAN yes' in image_prune_unit_run.stdout_lines"
+        fail_msg: >-
+          Starting prune-host-images.service SHALL run the prune and, on a
+          completed run, leave a successful unit. Collected:
+          {{ image_prune_unit_run.stdout_lines }}
+
+    # ============================================================
+    # FROM HERE ON THE RUN ABANDONS.
+    #
+    # Nothing below may be read as a keep-set assertion, and no keep-set
+    # assertion may be added below this line: an abandoning run removes
+    # nothing, so every "still present" claim past this point passes whether or
+    # not the keep set was computed correctly (tasks.md 2.7).
+    #
+    # Each arrangement gets its own CANARY -- a tagged image nothing references
+    # and nothing holds, built immediately before the run. Without it every
+    # image left on the host is in the keep set, so a run that ignored the
+    # abandon condition entirely would still remove nothing and the assertion
+    # would pass for the wrong reason.
+    # ============================================================
+    - name: Arrange an unresolvable Compose file for one enumerated application, with a canary
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export DOCKER_BUILDKIT=0
+        d=/tmp/image-prune-build-canary-unresolvable
+        rm -rf "$d"
+        mkdir -p "$d"
+        printf 'FROM alpine:3.19\nRUN echo canary-unresolvable > /image-prune-marker\n' > "$d/Dockerfile"
+        docker build -t imgprune-fixture/canary-unresolvable:v1 "$d" >/dev/null
+        printf 'services:\n  broken:\n    image: [this is not\n      a compose file\n' \
+          > /opt/alpha/docker-compose.yml
+        rc=0
+        docker compose --project-directory /opt/alpha config --images >/dev/null 2>&1 || rc=$?
+        echo "COMPOSE-CONFIG-RC $rc"
+      args:
+        executable: /bin/bash
+      register: image_prune_unresolvable_setup
+      changed_when: false
+
+    - name: Assert the unresolvable Compose fixture really is unrenderable
+      ansible.builtin.assert:
+        that:
+          - "'COMPOSE-CONFIG-RC 0' not in image_prune_unresolvable_setup.stdout_lines"
+        fail_msg: >-
+          The fixture Compose file still renders, so the run below would not
+          meet the condition its scenario is about and would pass vacuously.
+          This is a broken fixture, not a defect in the prune. Collected:
+          {{ image_prune_unresolvable_setup.stdout_lines }}
+
+    - name: Run the prune against an application whose Compose file cannot be rendered
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-unresolvable.all 2>&1 || rc=$?
+        echo "RC $rc"
+        echo "NAMES-APP $(grep -c alpha /var/tmp/image-prune-unresolvable.all || true)"
+        echo "HAS-CONSIDERED $(grep -ci considered /var/tmp/image-prune-unresolvable.all || true)"
+        if docker image inspect imgprune-fixture/canary-unresolvable:v1 >/dev/null 2>&1; then
+          echo "CANARY present"
+        else
+          echo "CANARY absent"
+        fi
+        if docker image inspect imgprune-fixture/defined-not-running:v1 >/dev/null 2>&1; then
+          echo "OTHER-APP-IMAGE present"
+        else
+          echo "OTHER-APP-IMAGE absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_unresolvable_run
+      changed_when: false
+
+    - name: Read the unresolvable run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-unresolvable.all
+      register: image_prune_unresolvable_report
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Delta scenario: An unresolvable Compose file abandons the whole run
+    # ------------------------------------------------------------
+    - name: Assert an unrenderable Compose file abandoned the whole run, removing nothing, and failed
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' not in image_prune_unresolvable_run.stdout_lines"
+          - "'CANARY present' in image_prune_unresolvable_run.stdout_lines"
+          - "'OTHER-APP-IMAGE present' in image_prune_unresolvable_run.stdout_lines"
+          - "'NAMES-APP 0' not in image_prune_unresolvable_run.stdout_lines"
+          - "'HAS-CONSIDERED 0' in image_prune_unresolvable_run.stdout_lines"
+        fail_msg: >-
+          An enumerated application's Compose file is present on the host and
+          cannot be rendered. The run SHALL remove NO image at all -- including
+          images of every other enumerated application -- SHALL report that
+          condition naming the application, and SHALL fail. An incomplete union
+          offers live images for removal, so a partial keep set is a wrong keep
+          set. The canary is an image nothing references and nothing holds,
+          built immediately before this run: it is what makes "removed nothing"
+          discriminating rather than vacuous. Collected:
+          {{ image_prune_unresolvable_run.stdout_lines }} -- run output:
+          {{ image_prune_unresolvable_report.stdout }}
+
+    # An unset interpolation variable. `docker compose config` does NOT fail on
+    # one: it warns, substitutes the empty string, exits 0, and emits a
+    # reference with an empty repository segment. That success is the whole
+    # hazard -- it is the only thing standing between a missing .env key and an
+    # enumerated application's images silently losing their protection.
+    - name: Repair the Compose file and arrange a malformed reference instead, with a canary
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export DOCKER_BUILDKIT=0
+        cp /var/tmp/image-prune-alpha-compose.yml /opt/alpha/docker-compose.yml
+        d=/tmp/image-prune-build-canary-malformed
+        rm -rf "$d"
+        mkdir -p "$d"
+        printf 'FROM alpine:3.19\nRUN echo canary-malformed > /image-prune-marker\n' > "$d/Dockerfile"
+        docker build -t imgprune-fixture/canary-malformed:v1 "$d" >/dev/null
+        rm -f /opt/beta/.env
+        cat > /opt/beta/docker-compose.yml <<'COMPOSE'
+        services:
+          worker:
+            image: imgprune-fixture/${IMAGE_PRUNE_FIXTURE_UNSET}:v1
+            command: ["sleep", "3600"]
+        COMPOSE
+        rc=0
+        rendered="$(docker compose --project-directory /opt/beta config --images 2>/dev/null)" || rc=$?
+        echo "COMPOSE-CONFIG-RC $rc"
+        echo "RENDERED [${rendered}]"
+      args:
+        executable: /bin/bash
+      register: image_prune_malformed_setup
+      changed_when: false
+
+    - name: Assert the malformed-reference fixture renders successfully and yields a malformed reference
+      ansible.builtin.assert:
+        that:
+          - "'COMPOSE-CONFIG-RC 0' in image_prune_malformed_setup.stdout_lines"
+          - "'RENDERED [imgprune-fixture/:v1]' in image_prune_malformed_setup.stdout_lines"
+        fail_msg: >-
+          This fixture is only meaningful if rendering SUCCEEDS and yields a
+          reference that is not well-formed -- that is what distinguishes it
+          from the unresolvable-Compose-file case above. If rendering failed
+          instead, the run below would abandon for the other reason and this
+          scenario would pass without ever being entered. Collected:
+          {{ image_prune_malformed_setup.stdout_lines }}
+
+    - name: Run the prune against an application rendering a malformed reference
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-malformed.all 2>&1 || rc=$?
+        echo "RC $rc"
+        echo "NAMES-APP $(grep -c beta /var/tmp/image-prune-malformed.all || true)"
+        echo "HAS-CONSIDERED $(grep -ci considered /var/tmp/image-prune-malformed.all || true)"
+        if docker image inspect imgprune-fixture/canary-malformed:v1 >/dev/null 2>&1; then
+          echo "CANARY present"
+        else
+          echo "CANARY absent"
+        fi
+        if docker image inspect imgprune-fixture/base:v2 >/dev/null 2>&1; then
+          echo "OTHER-APP-IMAGE present"
+        else
+          echo "OTHER-APP-IMAGE absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_malformed_run
+      changed_when: false
+
+    - name: Read the malformed-reference run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-malformed.all
+      register: image_prune_malformed_report
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Delta scenario: A malformed reference abandons the whole run
+    # ------------------------------------------------------------
+    - name: Assert a malformed rendered reference abandoned the whole run, removing nothing, and failed
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' not in image_prune_malformed_run.stdout_lines"
+          - "'CANARY present' in image_prune_malformed_run.stdout_lines"
+          - "'OTHER-APP-IMAGE present' in image_prune_malformed_run.stdout_lines"
+          - "'NAMES-APP 0' not in image_prune_malformed_run.stdout_lines"
+          - "'HAS-CONSIDERED 0' in image_prune_malformed_run.stdout_lines"
+        fail_msg: >-
+          Rendering succeeded and yielded `imgprune-fixture/:v1`, which is not
+          a well-formed image reference. The run SHALL remove no image at all
+          and SHALL report that condition and fail, RATHER THAN treating that
+          reference as naming an image the host has not pulled. An
+          implementation that splits on resolution instead of on
+          well-formedness reaches RC 0 here and silently drops `beta`'s
+          protection -- with every guard reporting satisfied. Collected:
+          {{ image_prune_malformed_run.stdout_lines }} -- run output:
+          {{ image_prune_malformed_report.stdout }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: An abandoned run says why and fails -- the two branches
+    # reachable in this scenario. The remaining three are in `abandon-paths`.
+    # ------------------------------------------------------------
+    - name: Assert the two abandoned runs are distinguishable from each other and from a completed run
+      ansible.builtin.assert:
+        that:
+          - image_prune_unresolvable_report.stdout | trim
+            != image_prune_malformed_report.stdout | trim
+          - image_prune_unresolvable_report.stdout | trim | length > 0
+          - image_prune_malformed_report.stdout | trim | length > 0
+          - "'HAS-CONSIDERED 0' in image_prune_unresolvable_run.stdout_lines"
+          - "'HAS-CONSIDERED 0' in image_prune_malformed_run.stdout_lines"
+        fail_msg: >-
+          An abandoned run SHALL report WHICH condition ended it, and SHALL be
+          distinguishable from a completed run that found nothing to remove. A
+          single generic "could not determine the keep set" for both branches
+          satisfies neither: an unresolvable Compose file and a malformed
+          reference send an operator to different places. Unresolvable report:
+          {{ image_prune_unresolvable_report.stdout }} -- malformed report:
+          {{ image_prune_malformed_report.stdout }}
