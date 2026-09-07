@@ -1,0 +1,72 @@
+---
+# Molecule scenario for iac-host-configuration's MODIFIED "Platform Data
+# Volume Is Mounted at a Fixed Host Path" requirement, scenario "More than
+# one candidate device is attached"
+# (openspec/changes/fix-volume-discovery-and-consistency/specs/
+# iac-host-configuration/spec.md).
+#
+# Written BEFORE the implementation exists, from the delta spec alone. See
+# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md for the
+# scenario-to-test mapping, the recorded baseline, and the per-assertion
+# specified/derived classification.
+#
+# WHY THIS NEEDS A SCENARIO OF ITS OWN
+# -----------------------------------
+# Nothing in the suite exercises the multi-device discovery path today:
+# `default` supplies a device explicitly and `no-device-discoverable` finds
+# none, so a determinism regression -- a selection that depends on the order
+# a directory read happened to return entries in -- would pass every existing
+# scenario. design.md Decision 2 states this as the reason the sort is
+# "verified, not merely implemented".
+#
+# WHY test_sequence IS *NOT* OVERRIDDEN HERE
+# ------------------------------------------
+# Stated explicitly rather than inherited silently, and deliberately unlike
+# the two failure-path scenarios beside it: this converge is expected to
+# SUCCEED, so the default sequence -- including `idempotence` -- is
+# meaningful and is kept in full. A second converge must select the same
+# device and leave the mount unchanged, which is itself part of what
+# "the same on every run" means.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s
+  # `platform-data-volume-role-instance` and from the sibling
+  # `no-device-discoverable` scenario: two scenarios of one role sharing an
+  # instance name collide on `create` whenever a sibling's container is still
+  # up.
+  - name: platform-data-volume-multi-device-instance
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py asserts it. See
+    # ansible/roles/docker/molecule/default/molecule.yml for why a digest and
+    # for how to refresh it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    # `privileged: true` is load-bearing here for the same reason it is in
+    # `default`: mknod/losetup/mount need CAP_SYS_ADMIN and device-node
+    # access to stand in for attached Hetzner Volume block devices.
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml -- same
+    # reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

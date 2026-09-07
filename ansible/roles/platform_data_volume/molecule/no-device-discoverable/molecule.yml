@@ -1,0 +1,89 @@
+---
+# Molecule scenario for iac-host-configuration's MODIFIED "Platform Data
+# Volume Is Mounted at a Fixed Host Path" requirement, scenario "No device is
+# supplied and none can be discovered", and -- for the `""` input itself --
+# the ADDED "A Role's Absent Required Input Is Reported by Name"
+# requirement's scenario "An empty value the role gives a meaning to is not a
+# missing input"
+# (openspec/changes/fix-volume-discovery-and-consistency/specs/
+# iac-host-configuration/spec.md).
+#
+# Written BEFORE the implementation exists, from the delta spec alone. See
+# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md for the
+# scenario-to-test mapping, the recorded baseline, and the per-assertion
+# specified/derived classification.
+#
+# WHY THIS NEEDS A SCENARIO OF ITS OWN
+# -----------------------------------
+# `molecule/default/` supplies `platform_data_volume_device` explicitly, so
+# it has never executed the role's discovery block at all. The empty-discovery
+# case is the NATURAL case inside a container -- the base image carries no
+# /dev/disk at all (confirmed against this pinned image on 2026-09-07) -- so
+# this scenario needs no fixture to produce it, only a converge that supplies
+# no device. Folding it into `default`, whose premise is a SUCCESSFUL
+# converge, would make a red run there ambiguous.
+#
+# WHY `idempotence` AND `side_effect` ARE OMITTED FROM test_sequence
+# -----------------------------------------------------------------
+# Stated explicitly rather than inherited silently. `idempotence` is
+# meaningless here and would fail for a reason unrelated to this scenario:
+# this converge deliberately aborts the role at its device check, so no task
+# after it ever runs on the first converge. Role idempotence is covered by
+# `default`, which converges the role to completion. `side_effect` is omitted
+# because this scenario has no side_effect.yml. `prepare` is kept in the
+# sequence although this scenario has no prepare.yml -- Molecule reports it as
+# a missing playbook and moves on, and the step is left in place so a fixture
+# added later needs no sequence edit.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s
+  # `platform-data-volume-role-instance` and from the sibling
+  # `multiple-devices-discoverable` scenario: two scenarios of one role
+  # sharing an instance name collide on `create` whenever a sibling's
+  # container is still up.
+  - name: platform-data-volume-no-device-instance
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py asserts it. See
+    # ansible/roles/docker/molecule/default/molecule.yml for why a digest and
+    # for how to refresh it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml -- same
+    # reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - cleanup
+    - destroy
+
+verifier:
+  name: ansible

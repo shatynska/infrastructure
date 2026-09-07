@@ -1,0 +1,86 @@
+---
+# Converges `platform_data_volume` with NO `platform_data_volume_device`
+# supplied, so the role's own default (`""`, which its defaults/main.yml
+# documents as the signal "discover it on-host") applies and the on-host
+# discovery runs and finds nothing. The base image carries no /dev/disk at
+# all, so "matches nothing" is the container's natural state and needs no
+# fixture.
+#
+# Delta scenarios under test
+# (openspec/changes/fix-volume-discovery-and-consistency/specs/
+# iac-host-configuration/spec.md):
+#
+#   "No device is supplied and none can be discovered"
+#     WHEN the host-baseline playbook runs against a host where no device
+#     path was supplied and on-host discovery matches nothing
+#     THEN the run SHALL fail with the diagnostic that names the missing
+#     device path and the attachment it depends on, and SHALL NOT fail
+#     instead on an error raised by indexing an empty discovery result
+#
+#   "An empty value the role gives a meaning to is not a missing input"
+#     WHEN such a role is run with the input set to an empty value that the
+#     role's own contract defines as meaningful
+#     THEN the run SHALL proceed with the meaning that role assigns the empty
+#     value, rather than reporting the input as missing
+#
+# WHY THE OUTCOME IS RECORDED TO A FILE RATHER THAN ASSERTED HERE
+# ---------------------------------------------------------------
+# Same mechanism, and the same reason, as
+# ansible/roles/deploy_user/molecule/ghcr-credential-rejected/converge.yml:
+# Molecule runs `converge` and `verify` as two separate ansible-playbook
+# invocations, so no fact set here survives into verify.yml. A marker file on
+# the instance is the channel.
+#
+# It is written on BOTH branches, and the success branch is the one that
+# matters most: if the discovery guard is later widened so that an empty
+# discovery no longer stops the run -- a `default('/dev/sdb')`, an
+# `ignore_errors`, an assert relaxed away -- this converge SUCCEEDS, records
+# `succeeded`, and verify.yml fails on it. A scenario recording only the
+# failure branch would go green in exactly the case it exists to catch.
+#
+# NOTE the variable is not merely omitted from `vars:` -- it is deliberately
+# not set anywhere in this play, so the value the role sees is its own
+# documented `""` default. Setting `platform_data_volume_device: ""` here
+# would test the same value while hiding the fact that the DEFAULT is what
+# supplies it.
+- name: Converge
+  hosts: all
+  become: true
+  tasks:
+    - name: Converge platform_data_volume with no device supplied and none discoverable
+      block:
+        - name: Run the platform_data_volume role
+          ansible.builtin.include_role:
+            name: platform_data_volume
+
+        - name: Record that the role completed without failing
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-no-device-discoverable-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'succeeded',
+                  'failed_task_name': '',
+                  'failed_action': '',
+                  'failed_msg': ''
+                } | to_nice_json
+              }}
+      rescue:
+        - name: Record the failure the empty discovery produced
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-no-device-discoverable-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_action': ansible_failed_task.action | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}

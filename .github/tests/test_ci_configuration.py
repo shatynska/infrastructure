@@ -1964,5 +1964,547 @@ class TestTheSuiteNeedsNoPrivilegedResource(unittest.TestCase):
         )
 
 
+# --------------------------------------------------------------------------
+# iac-platform-services / Shared-Stack Service Images Are Pinned to an Exact
+# Release, and Metrics Dashboards Are Available
+#
+# Derived from the delta specs of the OpenSpec change
+# `fix-volume-discovery-and-consistency`
+# (openspec/changes/fix-volume-discovery-and-consistency/specs/
+# iac-platform-services/spec.md), before any implementation of that change
+# existed. See that change's test-plan.md for the scenario-to-test mapping, the
+# baseline, and the scenarios deliberately left uncovered.
+#
+# These assertions live in THIS suite rather than in `terraform test` or in a
+# Molecule scenario because both are static reads of a committed file the
+# pipeline deploys: `platform/docker-compose.yml` is read and deployed by
+# `.github/workflows/platform-deploy.yml` (AGENTS.md, "Testing"; design.md
+# Decision 7). Neither needs a network call, a credential, a container runtime
+# or a Terraform binary, and neither adds an import.
+# --------------------------------------------------------------------------
+
+PLATFORM_COMPOSE = ROOT / "platform" / "docker-compose.yml"
+
+# Tags naming a channel rather than a version. Every one of them also names
+# zero version components, so the floor below already rejects each; they are
+# named separately because the scenario states the rejection of `latest` and
+# other channel tags as an obligation of its own, and because a failure that
+# says "this is a channel tag" tells the reader more than one that says "fewer
+# than two version components".
+CHANNEL_TAGS = frozenset(
+    {
+        "latest",
+        "stable",
+        "edge",
+        "main",
+        "master",
+        "nightly",
+        "dev",
+        "devel",
+        "release",
+        "current",
+        "rolling",
+    }
+)
+
+# The FLOOR, and never a ceiling: two is the fewest version components any
+# publisher represented in this stack uses for a release (PostgreSQL's release
+# version has two), so no correctly pinned tag can name fewer. Nothing below
+# rejects a tag for naming MORE -- a ceiling would reject `traefik:v3.7.10` and
+# `postgres:16.15` alike, which is the contradiction design.md Decision 7
+# records.
+VERSION_COMPONENT_FLOOR = 2
+
+# `${VAR}`, `${VAR:-default}` and the bare `$VAR` form, which is what Compose
+# interpolation accepts.
+COMPOSE_VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def compose_variables(text: str) -> set[str]:
+    """Every environment variable name a Compose value interpolates."""
+    return {braced or bare for braced, bare in COMPOSE_VARIABLE.findall(text)}
+
+
+def tag_version_components(tag: str) -> int:
+    """How many leading numeric version components a tag names.
+
+    `16` -> 1, `16.15` -> 2, `v3.7.10` -> 3, `latest` -> 0, `16.15-alpine` -> 2.
+    A leading `v` and a trailing variant suffix are stripped because they are
+    naming conventions, not version components; counting stops at the first
+    non-numeric component so a tag such as `16.15rc1` is not credited with a
+    component it does not have.
+    """
+    core = tag.split("-", 1)[0].split("_", 1)[0]
+    if core[:1] in ("v", "V"):
+        core = core[1:]
+    count = 0
+    for part in core.split("."):
+        if not part.isdigit():
+            break
+        count += 1
+    return count
+
+
+def image_names_a_release(image: str) -> bool:
+    """Whether an image reference passes the NECESSARY condition this suite can
+    decide: a content digest, or a tag naming at least `VERSION_COMPONENT_FLOOR`
+    version components and not naming a channel.
+
+    Passing establishes only a necessary condition. See the class docstrings
+    below for what it does not establish.
+    """
+    _, tag, digest = parse_image_reference(image)
+    if CONTENT_DIGEST.fullmatch(digest):
+        return True
+    if not tag or tag.lower() in CHANNEL_TAGS:
+        return False
+    return tag_version_components(tag) >= VERSION_COMPONENT_FLOOR
+
+
+def compose_services(path: Path | None = None) -> dict:
+    """The `services:` mapping of the shared platform stack definition.
+
+    A definition with no services is a failure, not an empty result: every
+    check below would otherwise pass having read nothing, which is the vacuous
+    pass this suite forbids elsewhere.
+    """
+    target = PLATFORM_COMPOSE if path is None else path
+    if not target.is_file():
+        raise AssertionError(f"{target} does not exist")
+    document = yaml.safe_load(target.read_text(encoding="utf-8"))
+    services = document.get("services") if isinstance(document, dict) else None
+    if not isinstance(services, dict) or not services:
+        raise AssertionError(
+            f"{target} declares no `services:` mapping, so every shared-stack "
+            f"pinning assertion would pass having checked nothing"
+        )
+    return services
+
+
+def compose_service_images(path: Path | None = None):
+    """Yield (service, image) over every service the stack defines.
+
+    A service declaring no `image:` yields `None` rather than being passed
+    over -- a service silently exempted from a pinning check is
+    indistinguishable from one that satisfies it.
+    """
+    for name, definition in sorted(compose_services(path).items()):
+        image = definition.get("image") if isinstance(definition, dict) else None
+        yield name, image if isinstance(image, str) and image.strip() else None
+
+
+def shared_stack_services_naming_no_release(path: Path | None = None) -> list[str]:
+    offenders = []
+    for name, image in compose_service_images(path):
+        if image is None:
+            offenders.append(f"{name}: declares no image:")
+        elif not image_names_a_release(image):
+            offenders.append(f"{name}: {image}")
+    return offenders
+
+
+def service_environment(name: str, path: Path | None = None) -> dict:
+    """A service's `environment:` block, in either the mapping or the
+    `KEY=value` list form Compose accepts."""
+    definition = compose_services(path).get(name)
+    if not isinstance(definition, dict):
+        raise AssertionError(f"the stack defines no service named {name!r}")
+    environment = definition.get("environment")
+    if isinstance(environment, dict):
+        return {str(key): "" if value is None else str(value) for key, value in environment.items()}
+    if isinstance(environment, list):
+        pairs = {}
+        for entry in environment:
+            key, _, value = str(entry).partition("=")
+            pairs[key] = value
+        return pairs
+    return {}
+
+
+def published_port_variables(name: str, path: Path | None = None) -> set[str]:
+    """Every variable the service's published-port declarations interpolate."""
+    definition = compose_services(path).get(name)
+    if not isinstance(definition, dict):
+        raise AssertionError(f"the stack defines no service named {name!r}")
+    ports = definition.get("ports")
+    if not isinstance(ports, list):
+        return set()
+    referenced: set[str] = set()
+    for entry in ports:
+        referenced |= compose_variables(str(entry))
+    return referenced
+
+
+def url_host(url: str) -> str:
+    """The host part of an absolute URL, port and path removed.
+
+    Deliberately not `urllib.parse`: importing `urllib` would trip this suite's
+    own `test_the_suite_imports_no_network_capable_module`, and the parsing
+    needed here is a split on `://` and `/`.
+    """
+    authority = url.split("://", 1)[-1].split("/", 1)[0]
+    return re.sub(r":\d+$", "", authority)
+
+
+DASHBOARD_SERVICE = "grafana"
+DASHBOARD_ROOT_URL = "GF_SERVER_ROOT_URL"
+
+
+def dashboard_base_url_offence(path: Path | None = None) -> str | None:
+    """Why the dashboard's configured base URL fails the requirement, or None.
+
+    Returns a sentence rather than a boolean so a failing assertion names which
+    of the several ways it can fail actually occurred.
+    """
+    environment = service_environment(DASHBOARD_SERVICE, path)
+    if DASHBOARD_ROOT_URL not in environment:
+        return f"the {DASHBOARD_SERVICE} service declares no {DASHBOARD_ROOT_URL}"
+    url = environment[DASHBOARD_ROOT_URL]
+    host = url_host(url)
+    referenced = compose_variables(host)
+    if not referenced:
+        return (
+            f"{DASHBOARD_ROOT_URL} is {url!r}, whose host {host!r} is a literal "
+            f"address rather than an interpolation of the value that determines "
+            f"where the interface is published"
+        )
+    published = published_port_variables(DASHBOARD_SERVICE, path)
+    if not published:
+        return (
+            f"the {DASHBOARD_SERVICE} service publishes no port through an "
+            f"interpolated variable, so there is nothing for {DASHBOARD_ROOT_URL} "
+            f"to be derived from"
+        )
+    if not referenced & published:
+        return (
+            f"{DASHBOARD_ROOT_URL} is {url!r}, interpolating {sorted(referenced)}, "
+            f"while the published port uses {sorted(published)}: the base URL is "
+            f"not derived from the same value that determines the address it is "
+            f"published on"
+        )
+    return None
+
+
+class TestSharedStackServiceImagesArePinnedToAnExactRelease(unittest.TestCase):
+    """ADDED requirement: Shared-Stack Service Images Are Pinned to an Exact
+    Release.
+
+    WHAT PASSING THIS CLASS ESTABLISHES, AND WHAT IT DOES NOT
+    --------------------------------------------------------
+    Only a NECESSARY condition. Which tags float is a property of the
+    publisher, not of the tag's shape, and cannot be read off a committed file:
+    PostgreSQL's release version has two components, so `postgres:16` floats
+    while `postgres:16.15` is a release, whereas the other publishers in this
+    stack release `MAJOR.MINOR.PATCH`, where a two-component tag is a series.
+    A tag specific enough to pass this floor may therefore still be a series
+    under its own publisher's scheme -- `traefik:v3.7` would pass here and is
+    not a release. That residue is carried by the human review every change to
+    the stack definition already passes through (the requirement splits the
+    obligation deliberately), and no assertion below should be read as
+    discharging it.
+
+    The condition is a floor on specificity and NEVER a ceiling: nothing here
+    rejects a tag for being more specific than some threshold, because such a
+    rule would reject correctly pinned releases, `postgres:16.15` among them.
+    """
+
+    def test_the_check_reads_every_service_the_stack_defines(self) -> None:
+        """DERIVED -- no scenario states it. It guards every assertion below
+        from passing vacuously over an empty or partial read of the file, the
+        same failure mode this suite's Molecule-pinning section guards against
+        with its own discovery test."""
+        services = sorted(compose_services())
+        read = sorted(name for name, _ in compose_service_images())
+        self.assertTrue(services, "the stack definition declares no services")
+        self.assertEqual(
+            services,
+            read,
+            "the pinning check does not read every service the stack defines, so a "
+            "service could be added and never checked",
+        )
+
+    def test_every_shared_stack_service_names_an_exact_release(self) -> None:
+        """SPECIFIED -- scenario "A service declares a tag that names no
+        specific release", and scenario "The automated check enforces a floor
+        and says so": the check rejects `latest`, any other tag naming a
+        channel, and any tag naming fewer than two version components.
+
+        Passing establishes only the necessary condition described in this
+        class's docstring -- a tag specific enough to pass may still be a
+        series under its own publisher's scheme, and that residue is carried by
+        human review, not by this test.
+        """
+        offenders = shared_stack_services_naming_no_release()
+        self.assertEqual(
+            [],
+            offenders,
+            "these shared-stack services do not name an exact release -- each names "
+            "a channel tag, a tag naming fewer than "
+            f"{VERSION_COMPONENT_FLOOR} version components, or no image at all, so "
+            "the version actually running is a function of when the last deploy "
+            f"happened rather than of what is committed: {offenders}",
+        )
+
+    def test_a_two_component_postgresql_release_is_accepted(self) -> None:
+        """SPECIFIED -- scenario "The check does not reject a correctly pinned
+        release": a service naming a release with the number of components its
+        own publisher uses, such as a two-component PostgreSQL release, is
+        accepted."""
+        self.assertTrue(
+            image_names_a_release("postgres:16.15"),
+            "postgres:16.15 is a PostgreSQL release, and a check that rejected it "
+            "would be a ceiling on specificity rather than a floor",
+        )
+
+    def test_a_bare_series_tag_is_rejected(self) -> None:
+        """SPECIFIED -- same scenario's rejection of "a tag naming a version
+        series that its publisher repoints at each new release within that
+        series"."""
+        for image in ("postgres:16", "traefik:v3", "grafana/grafana:12"):
+            with self.subTest(image=image):
+                self.assertFalse(
+                    image_names_a_release(image),
+                    f"{image} names a bare series, which cannot name a release under "
+                    f"any publisher's scheme",
+                )
+
+    def test_a_channel_tag_is_rejected(self) -> None:
+        """SPECIFIED -- scenario "The automated check enforces a floor and says
+        so": the check rejects `latest` and any other tag naming a channel
+        rather than a version. An image with no tag at all resolves to `latest`
+        and is rejected for the same reason."""
+        for image in (
+            "postgres:latest",
+            "traefik:stable",
+            "prom/prometheus:edge",
+            "grafana/grafana:main",
+            "postgres",
+        ):
+            with self.subTest(image=image):
+                self.assertFalse(
+                    image_names_a_release(image),
+                    f"{image} names a channel rather than a release",
+                )
+
+    def test_a_more_specific_tag_is_never_rejected_for_being_specific(self) -> None:
+        """SPECIFIED -- "The necessary condition SHALL be a floor on
+        specificity, never a ceiling". A ceiling is the defect the round-1
+        draft carried (design.md Decision 7); this is the assertion that would
+        catch its reintroduction."""
+        for image in (
+            "traefik:v3.7.10",
+            "prom/node-exporter:v1.9.1",
+            "ghcr.io/google/cadvisor:v0.60.5",
+            "grafana/grafana:12.3.0",
+            "postgres:16.15.2",
+            "postgres:16.15-alpine",
+        ):
+            with self.subTest(image=image):
+                self.assertTrue(
+                    image_names_a_release(image),
+                    f"{image} was rejected for naming more version components than "
+                    f"the floor requires, which makes the check a ceiling",
+                )
+
+    def test_a_content_digest_is_accepted_whatever_its_tag(self) -> None:
+        """SPECIFIED -- "an immutable content digest, or the tag its publisher
+        assigns to one release". The requirement admits either form; it does
+        not adopt `iac-cicd-pipeline`'s digest-only remedy."""
+        digest = "@sha256:" + "0" * 64
+        self.assertTrue(image_names_a_release("postgres" + digest))
+        self.assertTrue(image_names_a_release("postgres:16" + digest))
+
+    def test_the_check_records_that_it_establishes_only_a_necessary_condition(self) -> None:
+        """SPECIFIED -- scenario "The automated check enforces a floor and says
+        so", second limb: the check "SHALL record that passing establishes only
+        a necessary condition -- a tag specific enough to pass may still be a
+        series under its own publisher's scheme, and that residue is carried by
+        human review".
+
+        Asserted over this class's own docstring, which is where that record
+        lives. A caveat nobody can delete without a test failing is the only
+        form of "SHALL record" an automated check can actually keep.
+        """
+        recorded = (type(self).__doc__ or "").lower()
+        for phrase in ("necessary condition", "human review", "publisher"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    recorded,
+                    "the pinning check no longer records what passing it does and does "
+                    "not establish, so it now presents its necessary condition as the "
+                    "whole obligation -- which reports a floating tag as pinned",
+                )
+
+
+class TestTheSharedStackPinningCheckIsARealReadOfTheFile(unittest.TestCase):
+    """ADDED requirement: Shared-Stack Service Images Are Pinned to an Exact
+    Release.
+
+    An assertion that silently covered only the services that exist today would
+    pass the class above identically while catching nothing a later edit
+    introduces. These tests run the same check over throwaway stack definitions
+    that differ from the committed one in exactly one property, so the check's
+    verdict is shown to depend on the file rather than on an enumeration
+    written into the test.
+    """
+
+    GRAFANA_BLOCK = (
+        "  grafana:\n"
+        "    image: grafana/grafana:12.3.0\n"
+        "    environment:\n"
+        "      GF_SERVER_ROOT_URL: http://${GRAFANA_BIND_ADDRESS}:3000\n"
+        '    ports:\n      - "${GRAFANA_BIND_ADDRESS}:3000:3000"\n'
+    )
+
+    def compose_fixture(self, services: str) -> Path:
+        directory = Path(tempfile.mkdtemp(prefix="platform-compose-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = directory / "docker-compose.yml"
+        path.write_text("---\nservices:\n" + services, encoding="utf-8")
+        return path
+
+    def test_a_service_added_with_a_moving_tag_is_caught_with_no_test_edit(self) -> None:
+        """SPECIFIED -- scenario "A service declares a tag that names no
+        specific release" holds of "every service defined in the shared
+        platform Compose stack", including one that does not exist yet."""
+        fixture = self.compose_fixture(
+            self.GRAFANA_BLOCK + "  newcomer:\n    image: redis:latest\n"
+        )
+        self.assertEqual(
+            ["newcomer: redis:latest"],
+            shared_stack_services_naming_no_release(fixture),
+            "a service added to the stack with a moving tag was not caught, so the "
+            "check enumerates the services it knows about rather than reading the "
+            "file",
+        )
+
+    def test_a_service_declaring_no_image_fails_by_name_rather_than_being_skipped(self) -> None:
+        """DERIVED -- no scenario states it. A service passed over for
+        declaring no `image:` is indistinguishable from one that satisfies the
+        requirement, which is the vacuous pass this suite forbids elsewhere."""
+        fixture = self.compose_fixture(
+            self.GRAFANA_BLOCK + "  imageless:\n    restart: unless-stopped\n"
+        )
+        self.assertEqual(
+            ["imageless: declares no image:"],
+            shared_stack_services_naming_no_release(fixture),
+            "a service declaring no image: was skipped rather than reported by name",
+        )
+
+    def test_a_stack_declaring_no_services_fails_rather_than_reading_nothing(self) -> None:
+        """DERIVED -- the same non-vacuity guard, at the file level."""
+        directory = Path(tempfile.mkdtemp(prefix="platform-compose-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = directory / "docker-compose.yml"
+        path.write_text("---\nvolumes:\n  postgres_data:\n", encoding="utf-8")
+        with self.assertRaises(AssertionError):
+            shared_stack_services_naming_no_release(path)
+
+    def test_a_stack_whose_services_all_name_releases_is_accepted(self) -> None:
+        """DERIVED -- the converse half. Without it, a check that reported
+        every service as an offender would satisfy the three tests above while
+        failing every change to the stack regardless of what it changed."""
+        fixture = self.compose_fixture(
+            self.GRAFANA_BLOCK
+            + "  postgres:\n    image: postgres:16.15\n"
+            + "  traefik:\n    image: traefik:v3.7.10\n"
+        )
+        self.assertEqual([], shared_stack_services_naming_no_release(fixture))
+
+
+class TestDashboardBaseUrlIsNotALiteralAddress(unittest.TestCase):
+    """MODIFIED requirement: Metrics Dashboards Are Available -- the added
+    clause obliging a generated absolute URL to address the host at the same
+    private-tailnet address the interface is published on.
+
+    This is the half of that obligation a static read can decide. That the URL
+    Grafana actually serves changed is confirmed against the running host
+    (design.md's Migration Plan step 3), not here.
+    """
+
+    def compose_fixture(self, root_url: str, ports: str = '"${GRAFANA_BIND_ADDRESS}:3000:3000"') -> Path:
+        directory = Path(tempfile.mkdtemp(prefix="platform-compose-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = directory / "docker-compose.yml"
+        path.write_text(
+            "---\nservices:\n"
+            "  grafana:\n"
+            "    image: grafana/grafana:12.3.0\n"
+            "    environment:\n"
+            f"      GF_SERVER_ROOT_URL: {root_url}\n"
+            "    ports:\n"
+            f"      - {ports}\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_the_configured_base_url_is_derived_from_where_the_interface_is_published(
+        self,
+    ) -> None:
+        """SPECIFIED -- scenario "The configured base URL is not a literal that
+        ignores where the interface is published": read from the stack's own
+        definition, the base URL SHALL be derived from the same value that
+        determines the address it is published on, rather than being a literal
+        address -- including `localhost` -- that is correct only on the host
+        itself."""
+        offence = dashboard_base_url_offence()
+        self.assertIsNone(
+            offence,
+            "the dashboard's configured base URL does not follow where the "
+            f"interface is published: {offence}",
+        )
+
+    def test_any_literal_host_is_rejected_not_only_localhost(self) -> None:
+        """SPECIFIED -- the same scenario's "rather than being a literal
+        address -- including `localhost`". The word "including" is what makes
+        this test necessary: a check keyed on the string `localhost` would pass
+        a literal tailnet IP, which is equally a literal and equally wrong the
+        moment the address changes."""
+        for url in (
+            "http://localhost:3000",
+            "http://100.101.102.103:3000",
+            "http://grafana.example.internal:3000",
+            "http://127.0.0.1:3000",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNotNone(
+                    dashboard_base_url_offence(self.compose_fixture(url)),
+                    f"{url} is a literal address and was accepted",
+                )
+
+    def test_interpolating_a_different_variable_is_rejected(self) -> None:
+        """SPECIFIED -- the same scenario's "derived from the same value that
+        determines the address it is published on". An interpolation of some
+        other variable is not a literal, but it is not derived from the
+        publication either."""
+        fixture = self.compose_fixture("http://${SOME_OTHER_ADDRESS}:3000")
+        self.assertIsNotNone(
+            dashboard_base_url_offence(fixture),
+            "a base URL interpolating a variable unrelated to the published port "
+            "was accepted",
+        )
+
+    def test_the_expected_form_is_accepted(self) -> None:
+        """DERIVED -- the converse half. Without it, a check that rejected
+        every URL would satisfy the two tests above while never being
+        satisfiable."""
+        fixture = self.compose_fixture("http://${GRAFANA_BIND_ADDRESS}:3000")
+        self.assertIsNone(dashboard_base_url_offence(fixture))
+
+    def test_an_absent_root_url_is_reported_rather_than_skipped(self) -> None:
+        """DERIVED -- no scenario states it. A dashboard service declaring no
+        base URL at all would otherwise pass a check written only over the
+        value's shape."""
+        directory = Path(tempfile.mkdtemp(prefix="platform-compose-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = directory / "docker-compose.yml"
+        path.write_text(
+            "---\nservices:\n  grafana:\n    image: grafana/grafana:12.3.0\n",
+            encoding="utf-8",
+        )
+        self.assertIsNotNone(dashboard_base_url_offence(path))
+
+
 if __name__ == "__main__":
     unittest.main()
