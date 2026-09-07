@@ -139,8 +139,8 @@ jobs:
 
       # validate/tflint/test discover terraform/modules/*/ and terraform/environments/* directories
       # rather than naming them, so a directory added under either one is
-      # covered without a workflow edit — see
-      # openspec/changes/fix-ci-module-coverage.
+      # covered without a workflow edit — see the change
+      # fix-ci-module-coverage.
       - name: terraform validate
         if: steps.changes.outputs.terraform == 'true'
         run: |

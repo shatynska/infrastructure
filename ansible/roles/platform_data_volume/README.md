@@ -10,9 +10,9 @@ ownership and permissions, before that service can rely on them existing.
 
 Implements `iac-host-configuration`'s ADDED "Platform Data Volume Is Mounted
 at a Fixed Host Path" requirement — see
-`openspec/changes/add-platform-monitoring/specs/iac-host-configuration/spec.md`
-and that change's `design.md` for the full rationale, including why the
-volume's device path is discovered on-host rather than hand-copied from
+`openspec/specs/iac-host-configuration/spec.md`, and
+`add-platform-monitoring`'s `design.md`, for the full rationale, including why
+the volume's device path is discovered on-host rather than hand-copied from
 Terraform's output.
 
 ## Scope

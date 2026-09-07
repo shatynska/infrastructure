@@ -3,11 +3,11 @@
 # Required Input Is Reported by Name" requirement, scenarios "A required
 # input is not supplied" and "The check precedes the tasks that consume the
 # input"
-# (openspec/changes/fix-volume-discovery-and-consistency/specs/
-# iac-host-configuration/spec.md).
+# (openspec/specs/iac-host-configuration/spec.md,
+# from fix-volume-discovery-and-consistency).
 #
 # Written BEFORE the implementation exists, from the delta spec alone. See
-# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md for the
+# fix-volume-discovery-and-consistency's test-plan.md for the
 # scenario-to-test mapping, the recorded baseline, and the per-assertion
 # specified/derived classification.
 #

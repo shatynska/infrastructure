@@ -3,7 +3,7 @@
 Terraform-managed infrastructure on Hetzner Cloud. State lives in HCP Terraform
 (CLI-driven, local execution); GitHub Actions runs the `terraform` CLI and
 gates every apply behind manual approval. See
-`openspec/changes/bootstrap-hetzner-iac/design.md` for the full rationale
+`bootstrap-hetzner-iac`'s design.md for the full rationale
 behind these choices.
 
 Manual, ad-hoc server provisioning is hard to audit and drifts silently from
@@ -186,8 +186,7 @@ Terraform has no traditional unit-test layer here; verification is the
 static checks and plan review above, plus (as `terraform/modules/` grows past
 `terraform/modules/server`) module-level tests in
 `terraform/modules/<name>/tests/*.tftest.hcl`, run via `terraform test`. See
-`openspec/changes/project-foundation/design.md` for the full testing
-strategy.
+the change `project-foundation`'s design.md for the full testing strategy.
 
 ### Re-enabling the drift-detection workflow
 
@@ -198,12 +197,12 @@ then trigger it once manually (`workflow_dispatch`) to confirm it runs clean.
 
 ## Status
 
-This repository is being bootstrapped per
-`openspec/changes/bootstrap-hetzner-iac/`. Several setup steps require
-manual action outside version control (HCP Terraform org/workspace, Hetzner
-Cloud project and tokens, GitHub environment/branch settings) — see that
-change's `tasks.md` for the current checklist. Project identity, scope, and
-non-goals are recorded in `openspec/changes/project-foundation/design.md`.
+This repository is being bootstrapped per the change
+`bootstrap-hetzner-iac`. Several setup steps require manual action outside
+version control (HCP Terraform org/workspace, Hetzner Cloud project and tokens,
+GitHub environment/branch settings) — see that change's `tasks.md` for the
+current checklist. Project identity, scope, and non-goals are recorded in the
+change `project-foundation`'s design.md.
 
 A staging environment (a second `terraform/environments/<name>/` folder reusing the
 same modules) is anticipated as the next environment after `prod` is fully
@@ -211,5 +210,5 @@ stood up, but is not yet in scope.
 
 The `ansible/` and `platform/` directories, and the `terraform/`/`ansible/`/
 `platform/` structure and pipeline boundary between them, were established by
-`openspec/changes/integrate-ansible-host-config/` — structure and convention
-only; neither directory has role/playbook or Compose service content yet.
+the change `integrate-ansible-host-config` — structure and convention only;
+neither directory has role/playbook or Compose service content yet.

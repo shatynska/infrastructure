@@ -3,7 +3,7 @@
 # supplied and nothing discoverable.
 #
 # What each assertion below establishes, and its provenance, is recorded in
-# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md. The
+# fix-volume-discovery-and-consistency's test-plan.md. The
 # short form:
 #
 #   outcome == 'failed'            SPECIFIED -- "the run SHALL fail".

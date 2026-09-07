@@ -3,7 +3,7 @@
 # here may set up the thing under test. It exists to work around two gaps in
 # what this scenario converges on top of, both of which stop `converge`
 # before the role under test ever runs
-# (openspec/changes/repair-ansible-test-harness).
+# (the change repair-ansible-test-harness).
 #
 # 1. geerlingguy.docker 8.0.0's tasks/setup-Debian.yml installs
 #    `ca-certificates` and `python3-debian` with `state: present` and NO

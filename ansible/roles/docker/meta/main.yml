@@ -7,7 +7,7 @@
 # deploy_user) rather than referencing the external role directly.
 #
 # `galaxy_info` exists only to give this role a resolvable fully-qualified
-# name, and was added by openspec/changes/repair-ansible-test-harness. It is
+# name, and was added by repair-ansible-test-harness. It is
 # not a step towards publishing this role anywhere. Molecule 26.x's bundled
 # ansible-compat resolves an FQRN for any role carrying a meta/main.yml
 # before it will install it locally, and without these two keys it refuses

@@ -31,7 +31,7 @@
 # non-empty, so an empty fallback is what makes this scenario runnable with
 # no credential at all. A non-empty dummy would satisfy the guard, reach
 # ghcr.io, and abort the converge on a 403 -- which is exactly what it used
-# to do (openspec/changes/repair-ansible-test-harness). Setting
+# to do (repair-ansible-test-harness). Setting
 # MOLECULE_GHCR_PULL_TOKEN and MOLECULE_GHCR_PULL_USERNAME together still
 # exercises the real login path.
 #

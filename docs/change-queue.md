@@ -393,6 +393,142 @@ not folded into it: that change's subject is the suite's pins and one broken
 assertion, and this is a documentation defect in a file it otherwise does not
 touch.
 
+## 8. namespace-the-molecule-suite-per-working-tree
+
+**Not blocked; recorded because it is a gap in this project's own verification
+rules rather than a defect in any change, and because it silently invalidates
+results.** Observed 2026-09-07 by two sessions at once —
+`decide-archived-change-reference-policy` and `reclaim-superseded-app-images` —
+which is why the evidence below spans two working trees.
+
+`AGENTS.md:27` already names the hazard — *"Where verification writes to a
+shared service, take your own namespace within it, named deterministically from
+your working tree"* — and `AGENTS.md:29` says that where this project binds that
+rule to a particular service, the binding is an adjacent section of the file.
+**No such section exists, for any service.** The rule is stated and nothing is
+bound to it, while Molecule is the one shared service this project's
+verification actually writes to.
+
+Three handles are shared across every working tree on the machine, and none is
+derived from the working tree:
+
+- **The container name** — every scenario's `molecule.yml` sets
+  `platforms[0].name` to a literal, e.g. `deploy_user-role-instance` in
+  `ansible/roles/deploy_user/molecule/default/molecule.yml`. Two working trees
+  running the same role create, converge and destroy *the same container*.
+  **This is the collision that matters**, and no environment variable reaches
+  it. (Named by key rather than by line: an earlier draft of this entry cited
+  `molecule.yml:40`, which was already wrong when written and which this very
+  change shifted by one — a line citation rotting inside the change whose
+  subject is citations that rot.)
+- **Molecule's ephemeral directory**, `~/.ansible/tmp/molecule.<id>.<scenario>`.
+  The `<id>` is **derived from the role, not from the path**, so it is identical
+  across working trees by construction: on 2026-09-07 every `deploy_user` run
+  from either working tree resolved to `molecule.dnU2.*`, while the other roles
+  each held their own — `1UjF` `docker`, `Dp-1` `platform_data_volume`, `E127`
+  `ops_user`, `HeLe` `hardening`. Relocating a working tree therefore does not
+  escape it, and `MOLECULE_EPHEMERAL_DIRECTORY` is the only lever.
+- **Molecule's cache**, `~/.cache/molecule/<role>` — keyed by role name alone.
+
+Because the ephemeral id is stable per role rather than per run, **inheriting
+another working tree's directory is the default rather than the exception**.
+Molecule does not remove the directory when a run finishes — verified after a
+clean `exit 0` run, which left all three of its scenario directories in place —
+so clearing before a run is a standing requirement, not something owed only
+after a crash.
+
+The failure presents at three different stages, which is what makes it read as
+three unrelated defects rather than one cause. One session hit them in this
+order — progressively later in the run — which is the point: the window is not
+one moment but anywhere the other party touches a shared handle.
+
+| Stage | Symptom |
+|---|---|
+| `create` | `lookup plugin 'file' failed: Unable to access .../molecule.dnU2.default/molecule.yml` — a `destroy` pruned the ephemeral directory a later `create` then read |
+| `prepare` | the container torn down under a running play; `UNREACHABLE ... Failed to create temporary directory` |
+| `verify` | 18 tasks in, after five `All assertions passed`, a task unrelated to the change dies with **rc 137** |
+
+The `verify` symptom is the one most likely to be misread, so it is worth
+naming precisely. What makes it diagnosable is the *pairing*: SIGKILL together
+with **empty** stdout and stderr. A module that fails prints something; a module
+that is killed prints nothing, and Ansible then reports `Module result
+deserialization failed: No start of json char found` — which reads like a module
+bug, and is not.
+
+**Serialising is necessary but not sufficient, and neither is the environment
+variable.** `flock` on a shared lock file stops two runs overlapping in time; it
+does nothing about a run inheriting a directory the previous session left
+behind. Observed directly: a locked run, with no concurrent process anywhere on
+the machine, still failed at `create` on an ephemeral directory another working
+tree had created earlier.
+
+That is contention across *time*, not a standalone defect in the suite — the
+same `destroy`-then-`create` sequence runs clean on a directory the working tree
+owns, as four other roles demonstrated in the same session. The distinction
+matters: the suite is not broken on its own, so the fix is separating the
+handles rather than reworking the test sequence.
+
+It also means clearing the shared state is part of the safeguard and not merely
+tidying, and that a session reporting it left nothing behind should be checked
+rather than believed — on 2026-09-07 one did, and `molecule.dnU2.default` was
+still there.
+
+`MOLECULE_EPHEMERAL_DIRECTORY` and a cache override stop a run inheriting stale
+state, but leave both runs fighting over one container. Only separating all
+three handles makes a concurrent-worktree result mean anything; until then,
+coordination between sessions is the whole safeguard.
+
+`molecule test --all` compounds it. It stops at the first failing scenario, so a
+collision in `default` — which sorts first for `deploy_user` — leaves
+`ghcr-credential-absent` and `ghcr-credential-rejected` neither executed nor
+listed in the recap, while the recap still looks complete.
+
+The danger is not the red runs. A colliding run can equally **pass** against a
+container the other session converged, which reads as evidence the change under
+test is sound.
+
+The fix is one decision covering all three: a per-working-tree instance name —
+which means templating it in every `molecule.yml`, with `.github/tests`
+asserting that each one does — plus the ephemeral-directory and cache
+overrides, and a binding section in `AGENTS.md` that ties `AGENTS.md:27` to
+Molecule the way it was always meant to be tied to something.
+
+## 8a. a review agent's mutation check writes to the tree it is reviewing
+
+**Not blocked; recorded next to entry 8 because it is the same class of hazard —
+a shared handle nobody namespaced — and was found the same day.**
+
+The `code-review` skill performs mutation checks against the **live working
+tree**: it appends a violation to a real file, confirms the gate goes red, then
+reverts. Observed 2026-09-07 during `decide-archived-change-reference-policy`'s
+code-review gate, on `platform/README.md`.
+
+The revert restored the file to its **committed** content, not to the
+working-tree content it had displaced. The change under review was a 45-file
+sweep of uncommitted edits, so the revert silently undid the sweep in that file
+and restored six pre-archive citations. The stash list and the reflog showed
+nothing, because neither a stash nor a branch checkout was involved, which is
+why the cause took a while to find.
+
+Two things follow, and only the first is about this incident:
+
+- **A review agent that writes to the tree can destroy the work it is
+  reviewing**, and does so in a way that looks like nothing happened. The
+  working tree is a shared handle between a session and its own review agent,
+  exactly as the container name is between two Molecule runs.
+- **The mutation check itself is sound and worth keeping.** Appending a
+  violation and confirming the gate goes red is what distinguishes a check that
+  reads the tree from a tautology. What is wrong is performing it in place. It
+  belongs against a copy, or must restore the content it displaced rather than
+  the committed content.
+
+Worth deciding whether this project constrains review agents to a read-only
+tree, or accepts in-place mutation checks and requires the dispatching session
+to verify the tree afterwards. In this instance the change's own new check
+caught the regression unprompted and named all six restored citations by file
+and line — which is evidence for that check, not a reason to assume one exists
+next time.
+
 ## 7. size-platform-container-resource-limits
 
 **Blocked on data, not on another change.** No service in

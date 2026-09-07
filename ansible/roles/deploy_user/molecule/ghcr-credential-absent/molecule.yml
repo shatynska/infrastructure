@@ -2,8 +2,8 @@
 # Molecule scenario for the MODIFIED "Host Authenticates to GHCR for
 # Application Image Pulls" requirement, scenario "Host configuration
 # completes when no GHCR credential is supplied"
-# (openspec/changes/repair-ansible-test-harness/specs/
-# iac-host-configuration/spec.md).
+# (openspec/specs/iac-host-configuration/spec.md,
+# from repair-ansible-test-harness).
 #
 # WHY THIS EXISTS, SEPARATELY FROM `default`
 # ------------------------------------------

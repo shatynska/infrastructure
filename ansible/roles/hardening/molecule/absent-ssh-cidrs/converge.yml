@@ -4,9 +4,10 @@
 # deliberately gives it no default, because there is no safe default source
 # CIDR for SSH.
 #
-# Delta scenarios under test
-# (openspec/changes/fix-volume-discovery-and-consistency/specs/
-# iac-host-configuration/spec.md):
+# Scenarios under test, from the "A Role's Absent Required Input Is Reported
+# by Name" requirement
+# (openspec/specs/iac-host-configuration/spec.md,
+# from fix-volume-discovery-and-consistency):
 #
 #   "A required input is not supplied"
 #     WHEN a role that consumes a caller-supplied input with no safe default

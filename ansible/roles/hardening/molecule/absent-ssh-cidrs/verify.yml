@@ -4,7 +4,7 @@
 # host was not changed before the run stopped.
 #
 # Provenance of each assertion (full classification in
-# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md):
+# fix-volume-discovery-and-consistency's test-plan.md):
 #
 #   outcome == 'failed'             SPECIFIED -- "the run SHALL fail". On its
 #                                   own it establishes nothing: the unfixed

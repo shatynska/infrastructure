@@ -1,7 +1,7 @@
 ---
 # Verifies the ADDED "Unprivileged Operator Accounts Support Interactive
 # Host Inspection" requirement (9 scenarios)
-# (openspec/changes/add-ops-account/specs/iac-host-configuration/spec.md).
+# (openspec/specs/iac-host-configuration/spec.md, from add-ops-account).
 #
 # Each block below is labelled with the scenario it covers, and every
 # scenario in that requirement has a block here. Where a block is proxy
@@ -17,7 +17,7 @@
 # classification.
 #
 # EDITED AT IMPLEMENTATION TIME, by the implementer rather than this file's
-# original author (2026-09-01, openspec/changes/add-ops-account tasks.md
+# original author (2026-09-01, add-ops-account tasks.md
 # §3). One change only: the private-key-marker scan near the end of this
 # file matched THIS FILE, because a scan whose pattern is written out
 # literally necessarily contains the string it searches for. The pattern is
@@ -27,7 +27,7 @@
 # and observing the scan fire on each, then fall silent once removed. The
 # The same self-match was latent in deploy_user's equivalent scan and has
 # since been repaired there the same way
-# (openspec/changes/repair-ansible-test-harness, task 6.1).
+# (repair-ansible-test-harness, task 6.1).
 - name: Verify
   hosts: all
   become: true
@@ -226,7 +226,7 @@
       failed_when: false
 
     # The refusal is asserted by EXIT STATUS plus a discriminator, not by
-    # matching sudo's wording (openspec/changes/repair-ansible-test-harness,
+    # matching sudo's wording (repair-ansible-test-harness,
     # task 6.4). Two reasons the phrasing cannot carry this assertion:
     #
     #   - It is host-dependent. Against prod this exact command produced

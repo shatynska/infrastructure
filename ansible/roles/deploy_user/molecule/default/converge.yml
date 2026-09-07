@@ -19,7 +19,7 @@
 # an empty fallback is what lets this scenario run with no credential at
 # all; a non-empty dummy would satisfy the guard, reach ghcr.io and abort
 # the converge on a 403, which is what it used to do
-# (openspec/changes/repair-ansible-test-harness). Set both variables
+# (repair-ansible-test-harness). Set both variables
 # together to exercise the real login path -- see test-manifest.md for why
 # the GHCR-credential-store assertion in verify.yml is conditioned on a real
 # value being supplied this way.

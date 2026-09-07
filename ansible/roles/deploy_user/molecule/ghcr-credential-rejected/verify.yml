@@ -2,8 +2,8 @@
 # Verifies the MODIFIED "Host Authenticates to GHCR for Application Image
 # Pulls" requirement's scenario "A supplied credential that the registry
 # rejects still fails the run"
-# (openspec/changes/repair-ansible-test-harness/specs/
-# iac-host-configuration/spec.md).
+# (openspec/specs/iac-host-configuration/spec.md,
+# from repair-ansible-test-harness).
 #
 # The scenario's THEN has one limb with two halves, and both are asserted:
 #   "the run SHALL fail"                     -> outcome == 'failed'

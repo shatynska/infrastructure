@@ -2,7 +2,7 @@
 # Provisions the restricted `deploy` account per iac-host-configuration's
 # "Restricted Deploy Account Supports Per-Application Forced-Command
 # Deploys" and "Host Authenticates to GHCR for Application Image Pulls"
-# requirements (openspec/changes/add-per-app-deploy-keys). See that
+# requirements (add-per-app-deploy-keys). See that
 # change's design.md for why every application -- platform included --
 # shares one account, isolated per application by a forced-command SSH key
 # plus a named `sudoers` rule, rather than one account per application.
@@ -273,7 +273,7 @@
 # reading package contents (design.md's GHCR decision).
 #
 # Guarded on BOTH credential halves being supplied and non-empty
-# (openspec/changes/repair-ansible-test-harness). What the guard tolerates,
+# (repair-ansible-test-harness). What the guard tolerates,
 # and what it deliberately does not:
 #
 #   TOLERATED -- the credential being ABSENT. A host that pulls no private

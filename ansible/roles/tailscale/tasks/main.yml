@@ -1,7 +1,7 @@
 ---
 # Joins the prod host to a private tailnet, per iac-host-configuration's
 # ADDED "Host Joins a Private Tailnet for Non-Operator SSH Access"
-# requirement (openspec/changes/connect-platform-deploy-via-tailscale).
+# requirement (the change connect-platform-deploy-via-tailscale).
 # This exists so the GitHub Actions deploy job can reach the host without
 # widening SSH access on the public internet -- see that change's
 # design.md for the full rationale.
@@ -48,7 +48,7 @@
 # abort every `--check` run of host-baseline.yml with
 # "The filter plugin 'ansible.builtin.from_json' failed: Expecting value:
 # line 1 column 1 (char 0)". Since tailscale runs third of five, nothing
-# after it was ever evaluated (openspec/changes/repair-ansible-test-harness).
+# after it was ever evaluated (repair-ansible-test-harness).
 - name: Check current tailnet connection status
   ansible.builtin.command: tailscale status --json
   register: tailscale_status_check
