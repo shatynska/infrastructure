@@ -1,10 +1,11 @@
 """Static-assertion tests for the CI configuration this repository ships.
 
-Derived from the delta specs of the OpenSpec change `close-ci-verification-gaps`
-(`openspec/changes/close-ci-verification-gaps/specs/`), before any implementation
-of that change existed. Every assertion below is annotated SPECIFIED (it traces
-to SHALL text in a delta spec) or DERIVED (it traces to `design.md`/`tasks.md`
-rather than to a scenario). See that change's `test-plan.md` for the
+Derived from the delta specs of the OpenSpec change `close-ci-verification-gaps`,
+before any implementation of that change existed. Those deltas span several
+capabilities, so no single `openspec/specs/<capability>/spec.md` names them all;
+each section below cites the one it traces to. Every assertion is annotated
+SPECIFIED (it traces to SHALL text in a delta spec) or DERIVED (it traces to
+`design.md`/`tasks.md` rather than to a scenario). See that change's `test-plan.md` for the
 scenario-to-test mapping and for the scenarios deliberately left uncovered.
 
 Sections added later carry their own provenance comment naming the change they
@@ -744,9 +745,10 @@ class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
 # --------------------------------------------------------------------------
 #
 # Derived from the delta spec of the OpenSpec change
-# `pin-and-fix-molecule-suite`
-# (openspec/changes/pin-and-fix-molecule-suite/specs/iac-cicd-pipeline/spec.md),
-# before any implementation of that change existed. See that change's
+# `pin-and-fix-molecule-suite`, before any implementation of that change
+# existed. The requirement these assertions trace to is
+# `iac-cicd-pipeline`'s "Ansible Configuration Is Verified in Continuous
+# Integration" (openspec/specs/iac-cicd-pipeline/spec.md). See that change's
 # test-plan.md for the scenario-to-test mapping, the baseline, and the
 # scenarios deliberately left uncovered.
 
@@ -1969,11 +1971,12 @@ class TestTheSuiteNeedsNoPrivilegedResource(unittest.TestCase):
 # Release, and Metrics Dashboards Are Available
 #
 # Derived from the delta specs of the OpenSpec change
-# `fix-volume-discovery-and-consistency`
-# (openspec/changes/fix-volume-discovery-and-consistency/specs/
-# iac-platform-services/spec.md), before any implementation of that change
-# existed. See that change's test-plan.md for the scenario-to-test mapping, the
-# baseline, and the scenarios deliberately left uncovered.
+# `fix-volume-discovery-and-consistency`, before any implementation of that
+# change existed. Both requirements named in this section's heading above are
+# held in `iac-platform-services`
+# (openspec/specs/iac-platform-services/spec.md). See that change's
+# test-plan.md for the scenario-to-test mapping, the baseline, and the
+# scenarios deliberately left uncovered.
 #
 # These assertions live in THIS suite rather than in `terraform test` or in a
 # Molecule scenario because both are static reads of a committed file the
@@ -2683,6 +2686,14 @@ WRAPPED_CITATION = re.compile(
 # would inflict on itself on every run rather than one a developer provokes and
 # can see. That is what separates it from the untracked scratch file design
 # Decision 7 deliberately accepts.
+# NOTE: this list and `PRUNED_AT_ROOT_RELATIVE` below hand-mirror part of
+# `.gitignore`, and nothing keeps the two in step. The prohibition is over
+# *committed* files, so an ignored path added to `.gitignore` later -- a second
+# Galaxy role from `ansible/requirements.yml`, a repo-local `.venv`,
+# `.pytest_cache` -- becomes readable here and can turn the check red on a file
+# nobody committed. That is local-only; continuous integration checks out a
+# clean tree. When adding an ignore rule for something that lands inside the
+# working tree, add it here too.
 PRUNED_ANYWHERE = frozenset({".git", ".terraform", "__pycache__", "node_modules"})
 
 # Pruned only at their path relative to the walk root. `.claude` is NOT pruned
@@ -2780,14 +2791,45 @@ class TestNoCommittedFileOutsideOpenSpecCarriesAPreArchiveCitation(unittest.Test
         """DERIVED -- design Decision 7, which prunes `.claude/worktrees` only
         and not `.claude` wholesale, because the files tracked beneath it are
         committed files outside `openspec/` and are the likeliest future source
-        of the prohibited form: they document OpenSpec's change layout."""
+        of the prohibited form: they document OpenSpec's change layout.
+
+        Asserted against an enumeration of the directory rather than against a
+        count of what it holds today. A count fails on an unrelated file the
+        OpenSpec CLI adds or removes; this fails on what actually matters -- a
+        prune-list edit that drops part of `.claude` out of the prohibition's
+        scope. The two subtree assertions are the floor beneath it: without
+        them, pruning `.claude` in its entirety would empty both sides of the
+        comparison and pass.
+        """
+        agent_directory = ROOT / ".claude"
+        if not agent_directory.is_dir():
+            self.skipTest("this repository has no .claude/ directory")
         walked = {path.relative_to(ROOT).as_posix() for path in walked_files()}
-        beneath = sorted(name for name in walked if name.startswith(".claude/"))
-        self.assertTrue(
-            beneath,
-            "the walk reached no file under .claude/, so the prohibition would "
-            "be silently unenforced over the files tracked there",
+        # Independent of PRUNED_AT_ROOT_RELATIVE, which is what this test is
+        # about. It excludes only the `worktrees` subtree, which Decision 7
+        # prunes because it is a second checkout of this repository, and the
+        # any-depth entries, which are not at issue here.
+        expected = {
+            path.relative_to(ROOT).as_posix()
+            for path in agent_directory.rglob("*")
+            if path.is_file()
+            and path.relative_to(agent_directory).parts[0] != "worktrees"
+            and not set(path.relative_to(ROOT).parts) & PRUNED_ANYWHERE
+        }
+        missing = sorted(expected - walked)
+        self.assertEqual(
+            [],
+            missing,
+            f"the walk did not reach these files under .claude/, so the "
+            f"prohibition is silently unenforced over them: {missing}",
         )
+        for subtree in (".claude/commands/", ".claude/skills/"):
+            self.assertTrue(
+                any(name.startswith(subtree) for name in walked),
+                f"the walk reached no file under {subtree}; pruning it would "
+                f"drop the files OpenSpec installs there out of the "
+                f"prohibition's scope without failing anything",
+            )
 
     def test_no_committed_file_outside_openspec_carries_a_pre_archive_citation(self) -> None:
         """SPECIFIED -- "No committed file outside `openspec/` SHALL contain a

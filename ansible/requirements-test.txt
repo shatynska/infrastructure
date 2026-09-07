@@ -1,5 +1,5 @@
 # Pinned pip test dependencies for this project's Ansible test framework
-# (Molecule), adopted by openspec/changes/bootstrap-ansible-host-baseline's
+# (Molecule), adopted by bootstrap-ansible-host-baseline's
 # design.md Decisions section. These arrive via pip rather than Galaxy, but
 # the same "any external role or collection used for any purpose is pinned
 # to an exact version" convention (AGENTS.md) is extended to them here —
@@ -10,7 +10,7 @@
 # Install with: pip install -r ansible/requirements-test.txt
 #
 # ansible-core is pinned here too, and that is the correction this file
-# needed (openspec/changes/repair-ansible-test-harness). Leaving it out did
+# needed (repair-ansible-test-harness). Leaving it out did
 # not leave it unconstrained -- it left it resolved by whatever pip picked
 # on the day, which is exactly the failure the convention above exists to
 # prevent. A fresh install used to resolve ansible-core 2.21 against a

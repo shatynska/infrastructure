@@ -2,10 +2,11 @@
 # Molecule scenario for the ADDED "Restricted Deploy Account Supports
 # Per-Application Forced-Command Deploys" and "Host Authenticates to GHCR
 # for Application Image Pulls" requirements
-# (openspec/changes/add-per-app-deploy-keys/specs/iac-host-configuration/
-# spec.md). Originally written as a sibling `per_app_deploy` scenario by
-# the test-writing pass ahead of implementation (which never edits or
-# deletes an existing test); folded into `default` here, at implementation
+# (openspec/specs/iac-host-configuration/spec.md,
+# from add-per-app-deploy-keys). Originally written as a sibling
+# `per_app_deploy` scenario by the test-writing pass ahead of implementation
+# (which never edits or deletes an existing test); folded into `default`
+# here, at implementation
 # time, as test-manifest.md's own "Obsolete tests" section anticipated --
 # the old `default`'s converge/verify assumed the single-key,
 # single-wrapper-script shape this change retires, so it could not

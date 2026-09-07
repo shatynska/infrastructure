@@ -194,6 +194,15 @@ Permitting `archive` keeps the two correct, permanent citations already in
 and the `integrate-ansible-host-config` one) rather than forcing them into a
 weaker form for uniformity's sake.
 
+A sibling proposal — assert that every cited `openspec/specs/<capability>/spec.md`
+path resolves on disk — was raised at code review and declined for a reason the
+requirement itself supplies: it explicitly accepts an interval where that path
+does not resolve, because a change introducing a *new* capability has the file
+created by archiving. Such a test would go red during exactly the interval the
+requirement blesses. If the loop is ever worth closing, close it in a form that
+tolerates the interval — a typo check against the `openspec/specs/*/` directory
+names rather than a file-existence assertion.
+
 The check deliberately does **not** resolve a cited change name to a directory.
 A bare name in prose is an ordinary word; distinguishing a citation from a
 sentence would need either a bespoke marker syntax (`change:<name>`) or a

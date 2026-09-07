@@ -4,7 +4,7 @@ Joins the prod host to a private tailnet, so the
 `deploy-platform-compose-stack` GitHub Actions deploy job can reach it over
 SSH without widening `ssh_allowed_cidrs`/`hardening_ssh_allowed_cidrs`
 beyond the operator's own CIDR. See
-`openspec/changes/connect-platform-deploy-via-tailscale/design.md` for the
+`connect-platform-deploy-via-tailscale`'s design.md for the
 full rationale, including why a UFW rule (not just this role) was needed
 for SSH to actually be reachable over the new `tailscale0` interface.
 

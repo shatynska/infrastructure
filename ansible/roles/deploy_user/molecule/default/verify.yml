@@ -2,9 +2,10 @@
 # Verifies the ADDED "Restricted Deploy Account Supports Per-Application
 # Forced-Command Deploys" (7 scenarios) and "Host Authenticates to GHCR
 # for Application Image Pulls" (2 scenarios) requirements
-# (openspec/changes/add-per-app-deploy-keys/specs/iac-host-configuration/
-# spec.md). Each block is labeled with the scenario it covers. See
-# test-manifest.md for the full scenario-accounting table, including which
+# (openspec/specs/iac-host-configuration/spec.md,
+# from add-per-app-deploy-keys). Each block is labeled with the scenario it
+# covers. See that change's test-manifest.md for the full scenario-accounting
+# table, including which
 # parts of some scenarios are proxy coverage or deliberately left to
 # tasks.md's Rollout section's live/manual verification instead of
 # Molecule.
@@ -449,7 +450,7 @@
     # keyboard while editing them. An assignment is acceptable if its value
     # is an inline `!vault` value or a `lookup('env', ...)` expression;
     # anything else is a literal and fails.
-    # (openspec/changes/repair-ansible-test-harness, task 6.2.)
+    # (repair-ansible-test-harness, task 6.2.)
     - name: Find any ghcr_pull_token assignment whose value is a committed literal
       ansible.builtin.shell: |
         set -o pipefail
@@ -553,7 +554,7 @@
     # implementation can clear. Splitting the delimiter means the assembled
     # regex appears nowhere in the file, while still matching every real key:
     # an OpenSSH, RSA or PKCS#8 private key opens with exactly that line.
-    # (openspec/changes/repair-ansible-test-harness, task 6.1.)
+    # (repair-ansible-test-harness, task 6.1.)
     - name: Scan this role's committed files for embedded private-key material
       ansible.builtin.shell: |
         set -o pipefail

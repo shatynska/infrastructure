@@ -5,7 +5,7 @@ Provisions unprivileged, **interactive** operator accounts on the prod host
 normal shell, and membership of the `docker` group. Implements
 `iac-host-configuration`'s "Unprivileged Operator Accounts Support
 Interactive Host Inspection" requirement. See
-`openspec/changes/add-ops-account/design.md` for the full rationale.
+`add-ops-account`'s design.md for the full rationale.
 
 It exists because this host previously had exactly one interactive login —
 `root`. The `deploy` account is deliberately shell-less (every key on it
