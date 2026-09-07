@@ -169,8 +169,16 @@ more weight given the paragraph above. Its assertion is the same construct as
 `hardening`'s, over the same class of value, failing at the same point in the play
 — so a scenario would re-run a mechanism rather than reach a distinct behaviour,
 and task 4.2's regression check across the three existing scenarios establishes
-that the new assertion does not break the supplied case. That is the whole of the
-argument. It is deliberately *not* a cost argument: a
+that the new assertion does not break the supplied case.
+
+Be precise about what that leaves uncovered, because a later reader will
+otherwise over-read it. `.github/tests`' `TestRequiredRoleInputsAreAssertedBefore
+TheRoleActs` reads both role files statically, so a regression in the assertion's
+**shape** — a limb dropped, the assert no longer first, a default introduced — is
+caught for `deploy_user` as well as `hardening`. A regression in its **behaviour**
+— the assert made non-fatal, or a `fail_msg` that fails to render — is caught for
+`hardening` only, by its scenario. That residue is the accepted cost of the
+stopping point, not something the static tests close. It is deliberately *not* a cost argument: a
 failure-path scenario aborts on the role's first task, so its marginal cost is one
 container create/destroy cycle — `platform_data_volume`'s entire scenario runs in
 1m35s — and pleading CI time for something that cheap would be a bad reason

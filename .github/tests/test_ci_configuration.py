@@ -2506,8 +2506,6 @@ class TestDashboardBaseUrlIsNotALiteralAddress(unittest.TestCase):
         self.assertIsNotNone(dashboard_base_url_offence(path))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 # --------------------------------------------------------------------------
@@ -2562,6 +2560,27 @@ class TestRequiredRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
                     f"a task acting on the host now runs before {variable} is checked",
                 )
 
+    def test_no_role_dependency_runs_ahead_of_the_assertion(self) -> None:
+        """SPECIFIED -- the premise the test above rests on. "First task in the
+        file" only means "first thing that runs" while the role pulls in no
+        dependency: a meta/main.yml declaring `dependencies:` would run another
+        role, and its host-changing tasks, before the assert -- with every
+        other test here still green."""
+        for path, variable in REQUIRED_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                meta = ROOT / Path(path).parent.parent / "meta" / "main.yml"
+                if not meta.exists():
+                    continue
+                declared = (yaml.safe_load(meta.read_text(encoding="utf-8")) or {}).get(
+                    "dependencies"
+                )
+                self.assertFalse(
+                    declared,
+                    f"{meta} declares dependencies {declared!r}; those roles run "
+                    f"before the assertion guarding {variable}, so it is no longer "
+                    f"the first thing that acts on the host",
+                )
+
     def test_the_assertion_carries_every_limb(self) -> None:
         """SPECIFIED -- "rather than with an undefined-variable, index, or type
         error raised by a task that consumed it". Each missing limb readmits
@@ -2593,3 +2612,6 @@ class TestRequiredRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
                     f"{defaults_path} now defines {variable}; the assertion in {path} "
                     f"would pass on the default rather than on a supplied value",
                 )
+
+if __name__ == "__main__":
+    unittest.main()

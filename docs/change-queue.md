@@ -93,8 +93,10 @@ policy decision about the host rather than a defect.**
 `fix-volume-discovery-and-consistency` made `platform_data_volume`'s device
 discovery deterministic: where more than one `/dev/disk/by-id/scsi-0HC_Volume_*`
 device is attached, it now sorts and takes the first instead of taking whatever
-`find` returned first. That closes the nondeterminism, and a Molecule scenario
-(`multiple-devices-discoverable`) holds it closed under both creation orders.
+`find` returned first. That closes the nondeterminism, and a PAIR of Molecule scenarios holds it
+closed: `multiple-devices-discoverable` and `multiple-devices-reverse-order`, one per
+directory-read arrangement. Either alone is weaker than it looks — the first
+catches a role selecting `files[0]`, the second one selecting `files | last`.
 
 What it does **not** decide is whether a deterministic pick is the right
 behaviour at all. The alternative — fail when discovery matches more than one

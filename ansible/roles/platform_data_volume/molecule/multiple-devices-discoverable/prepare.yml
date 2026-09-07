@@ -133,6 +133,31 @@
       loop_control:
         label: "{{ item.item.device }}"
 
+    # Detach before associating, unconditionally. A loop association is
+    # kernel-global and outlives the container, so "associate only if not
+    # already associated" silently inherits whatever a previous run -- or,
+    # worse, the SIBLING ARM running earlier in the same `molecule test --all`
+    # -- left attached to this minor. That device already carries a
+    # filesystem, which quietly falsifies this fixture's "both devices are
+    # deliberately left UNFORMATTED" invariant for the second arm to run.
+    # Observed on 2026-09-07: after a full run, `losetup -a` still showed
+    # /dev/loop88 and /dev/loop89 attached to the previous run's images.
+    #
+    # Detaching first also fixes a subtler staleness: the backing file path is
+    # reused across runs, so an association held from a previous run points at
+    # the OLD inode while this container's file is a freshly truncated one.
+    - name: Detach each fixed loop device from anything a previous run or sibling arm left attached
+      ansible.builtin.command: losetup -d {{ item.device }}
+      loop: "{{ platform_data_volume_fixture_devices }}"
+      loop_control:
+        label: "{{ item.device }}"
+      register: platform_data_volume_fixture_detach
+      # rc 1 is the ordinary "not currently associated" case, which is not a
+      # failure -- this task only has to guarantee the device is free
+      # afterwards, not that it was busy before.
+      failed_when: false
+      changed_when: platform_data_volume_fixture_detach.rc == 0
+
     - name: Check whether each fixed loop device is already associated with a backing file
       ansible.builtin.command: losetup {{ item.device }}
       register: platform_data_volume_fixture_associations

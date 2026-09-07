@@ -23,8 +23,10 @@ needs maintenance, not restructuring — not because they share a cause.
 - Make the selection deterministic when more than one matching device is
   attached. `find` guarantees no ordering; today a second volume would make the
   pick nondeterministic and silent.
-- Add two Molecule scenarios: one for the empty-discovery path, one for the
-  multi-device path. The `default` scenario supplies `platform_data_volume_device`
+- Add three Molecule scenarios: one for the empty-discovery path, and two for
+  the multi-device path — one per directory-read arrangement, because a single
+  arrangement catches a role selecting `files[0]` but not one selecting
+  `files | last`, and the requirement forbids order-dependence, not one index. The `default` scenario supplies `platform_data_volume_device`
   explicitly and never exercises discovery at all, so nothing in the suite has
   ever run the block being fixed — and without the second, a later revert to
   `files[0]` would pass every scenario there is.
@@ -98,6 +100,8 @@ None.
 
 - `ansible/roles/platform_data_volume/tasks/main.yml` — the discovery block.
 - `ansible/roles/platform_data_volume/molecule/` — three new scenarios.
+- `ansible/roles/platform_data_volume/README.md` — its "Device discovery"
+  section described the behaviour this change replaces.
 - `ansible/roles/hardening/tasks/main.yml` — one added assertion.
 - `ansible/roles/hardening/defaults/main.yml` — the comment that records why there
   is no default.
