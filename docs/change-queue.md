@@ -113,6 +113,42 @@ already considered and rejected, so this is not a free choice either.
 Today the question is academic — prod has one volume attached — which is why it
 is queued rather than opened.
 
+## 3b. report-an-absent-tailscale-auth-key
+
+**Not blocked on another change; recorded because doing it well is a larger
+job than it looks, and doing it badly breaks the host's reachability.**
+
+`fix-volume-discovery-and-consistency` added the requirement *A Role's Absent
+Required Input Is Reported by Name* (`iac-host-configuration`) and satisfied it
+for `hardening_ssh_allowed_cidrs` and `deploy_apps`. That requirement is
+deliberately scoped to inputs a role consumes on **every** run, and this entry
+is the class it excludes.
+
+`ansible/roles/tailscale/defaults/main.yml` documents `tailscale_auth_key` in
+almost the same words as the two variables that were fixed, which is what makes
+this look like an oversight rather than a decision. It is not. The key is
+consumed only inside `Bring the host onto the tailnet`, guarded by a `when:`
+that skips when the host is already on the tailnet — so a re-converge of the
+prod host, the common case, never evaluates it and does not need it supplied.
+An unconditional assertion would start demanding it on every run and break a
+working path.
+
+Three things make this its own change rather than a fold-in:
+
+- The diagnostic has to fire under the **same** condition as the join, which
+  means naming that four-limb condition once instead of restating it. Its
+  `POLARITY` comment warns that reading it the wrong way silently stops a host
+  joining the tailnet — the mechanism the deploy pipeline depends on to reach
+  the host at all.
+- `tailscale` carries **no Molecule scenario**, so there is nothing to regress
+  against. Any change here should bring the role's first scenario with it.
+- The failure is currently *censored*: the consuming task sets `no_log: true`,
+  so an absent key surfaces as a redacted error rather than a named one. That
+  is worth fixing on its own merits and is invisible from the outside.
+
+Recorded by `fix-volume-discovery-and-consistency`, whose `design.md`
+Decision 3a carries the full reasoning.
+
 ## 4. promote-molecule-to-a-required-check
 
 **Reading the run log: `molecule test --all` stops at the first failing

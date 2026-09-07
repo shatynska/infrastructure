@@ -18,7 +18,8 @@ embedded JSON. Editing dashboard JSON inside a YAML `configs:` block inside a
 Compose file is genuinely unpleasant, and nothing validates that JSON.
 
 It stays one file because of a deliberate security control, not inertia.
-`deploy-receive` (`ansible/roles/deploy_user/tasks/main.yml:73-85`) extracts a
+`deploy-receive` (the `Install the deploy-receive script` task in
+`ansible/roles/deploy_user/tasks/main.yml`) extracts a
 **fixed, explicit two-member list** — `docker-compose.yml` and `.env` — from the
 tar it receives. GNU tar with named members extracts only those names and
 ignores everything else the archive contains. That is what bounds what a

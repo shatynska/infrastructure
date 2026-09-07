@@ -87,6 +87,18 @@
         if platform_data_volume_fixture_reverse_order
         else [platform_data_volume_fixture_first, platform_data_volume_fixture_second]
       }}
+    # Which link this arm needs a bare directory read to hand back FIRST.
+    # The default arm wants the loser there, so `files[0]` and a sorted pick
+    # disagree and the scenario can discriminate; the reverse arm wants the
+    # winner there, the arrangement under which an unsorted role would pass
+    # by luck, so that asserting the same selection establishes determinism.
+    # Achieved by observation below, not by assuming a readdir order.
+    platform_data_volume_fixture_wanted_readdir_first: >-
+      {{
+        platform_data_volume_fixture_first.link
+        if platform_data_volume_fixture_reverse_order
+        else platform_data_volume_fixture_second.link
+      }}
   tasks:
     - name: Refresh the apt cache and install fixture-only loop/filesystem tooling
       ansible.builtin.apt:
@@ -164,6 +176,74 @@
       loop: "{{ platform_data_volume_fixture_link_order }}"
       loop_control:
         label: "{{ item.link }}"
+
+    # SELF-ORIENTING, because a creation order is not a readdir order.
+    #
+    # The arrangement above assumes tmpfs hands back the LAST-created entry
+    # first, which is true of `dcache_readdir` (measured on this machine's
+    # 6.6 kernel) and NOT true of the `libfs` stable-offset implementation
+    # tmpfs moved to in later kernels, which returns creation order. CI runs
+    # on `ubuntu-latest`, whose kernel is not this one, so an assumption
+    # about readdir order is an assumption about a machine this fixture has
+    # never run on.
+    #
+    # So the intended arrangement is not assumed -- it is observed and then
+    # corrected. Read the directory with the very module the role's own
+    # discovery uses, and if the entry that came back first is not the one
+    # this arm wants there, re-create the links in the opposite order. On a
+    # kernel that already gives the wanted arrangement this is a no-op.
+    #
+    # What each arm wants differs, and both are meaningful:
+    #   default arm  -- readdir-first must NOT be the lexicographic winner,
+    #                   so that `files[0]` and a sorted pick disagree and the
+    #                   scenario can tell them apart at all.
+    #   reverse arm  -- readdir-first IS the lexicographic winner, the
+    #                   arrangement under which an unsorted role passes by
+    #                   luck. Asserting the same selection here is what makes
+    #                   the determinism claim (tasks.md 2.5b) rather than a
+    #                   single-order observation.
+    - name: Read the by-id directory in the order the role's own discovery returns it
+      ansible.builtin.find:
+        paths: /dev/disk/by-id
+        patterns: "scsi-0HC_Volume_*"
+        file_type: any
+      register: platform_data_volume_fixture_readdir
+
+    # Removal first, and it is not optional. `file: state=link force=true`
+    # over an existing link with the same target leaves the dentry in place
+    # -- it reports `changed` while the directory order is untouched, so a
+    # correction built on it silently does nothing. Verified by forcing this
+    # path on 2026-09-07: the task reported changed and the order assertion
+    # still failed. Only unlinking and re-creating moves an entry.
+    - name: Decide whether this kernel's ordering needs correcting
+      ansible.builtin.set_fact:
+        platform_data_volume_fixture_needs_reorder: >-
+          {{
+            (platform_data_volume_fixture_readdir.files
+             | map(attribute='path') | map('basename') | first)
+            != platform_data_volume_fixture_wanted_readdir_first
+          }}
+
+    - name: Unlink both by-id entries so they can be re-created in the opposite order
+      ansible.builtin.file:
+        path: /dev/disk/by-id/{{ item.link }}
+        state: absent
+      loop: "{{ platform_data_volume_fixture_link_order }}"
+      loop_control:
+        label: "{{ item.link }}"
+      when: platform_data_volume_fixture_needs_reorder
+
+    - name: Re-create the links in the opposite order if this kernel ordered them the other way
+      ansible.builtin.file:
+        src: "{{ item.device }}"
+        dest: /dev/disk/by-id/{{ item.link }}
+        state: link
+        force: true
+        follow: false
+      loop: "{{ platform_data_volume_fixture_link_order | reverse | list }}"
+      loop_control:
+        label: "{{ item.link }}"
+      when: platform_data_volume_fixture_needs_reorder
 
     - name: Record the fixture's creation order and expected selection for the run log
       ansible.builtin.debug:

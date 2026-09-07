@@ -23,6 +23,7 @@
       - hardening_ssh_allowed_cidrs is defined
       - hardening_ssh_allowed_cidrs is sequence
       - hardening_ssh_allowed_cidrs is not string
+      - hardening_ssh_allowed_cidrs is not mapping
     fail_msg: >-
       hardening_ssh_allowed_cidrs was not supplied, or is not a list. This
       role has no default for it and there is no safe default source CIDR for

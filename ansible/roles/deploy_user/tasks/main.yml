@@ -30,6 +30,7 @@
       - deploy_apps is defined
       - deploy_apps is sequence
       - deploy_apps is not string
+      - deploy_apps is not mapping
     fail_msg: >-
       deploy_apps was not supplied, or is not a list. This role has no default
       for it -- there is no safe default set of applications permitted to
