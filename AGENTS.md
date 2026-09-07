@@ -147,7 +147,7 @@ These are specific to this repository, not part of the generated workflow block 
 
 There is no traditional unit-test layer for the Terraform code yet. Verification is static analysis (`terraform fmt`, `terraform validate`, `tflint`, Trivy, `gitleaks`) plus mandatory human review of an exact `terraform plan`.
 
-This project has **three** test commands, and a change may owe tests under any of them. The independent-test-authoring step in the workflow above must be dispatched with the pair that fits what the change touches — a dispatch carrying only the Terraform glob cannot place a test for anything else, and a test author who cannot place a file will report the gap rather than inventing a destination:
+This project has **three** test commands, and a change may owe tests under any of them. The independent-test-authoring step in the workflow above must be dispatched with the row that fits what the change touches — a dispatch carrying only the Terraform glob cannot place a test for anything else, and a test author who cannot place a file will report the gap rather than inventing a destination:
 
 | Subject | Test command | Test-path glob |
 |---|---|---|

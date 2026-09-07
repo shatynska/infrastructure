@@ -209,21 +209,21 @@
         file_type: any
       register: platform_data_volume_fixture_readdir
 
+    - name: Decide whether this kernel's ordering needs correcting
+      ansible.builtin.set_fact:
+        platform_data_volume_fixture_needs_reorder: >-
+          {{
+            (platform_data_volume_fixture_readdir.files
+             | map(attribute='path') | map('basename') | first | default(''))
+            != platform_data_volume_fixture_wanted_readdir_first
+          }}
+
     # Removal first, and it is not optional. `file: state=link force=true`
     # over an existing link with the same target leaves the dentry in place
     # -- it reports `changed` while the directory order is untouched, so a
     # correction built on it silently does nothing. Verified by forcing this
     # path on 2026-09-07: the task reported changed and the order assertion
     # still failed. Only unlinking and re-creating moves an entry.
-    - name: Decide whether this kernel's ordering needs correcting
-      ansible.builtin.set_fact:
-        platform_data_volume_fixture_needs_reorder: >-
-          {{
-            (platform_data_volume_fixture_readdir.files
-             | map(attribute='path') | map('basename') | first)
-            != platform_data_volume_fixture_wanted_readdir_first
-          }}
-
     - name: Unlink both by-id entries so they can be re-created in the opposite order
       ansible.builtin.file:
         path: /dev/disk/by-id/{{ item.link }}

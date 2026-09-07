@@ -149,6 +149,50 @@ Three things make this its own change rather than a fold-in:
 Recorded by `fix-volume-discovery-and-consistency`, whose `design.md`
 Decision 3a carries the full reasoning.
 
+## 3c. decide-whether-required-input-checks-belong-to-the-play
+
+**Not blocked; recorded because it is a question about the playbook, not a
+defect in either role.**
+
+`fix-volume-discovery-and-consistency` gave `hardening` and `deploy_user` an
+assertion that fires before either role changes the host, satisfying
+`iac-host-configuration`'s *A Role's Absent Required Input Is Reported by Name*
+at **role** scope, which is the scope its Molecule scenarios verify.
+
+At **play** scope the guarantee is weaker, and the change's artifacts do not say
+so. `ansible/playbooks/host-baseline.yml` runs `docker`, `hardening`,
+`tailscale`, `deploy_user`, `ops_user`, `platform_data_volume` in that order.
+Against a host whose `group_vars` omits `deploy_apps`, a real run installs and
+starts Docker, runs the whole of `hardening` including `Enable UFW`, and joins
+the host to the tailnet before `deploy_user`'s assertion is reached. The
+requirement's wording — "before any task that acts on the host has changed it" —
+reads naturally as the play, and at that scope it is not met.
+
+The fix is not more per-role assertions: it is a `pre_tasks` block on the play,
+or a validation role placed first, checking every required input of every role
+the play is about to run. That is a different shape of change from the one
+`fix-volume-discovery-and-consistency` proposed, which is why it is here.
+
+Worth deciding explicitly rather than leaving the two readings ambiguous.
+
+## 3d. assert-the-shape-of-required-input-elements
+
+**Not blocked; small, and deliberately outside the requirement as written.**
+
+The assertions `fix-volume-discovery-and-consistency` added check the
+*container* — defined, a sequence, not a string, not a mapping — and nothing
+about the elements. So `deploy_apps: ["platform"]`, a list of strings rather
+than of `{name, public_key}` mappings, passes the assertion and then fails at
+`item.name` in `Render each application's sudoers.d NOPASSWD rule for
+app-deploy`, after the deploy group, the account and its `.ssh` directory
+already exist — the partial application the assertion exists to prevent.
+
+The requirement is scoped to an input that "was not supplied", and a
+wrongly-shaped one was supplied, so this sits just outside it rather than being
+a gap in it. Closing it means either widening the requirement to cover element
+shape or adding the check as a local nicety; that choice is the reason this is
+recorded rather than done.
+
 ## 4. promote-molecule-to-a-required-check
 
 **Reading the run log: `molecule test --all` stops at the first failing

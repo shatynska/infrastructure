@@ -97,7 +97,7 @@ None.
 **Code**
 
 - `ansible/roles/platform_data_volume/tasks/main.yml` — the discovery block.
-- `ansible/roles/platform_data_volume/molecule/` — two new scenarios.
+- `ansible/roles/platform_data_volume/molecule/` — three new scenarios.
 - `ansible/roles/hardening/tasks/main.yml` — one added assertion.
 - `ansible/roles/hardening/defaults/main.yml` — the comment that records why there
   is no default.
@@ -115,8 +115,11 @@ None.
   Decision 7.
 - `AGENTS.md` — the "Testing" section gains a Molecule row, so a test-authoring
   dispatch can place a role scenario without being told the pair by hand.
-- `docs/change-queue.md` — two entries recorded rather than folded in, and one
-  correction to an existing entry.
+- `docs/change-queue.md` — four entries recorded rather than folded in, a note
+  added to an existing entry, and one stale citation corrected.
+- `docs/deferred-work.md` — one stale citation corrected. It went stale
+  *because* of this change: the `deploy_apps` assertion shifted the lines it
+  cited, the same shift that was repaired in `docs/change-queue.md`.
 
 **Systems**
 

@@ -2508,3 +2508,88 @@ class TestDashboardBaseUrlIsNotALiteralAddress(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# iac-host-configuration / A Role's Absent Required Input Is Reported by Name
+# --------------------------------------------------------------------------
+
+
+REQUIRED_INPUT_ASSERTIONS = {
+    "ansible/roles/hardening/tasks/main.yml": "hardening_ssh_allowed_cidrs",
+    "ansible/roles/deploy_user/tasks/main.yml": "deploy_apps",
+}
+
+# Every limb the assertion needs, and why each is load-bearing. `is defined`
+# alone leaves the undefined case; `is sequence` alone accepts a string, which
+# Ansible then iterates character by character; `is not mapping` is the limb a
+# code review had to add, because a dict satisfies BOTH `is sequence` and
+# `is not string` and then dies in the consuming loop with "The `loop` value
+# must resolve to a 'list', not 'dict'" -- the type error the requirement's
+# "A required input is not supplied" scenario forbids.
+REQUIRED_INPUT_LIMBS = ("is defined", "is sequence", "is not string", "is not mapping")
+
+
+class TestRequiredRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
+    """ADDED requirement: A Role's Absent Required Input Is Reported by Name.
+
+    A static read, because the behavioural cover is partial by design: the
+    Molecule scenarios exercise the *absent* case only, so three of the four
+    limbs -- including the one added in response to a review finding -- are
+    asserted by nothing that runs. This class is what keeps a limb from being
+    dropped again silently.
+    """
+
+    def _tasks(self, relative_path):
+        parsed = yaml.safe_load((ROOT / relative_path).read_text(encoding="utf-8"))
+        self.assertIsInstance(
+            parsed, list, f"{relative_path} did not parse as a task list"
+        )
+        return parsed
+
+    def test_the_assertion_is_the_first_task_in_the_role(self) -> None:
+        """SPECIFIED -- scenario "The check precedes the tasks that consume the
+        input": the run SHALL fail "before any task that acts on the host has
+        changed it". At role scope that means literally first, since neither
+        role has a meta/main.yml to run anything ahead of it."""
+        for path, variable in REQUIRED_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                first = self._tasks(path)[0]
+                self.assertIn(
+                    "ansible.builtin.assert",
+                    first,
+                    f"{path}'s first task is {first.get('name')!r}, not an assert -- "
+                    f"a task acting on the host now runs before {variable} is checked",
+                )
+
+    def test_the_assertion_carries_every_limb(self) -> None:
+        """SPECIFIED -- "rather than with an undefined-variable, index, or type
+        error raised by a task that consumed it". Each missing limb readmits
+        exactly one such error."""
+        for path, variable in REQUIRED_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                that = self._tasks(path)[0]["ansible.builtin.assert"]["that"]
+                for limb in REQUIRED_INPUT_LIMBS:
+                    self.assertIn(
+                        f"{variable} {limb}",
+                        that,
+                        f"{path}'s assertion is missing `{variable} {limb}`; without "
+                        f"it a value reaches the consuming loop and fails there",
+                    )
+
+    def test_no_default_was_introduced_for_the_asserted_variable(self) -> None:
+        """SPECIFIED -- "SHALL NOT satisfy this obligation by adopting a default
+        value". A default would make the assertion pass while substituting a
+        wrong answer for a stated one, which is what its absence prevents."""
+        for path, variable in REQUIRED_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                defaults_path = Path(path).parent.parent / "defaults" / "main.yml"
+                defaults = yaml.safe_load(
+                    (ROOT / defaults_path).read_text(encoding="utf-8")
+                ) or {}
+                self.assertNotIn(
+                    variable,
+                    defaults,
+                    f"{defaults_path} now defines {variable}; the assertion in {path} "
+                    f"would pass on the default rather than on a supplied value",
+                )

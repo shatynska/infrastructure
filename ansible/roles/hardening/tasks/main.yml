@@ -9,9 +9,11 @@
 # has no default and no safe one (defaults/main.yml says why), and without
 # this it surfaced as `'hardening_ssh_allowed_cidrs' is undefined` from the
 # SSH rule's loop below -- by which point UFW is installed and its default
-# incoming policy is deny, leaving a host reachable only by SSH with no SSH
-# allow rule written yet. A refusal to proceed is the correct outcome, not a
-# partial application.
+# policy written to /etc/default/ufw, with no SSH rule and the firewall not
+# yet enabled. NOT a lockout: `Enable UFW` (state: enabled) runs after the
+# SSH allow loop, so an abort inside that loop leaves the firewall inactive.
+# What it leaves is a half-configured host, and a refusal to proceed is the
+# correct outcome instead.
 #
 # Definedness, deliberately NOT `| length > 0`: an empty list is a coherent,
 # stricter posture here, since the tailnet CGNAT rule further down admits SSH
