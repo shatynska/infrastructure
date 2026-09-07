@@ -15,6 +15,28 @@
 # validation-gated playbook run removes them (tasks.md 5.6), which is not
 # part of this role.
 
+# FIRST, before any task that changes the host -- the same obligation, and
+# the same reasoning, as the assertion at the top of ansible/roles/hardening.
+# deploy_apps has no default and no safe one (defaults/main.yml says why), and
+# without this it surfaced as `'deploy_apps' is undefined` from the /opt/<name>
+# loop below, after the deploy group, the account and its .ssh directory had
+# already been created.
+#
+# Definedness, deliberately NOT `| length > 0`: an empty list means no
+# application may deploy to this host, which is restrictive rather than wrong.
+- name: Fail loudly if the applications allowed to deploy were not supplied
+  ansible.builtin.assert:
+    that:
+      - deploy_apps is defined
+      - deploy_apps is sequence
+      - deploy_apps is not string
+      - deploy_apps is not mapping
+    fail_msg: >-
+      deploy_apps was not supplied, or is not a list. This role has no default
+      for it -- there is no safe default set of applications permitted to
+      deploy to this host. Set it in ansible/inventory/group_vars/prod.yml
+      (see this role's defaults/main.yml and README).
+
 - name: Create the deploy group
   ansible.builtin.group:
     name: deploy

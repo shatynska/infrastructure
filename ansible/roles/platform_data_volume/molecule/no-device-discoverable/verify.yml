@@ -1,0 +1,151 @@
+---
+# Verifies the outcome converge.yml recorded for a run with no device
+# supplied and nothing discoverable.
+#
+# What each assertion below establishes, and its provenance, is recorded in
+# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md. The
+# short form:
+#
+#   outcome == 'failed'            SPECIFIED -- "the run SHALL fail".
+#                                  On its own it establishes NOTHING here:
+#                                  the unfixed role also fails on this input,
+#                                  on `list object has no element 0`. Which
+#                                  is why it is never the last assertion.
+#   'assert' in failed_action      SPECIFIED -- "SHALL NOT fail instead on an
+#                                  error raised by indexing an empty
+#                                  discovery result". The failure has to come
+#                                  from the role's own device check, not from
+#                                  whichever expression happened to blow up
+#                                  first. A substring test, as
+#                                  ghcr-credential-rejected/verify.yml:56
+#                                  does, because a recorded action may be
+#                                  short (`assert`) or fully qualified
+#                                  (`ansible.builtin.assert`).
+#   message names the device       SPECIFIED -- "the diagnostic that names
+#                                  the missing device path".
+#   message names volume_enabled   The clause "and the attachment it depends
+#                                  on" is SPECIFIED; the choice of the token
+#                                  `volume_enabled` to stand for it is
+#                                  DERIVED, from tasks.md 2.3 and from the
+#                                  wording the role's existing fail_msg
+#                                  already uses.
+#   message names the discovery    SPECIFIED, for the "empty value ... is not
+#   pattern                        a missing input" scenario: it is the
+#                                  evidence that the role PROCEEDED to
+#                                  on-host discovery on an empty device path
+#                                  rather than reporting the input as
+#                                  missing.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_outcome_path: /var/tmp/molecule-no-device-discoverable-outcome.json
+  tasks:
+    - name: Read the outcome converge.yml recorded for the no-device run
+      ansible.builtin.slurp:
+        src: "{{ platform_data_volume_outcome_path }}"
+      register: platform_data_volume_no_device_outcome_raw
+
+    - name: Report the recorded outcome
+      ansible.builtin.debug:
+        var: platform_data_volume_no_device_outcome_raw.content | b64decode | from_json
+
+    - name: Assert the run failed rather than converging without a device
+      vars:
+        no_device_outcome: "{{ platform_data_volume_no_device_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - no_device_outcome.outcome == "failed"
+        fail_msg: >-
+          The platform_data_volume role converged on a host where no device
+          path was supplied and on-host discovery matched nothing. A host in
+          that state cannot be brought to the state the requirement
+          describes, so the run SHALL fail rather than converge -- the volume
+          is a stated dependency of the platform/ services that bind-mount
+          it. A guard widened past "did discovery find something", a literal
+          default device path, or an ignore_errors on the mount looks exactly
+          like this from the outside.
+        success_msg: >-
+          The run failed, as required. (Which failure it was is what the next
+          assertions decide -- on its own this establishes nothing, because
+          the unfixed role fails here too.)
+        quiet: true
+
+    - name: Assert the failure came from the role's own device check, not from indexing an empty discovery result
+      vars:
+        no_device_outcome: "{{ platform_data_volume_no_device_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'assert' in no_device_outcome.failed_action"
+        fail_msg: >-
+          The run failed, but not at the role's device check -- the failing
+          task was '{{ no_device_outcome.failed_task_name }}' (action
+          '{{ no_device_outcome.failed_action }}', message
+          '{{ no_device_outcome.failed_msg }}'). This is the assertion that
+          discriminates the fixed role from the unfixed one: an unfixed role
+          reaches `set_fact` with an empty discovery result and dies on
+          `list object has no element 0`, which names the expression that
+          failed rather than the decision the operator has to make. The
+          requirement forbids exactly that substitution.
+        success_msg: >-
+          The failure came from the role's own device check, not from
+          indexing an empty discovery result.
+        quiet: true
+
+    - name: Assert the failure was not an index error over the empty discovery result
+      vars:
+        no_device_outcome: "{{ platform_data_volume_no_device_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'no element' not in no_device_outcome.failed_msg"
+          - "'object has no attribute' not in no_device_outcome.failed_msg"
+        fail_msg: >-
+          The recorded failure message is an indexing or attribute error over
+          the discovery result: '{{ no_device_outcome.failed_msg }}'. Stated
+          separately from the task-identity assertion above so that the run
+          reports WHICH wrong failure occurred, rather than only that the
+          right one did not.
+        success_msg: >-
+          The failure was not an index error over the discovery result.
+        quiet: true
+
+    - name: Assert the diagnostic names the missing device path and the attachment it depends on
+      vars:
+        no_device_outcome: "{{ platform_data_volume_no_device_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'platform_data_volume_device' in no_device_outcome.failed_msg"
+          - "'volume_enabled' in no_device_outcome.failed_msg"
+        fail_msg: >-
+          The run failed at the device check, but its message does not name
+          both the missing device path and the attachment it depends on:
+          '{{ no_device_outcome.failed_msg }}'. An operator reading it has to
+          be told which input was not supplied and which toggle governs
+          whether the volume is attached at all -- that is the whole
+          difference between this diagnostic and the Jinja traceback it
+          replaces.
+        success_msg: >-
+          The diagnostic names the missing device path and the volume
+          attachment toggle.
+        quiet: true
+
+    - name: Assert the empty device value was treated as "discover it", not as a missing input
+      vars:
+        no_device_outcome: "{{ platform_data_volume_no_device_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'scsi-0HC_Volume_' in no_device_outcome.failed_msg"
+        fail_msg: >-
+          The diagnostic does not mention the on-host discovery this role
+          performs for an empty device path:
+          '{{ no_device_outcome.failed_msg }}'. The role's own contract
+          defines `""` as the signal to discover the device on the host
+          (defaults/main.yml), so an empty value is SUPPLIED, not missing:
+          the run must proceed to discovery and fail on what discovery found
+          -- never report the input as unsupplied, and never demand it via
+          `| mandatory` or an undefined default.
+        success_msg: >-
+          The empty device value was treated as the role's documented
+          "discover it on-host" signal: the run reached discovery and failed
+          on its result, not on the input being absent.
+        quiet: true

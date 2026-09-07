@@ -1,0 +1,285 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing
+# here sets up the thing under test (the role's own discovery and mount).
+# It stands in for the one part of this scenario that cannot exist inside a
+# Molecule container: TWO attached Hetzner Volume block devices, each
+# reachable under the stable /dev/disk/by-id/scsi-0HC_Volume_* name the role
+# discovers by.
+#
+# Built the same way ansible/roles/platform_data_volume/molecule/default/
+# prepare.yml builds its single device -- the same package prerequisites, the
+# same truncate/mknod/losetup steps, and fixed minor numbers for the same
+# reason that file gives (prepare and converge are separate ansible-playbook
+# invocations and this project's ansible.cfg configures no fact caching, so a
+# dynamically chosen path would have no channel between them). 88 and 89 are
+# used rather than `default`'s 87 so the two scenarios cannot collide on a
+# loop association, which is kernel-global and outlives the container. The
+# same small, known flakiness `default` records applies here: if a CI host's
+# kernel already has /dev/loop88 or /dev/loop89 claimed by something else,
+# this FIXTURE is what needs a different number, not the role under test.
+#
+# THE NAMES AND THE CREATION ORDER ARE THE WHOLE POINT
+# ----------------------------------------------------
+# The delta scenario is about determinism, so the fixture has to be able to
+# tell a deterministic selection apart from one that merely happened to
+# match. It does that by making the lexicographically-FIRST link
+# (scsi-0HC_Volume_100000001) deliberately NOT the entry a bare directory
+# read returns first. Without that, a role selecting `files[0]` would pick
+# the same device a sorted role does, the assertion would pass by luck, and
+# the scenario would discriminate nothing.
+#
+# WHICH creation order produces that was MEASURED, not assumed. Observed
+# 2026-09-07 against this pinned image: /dev is a tmpfs whose readdir order
+# is the REVERSE of creation order -- the link created LAST is the one
+# `ansible.builtin.find` returns first. So the default order below creates
+# the lexicographic winner FIRST, leaving the loser as the entry a directory
+# read hands back first. The opposite arrangement was tried and confirmed to
+# make this scenario pass against the unfixed role, which is precisely the
+# by-luck pass it exists to avoid.
+#
+# That measurement is a property of a kernel and a filesystem, not a
+# contract, so verify.yml does not take it on trust: it re-reads the
+# directory with the very module the role's own discovery uses and asserts
+# that the intended order was actually achieved. If a future kernel orders
+# tmpfs entries differently, that assertion fails and says so, rather than
+# this scenario quietly ceasing to discriminate.
+#
+# MOLECULE_MULTI_DEVICE_REVERSE_ORDER creates the same two links in the
+# opposite order, which is how the determinism claim is checked rather than
+# asserted: a role that selects deterministically must mount the same device
+# under both orders, and a scenario that passed under only one establishes
+# nothing about determinism (tasks.md 2.5b). It is a fixture switch, never a
+# way to make a failing run pass -- verify.yml's selection assertion is
+# identical either way, and its order assertion simply expects the inverted
+# arrangement instead.
+#
+# Molecule runs `prepare` once, after `create` and before `converge`, and
+# does NOT re-run it for the `idempotence` action -- so this file can never
+# be the reason a second converge reports no changes.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_fixture_reverse_order: >-
+      {{ lookup('env', 'MOLECULE_MULTI_DEVICE_REVERSE_ORDER') | lower in ['1', 'true', 'yes', 'on'] }}
+    # The lexicographic winner, and therefore the device a deterministic
+    # selection must mount whatever order the links were created in.
+    platform_data_volume_fixture_first:
+      link: scsi-0HC_Volume_100000001
+      device: /dev/loop88
+      backing: /root/platform-data-volume-multi-a.img
+      minor: 88
+    platform_data_volume_fixture_second:
+      link: scsi-0HC_Volume_200000002
+      device: /dev/loop89
+      backing: /root/platform-data-volume-multi-b.img
+      minor: 89
+    platform_data_volume_fixture_devices:
+      - "{{ platform_data_volume_fixture_first }}"
+      - "{{ platform_data_volume_fixture_second }}"
+    # Default: winner first, so the LOSER is what a directory read returns
+    # first on this filesystem. See the header -- this is the discriminating
+    # arrangement, and it is the reverse of what "create the loser first"
+    # intuition suggests.
+    platform_data_volume_fixture_link_order: >-
+      {{
+        [platform_data_volume_fixture_second, platform_data_volume_fixture_first]
+        if platform_data_volume_fixture_reverse_order
+        else [platform_data_volume_fixture_first, platform_data_volume_fixture_second]
+      }}
+    # Which link this arm needs a bare directory read to hand back FIRST.
+    # The default arm wants the loser there, so `files[0]` and a sorted pick
+    # disagree and the scenario can discriminate; the reverse arm wants the
+    # winner there, the arrangement under which an unsorted role would pass
+    # by luck, so that asserting the same selection establishes determinism.
+    # Achieved by observation below, not by assuming a readdir order.
+    platform_data_volume_fixture_wanted_readdir_first: >-
+      {{
+        platform_data_volume_fixture_first.link
+        if platform_data_volume_fixture_reverse_order
+        else platform_data_volume_fixture_second.link
+      }}
+  tasks:
+    - name: Refresh the apt cache and install fixture-only loop/filesystem tooling
+      ansible.builtin.apt:
+        name:
+          - util-linux
+          - e2fsprogs
+        state: present
+        update_cache: true
+        cache_valid_time: 0
+
+    - name: Create a sparse backing file per stand-in Hetzner Volume
+      ansible.builtin.command: truncate -s 512M {{ item.backing }}
+      args:
+        creates: "{{ item.backing }}"
+      loop: "{{ platform_data_volume_fixture_devices }}"
+      loop_control:
+        label: "{{ item.backing }}"
+
+    - name: Check whether each fixed loop device node already exists
+      ansible.builtin.stat:
+        path: "{{ item.device }}"
+      loop: "{{ platform_data_volume_fixture_devices }}"
+      loop_control:
+        label: "{{ item.device }}"
+      register: platform_data_volume_fixture_nodes
+
+    - name: Create each fixed loop device node (major 7 = loop) if it does not already exist
+      ansible.builtin.command: mknod -m 0660 {{ item.item.device }} b 7 {{ item.item.minor }}
+      when: not item.stat.exists
+      changed_when: true
+      loop: "{{ platform_data_volume_fixture_nodes.results }}"
+      loop_control:
+        label: "{{ item.item.device }}"
+
+    # Detach before associating, unconditionally. A loop association is
+    # kernel-global and outlives the container, so "associate only if not
+    # already associated" silently inherits whatever a previous run -- or,
+    # worse, the SIBLING ARM running earlier in the same `molecule test --all`
+    # -- left attached to this minor. That device already carries a
+    # filesystem, which quietly falsifies this fixture's "both devices are
+    # deliberately left UNFORMATTED" invariant for the second arm to run.
+    # Observed on 2026-09-07: after a full run, `losetup -a` still showed
+    # /dev/loop88 and /dev/loop89 attached to the previous run's images.
+    #
+    # Detaching first also fixes a subtler staleness: the backing file path is
+    # reused across runs, so an association held from a previous run points at
+    # the OLD inode while this container's file is a freshly truncated one.
+    - name: Detach each fixed loop device from anything a previous run or sibling arm left attached
+      ansible.builtin.command: losetup -d {{ item.device }}
+      loop: "{{ platform_data_volume_fixture_devices }}"
+      loop_control:
+        label: "{{ item.device }}"
+      register: platform_data_volume_fixture_detach
+      # rc 1 is the ordinary "not currently associated" case, which is not a
+      # failure -- this task only has to guarantee the device is free
+      # afterwards, not that it was busy before.
+      failed_when: false
+      changed_when: platform_data_volume_fixture_detach.rc == 0
+
+    - name: Check whether each fixed loop device is already associated with a backing file
+      ansible.builtin.command: losetup {{ item.device }}
+      register: platform_data_volume_fixture_associations
+      changed_when: false
+      failed_when: false
+      loop: "{{ platform_data_volume_fixture_devices }}"
+      loop_control:
+        label: "{{ item.device }}"
+
+    - name: Associate each backing file with its fixed loop device
+      ansible.builtin.command: losetup {{ item.item.device }} {{ item.item.backing }}
+      when: item.rc != 0
+      changed_when: true
+      loop: "{{ platform_data_volume_fixture_associations.results }}"
+      loop_control:
+        label: "{{ item.item.device }}"
+
+    # The base image carries no /dev/disk at all (confirmed against the
+    # pinned image on 2026-09-07), which is why the empty-discovery case
+    # needs no fixture in the sibling scenario and why this one has to build
+    # the directory itself.
+    - name: Create the by-id directory the role discovers in
+      ansible.builtin.file:
+        path: /dev/disk/by-id
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # ORDERED, and the order is load-bearing -- see this file's header. The
+    # links are created in a single ordered loop so that the creation order,
+    # and therefore this directory's readdir order, is a property of the list
+    # above rather than of which task happened to be written first.
+    - name: Create the by-id symlinks in a deliberate order
+      ansible.builtin.file:
+        src: "{{ item.device }}"
+        dest: /dev/disk/by-id/{{ item.link }}
+        state: link
+        force: true
+        follow: false
+      loop: "{{ platform_data_volume_fixture_link_order }}"
+      loop_control:
+        label: "{{ item.link }}"
+
+    # SELF-ORIENTING, because a creation order is not a readdir order.
+    #
+    # The arrangement above assumes tmpfs hands back the LAST-created entry
+    # first, which is true of `dcache_readdir` (measured on this machine's
+    # 6.6 kernel) and NOT true of the `libfs` stable-offset implementation
+    # tmpfs moved to in later kernels, which returns creation order. CI runs
+    # on `ubuntu-latest`, whose kernel is not this one, so an assumption
+    # about readdir order is an assumption about a machine this fixture has
+    # never run on.
+    #
+    # So the intended arrangement is not assumed -- it is observed and then
+    # corrected. Read the directory with the very module the role's own
+    # discovery uses, and if the entry that came back first is not the one
+    # this arm wants there, re-create the links in the opposite order. On a
+    # kernel that already gives the wanted arrangement this is a no-op.
+    #
+    # What each arm wants differs, and both are meaningful:
+    #   default arm  -- readdir-first must NOT be the lexicographic winner,
+    #                   so that `files[0]` and a sorted pick disagree and the
+    #                   scenario can tell them apart at all.
+    #   reverse arm  -- readdir-first IS the lexicographic winner, the
+    #                   arrangement under which an unsorted role passes by
+    #                   luck. Asserting the same selection here is what makes
+    #                   the determinism claim (tasks.md 2.5b) rather than a
+    #                   single-order observation.
+    - name: Read the by-id directory in the order the role's own discovery returns it
+      ansible.builtin.find:
+        paths: /dev/disk/by-id
+        patterns: "scsi-0HC_Volume_*"
+        file_type: any
+      register: platform_data_volume_fixture_readdir
+
+    - name: Decide whether this kernel's ordering needs correcting
+      ansible.builtin.set_fact:
+        platform_data_volume_fixture_needs_reorder: >-
+          {{
+            (platform_data_volume_fixture_readdir.files
+             | map(attribute='path') | map('basename') | first | default(''))
+            != platform_data_volume_fixture_wanted_readdir_first
+          }}
+
+    # Removal first, and it is not optional. `file: state=link force=true`
+    # over an existing link with the same target leaves the dentry in place
+    # -- it reports `changed` while the directory order is untouched, so a
+    # correction built on it silently does nothing. Verified by forcing this
+    # path on 2026-09-07: the task reported changed and the order assertion
+    # still failed. Only unlinking and re-creating moves an entry.
+    - name: Unlink both by-id entries so they can be re-created in the opposite order
+      ansible.builtin.file:
+        path: /dev/disk/by-id/{{ item.link }}
+        state: absent
+      loop: "{{ platform_data_volume_fixture_link_order }}"
+      loop_control:
+        label: "{{ item.link }}"
+      when: platform_data_volume_fixture_needs_reorder
+
+    - name: Re-create the links in the opposite order if this kernel ordered them the other way
+      ansible.builtin.file:
+        src: "{{ item.device }}"
+        dest: /dev/disk/by-id/{{ item.link }}
+        state: link
+        force: true
+        follow: false
+      loop: "{{ platform_data_volume_fixture_link_order | reverse | list }}"
+      loop_control:
+        label: "{{ item.link }}"
+      when: platform_data_volume_fixture_needs_reorder
+
+    - name: Record the fixture's creation order and expected selection for the run log
+      ansible.builtin.debug:
+        msg: >-
+          Links created in order
+          {{ platform_data_volume_fixture_link_order | map(attribute='link') | list }};
+          a deterministic selection must mount
+          {{ platform_data_volume_fixture_first.link }}
+          ({{ platform_data_volume_fixture_first.device }}) either way.
+
+    # Both devices are deliberately left UNFORMATTED, for the same reason
+    # `default`'s fixture leaves its one device unformatted: formatting here
+    # would test the role against a case production never presents on first
+    # attach, and would mask a role that cannot format a raw device.

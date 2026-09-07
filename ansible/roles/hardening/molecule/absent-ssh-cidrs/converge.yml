@@ -1,0 +1,84 @@
+---
+# Converges the `hardening` role with `hardening_ssh_allowed_cidrs`
+# deliberately NOT supplied -- not set here, and the role's defaults/main.yml
+# deliberately gives it no default, because there is no safe default source
+# CIDR for SSH.
+#
+# Delta scenarios under test
+# (openspec/changes/fix-volume-discovery-and-consistency/specs/
+# iac-host-configuration/spec.md):
+#
+#   "A required input is not supplied"
+#     WHEN a role that consumes a caller-supplied input with no safe default
+#     on every run is run without that input having been supplied at all
+#     THEN the run SHALL fail with a message naming that input and how to
+#     supply it, rather than with an undefined-variable, index, or type error
+#     raised by a task that consumed it
+#
+#   "The check precedes the tasks that consume the input"
+#     WHEN such a role is run without its required input
+#     THEN the run SHALL fail before any task that acts on the host has
+#     changed it, so the failure is a refusal to proceed rather than a
+#     partial application
+#
+# WHY THE block/rescue AND THE MARKER FILE ARE MANDATORY, NOT STYLISTIC
+# ---------------------------------------------------------------------
+# Two reasons, both structural. Molecule runs `converge` and `verify` as two
+# separate ansible-playbook invocations, so no fact set here survives into
+# verify.yml -- a file on the instance is the channel. And without the
+# rescue, the converge exits non-zero, Molecule never runs `verify` at all,
+# and the scenario reports a bare converge failure instead of the assertion
+# it was written to make. This is the shape
+# ansible/roles/deploy_user/molecule/ghcr-credential-rejected/converge.yml
+# established; see its comment for the same reasoning stated there.
+#
+# The success branch is written too, and matters most: if the check is later
+# softened -- a default added to defaults/main.yml, the assert relaxed to a
+# warning, the variable given a literal fallback -- this converge SUCCEEDS,
+# records `succeeded`, and verify.yml fails on it. A scenario recording only
+# the failure branch would go green in exactly the case it exists to catch.
+#
+# `hardening_web_allowed_cidrs` is deliberately left alone: it HAS a
+# documented safe default of `[]` (closed), so it is not a member of the
+# class this requirement covers (design.md Decision 3).
+- name: Converge
+  hosts: all
+  become: true
+  tasks:
+    - name: Converge hardening with no SSH CIDR list supplied
+      block:
+        - name: Run the hardening role
+          ansible.builtin.include_role:
+            name: hardening
+
+        - name: Record that the role completed without failing
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-absent-ssh-cidrs-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'succeeded',
+                  'failed_task_name': '',
+                  'failed_action': '',
+                  'failed_msg': ''
+                } | to_nice_json
+              }}
+      rescue:
+        - name: Record the failure the unsupplied input produced
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-absent-ssh-cidrs-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_action': ansible_failed_task.action | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}

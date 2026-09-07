@@ -147,16 +147,21 @@ These are specific to this repository, not part of the generated workflow block 
 
 There is no traditional unit-test layer for the Terraform code yet. Verification is static analysis (`terraform fmt`, `terraform validate`, `tflint`, Trivy, `gitleaks`) plus mandatory human review of an exact `terraform plan`.
 
-This project has **two** test commands, and a change may owe tests under either. The independent-test-authoring step in the workflow above must be dispatched with the pair that fits what the change touches — a dispatch carrying only the Terraform glob cannot place a test for anything else, and a test author who cannot place a file will report the gap rather than inventing a destination:
+This project has **three** test commands, and a change may owe tests under any of them. The independent-test-authoring step in the workflow above must be dispatched with the row that fits what the change touches — a dispatch carrying only the Terraform glob cannot place a test for anything else, and a test author who cannot place a file will report the gap rather than inventing a destination:
 
 | Subject | Test command | Test-path glob |
 |---|---|---|
 | Terraform modules | `terraform test`, run from each module directory | `terraform/modules/<name>/tests/*.tftest.hcl` |
+| The behaviour of an Ansible role on a host — what it converges to, and how it fails | `molecule test --all`, run from each role directory | `ansible/roles/<name>/molecule/<scenario>/` |
 | CI configuration, and any committed file the pipeline reads or executes — workflows, `dependabot.yml`, `.pre-commit-config.yaml`, and static properties of what CI runs, such as the image pins in `ansible/roles/*/molecule/*/molecule.yml` | `python3 -m unittest discover --start-directory .github/tests`, run from the repository root | `.github/tests/*.py` |
 
-The second exists because `terraform test` can only exercise Terraform modules, so the guarantees this pipeline makes about its own configuration were unverifiable by anything the project had. Its dependencies are pinned in `.github/requirements-ci.txt`.
+The `.github/tests` suite exists because `terraform test` can only exercise Terraform modules, so the guarantees this pipeline makes about its own configuration were unverifiable by anything the project had. Its dependencies are pinned in `.github/requirements-ci.txt`.
 
 Its subject is deliberately wider than `.github/`: a property the pipeline depends on is in scope wherever the file holding it lives, so long as the assertion is a static read of a committed file. What is *not* in scope is anything needing a network call, a credential, a container runtime or a Terraform binary — those constraints are themselves asserted by tests in that suite, and a check that cannot be written within them belongs somewhere else.
+
+The Molecule row and the `.github/tests` row are near-opposites and are easy to confuse. Molecule asserts what a role *does* — it needs a container runtime and converges a real host, so it is the only place a role's failure path can be observed. `.github/tests` asserts what a committed file *says*, statically, and may not spawn a container at all. A property of a `molecule.yml` — its image pin — is therefore asserted by `.github/tests`, while the behaviour that scenario exercises is asserted by Molecule. Its toolchain is pinned in `ansible/requirements-test.txt`, and CI runs it as `ansible-verify.yml`.
+
+Two things about `molecule test --all` that a verification claim depends on. It runs a role's scenarios in sorted order and **stops at the first failure**, so every scenario sorting after a failing one is silently not executed and not listed in the run's SCENARIO RECAP — read the recap and confirm it names every scenario the role has, rather than reading the exit code alone. While a role is red, run its scenarios individually with `-s <name>`. Molecule's own `--continue-on-failure` is not available here: it applies only with `--workers`, and `--workers > 1` requires collection mode (`galaxy.yml`), which these plain roles are not.
 
 ### Development tooling
 

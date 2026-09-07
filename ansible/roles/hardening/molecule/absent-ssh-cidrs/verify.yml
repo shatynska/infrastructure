@@ -1,0 +1,168 @@
+---
+# Verifies the outcome converge.yml recorded for a run with
+# `hardening_ssh_allowed_cidrs` not supplied, and -- separately -- that the
+# host was not changed before the run stopped.
+#
+# Provenance of each assertion (full classification in
+# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md):
+#
+#   outcome == 'failed'             SPECIFIED -- "the run SHALL fail". On its
+#                                   own it establishes nothing: the unfixed
+#                                   role also fails on this input, inside the
+#                                   `Allow SSH (22) from the configured
+#                                   CIDRs` loop on an undefined variable.
+#                                   Which is why it is never the last
+#                                   assertion.
+#   'assert' in failed_action       SPECIFIED -- "rather than with an
+#                                   undefined-variable, index, or type error
+#                                   raised by a task that consumed it". A
+#                                   substring test, as
+#                                   ghcr-credential-rejected/verify.yml:56
+#                                   does, because a recorded action may be
+#                                   short (`assert`) or fully qualified.
+#   message names the variable      SPECIFIED -- "a message naming that
+#                                   input".
+#   message names group_vars/       The clause "and how to supply it" is
+#   prod.yml                        SPECIFIED; the choice of that particular
+#                                   path to satisfy it is DERIVED, from
+#                                   tasks.md 2.4/4.1.
+#   ufw is not installed            SPECIFIED -- "the run SHALL fail before
+#                                   any task that acts on the host has
+#                                   changed it". `Ensure UFW is installed` is
+#                                   the role's first host-changing task, so
+#                                   the package's absence is the observable
+#                                   form of "a refusal to proceed rather than
+#                                   a partial application". Not vacuous: the
+#                                   pinned base image ships no ufw (confirmed
+#                                   2026-09-07), and against the current tree
+#                                   this assertion FAILS, because the unfixed
+#                                   role installs it before reaching the loop
+#                                   that dies.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    hardening_outcome_path: /var/tmp/molecule-absent-ssh-cidrs-outcome.json
+  tasks:
+    - name: Read the outcome converge.yml recorded for the unsupplied-input run
+      ansible.builtin.slurp:
+        src: "{{ hardening_outcome_path }}"
+      register: hardening_absent_cidrs_outcome_raw
+
+    - name: Report the recorded outcome
+      ansible.builtin.debug:
+        var: hardening_absent_cidrs_outcome_raw.content | b64decode | from_json
+
+    - name: Assert the run failed rather than converging without an SSH CIDR list
+      vars:
+        absent_cidrs_outcome: "{{ hardening_absent_cidrs_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - absent_cidrs_outcome.outcome == "failed"
+        fail_msg: >-
+          The hardening role converged without hardening_ssh_allowed_cidrs
+          having been supplied. The input has no safe default -- any literal
+          one silently substitutes a wrong source CIDR for a stated one --
+          so the role SHALL detect that it was not supplied and stop. A
+          default added to defaults/main.yml, or a `| default([])` on the
+          loop, looks exactly like this from the outside.
+        success_msg: >-
+          The run failed, as required. (Which failure it was is what the next
+          assertions decide -- on its own this establishes nothing, because
+          the unfixed role fails here too.)
+        quiet: true
+
+    - name: Assert the failure came from an explicit check, not from a task that consumed the variable
+      vars:
+        absent_cidrs_outcome: "{{ hardening_absent_cidrs_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'assert' in absent_cidrs_outcome.failed_action"
+        fail_msg: >-
+          The run failed, but not at an explicit check -- the failing task
+          was '{{ absent_cidrs_outcome.failed_task_name }}' (action
+          '{{ absent_cidrs_outcome.failed_action }}', message
+          '{{ absent_cidrs_outcome.failed_msg }}'). This is the assertion
+          that discriminates the fixed role from the unfixed one: an unfixed
+          role reaches the `Allow SSH (22) from the configured CIDRs` loop
+          and dies on an undefined variable, which names the expression that
+          failed rather than the decision the operator has to make, and is
+          indistinguishable from a defect in the role itself. The requirement
+          forbids exactly that substitution.
+        success_msg: >-
+          The failure came from an explicit check rather than from a task
+          that consumed the variable.
+        quiet: true
+
+    - name: Assert the failure was not an undefined-variable error raised by a consuming task
+      vars:
+        absent_cidrs_outcome: "{{ hardening_absent_cidrs_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'undefined variable' not in absent_cidrs_outcome.failed_msg | lower"
+        fail_msg: >-
+          The recorded failure message is an undefined-variable error:
+          '{{ absent_cidrs_outcome.failed_msg }}'. Stated separately from the
+          task-identity assertion above so that the run reports WHICH wrong
+          failure occurred, rather than only that the right one did not.
+        success_msg: >-
+          The failure was not an undefined-variable error.
+        quiet: true
+
+    - name: Assert the diagnostic names the input and where it is expected to be set
+      vars:
+        absent_cidrs_outcome: "{{ hardening_absent_cidrs_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'hardening_ssh_allowed_cidrs' in absent_cidrs_outcome.failed_msg"
+          - "'group_vars/prod.yml' in absent_cidrs_outcome.failed_msg"
+        fail_msg: >-
+          The run failed at a check, but its message does not name both the
+          input and where it is expected to be set:
+          '{{ absent_cidrs_outcome.failed_msg }}'. An operator reading it has
+          to be told which input was not supplied and how to supply it --
+          that is the whole difference between this diagnostic and the
+          undefined-variable error it replaces.
+        success_msg: >-
+          The diagnostic names hardening_ssh_allowed_cidrs and the inventory
+          file it is expected to be set in.
+        quiet: true
+
+    # ============================================================
+    # "The check precedes the tasks that consume the input": a refusal to
+    # proceed, not a partial application.
+    # ============================================================
+    - name: Gather the instance's installed packages
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: Assert the package facts were actually gathered
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.packages is defined
+          - ansible_facts.packages | length > 0
+        fail_msg: >-
+          No package facts were gathered, so the "ufw is not installed"
+          assertion below would pass having observed nothing. This guard
+          exists because that assertion is a negative one: an empty fact set
+          satisfies it vacuously.
+        quiet: true
+
+    - name: Assert the host was not changed before the run stopped
+      ansible.builtin.assert:
+        that:
+          - "'ufw' not in ansible_facts.packages"
+        fail_msg: >-
+          ufw is installed on the instance after a converge that failed for
+          want of hardening_ssh_allowed_cidrs. `Ensure UFW is installed` is
+          the hardening role's first host-changing task, so its having run
+          means the check did not precede the tasks that consume the input:
+          the run left the host partially configured instead of refusing to
+          proceed. The check has to be the role's FIRST task, before
+          `Ensure UFW is installed`, not merely somewhere before the loop
+          that consumes the variable.
+        success_msg: >-
+          ufw is absent, so the run stopped before the role's first
+          host-changing task: a refusal to proceed, not a partial
+          application.
+        quiet: true

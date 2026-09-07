@@ -1,13 +1,3 @@
-# Comment-only change (no image/config changes) -- exercises
-# add-per-app-deploy-keys tasks.md 5.2's validation deploy: confirms
-# platform-deploy.yml's new tar-pipe delivery and deploy-receive's forced
-# command actually complete a real deploy end to end.
-#
-# Monitoring/alerting service image tags below were pinned without the
-# ability to query their registries from this environment (no network
-# access) -- confirm each resolves, or bump to whichever exact version
-# does, before relying on this file in CI or locally (same caveat this
-# project's ansible/requirements.yml already carries for its own pins).
 services:
   traefik:
     image: traefik:v3.7.10
@@ -72,7 +62,16 @@ services:
       start_period: 10s
 
   postgres:
-    image: postgres:16
+    # Exact release, not the `16` series tag: PostgreSQL's release version is
+    # MAJOR.MINOR, so `16` is repointed at every new release and the version
+    # actually running would be a function of when the last deploy happened
+    # rather than of what is committed. 16.15 is what this host is running --
+    # read from platform-postgres-1 on 2026-09-07, when `16` and `16.15` also
+    # resolved to the identical manifest -- so this pin is a restart on the
+    # same version, not an upgrade. (Docker Hub does rebuild an official tag
+    # in place for base-OS patches, so it is not guaranteed to be the identical
+    # image; the server version is what is pinned.)
+    image: postgres:16.15
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -247,7 +246,13 @@ services:
       # Never left at its image default -- see iac-platform-services's
       # "The dashboard interface has no default credential" scenario.
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      GF_SERVER_ROOT_URL: http://localhost:3000
+      # The base URL Grafana builds its own links and redirects from, so it
+      # must name the host, not whatever machine is viewing. Interpolates the
+      # SAME value the ports: publication below uses -- a literal tailnet IPv4
+      # rendered into .env by platform-deploy.yml, which fails the deploy on an
+      # empty or non-IPv4 result before writing it. `localhost` here meant every
+      # generated link resolved to the viewer's own loopback.
+      GF_SERVER_ROOT_URL: http://${GRAFANA_BIND_ADDRESS}:3000
     configs:
       - source: grafana_datasource
         target: /etc/grafana/provisioning/datasources/prometheus.yml

@@ -1,0 +1,34 @@
+---
+# Converges `platform_data_volume` against a host carrying TWO discoverable
+# candidate devices, supplying no `platform_data_volume_device` so the role's
+# own on-host discovery runs and has to choose between them.
+#
+# Delta scenario under test
+# (openspec/changes/fix-volume-discovery-and-consistency/specs/
+# iac-host-configuration/spec.md):
+#
+#   "More than one candidate device is attached"
+#     WHEN on-host discovery matches more than one attached volume device
+#     THEN the device selected SHALL be the same on every run against that
+#     same set of attached devices, rather than depending on the order the
+#     discovery happened to return them in
+#
+# No block/rescue here, unlike the two failure-path scenarios beside it: this
+# converge is expected to SUCCEED, and a failure of it is a failure of the
+# scenario. What was selected is read off the live mount table in verify.yml
+# rather than recorded here -- findmnt reports what the kernel actually
+# mounted, independent of any Ansible fact.
+#
+# The variable is deliberately not set anywhere in this play, so the value
+# the role sees is its own documented `""` default, which its
+# defaults/main.yml defines as the signal to discover the device on-host.
+# `platform_data_volume_subdirs` is likewise left at its `[]` default: this
+# scenario is about which device is chosen, and `default` already covers the
+# subdirectory layout.
+- name: Converge
+  hosts: all
+  become: true
+  tasks:
+    - name: Run the platform_data_volume role with two discoverable candidate devices
+      ansible.builtin.include_role:
+        name: platform_data_volume

@@ -1,0 +1,86 @@
+---
+# Molecule scenario for iac-host-configuration's ADDED "A Role's Absent
+# Required Input Is Reported by Name" requirement, scenarios "A required
+# input is not supplied" and "The check precedes the tasks that consume the
+# input"
+# (openspec/changes/fix-volume-discovery-and-consistency/specs/
+# iac-host-configuration/spec.md).
+#
+# Written BEFORE the implementation exists, from the delta spec alone. See
+# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md for the
+# scenario-to-test mapping, the recorded baseline, and the per-assertion
+# specified/derived classification.
+#
+# WHY THIS ROLE CARRIES THE REQUIREMENT'S ONLY DEMONSTRATION
+# ----------------------------------------------------------
+# design.md Decision 3b: `platform_data_volume`'s no-device scenario does NOT
+# also demonstrate this requirement -- its `""` is a supplied value the role
+# gives a meaning to, which the requirement's own empty-value clause
+# explicitly excludes. So the general required-input requirement rests on
+# this scenario alone, and `deploy_user` deliberately gets no scenario of its
+# own (same construct, same class of value, same point in the play; its
+# regression cover is that its three existing scenarios stay green).
+#
+# WHY `idempotence` AND `side_effect` ARE OMITTED FROM test_sequence
+# -----------------------------------------------------------------
+# Stated explicitly rather than inherited silently. `idempotence` is
+# meaningless here and would fail for a reason unrelated to this scenario:
+# this converge deliberately aborts the role before it configures anything,
+# so no task after the check ever runs on the first converge. Role
+# idempotence is covered by `default`, which converges the role to
+# completion. `side_effect` is omitted because this scenario has no
+# side_effect.yml. `prepare` is kept in the sequence although this scenario
+# has no prepare.yml -- Molecule reports it as a missing playbook and moves
+# on, and the step is left in place so a fixture added later needs no
+# sequence edit.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s `hardening-role-instance`: two
+  # scenarios of one role sharing an instance name collide on `create`
+  # whenever the sibling's container is still up.
+  - name: hardening-absent-ssh-cidrs-instance
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py asserts it. See
+    # ansible/roles/docker/molecule/default/molecule.yml for why a digest and
+    # for how to refresh it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml -- same
+    # reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - cleanup
+    - destroy
+
+verifier:
+  name: ansible

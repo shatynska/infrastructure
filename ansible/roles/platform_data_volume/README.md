@@ -30,10 +30,29 @@ concern, deployed by the separate `platform-deploy` GitHub Actions pipeline.
 `platform_data_volume_device` defaults to an empty string, which this role
 reads as "not explicitly supplied" — it then globs
 `/dev/disk/by-id/scsi-0HC_Volume_*` (Hetzner's stable, documented naming for
-an attached Volume) and uses whatever single device that resolves to. Pass
-`platform_data_volume_device` explicitly only to override this (as this
-role's own Molecule scenario does, pointing it at a fixture loop device
-standing in for the real attached volume).
+an attached Volume). Pass `platform_data_volume_device` explicitly only to
+override this (as the `default` Molecule scenario does, pointing it at a
+fixture loop device standing in for the real attached volume).
+
+Two properties of that discovery are specified requirements, not incidental:
+
+- **It is deterministic.** `find` returns directory-read order and guarantees
+  none, so the match is sorted and the lexicographically first device chosen.
+  With one volume attached — production today — sorted and unsorted agree, so
+  the difference only appears once a second volume is attached, which is
+  exactly when a silent, run-to-run-varying pick would be worst. Whether an
+  ambiguous match should instead be a hard failure is a policy question
+  recorded in `docs/change-queue.md`, not settled here.
+- **Finding nothing is reported, not raised.** A host with the volume disabled
+  in `terraform.tfvars`, or one where the volume is still attaching, matches
+  nothing — the ordinary state of such a host, not an exotic one. The run
+  fails with a message naming the missing device and the `volume_enabled`
+  toggle, rather than with a Jinja error about an empty list.
+
+Four Molecule scenarios cover this: `default` (device supplied explicitly),
+`no-device-discoverable`, and `multiple-devices-discoverable` plus
+`multiple-devices-reverse-order` — one per directory-read arrangement, since a
+single arrangement cannot tell a sorted selection from an order-dependent one.
 
 ## Variables
 

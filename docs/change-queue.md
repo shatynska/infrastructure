@@ -66,16 +66,16 @@ way to tell them apart:
 
 - **why the code is shaped this way** — irreplaceable, keep it. The tailnet
   polarity note (`ansible/roles/tailscale/tasks/main.yml:76-82`) and the GHCR
-  tolerated/not-tolerated block (`ansible/roles/deploy_user/tasks/main.yml:124-148`)
+  tolerated/not-tolerated block (the `ghcr_pull_*` comment block in
+  `ansible/roles/deploy_user/tasks/main.yml`)
   are load-bearing and must survive any pass.
 - **what a past change did** — git log and the archive already own this.
 - **a TODO whose condition has passed** — dead, and quietly misleading.
 
-Only the first kind survives archiving. Concrete instances of the other two:
+Only the first kind survives archiving. Concrete instances of the other two
+(the `platform/docker-compose.yml` header, formerly listed first, was removed
+by `fix-volume-discovery-and-consistency`, which was editing that file anyway):
 
-- `platform/docker-compose.yml:1-4` — a commit message stuck to the top of the
-  production stack definition ("Comment-only change … exercises
-  add-per-app-deploy-keys tasks.md 5.2's validation deploy").
 - `terraform/environments/prod/ssh_key.tf:20-28` — a `moved` block that
   documents its own removal condition ("Safe to delete once the next apply has
   run") from a change archived 2026-08-18.
@@ -85,7 +85,130 @@ Only the first kind survives archiving. Concrete instances of the other two:
 The tailscale role is 48 comment lines against 90 non-blank; this is a style
 question with a real maintenance cost, not a cosmetic one.
 
+## 3a. decide-multiple-volume-selection-policy
+
+**Not blocked on anything; recorded rather than folded in, because it is a
+policy decision about the host rather than a defect.**
+
+`fix-volume-discovery-and-consistency` made `platform_data_volume`'s device
+discovery deterministic: where more than one `/dev/disk/by-id/scsi-0HC_Volume_*`
+device is attached, it now sorts and takes the first instead of taking whatever
+`find` returned first. That closes the nondeterminism, and a PAIR of Molecule scenarios holds it
+closed: `multiple-devices-discoverable` and `multiple-devices-reverse-order`, one per
+directory-read arrangement. Either alone is weaker than it looks — the first
+catches a role selecting `files[0]`, the second one selecting `files | last`.
+
+What it does **not** decide is whether a deterministic pick is the right
+behaviour at all. The alternative — fail when discovery matches more than one
+device, on the grounds that an ambiguous pick is worse than a refusal — was
+considered in that change's `design.md` Decision 2 and rejected *for that
+change*, not on the merits: the role does not own what else may be attached to
+the host, and a second Hetzner Volume mounted for a reason unrelated to
+`platform/` would then break `host-baseline.yml` for every host.
+
+Deciding it needs an answer to a question that is the operator's: is a second
+attached volume something this project ever expects, and if so, should the role
+be told which one is `main-data` rather than inferring it? Note that being told
+is close to the `linux_device` hand-copying that `add-platform-monitoring`
+already considered and rejected, so this is not a free choice either.
+
+Today the question is academic — prod has one volume attached — which is why it
+is queued rather than opened.
+
+## 3b. report-an-absent-tailscale-auth-key
+
+**Not blocked on another change; recorded because doing it well is a larger
+job than it looks, and doing it badly breaks the host's reachability.**
+
+`fix-volume-discovery-and-consistency` added the requirement *A Role's Absent
+Required Input Is Reported by Name* (`iac-host-configuration`) and satisfied it
+for `hardening_ssh_allowed_cidrs` and `deploy_apps`. That requirement is
+deliberately scoped to inputs a role consumes on **every** run, and this entry
+is the class it excludes.
+
+`ansible/roles/tailscale/defaults/main.yml` documents `tailscale_auth_key` in
+almost the same words as the two variables that were fixed, which is what makes
+this look like an oversight rather than a decision. It is not. The key is
+consumed only inside `Bring the host onto the tailnet`, guarded by a `when:`
+that skips when the host is already on the tailnet — so a re-converge of the
+prod host, the common case, never evaluates it and does not need it supplied.
+An unconditional assertion would start demanding it on every run and break a
+working path.
+
+Three things make this its own change rather than a fold-in:
+
+- The diagnostic has to fire under the **same** condition as the join, which
+  means naming that four-limb condition once instead of restating it. Its
+  `POLARITY` comment warns that reading it the wrong way silently stops a host
+  joining the tailnet — the mechanism the deploy pipeline depends on to reach
+  the host at all.
+- `tailscale` carries **no Molecule scenario**, so there is nothing to regress
+  against. Any change here should bring the role's first scenario with it.
+- The failure is currently *censored*: the consuming task sets `no_log: true`,
+  so an absent key surfaces as a redacted error rather than a named one. That
+  is worth fixing on its own merits and is invisible from the outside.
+
+Recorded by `fix-volume-discovery-and-consistency`, whose `design.md`
+Decision 3a carries the full reasoning.
+
+## 3c. decide-whether-required-input-checks-belong-to-the-play
+
+**Not blocked; recorded because it is a question about the playbook, not a
+defect in either role.**
+
+`fix-volume-discovery-and-consistency` gave `hardening` and `deploy_user` an
+assertion that fires before either role changes the host, satisfying
+`iac-host-configuration`'s *A Role's Absent Required Input Is Reported by Name*
+at **role** scope, which is the scope its Molecule scenarios verify.
+
+At **play** scope the guarantee is weaker, and the change's artifacts do not say
+so. `ansible/playbooks/host-baseline.yml` runs `docker`, `hardening`,
+`tailscale`, `deploy_user`, `ops_user`, `platform_data_volume` in that order.
+Against a host whose `group_vars` omits `deploy_apps`, a real run installs and
+starts Docker, runs the whole of `hardening` including `Enable UFW`, and joins
+the host to the tailnet before `deploy_user`'s assertion is reached. The
+requirement's wording — "before any task that acts on the host has changed it" —
+reads naturally as the play, and at that scope it is not met.
+
+The fix is not more per-role assertions: it is a `pre_tasks` block on the play,
+or a validation role placed first, checking every required input of every role
+the play is about to run. That is a different shape of change from the one
+`fix-volume-discovery-and-consistency` proposed, which is why it is here.
+
+Worth deciding explicitly rather than leaving the two readings ambiguous.
+
+## 3d. assert-the-shape-of-required-input-elements
+
+**Not blocked; small, and deliberately outside the requirement as written.**
+
+The assertions `fix-volume-discovery-and-consistency` added check the
+*container* — defined, a sequence, not a string, not a mapping — and nothing
+about the elements. So `deploy_apps: ["platform"]`, a list of strings rather
+than of `{name, public_key}` mappings, passes the assertion and then fails at
+`item.name` in `Render each application's sudoers.d NOPASSWD rule for
+app-deploy`, after the deploy group, the account and its `.ssh` directory
+already exist — the partial application the assertion exists to prevent.
+
+The requirement is scoped to an input that "was not supplied", and a
+wrongly-shaped one was supplied, so this sits just outside it rather than being
+a gap in it. Closing it means either widening the requirement to cover element
+shape or adding the check as a local nicety; that choice is the reason this is
+recorded rather than done.
+
 ## 4. promote-molecule-to-a-required-check
+
+**Reading the run log: `molecule test --all` stops at the first failing
+scenario.** Every scenario sorting after a failing one is neither executed nor
+listed in that run's SCENARIO RECAP. This does *not* weaken the
+"consecutive green runs" evidence below — a green run did execute everything —
+but a **red** run establishes less than it appears to, which matters for the
+per-role outcomes recorded here. Molecule's own remedy is unavailable to this
+repository: `--continue-on-failure` applies only with `--workers`, and
+`--workers > 1` refuses with `only supported in collection mode (galaxy.yml
+required)` (observed 2026-09-07). The remedy that would work is a CI matrix over
+*scenarios* rather than roles — which also parallelises the suite's longest role,
+and is adjacent to the workflow reshaping point 2 below already names as the real
+remaining work. Recorded by `fix-volume-discovery-and-consistency`.
 
 **Blocked on evidence only.** `close-ci-verification-gaps` put the Molecule
 suite in CI as `ansible-verify.yml`, advisory: it is not a required status

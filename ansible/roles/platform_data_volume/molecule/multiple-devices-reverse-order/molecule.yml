@@ -1,0 +1,69 @@
+---
+# The second arm of the determinism claim, and the reason it is a scenario of
+# its own rather than an environment variable somebody remembers to set.
+#
+# `multiple-devices-discoverable` arranges the two by-id entries so a bare
+# directory read returns the LOSER first. That catches a role selecting
+# `files[0]` -- the defect this change fixes -- but it does not catch every
+# order-dependent selection: with readdir returning [loser, winner], a role
+# selecting `files | last` also lands on the winner and passes. Only the
+# opposite arrangement catches that one, and the spec scenario forbids the
+# selection "depending on the order the discovery happened to return them in",
+# not merely `files[0]`.
+#
+# The sibling scenario already accepts MOLECULE_MULTI_DEVICE_REVERSE_ORDER for
+# exactly this arrangement, but nothing in `.github/workflows/ansible-verify.yml`
+# sets it -- that workflow runs a bare `molecule test --all` per role and is
+# deliberately generic, so teaching it about one scenario's environment would
+# make it role-aware for no reason the other roles share. A scenario is
+# discovered automatically instead (`find ... -name molecule`, then
+# `molecule test --all`), so this arm runs in CI with no workflow edit at all.
+#
+# Everything but the instance name and that variable is the sibling's: its
+# prepare, converge and verify are imported rather than copied, so the two arms
+# cannot drift into asserting different things.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from every sibling: two scenarios of one role
+  # sharing an instance name collide on `create` whenever the other's
+  # container is still up.
+  - name: platform-data-volume-multi-device-reverse-instance
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py asserts it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    # `privileged: true` is load-bearing for the same reason it is in the
+    # sibling: mknod/losetup/mount need CAP_SYS_ADMIN and device-node access
+    # to stand in for attached Hetzner Volume block devices.
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml -- same
+    # reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+    # THE ONE THING THIS SCENARIO CHANGES. The imported fixture reads it and
+    # arranges the by-id entries so a directory read returns the winner first
+    # -- the arrangement under which an unsorted role would pass by luck.
+    # Asserting the same selection under both arrangements is what makes the
+    # determinism claim rather than a single-order observation.
+    MOLECULE_MULTI_DEVICE_REVERSE_ORDER: "true"
+
+verifier:
+  name: ansible

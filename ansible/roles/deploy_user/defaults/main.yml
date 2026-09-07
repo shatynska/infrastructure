@@ -3,6 +3,14 @@
 # safe default for a login credential, an application's own SSH public
 # key, or a registry token. All are supplied by the caller (Ansible Vault
 # or a run-time variable), per tasks.md 2.1/2.3.
+#
+# For deploy_apps that absence is enforced, not merely documented:
+# tasks/main.yml's first task, "Fail loudly if the applications allowed to
+# deploy were not supplied", asserts it before any task changes the host.
+# Keep the two in step -- adding a default here would silently defeat it.
+# The ghcr_pull_* pair is deliberately NOT asserted: iac-host-configuration's
+# "Host Authenticates to GHCR for Application Image Pulls" requires an absent
+# registry credential to be tolerated and the login skipped, not failed.
 
 # deploy_apps: list of {name, public_key} -- one entry per application
 # allowed to deploy to this host, `platform` included. Drives every

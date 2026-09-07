@@ -24,8 +24,26 @@
 
 - name: Resolve the discovered device path
   ansible.builtin.set_fact:
-    platform_data_volume_device: "{{ platform_data_volume_by_id.files[0].path }}"
-  when: platform_data_volume_device | length == 0
+    # Sorted, not `files[0]`: `find` returns directory-read order and
+    # guarantees none. With one volume attached the two agree, so the
+    # difference is invisible until a second one is -- at which point an
+    # unsorted pick is nondeterministic and silent. Sorting makes the
+    # selection the same on every run against the same set of devices.
+    platform_data_volume_device: "{{ platform_data_volume_by_id.files | map(attribute='path') | sort | first }}"
+  when:
+    - platform_data_volume_device | length == 0
+    # Guards the indexing above. Without it, an empty `find` result reaches
+    # `files | first` and the play aborts on a Jinja error BEFORE the assert
+    # below -- the assert written to diagnose precisely that case, which is
+    # what a host sees with volume_enabled false or a volume still
+    # attaching. The empty case must fall through to it instead.
+    #
+    # `| default([])` is load-bearing because the register can be WHOLLY
+    # UNDEFINED, not merely missing its `files` key: a run that excludes the
+    # discovery task by --tags/--skip-tags never registers it at all. It
+    # also covers the ordinary skipped case, where the caller supplied a
+    # device and the register holds no `files`.
+    - platform_data_volume_by_id.files | default([]) | length > 0
 
 - name: Fail loudly if no device path is available (neither supplied nor discoverable)
   ansible.builtin.assert:
