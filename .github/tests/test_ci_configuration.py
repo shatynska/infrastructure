@@ -3166,5 +3166,955 @@ class TestThePreArchiveCitationCheckGatesEveryPullRequest(unittest.TestCase):
             f"no step in pr-validation.yml runs the suite under {SUITE_MARKER}/",
         )
 
+
+# --------------------------------------------------------------------------
+# iac-cicd-pipeline / Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge; Required Status Checks Report on Every Pull
+# Request; Branch Protection on the Default Branch
+#
+# Derived from the delta specs of the OpenSpec change
+# `promote-molecule-to-a-required-check`, before any implementation of that
+# change existed. See that change's test-plan.md for the scenario-to-test
+# mapping, the baseline, the assertion classifications, and the scenarios no
+# test command in this repository can reach.
+#
+# NOTHING IN THIS SECTION ESTABLISHES THAT A STATUS CHECK CONTEXT IS
+# REGISTERED. Registering a context is repository settings rather than
+# repository content, and this suite makes no network call -- The
+# Continuous-Integration Configuration Is Itself Verified requires that, and
+# `TestTheSuiteNeedsNoPrivilegedResource` asserts it of this suite. Every
+# assertion below is a static read of a committed workflow file, or an
+# execution of a snippet taken out of one. Together they establish only that
+# the workflow is *shaped* so a context can be registered on it safely: no
+# workflow-level path filter, a literal job name to register, and a gate that
+# discriminates. Whether the operator registered it, whether a direct push to
+# `main` is rejected, and whether a red check blocks a merge are read from the
+# branch-protection API and from the forge during this change's ship stage, and
+# are not things a green run here has checked.
+#
+# The requirement name above does not appear in openspec/specs/ until this
+# change is archived. That bounded interval is recorded deliberately in this
+# change's design.md rather than being an oversight.
+# --------------------------------------------------------------------------
+
+# The status check contexts branch protection registers on `main`, each mapped
+# to the workflow that produces it. A third required check is then added here
+# as a name rather than as a test.
+REQUIRED_STATUS_CHECK_WORKFLOWS = {
+    "validate": PR_VALIDATION,
+    "ansible-verify": ANSIBLE_VERIFY,
+}
+
+# The context this change adds, and the job whose literal `name:` produces it.
+AGGREGATING_CONTEXT = "ansible-verify"
+
+
+def job_context_name(job_key: str, job: dict) -> str:
+    """The status check context a job produces: its `name:` where it declares
+    one, otherwise its key."""
+    name = job.get("name")
+    return str(name) if name else job_key
+
+
+def compact(value: object) -> str:
+    """An Actions expression with its whitespace removed, so
+    `${{ needs.discover.result }}` and `${{needs.discover.result}}` are matched
+    by the same substring."""
+    return re.sub(r"\s+", "", str(value))
+
+
+def require_external_tools(case: unittest.TestCase, tools, purpose: str) -> None:
+    """Precondition, not an assertion: refuse to read a subprocess's exit
+    status as evidence about a workflow snippet when the snippet could not run
+    at all.
+
+    Same skip-vs-fail handling as
+    `TestMoleculeDiscoveryAndScenarioCoverage._require_discovery_snippet_tools`,
+    for the same reason: outside CI a missing tool is a fact about the machine
+    and the test skips naming it, while under CI it fails instead, because a
+    silently skipped check on a runner is a required status check reporting
+    success having verified nothing.
+    """
+    missing = [tool for tool in tools if shutil.which(tool) is None]
+    if not missing:
+        return
+    reason = (
+        f"cannot {purpose}: it needs {', '.join(missing)}, absent on this machine, "
+        "so an exit status from it would say nothing about the workflow"
+    )
+    if os.environ.get("CI"):
+        case.fail(
+            f"{reason}. Running under CI, where skipping this test would report "
+            "success having verified nothing; install the tool on the runner."
+        )
+    case.skipTest(reason)
+
+
+def github_output_pairs(path: Path) -> dict:
+    """Parse a `$GITHUB_OUTPUT` file the way the runner does: `key=value`
+    lines, plus the heredoc form a multi-line value uses."""
+    pairs: dict = {}
+    lines = path.read_text(encoding="utf-8").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        heredoc = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*)<<(\S+)\s*$", line)
+        if heredoc:
+            key, delimiter = heredoc.groups()
+            body = []
+            index += 1
+            while index < len(lines) and lines[index].strip() != delimiter:
+                body.append(lines[index])
+                index += 1
+            pairs[key] = "\n".join(body)
+        elif "=" in line:
+            key, _, value = line.partition("=")
+            pairs[key.strip()] = value
+        index += 1
+    return pairs
+
+
+class MoleculeWorkflowShapeMixin:
+    """Locators shared by the classes below.
+
+    Each asserts rather than returning nothing, so a workflow that has not been
+    reshaped yet fails these tests for the reason the specification names
+    rather than erroring on a `None`.
+    """
+
+    def _workflow(self) -> dict:
+        return load_yaml(ANSIBLE_VERIFY)
+
+    def _job_named(self, workflow: dict, context: str):
+        matches = [
+            (key, job)
+            for key, job in jobs(workflow).items()
+            if job_context_name(key, job) == context
+        ]
+        self.assertEqual(
+            1,
+            len(matches),
+            f"ansible-verify.yml declares {len(matches)} jobs whose status check "
+            f"context is `{context}`; branch protection registers exactly one, and "
+            "the contexts this workflow declares are "
+            f"{sorted(job_context_name(k, j) for k, j in jobs(workflow).items())}",
+        )
+        return matches[0]
+
+    def _discovery_job(self, workflow: dict):
+        """The always-running job that enumerates roles: the one carrying a
+        step whose script reads `ansible/roles`."""
+        matches = [
+            (key, job)
+            for key, job in jobs(workflow).items()
+            if any(
+                re.search(r"ansible/roles", str(step.get("run", "")))
+                for step in (job.get("steps") or [])
+            )
+        ]
+        self.assertTrue(
+            matches,
+            "no job in ansible-verify.yml carries a step that discovers roles under "
+            "ansible/roles/",
+        )
+        return matches[0]
+
+    def _matrix_job(self, workflow: dict):
+        """The job whose name is generated from a matrix -- the one that must
+        never be the registered context."""
+        matches = [
+            (key, job)
+            for key, job in jobs(workflow).items()
+            if (job.get("strategy") or {}).get("matrix")
+        ]
+        self.assertTrue(
+            matches, "no job in ansible-verify.yml declares a `strategy.matrix`"
+        )
+        return matches[0]
+
+
+class TestEveryRequiredCheckIsShapedToBeRegistrable(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """MODIFIED requirements: Required Status Checks Report on Every Pull
+    Request; Branch Protection on the Default Branch.
+
+    Establishes the workflow-file half of both, and nothing else. It does NOT
+    establish that either context is registered in `main`'s branch protection,
+    that a direct push to `main` is rejected, or that a pull request with a
+    failing check is blocked from merging: those are repository settings and
+    merge outcomes, which this suite makes no network call to read. A green run
+    here means the workflows are shaped so those settings can be applied
+    safely, never that they were applied.
+    """
+
+    def test_no_required_check_workflow_declares_a_workflow_level_path_filter(self) -> None:
+        """SPECIFIED -- "That work MAY be path-filtered, but the filtering SHALL
+        occur *inside* an always-running job rather than via a workflow-level
+        `paths` or `paths-ignore` filter", and scenario "Documentation-only pull
+        request remains mergeable" in its workflow-file half. Both keys are
+        checked because the requirement forbids the mechanism rather than one
+        spelling of it, and every workflow behind a registered context is
+        checked because the requirement is now over each of them.
+
+        Says nothing about whether such a pull request is in fact mergeable:
+        that is a merge outcome, observed on the forge rather than here.
+        """
+        for context, path in sorted(REQUIRED_STATUS_CHECK_WORKFLOWS.items()):
+            on = triggers(load_yaml(path))
+            self.assertTrue(
+                on,
+                f"{path.name} declares no triggers at all, so this check over the "
+                f"context `{context}` would pass having read nothing",
+            )
+            for event, config in on.items():
+                if not isinstance(config, dict):
+                    continue
+                for key in ("paths", "paths-ignore"):
+                    self.assertNotIn(
+                        key,
+                        config,
+                        f"{path.name}'s `{event}` trigger declares `{key}:`, which "
+                        "leaves every non-matching pull request permanently pending "
+                        f"on the required context `{context}` and so unmergeable",
+                    )
+
+    def test_every_required_context_names_a_job_whose_name_is_a_literal(self) -> None:
+        """SPECIFIED -- scenario "Every registered context names a literal job":
+        "the job that context names SHALL carry a literal `name:`, containing no
+        GitHub Actions expression".
+
+        Establishes the workflow-file half only: that each named workflow
+        declares a job producing that context, by a literal. It does NOT
+        establish that the context is registered on `main` -- that half is read
+        from the protection API, not from this repository.
+        """
+        for context, path in sorted(REQUIRED_STATUS_CHECK_WORKFLOWS.items()):
+            workflow = load_yaml(path)
+            declared = {
+                job_context_name(key, job): job for key, job in jobs(workflow).items()
+            }
+            self.assertIn(
+                context,
+                sorted(declared),
+                f"{path.name} declares no job whose status check context is "
+                f"`{context}`, so registering that context would register a check "
+                f"that never reports; the workflow declares {sorted(declared)}",
+            )
+            self.assertNotIn(
+                "${{",
+                str(declared[context].get("name", context)),
+                f"{path.name}'s `{context}` job carries an Actions expression in its "
+                "`name:`, so the context it produces is generated rather than literal "
+                "and cannot be enumerated in branch protection in advance",
+            )
+
+    def test_the_generated_matrix_context_is_not_the_one_registered(self) -> None:
+        """SPECIFIED -- "Where a required check's work is performed by a job
+        whose name is generated rather than literal -- a matrix job, whose
+        context names vary with the matrix -- that job SHALL NOT be the
+        registered context".
+
+        Establishes that the matrix job's context differs from the registered
+        name. It does NOT establish which contexts branch protection holds.
+        """
+        workflow = self._workflow()
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        self.assertNotEqual(
+            AGGREGATING_CONTEXT,
+            job_context_name(matrix_key, matrix_job),
+            "the matrix job itself produces the context this change registers, so a "
+            "role added under ansible/roles/ would change which contexts report",
+        )
+        self.assertIn(
+            "${{",
+            str(matrix_job.get("name", matrix_key)),
+            "the matrix job's name is a literal, which means either it no longer "
+            "varies with the matrix or the matrix has moved to another job; re-read "
+            "which job produces which context before relying on the assertions about "
+            "the aggregating job below",
+        )
+
+
+class TestTheMoleculeWorkflowRunsOnPullRequestsAndOnDispatch(unittest.TestCase):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
+
+    def test_the_workflow_triggers_on_pull_requests_and_on_a_manual_dispatch(self) -> None:
+        """SPECIFIED for the `pull_request` limb -- "Every pull request that
+        changes files under `ansible/` SHALL trigger continuous-integration
+        checks over that configuration".
+
+        DERIVED for the `workflow_dispatch` limb: scenario "A manual run
+        verifies the whole suite" states what SHALL happen when the workflow is
+        started other than by a pull request, which presupposes such a trigger
+        without requiring this spelling of it. Reconsider that limb, do not
+        weaken it, if the manual path is provided by another event.
+        """
+        on = triggers(load_yaml(ANSIBLE_VERIFY))
+        self.assertIn(
+            "pull_request",
+            on,
+            "ansible-verify.yml no longer runs on pull requests, so the required "
+            f"context `{AGGREGATING_CONTEXT}` would never report on one",
+        )
+        self.assertIn(
+            "workflow_dispatch",
+            on,
+            "ansible-verify.yml declares no manual trigger, so the suite cannot be "
+            "run against the trunk, which is the run the scenario \"A manual run "
+            'verifies the whole suite" is about',
+        )
+
+
+class TestTheAggregatingJobConcludesOnTheSuitesBehalf(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Required Status Checks Report on Every Pull
+    Request.
+
+    Establishes the structure that lets a literal-named job report for a
+    generated-name matrix. It does NOT establish that this job is registered as
+    a required status check: that is repository settings, unreadable here.
+    """
+
+    def test_the_aggregating_job_depends_on_discovery_and_on_the_matrix(self) -> None:
+        """SPECIFIED -- "A job whose name is a literal SHALL depend on it, run
+        regardless of its outcome, and conclude on its behalf", and "An
+        aggregating job SHALL treat its own change-detection input as
+        trustworthy only where the job producing it concluded successfully",
+        which it cannot read at all without depending on that job."""
+        workflow = self._workflow()
+        _, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
+        discovery_key, _ = self._discovery_job(workflow)
+        matrix_key, _ = self._matrix_job(workflow)
+        declared = aggregating.get("needs") or []
+        declared = [declared] if isinstance(declared, str) else list(declared)
+        for required in (discovery_key, matrix_key):
+            self.assertIn(
+                required,
+                declared,
+                f"the `{AGGREGATING_CONTEXT}` job does not depend on `{required}`, so "
+                "it can neither read that job's result nor conclude on its behalf; it "
+                f"depends on {declared}",
+            )
+
+    def test_the_aggregating_job_runs_whatever_its_dependencies_concluded(self) -> None:
+        """SPECIFIED -- "run regardless of its outcome". A job left with the
+        default `success()` condition is itself skipped when a dependency fails
+        or is skipped, and a skipped job produces no context at all -- the same
+        permanent pending this requirement exists to prevent, reintroduced one
+        layer down."""
+        workflow = self._workflow()
+        _, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
+        self.assertIn(
+            "always()",
+            compact(aggregating.get("if", "")),
+            f"the `{AGGREGATING_CONTEXT}` job's condition is "
+            f"{aggregating.get('if')!r}; without `always()` it is skipped whenever a "
+            "dependency fails or is skipped, and then produces no context for branch "
+            "protection to read",
+        )
+
+
+class TestOnlyTheMoleculeMatrixIsGated(MoleculeWorkflowShapeMixin, unittest.TestCase):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
+
+    def test_the_matrix_job_is_conditioned_on_the_change_detection_output(self) -> None:
+        """SPECIFIED -- scenario "A pull request touching no Ansible file starts
+        no container": "the Molecule matrix SHALL be skipped rather than
+        executed". The condition reads an output of the discovery job because
+        that is where the requirement puts change detection -- "triggered by
+        change detection *inside* an always-running workflow rather than by a
+        workflow-level path filter"."""
+        workflow = self._workflow()
+        discovery_key, _ = self._discovery_job(workflow)
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        condition = compact(matrix_job.get("if", ""))
+        self.assertTrue(
+            condition,
+            f"the matrix job `{matrix_key}` carries no `if:`, so every pull request "
+            "starts the containers the suite runs in, including one that touches "
+            "nothing under ansible/",
+        )
+        self.assertIn(
+            f"needs.{discovery_key}.outputs.",
+            condition,
+            f"the matrix job's condition {matrix_job.get('if')!r} reads no output of "
+            f"the discovery job `{discovery_key}`, so whatever it is gated on is not "
+            "the change detection this requirement places inside that job",
+        )
+
+    def test_no_step_inside_the_matrix_job_carries_its_own_condition(self) -> None:
+        """SPECIFIED -- the same scenario, in the half a job-level assertion
+        alone would miss. A step-level condition leaves the job itself running:
+        it concludes success having executed nothing, and the aggregating job
+        then reads that as a genuine success rather than as a skip."""
+        workflow = self._workflow()
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        offenders = [
+            step_label(matrix_key, index, step)
+            for index, step in enumerate(matrix_job.get("steps") or [])
+            if step.get("if") is not None
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            "these steps inside the matrix job carry their own condition, which "
+            "leaves the job green having run nothing rather than skipping it: "
+            f"{offenders}",
+        )
+
+    def test_role_discovery_runs_whatever_a_pull_request_touched(self) -> None:
+        """SPECIFIED -- scenario "Role discovery runs even where the suite does
+        not": "role discovery SHALL still run, and where it finds no role its
+        failure SHALL fail the required status check". Checks the discovery step
+        and its job, because moving the condition to the job would leave a
+        step-level assertion green while reopening the hole."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        self.assertIsNone(
+            discovery_job.get("if"),
+            f"the discovery job `{discovery_key}` is conditioned on "
+            f"{discovery_job.get('if')!r}, so a repository state in which no role "
+            "carries a molecule/ directory would stop only the pull requests that "
+            "touch ansible/ -- the suite that gates every merge having silently "
+            "disappeared is not a fact only those pull requests should learn",
+        )
+        offenders = [
+            step_label(discovery_key, index, step)
+            for index, step in enumerate(discovery_job.get("steps") or [])
+            if step.get("if") is not None
+            and re.search(r"ansible/roles", str(step.get("run", "")))
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            f"these role-discovery steps carry an `if:`: {offenders}",
+        )
+
+
+class TestDiscoveryDeclaresTheLeastPrivilegeItNeeds(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge -- "Discovery SHALL declare the least
+    privilege its change detection needs, per the *Least-Privilege Workflow
+    Permissions* requirement, and SHALL receive no write scope"."""
+
+    WRITE_SCOPES = {"write", "write-all"}
+
+    def test_the_discovery_job_declares_the_read_scopes_its_change_detection_uses(self) -> None:
+        """SPECIFIED -- the sentence above. `pull-requests: read` is what
+        reading which files a pull request touched needs; `contents: read` is
+        asserted beside it because a job-level `permissions:` block replaces the
+        workflow-level one rather than adding to it, so a block naming only the
+        new scope silently strips the job's own checkout."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        declared = discovery_job.get("permissions")
+        self.assertIsInstance(
+            declared,
+            dict,
+            f"the discovery job `{discovery_key}` declares no job-level "
+            "`permissions:` block, so it inherits the workflow's `contents: read` "
+            "alone and its change detection has no scope to read a pull request with",
+        )
+        for scope in ("contents", "pull-requests"):
+            self.assertEqual(
+                "read",
+                str(declared.get(scope)),
+                "the discovery job's `permissions:` block declares "
+                f"`{scope}: {declared.get(scope)!r}`; a job-level block replaces the "
+                "workflow-level one, so both scopes are named here or the job loses "
+                "one of them, and neither may exceed read",
+            )
+
+    def test_no_job_in_the_molecule_workflow_receives_a_write_scope(self) -> None:
+        """SPECIFIED -- "SHALL receive no write scope: reading which files a
+        pull request touched is a read"."""
+        workflow = self._workflow()
+        offenders = []
+        for key, job in jobs(workflow).items():
+            declared = job.get("permissions")
+            if isinstance(declared, str):
+                if declared != "read-all":
+                    offenders.append(f"{key}: {declared}")
+                continue
+            for scope, level in (declared or {}).items():
+                if str(level) in self.WRITE_SCOPES:
+                    offenders.append(f"{key}: {scope}: {level}")
+        self.assertEqual(
+            [],
+            offenders,
+            f"these jobs in ansible-verify.yml receive a write scope: {offenders}",
+        )
+
+
+class GateRow:
+    """One row of the aggregating gate's decision table.
+
+    A row names one or more matrix results, exactly as the table's own cells do
+    -- `failure / cancelled` is a single cell there -- because the delta states
+    those two as separate scenarios and a gate can discriminate one while
+    conflating the other.
+    """
+
+    def __init__(self, label, discovery, changed, matrix_results, concludes_success):
+        self.label = label
+        self.discovery = discovery
+        self.changed = changed
+        self.matrix_results = matrix_results
+        self.concludes_success = concludes_success
+
+
+# design.md Decision 4's table, in its own order: seven rows, four refusals and
+# three passes. The refusals are what the gate is for; the passes are what
+# stops a gate that refuses everything from satisfying them.
+GATE_TABLE = (
+    GateRow(
+        "discovery did not conclude, so its outputs are empty strings",
+        discovery="failure",
+        changed="",
+        matrix_results=("skipped",),
+        concludes_success=False,
+    ),
+    GateRow(
+        "the suite ran and passed on a pull request that changed ansible/",
+        discovery="success",
+        changed="true",
+        matrix_results=("success",),
+        concludes_success=True,
+    ),
+    GateRow(
+        "the suite was skipped on a pull request that changed ansible/",
+        discovery="success",
+        changed="true",
+        matrix_results=("skipped",),
+        concludes_success=False,
+    ),
+    GateRow(
+        "the suite failed or was cancelled on a pull request that changed ansible/",
+        discovery="success",
+        changed="true",
+        matrix_results=("failure", "cancelled"),
+        concludes_success=False,
+    ),
+    GateRow(
+        "nothing under ansible/ changed and the suite was skipped",
+        discovery="success",
+        changed="false",
+        matrix_results=("skipped",),
+        concludes_success=True,
+    ),
+    GateRow(
+        "nothing under ansible/ changed and the suite ran anyway",
+        discovery="success",
+        changed="false",
+        matrix_results=("success",),
+        concludes_success=True,
+    ),
+    GateRow(
+        "the suite failed or was cancelled although nothing under ansible/ changed",
+        discovery="success",
+        changed="false",
+        matrix_results=("failure", "cancelled"),
+        concludes_success=False,
+    ),
+)
+
+# The row the gate is most likely to get wrong, referenced by name rather than
+# by index so that reordering the table above cannot silently retarget the
+# message assertion onto another row.
+SKIPPED_YET_CHANGED = GATE_TABLE[2]
+
+
+class TestTheAggregatingGateDiscriminates(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Required Status Checks Report on Every Pull
+    Request; ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge.
+
+    Runs the gate rather than reading it. Its `run:` body is free of `${{ }}`
+    and takes its three inputs through the step's `env:` block, so it can be
+    pulled out of the workflow and executed under `bash` once per row of the
+    table above -- the same extract-and-run shape
+    `TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`
+    uses for role discovery. Grepping would establish that a gate exists; only
+    running it establishes that it discriminates.
+
+    What a green run here does NOT establish: that this gate's conclusion
+    blocks anything. Blocking is branch protection -- repository settings this
+    suite makes no network call to read.
+    """
+
+    def _gate_step(self):
+        """The aggregating job's gate step, with its three inputs identified by
+        the expressions its `env:` block assigns rather than by whatever names
+        the implementation chose for them."""
+        workflow = self._workflow()
+        discovery_key, _ = self._discovery_job(workflow)
+        matrix_key, _ = self._matrix_job(workflow)
+        job_key, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
+
+        candidates = []
+        for index, step in enumerate(aggregating.get("steps") or []):
+            if not step.get("run"):
+                continue
+            inputs = {}
+            for name, value in (step.get("env") or {}).items():
+                expression = compact(value)
+                if f"needs.{discovery_key}.result" in expression:
+                    inputs["discovery"] = name
+                elif f"needs.{matrix_key}.result" in expression:
+                    inputs["matrix"] = name
+                elif f"needs.{discovery_key}.outputs." in expression:
+                    inputs["changed"] = name
+            if set(inputs) == {"discovery", "matrix", "changed"}:
+                candidates.append((index, step, inputs))
+
+        self.assertEqual(
+            1,
+            len(candidates),
+            f"expected exactly one `run:` step in the `{AGGREGATING_CONTEXT}` job "
+            "whose `env:` block carries all three of the discovery job's result, the "
+            "matrix job's result and the discovery job's change-detection output, but "
+            f"found {len(candidates)}. The gate takes its inputs through `env:` so "
+            "that its body stays free of Actions expressions and can be executed "
+            "standalone; a gate written as an `if:` expression, or reading those "
+            "expressions inline, cannot be exercised by this suite at all. The job's "
+            "steps declare: "
+            + repr(
+                [
+                    (step.get("name"), sorted(step.get("env") or {}))
+                    for step in (aggregating.get("steps") or [])
+                ]
+            ),
+        )
+        index, step, inputs = candidates[0]
+        return job_key, index, step, inputs
+
+    def _run_gate(self, script: str, inputs: dict, row: GateRow, matrix_result: str):
+        scratch = Path(tempfile.mkdtemp(prefix="ansible-verify-gate-"))
+        try:
+            outputs = scratch / "github_output"
+            summary = scratch / "step_summary"
+            outputs.touch()
+            summary.touch()
+            env = dict(
+                os.environ,
+                GITHUB_OUTPUT=str(outputs),
+                GITHUB_ENV=str(outputs),
+                GITHUB_STEP_SUMMARY=str(summary),
+            )
+            env[inputs["discovery"]] = row.discovery
+            env[inputs["changed"]] = row.changed
+            env[inputs["matrix"]] = matrix_result
+            return subprocess.run(
+                ["bash", "-e", "-c", script],
+                cwd=scratch,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_the_gate_script_can_be_executed_standalone(self) -> None:
+        """DERIVED (design.md Decision 5, tasks.md 3.2) -- no scenario states
+        this shape. The scenarios state what the gate SHALL conclude; that its
+        body is free of `${{ }}` and takes its inputs through `env:` is how this
+        repository makes such a gate testable at all, decided in design.md
+        rather than required by the specification. Reconsider this assertion, do
+        not weaken it, if the gate is made executable by another means."""
+        job_key, index, step, _ = self._gate_step()
+        self.assertNotIn(
+            "${{",
+            str(step["run"]),
+            f"the gate {step_label(job_key, index, step)} embeds a GitHub Actions "
+            "expression in its body, so it cannot be run against the table of "
+            "conclusions it is responsible for and only its existence could be "
+            "checked",
+        )
+
+    def test_the_gate_concludes_as_the_table_says_on_every_row(self) -> None:
+        """SPECIFIED -- one row per stated conclusion:
+
+        - "A required check whose change detection did not conclude does not
+          report success" (row 1: discovery `failure`, whose outputs are then
+          empty strings -- an empty "nothing changed" is indistinguishable from
+          a genuine one, and this is the row a gate that checks the change
+          detection first would pass);
+        - "A required check whose work was skipped does not report success"
+          (row 3, the vacuous green);
+        - "A cancelled dependency does not report success" and "A failed
+          dependency reports failure whatever the change detection said"
+          (rows 4 and 7, each run for both results);
+        - "A required check reports without doing work it was not asked to do"
+          and "Documentation-only pull request remains mergeable" in their
+          reporting half (rows 5 and 6: the check concludes rather than pending
+          when the work was skipped for want of a relevant change);
+        - "A failing Molecule scenario blocks the merge" in its aggregating-job
+          half (row 4): "the aggregating job SHALL conclude failure". Whether
+          the merge is then blocked is branch protection, and is not established
+          here.
+
+        Rows 2, 5 and 6 are the converse the refusals need: a gate that failed
+        every row would satisfy the four refusals while blocking every pull
+        request in the repository.
+        """
+        _, _, step, inputs = self._gate_step()
+        script = str(step["run"])
+        require_external_tools(self, ("bash",), "execute ansible-verify.yml's gate")
+        for row in GATE_TABLE:
+            for matrix_result in row.matrix_results:
+                with self.subTest(row=row.label, matrix=matrix_result):
+                    result = self._run_gate(script, inputs, row, matrix_result)
+                    detail = (result.stdout + result.stderr).strip()[-800:]
+                    if row.concludes_success:
+                        self.assertEqual(
+                            0,
+                            result.returncode,
+                            f"the gate refused the row `{row.label}` (discovery="
+                            f"{row.discovery!r}, changed={row.changed!r}, matrix="
+                            f"{matrix_result!r}), which the specification requires it "
+                            f"to pass: {detail!r}",
+                        )
+                    else:
+                        self.assertNotEqual(
+                            0,
+                            result.returncode,
+                            f"the gate concluded success on the row `{row.label}` "
+                            f"(discovery={row.discovery!r}, changed={row.changed!r}, "
+                            f"matrix={matrix_result!r}), reporting a green required "
+                            f"status check for a suite that verified nothing: "
+                            f"{detail!r}",
+                        )
+
+    def test_the_gate_names_the_skip_when_it_refuses_the_vacuous_green(self) -> None:
+        """DERIVED (tasks.md 3.2) -- the specification requires the conclusion,
+        not a message. A distinct message is what makes this refusal
+        diagnosable rather than a bare non-zero exit, and this is the row a
+        reader is least likely to expect. Reconsider this assertion, do not
+        weaken it, if the implementation reports the case another way."""
+        _, _, step, inputs = self._gate_step()
+        script = str(step["run"])
+        require_external_tools(self, ("bash",), "execute ansible-verify.yml's gate")
+        result = self._run_gate(script, inputs, SKIPPED_YET_CHANGED, "skipped")
+        combined = (result.stdout + result.stderr).lower()
+        self.assertIn(
+            "skip",
+            combined,
+            "the gate refused the skipped-yet-changed row without naming the skip as "
+            f"the reason; it emitted {combined.strip()!r}",
+        )
+
+
+class TestChangeDetectionResolvesTheGatesInput(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge.
+
+    A second extracted script, and not a row of the gate's table. The gate
+    takes "Ansible changed" as given and decides what to conclude from it; this
+    step decides what that input *is*, from the event name. The polarity lives
+    here, and is invisible to a test that feeds the gate its input directly.
+    """
+
+    def _resolution_step(self):
+        """The discovery job's change-detection resolution step, identified by
+        the `github.event_name` its `env:` block passes in."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        candidates = []
+        for index, step in enumerate(discovery_job.get("steps") or []):
+            if not step.get("run"):
+                continue
+            inputs = {}
+            for name, value in (step.get("env") or {}).items():
+                expression = compact(value)
+                if "github.event_name" in expression:
+                    inputs["event"] = name
+                elif re.search(r"steps\.[A-Za-z0-9_-]+\.outputs\.", expression):
+                    inputs["filter"] = name
+            if "event" in inputs:
+                candidates.append((index, step, inputs))
+        self.assertEqual(
+            1,
+            len(candidates),
+            "expected exactly one `run:` step in the discovery job "
+            f"`{discovery_key}` taking `github.event_name` through its `env:` block "
+            "-- the step that resolves whether the suite runs -- but found "
+            f"{len(candidates)}. Without it the workflow either performs no such "
+            "resolution, or expresses it as an Actions expression this suite cannot "
+            "execute, leaving the manual-run polarity asserted nowhere.",
+        )
+        index, step, inputs = candidates[0]
+        self.assertIn(
+            "filter",
+            inputs,
+            "the resolution step takes the event name but no output of an earlier "
+            "step, so on a pull request it cannot be taking the change filter's "
+            f"result; its `env:` block declares {sorted(step.get('env') or {})}",
+        )
+        return discovery_key, discovery_job, index, step, inputs
+
+    def _resolved_output_name(self, discovery_job: dict, step: dict) -> str:
+        """The output key this step writes, read from the job's own `outputs:`
+        block so that the test does not have to guess the name."""
+        step_id = step.get("id")
+        self.assertTrue(
+            step_id,
+            "the resolution step declares no `id:`, so the job cannot expose its "
+            "result as an output and the matrix job has nothing to be gated on",
+        )
+        for expression in (discovery_job.get("outputs") or {}).values():
+            match = re.search(
+                r"steps\." + re.escape(str(step_id)) + r"\.outputs\.([A-Za-z0-9_-]+)",
+                compact(expression),
+            )
+            if match:
+                return match.group(1)
+        self.fail(
+            "no entry in the discovery job's `outputs:` block reads "
+            f"`steps.{step_id}.outputs.*`, so whatever this step resolves never "
+            "leaves the job, and neither the matrix job nor the gate can read it; "
+            f"the job declares the outputs {sorted(discovery_job.get('outputs') or {})}"
+        )
+
+    def _resolve(self, script: str, inputs: dict, output_name: str, event: str, filtered: str):
+        scratch = Path(tempfile.mkdtemp(prefix="ansible-verify-resolution-"))
+        try:
+            outputs = scratch / "github_output"
+            summary = scratch / "step_summary"
+            outputs.touch()
+            summary.touch()
+            env = dict(
+                os.environ,
+                GITHUB_OUTPUT=str(outputs),
+                GITHUB_ENV=str(outputs),
+                GITHUB_STEP_SUMMARY=str(summary),
+            )
+            env[inputs["event"]] = event
+            env[inputs["filter"]] = filtered
+            result = subprocess.run(
+                ["bash", "-e", "-c", script],
+                cwd=scratch,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                0,
+                result.returncode,
+                f"the resolution step exited {result.returncode} on a {event!r} run "
+                f"whose change filter reported {filtered!r}: "
+                f"{(result.stdout + result.stderr).strip()[-800:]!r}",
+            )
+            written = github_output_pairs(outputs)
+            self.assertIn(
+                output_name,
+                written,
+                f"the resolution step wrote no `{output_name}` to $GITHUB_OUTPUT on a "
+                f"{event!r} run; it wrote {written!r}",
+            )
+            return written[output_name].strip()
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_a_run_that_is_not_a_pull_request_resolves_to_the_whole_suite(self) -> None:
+        """SPECIFIED -- scenario "A manual run verifies the whole suite": "the
+        suite SHALL run in full rather than being skipped for want of a diff to
+        inspect, and the workflow SHALL NOT conclude success having skipped it",
+        and "Where the workflow is started by any other event there is no diff
+        to resolve against, and the suite SHALL run in full rather than
+        defaulting to skipped".
+
+        The `false` case on a dispatch is the polarity itself: the resolution
+        has to branch on the event, not on whatever value an unrun filter left
+        behind.
+        """
+        _, discovery_job, _, step, inputs = self._resolution_step()
+        output_name = self._resolved_output_name(discovery_job, step)
+        script = str(step["run"])
+        require_external_tools(
+            self, ("bash",), "execute ansible-verify.yml's change-detection resolution"
+        )
+        for event, filtered in (
+            ("workflow_dispatch", ""),
+            ("workflow_dispatch", "false"),
+            ("push", ""),
+            ("schedule", ""),
+        ):
+            with self.subTest(event=event, filter_output=filtered):
+                self.assertEqual(
+                    "true",
+                    self._resolve(script, inputs, output_name, event, filtered),
+                    f"on a `{event}` run the resolution produced something other than "
+                    "`true`, so the matrix is skipped and the workflow reports a green "
+                    "conclusion on precisely the trigger this repository uses to run "
+                    "the suite against the trunk",
+                )
+
+    def test_a_pull_request_resolves_to_what_the_change_filter_found(self) -> None:
+        """SPECIFIED -- "Change detection resolves against a pull request's
+        diff", in the two conclusions the delta's scenarios state: a pull
+        request changing files under `ansible/` runs the suite (scenario "A
+        failing Molecule scenario blocks the merge" presupposes it ran), and one
+        changing none of them does not (scenario "A pull request touching no
+        Ansible file starts no container")."""
+        _, discovery_job, _, step, inputs = self._resolution_step()
+        output_name = self._resolved_output_name(discovery_job, step)
+        script = str(step["run"])
+        require_external_tools(
+            self, ("bash",), "execute ansible-verify.yml's change-detection resolution"
+        )
+        for filtered, expected in (("true", "true"), ("false", "false")):
+            with self.subTest(filter_output=filtered):
+                self.assertEqual(
+                    expected,
+                    self._resolve(script, inputs, output_name, "pull_request", filtered),
+                    f"on a pull request whose change filter reported {filtered!r} the "
+                    f"resolution produced something other than {expected!r}, so the "
+                    "matrix is gated on something other than the diff",
+                )
+
+    def test_the_change_filter_itself_runs_only_where_there_is_a_diff(self) -> None:
+        """DERIVED (design.md Decision 1, tasks.md 2.3) -- no scenario states
+        it. The specification requires the suite to run in full on an event
+        carrying no diff; skipping the filter step on such an event is how this
+        change makes the polarity above structurally unreachable rather than
+        merely handled, which is a design choice rather than a stated
+        obligation. Nothing in this repository has observed the filter action on
+        a diffless event, which is why this change also observes it on a manual
+        dispatch after merge. Reconsider this assertion, do not weaken it, if
+        the filter is made safe on such an event by another means."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        filters = [
+            (index, step)
+            for index, step in enumerate(discovery_job.get("steps") or [])
+            if "paths-filter" in str(step.get("uses", ""))
+        ]
+        self.assertTrue(
+            filters,
+            f"the discovery job `{discovery_key}` carries no change-filter step, so "
+            "the resolution above has nothing to resolve on a pull request",
+        )
+        for index, step in filters:
+            self.assertIn(
+                "github.event_name",
+                compact(step.get("if", "")),
+                f"the change-filter step {step_label(discovery_key, index, step)} is "
+                f"conditioned on {step.get('if')!r}, which does not test the event: on "
+                "an event carrying no diff it runs anyway, and what it does there is "
+                "not something this repository has observed",
+            )
+
 if __name__ == "__main__":
     unittest.main()
