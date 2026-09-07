@@ -196,6 +196,27 @@ resolution decides what that input is. Decision 5 covers both, separately —
 conflating them is how the polarity ends up asserted nowhere, each test assuming
 the other checked it.
 
+**The resolution refuses a value the filter did not produce.** On a pull request
+the filter step must have run, so anything but `true` or `false` means it did
+not, and the empty string a skipped step leaves behind is refused rather than
+read as `false`.
+
+This is not defensive padding; it is what makes the filter step's condition safe
+to reason about. Read as `false`, that empty string skips the matrix and the gate
+concludes success on a pull request nothing verified — and **narrowing** the
+condition produces it exactly as surely as inverting it does. A plausible-looking
+`&& github.actor != 'dependabot[bot]'` would silently green every Dependabot pull
+request, which is why it cannot be left to an assertion about how the condition
+is spelled: such an assertion must either reject conditions that are fine or
+accept ones that are not, and a review that suggested that very conjunct as a
+harmless example is the evidence that the trap is easy to walk into.
+
+With the refusal in place the whole class is loud. Every mis-condition on that
+step — inverted, widened, narrowed, or removed — now either fails the static
+checks or fails the run, and none of them reports success having verified
+nothing. That is the property worth having; the static assertions catch the two
+unambiguous cases and are not asked to carry the rest.
+
 `cancelled` is failed rather than ignored. A cancelled run has not verified
 anything, and `concurrency.cancel-in-progress` cancels a *superseded* run whose
 checks belong to a superseded commit, not to the one being merged.

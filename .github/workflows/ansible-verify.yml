@@ -120,12 +120,25 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            if [ "$FILTER_RESULT" = "true" ]; then
-              run_suite=true
-            else
-              run_suite=false
-            fi
-            echo "Pull request: the change filter reported '${FILTER_RESULT}', so run-suite=${run_suite}."
+            # An unresolvable value is refused rather than read as `false`. On a
+            # pull request the filter above MUST have run, so anything other
+            # than `true` or `false` means it did not -- and the empty string
+            # that a skipped step leaves behind is indistinguishable from
+            # "nothing changed" unless it is rejected here. Read as `false` it
+            # skips the matrix, and the gate then concludes success on a pull
+            # request nothing verified. Any narrowing of that step's condition
+            # produces exactly this, which is why the refusal lives here rather
+            # than in an assertion about how the condition is spelled.
+            case "$FILTER_RESULT" in
+              true|false)
+                run_suite="$FILTER_RESULT"
+                echo "Pull request: the change filter reported '${FILTER_RESULT}', so run-suite=${run_suite}."
+                ;;
+              *)
+                echo "::error::The change filter produced '${FILTER_RESULT}' on a pull request, where it must produce 'true' or 'false'. It did not run. Refusing to read that as 'nothing changed': doing so skips the suite and reports a green required status check for a pull request nothing verified."
+                exit 1
+                ;;
+            esac
           else
             run_suite=true
             echo "Event '${EVENT_NAME}' carries no diff to filter on, so the whole suite runs: run-suite=true."

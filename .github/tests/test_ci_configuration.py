@@ -3367,30 +3367,38 @@ class MoleculeWorkflowShapeMixin:
         return matches[0]
 
     def _discovery_job(self, workflow: dict):
-        """The always-running job that enumerates roles: the one carrying a
-        step that SEARCHES `ansible/roles` rather than merely naming the path.
+        """The job that feeds the matrix, read from the matrix's own expression.
 
-        `ansible/roles` alone also matches the matrix job, which installs
-        Galaxy content into that directory -- two matches, and taking the first
-        would make six tests depend on the order the jobs happen to be declared
-        in. `find` is what distinguishes discovering roles from installing
-        into the same directory.
+        Identified structurally rather than by what its shell says. Selecting
+        on `ansible/roles` matched the matrix job too, which installs Galaxy
+        content into that directory; narrowing to `find ansible/roles` fixed
+        that but coupled six tests to one spelling of a path, so quoting it --
+        an ordinary refactor changing no behaviour -- would break them all.
+
+        What actually makes a job the discovery job is that the matrix is built
+        from its output. That is what is read here, and it survives any rewrite
+        of the discovery shell.
         """
-        matches = [
-            (key, job)
-            for key, job in jobs(workflow).items()
-            if any(
-                re.search(r"find\s+ansible/roles", str(step.get("run", "")))
-                for step in (job.get("steps") or [])
-            )
-        ]
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        expression = compact((matrix_job.get("strategy") or {}).get("matrix"))
+        referenced = sorted(set(re.findall(r"needs\.([A-Za-z0-9_-]+)\.outputs\.", expression)))
         self.assertEqual(
             1,
-            len(matches),
-            f"expected exactly one job in ansible-verify.yml to discover roles under "
-            f"ansible/roles/, found {len(matches)}: {[key for key, _ in matches]}",
+            len(referenced),
+            f"the matrix job `{matrix_key}` builds its matrix from "
+            f"{len(referenced)} job outputs, {referenced}; exactly one job supplies "
+            "the roles to run, and it is that job these checks call the discovery "
+            f"job. The matrix expression is {(matrix_job.get('strategy') or {}).get('matrix')!r}",
         )
-        return matches[0]
+        discovery_key = referenced[0]
+        declared = jobs(workflow)
+        self.assertIn(
+            discovery_key,
+            declared,
+            f"the matrix job `{matrix_key}` reads an output of `{discovery_key}`, "
+            f"which this workflow does not declare; its jobs are {sorted(declared)}",
+        )
+        return discovery_key, declared[discovery_key]
 
     def _matrix_job(self, workflow: dict):
         """The job whose name is generated from a matrix -- the one that must
@@ -3630,12 +3638,15 @@ class TestOnlyTheMoleculeMatrixIsGated(MoleculeWorkflowShapeMixin, unittest.Test
             "suite WHERE the change detection says to. Inverted, a documentation-only "
             "pull request starts every container and an Ansible one starts none",
         )
-        self.assertNotIn(
-            "!=",
-            condition,
-            f"the matrix job's condition {matrix_job.get('if')!r} negates the change "
-            "detection -- see above",
-        )
+        # Scoped to the operand, for the reason given on the change-filter
+        # step's own negation check.
+        for negation in ("!='true'", "!("):
+            self.assertNotIn(
+                negation,
+                condition,
+                f"the matrix job's condition {matrix_job.get('if')!r} negates the "
+                "change detection -- see above",
+            )
 
     def test_no_step_inside_the_matrix_job_carries_its_own_condition(self) -> None:
         """SPECIFIED -- the same scenario, in the half a job-level assertion
@@ -3726,6 +3737,23 @@ class TestDiscoveryDeclaresTheLeastPrivilegeItNeeds(
         """SPECIFIED -- "SHALL receive no write scope: reading which files a
         pull request touched is a read"."""
         workflow = self._workflow()
+        # Refuse to read this workflow's job blocks as evidence when the block
+        # they inherit from is absent. Widening the workflow-level block is
+        # caught by the loop below; DELETING it is not -- every job would then
+        # contribute no offenders while receiving the repository's default
+        # token scope. That default is "SHALL be set to read-only" per
+        # Least-Privilege Workflow Permissions, but it is a repository setting,
+        # and this suite makes no network call to read one. Passing here would
+        # be resting on an assumption about settings, which is the one thing
+        # this workflow is otherwise careful never to do.
+        self.assertIsInstance(
+            workflow.get("permissions"),
+            dict,
+            "ansible-verify.yml declares no workflow-level `permissions:` block, so "
+            "every job with no block of its own receives the repository's default "
+            "token scope -- a repository setting this suite cannot read, and so a "
+            "scope this check would be passing without having read",
+        )
         offenders = []
         for key, job in jobs(workflow).items():
             # What a job RECEIVES, which is what the requirement is about --
@@ -4201,6 +4229,56 @@ class TestChangeDetectionResolvesTheGatesInput(
                     "matrix is gated on something other than the diff",
                 )
 
+    def test_a_pull_request_whose_change_filter_did_not_run_is_refused(self) -> None:
+        """SPECIFIED -- "An aggregating job SHALL treat its own change-detection
+        input as trustworthy only where the job producing it concluded
+        successfully. Where that job did not, its outputs are empty, and an
+        empty 'nothing changed' is indistinguishable from a genuine one." The
+        requirement states it of the aggregating job; the same emptiness
+        reaches the same conclusion one step earlier, and is refused here too.
+
+        This is the failure mode that makes the change-filter step's condition
+        load-bearing beyond its polarity. A skipped filter leaves the empty
+        string, and reading that as `false` skips the matrix and concludes
+        SUCCESS on a pull request nothing verified. NARROWING that condition
+        produces it just as surely as inverting it does -- a plausible-looking
+        `&& github.actor != 'dependabot[bot]'` would silently green every
+        Dependabot pull request. Refusing the value here makes every such
+        narrowing loud, which no assertion about the condition's spelling can
+        do without also rejecting conditions that are fine.
+        """
+        _, discovery_job, _, step, inputs = self._resolution_step()
+        self._resolved_output_name(discovery_job, step)
+        script = str(step["run"])
+        require_external_tools(
+            self, ("bash",), "execute ansible-verify.yml's change-detection resolution"
+        )
+        for filtered in ("", "skipped", "TRUE"):
+            with self.subTest(filter_output=filtered):
+                result = subprocess.run(
+                    ["bash", "-e", "-c", script],
+                    cwd=tempfile.gettempdir(),
+                    env=dict(
+                        os.environ,
+                        GITHUB_OUTPUT=os.devnull,
+                        GITHUB_ENV=os.devnull,
+                        GITHUB_STEP_SUMMARY=os.devnull,
+                        **{inputs["event"]: "pull_request", inputs["filter"]: filtered},
+                    ),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                self.assertNotEqual(
+                    0,
+                    result.returncode,
+                    f"on a pull request whose change filter produced {filtered!r} -- "
+                    "which is what a filter step that did not run leaves behind -- the "
+                    "resolution concluded successfully. Whatever it wrote, the suite "
+                    "is then gated on a value nothing produced: "
+                    f"{(result.stdout + result.stderr).strip()[-400:]!r}",
+                )
+
     def test_the_change_filter_itself_runs_only_where_there_is_a_diff(self) -> None:
         """DERIVED (design.md Decision 1, tasks.md 2.3) -- no scenario states
         it. The specification requires the suite to run in full on an event
@@ -4252,13 +4330,21 @@ class TestChangeDetectionResolvesTheGatesInput(
                 "is empty, the matrix is skipped as though nothing changed, and the "
                 "required check reports success having run no scenario",
             )
-            self.assertNotIn(
-                "!=",
-                condition,
-                f"the change-filter step {label} is conditioned on "
-                f"{step.get('if')!r}, which negates the event test -- see above: "
-                "the failure is a green conclusion, not a red one",
-            )
+            # Scoped to the OPERAND, not to the whole condition. Checking for
+            # `!=` anywhere reasons about the condition as a bag of characters:
+            # it rejects a legitimate conjunct such as
+            # `... && github.actor != 'dependabot[bot]'`, while still admitting
+            # `!(github.event_name == 'pull_request')` -- valid Actions syntax,
+            # identical in effect to the inversion, and containing no `!=` at
+            # all. One mistake with two faces, so one fix for both.
+            for negation in ("!='pull_request'", "!("):
+                self.assertNotIn(
+                    negation,
+                    condition,
+                    f"the change-filter step {label} is conditioned on "
+                    f"{step.get('if')!r}, which negates the event test -- see "
+                    "above: the failure is a green conclusion, not a red one",
+                )
 
 
 if __name__ == "__main__":
