@@ -317,6 +317,51 @@ could have been attributable to a package archive. Runs after it reach no
 package archive during `create` at all, so "consecutive green runs" starts
 meaning something stricter than it did.
 
+## 11. matrix-the-molecule-suite-over-scenarios
+
+**Not blocked; recorded rather than folded into
+`promote-molecule-to-a-required-check`**, whose proposal names it as a non-goal.
+That change decides which job is required and reshapes the workflow's triggers;
+this one changes what a job *is*. Landing both in one diff would mean the
+change that picks the registered context also redefines the thing being
+registered.
+
+`molecule test --all` runs a role's scenarios in sorted order and **stops at the
+first failure**. Every scenario sorting after a failing one is neither executed
+nor listed in that run's SCENARIO RECAP, so a red run establishes less than it
+appears to and the recap still looks complete. Molecule's own remedy is
+unavailable here: `--continue-on-failure` applies only with `--workers`, and
+`--workers > 1` refuses with `only supported in collection mode (galaxy.yml
+required)` — these are plain roles, not a collection (observed 2026-09-07).
+
+The remedy that works is a continuous-integration matrix over **scenarios**
+rather than roles. Each scenario becomes its own job, so one failing scenario
+stops only itself and the rest still report. It also parallelises the suite's
+longest role, which carries three scenarios and is what sets the workflow's
+wall clock.
+
+**What promotion changes about its priority, in both directions.** A red
+required check that under-reports is slower to diagnose — you fix one scenario,
+push, and wait six minutes to discover the next one. That is an argument for
+doing this. Against it: the gate is not weaker for under-reporting. A red check
+blocks the merge whether or not it enumerated every failure, so this is about
+the cost of diagnosis rather than about the guarantee.
+
+Two things it must not undo, both in
+`openspec/specs/iac-cicd-pipeline/spec.md`. *Required Status Checks Report on
+Every Pull Request* forbids registering a job whose name is generated from a
+matrix — a per-scenario matrix generates more of those names, not fewer, so the
+literal-named aggregating job stays and keeps concluding on their behalf.
+*Ansible Configuration Is Verified in Continuous Integration and Gates the
+Merge* requires discovery rather than enumeration, so scenario discovery must
+find `ansible/roles/*/molecule/*/` without a workflow edit, and must keep
+failing loudly on an empty result.
+
+Worth noting that the per-job cost changes shape: each scenario job pays its own
+checkout and toolchain install, which the current per-role jobs amortise across
+a role's scenarios. Whether that is cheaper overall is an empirical question
+this entry does not answer.
+
 ## 6. two-deferred-ci-items
 
 Both noticed during `close-ci-verification-gaps`, neither a verification gap:

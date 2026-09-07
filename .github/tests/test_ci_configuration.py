@@ -463,12 +463,23 @@ class TestTerraformChecksDiscoverDirectories(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Ansible Configuration Is Verified in CI (ADDED)
+# iac-cicd-pipeline / Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge
 # --------------------------------------------------------------------------
 
 
 class TestAnsibleBlockingTier(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge.
+
+    The tier this class covers is the requirement's *Lint tier*, called the
+    *Blocking tier* when this class was written -- a name that distinguished it
+    from an advisory one, which no longer exists. The class and its methods
+    keep their names: they are runner-selectable identifiers cited by an
+    archived `test-plan.md`, and renaming them would break that citation to say
+    nothing new. The assertions are unchanged; both tiers block, and this one
+    always did.
+    """
 
     def setUp(self) -> None:
         self.workflow = load_yaml(PR_VALIDATION)
@@ -509,7 +520,8 @@ class TestAnsibleBlockingTier(unittest.TestCase):
 
 
 class TestVerificationJobsCarryNoCredential(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
 
     def test_no_pull_request_validation_job_declares_an_environment(self) -> None:
         """SPECIFIED -- scenario "Ansible verification receives no production
@@ -520,7 +532,11 @@ class TestVerificationJobsCarryNoCredential(unittest.TestCase):
         self.assertEqual([], offenders, f"jobs declaring `environment:`: {offenders}")
 
     def test_the_molecule_workflow_declares_no_environment(self) -> None:
-        """SPECIFIED -- same scenario, advisory tier."""
+        """SPECIFIED -- same scenario, suite tier. The requirement's two tiers
+        were named *Blocking* and *Advisory* while only one of them gated;
+        `promote-molecule-to-a-required-check` renamed them *Lint* and *Suite*,
+        because both gate now and what separates them is what they run. The
+        credential prohibition was always over both and is unchanged."""
         workflow = load_yaml(ANSIBLE_VERIFY)
         offenders = [name for name, job in jobs(workflow).items() if "environment" in job]
         self.assertEqual([], offenders, f"jobs declaring `environment:`: {offenders}")
@@ -537,7 +553,8 @@ class TestVerificationJobsCarryNoCredential(unittest.TestCase):
 
 
 class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
 
     # The discovery snippet is real shell: it calls these before it can reach
     # its own failure branch. Without them it exits non-zero for a reason that
@@ -613,17 +630,27 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
         )
 
     def test_the_workflow_uses_no_continue_on_error(self) -> None:
-        """SPECIFIED -- scenario "A failing Molecule scenario does not block a
-        merge": the failure SHALL be visible on the pull request. Advisory
-        status comes from not registering the workflow as a required check, not
-        from swallowing its conclusion. Establishes the visibility half only;
-        branch-protection registration is not repository state."""
+        """SPECIFIED -- scenario "A failing Molecule scenario blocks the merge":
+        the failure SHALL be visible on the pull request and the aggregating job
+        SHALL conclude failure.
+
+        The assertion is unchanged; what it protects is not. While this workflow
+        was advisory, `continue-on-error` would have destroyed the signal the
+        tier existed to collect. Now that the workflow is a required check, it
+        would report a GREEN REQUIRED STATUS CHECK for a failed suite and let
+        the merge through -- the same conflation the aggregating gate refuses
+        for a skipped matrix, reached by a different route.
+
+        Establishes the visibility half only. Whether the merge is then blocked
+        is branch protection, which is repository settings and not repository
+        state this suite can read.
+        """
         self.assertNotIn(
             "continue-on-error",
             self.text,
             "ansible-verify.yml uses continue-on-error, which reports a green "
-            "conclusion for a failed scenario and destroys the signal the advisory "
-            "tier exists to collect",
+            "conclusion for a failed scenario -- on a required status check, that "
+            "is a merge let through by a suite that failed",
         )
 
     def test_role_discovery_fails_when_it_finds_nothing(self) -> None:
@@ -695,7 +722,8 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
 
 
 class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
 
     PIP_INSTALL = re.compile(r"pip\d*\s+install\s+(?P<args>[^\n]*)")
 
@@ -740,7 +768,8 @@ class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Ansible Configuration Is Verified in CI --
+# iac-cicd-pipeline / Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge --
 # the container image each scenario executes inside
 # --------------------------------------------------------------------------
 #
@@ -1527,25 +1556,47 @@ class TestRequiredCheckIsNotPathFiltered(unittest.TestCase):
     """MODIFIED requirement: Gated Production Apply Applies the Reviewed Plan.
 
     The delta adds the constraint that the path filter is permissible only
-    because the apply workflow is not a required check, and that the required
+    because the apply workflow is not a required check, and that a required
     check must not carry one. This asserts the second half.
+
+    `promote-molecule-to-a-required-check` made a second workflow a required
+    check, and that requirement's "The workflow that is registered as a
+    required check" became "Any workflow that is registered as a required
+    check". The workflows below are therefore named LITERALLY rather than read
+    out of `REQUIRED_STATUS_CHECK_WORKFLOWS`, which
+    `TestEveryRequiredCheckIsShapedToBeRegistrable` iterates. That is
+    deliberate duplication, not an oversight: a loop over a mapping passes
+    vacuously if the mapping is emptied, and this constraint is the one whose
+    violation leaves every pull request in the repository unmergeable. Two
+    workflows spelled out here cost one line each and survive that edit.
+
+    The method name is left unchanged: it is a runner-selectable identifier
+    that an archived `test-plan.md` cites.
     """
 
+    LITERALLY_REQUIRED = (PR_VALIDATION, ANSIBLE_VERIFY)
+
     def test_the_required_check_declares_no_workflow_level_path_filter(self) -> None:
-        """SPECIFIED -- "The workflow that is registered as a required check
+        """SPECIFIED -- "Any workflow that is registered as a required check
         SHALL NOT be path-filtered at the workflow level"."""
-        on = triggers(load_yaml(PR_VALIDATION))
-        for event, config in on.items():
-            if not isinstance(config, dict):
-                continue
-            for key in ("paths", "paths-ignore"):
-                self.assertNotIn(
-                    key,
-                    config,
-                    f"pr-validation.yml's `{event}` trigger declares `{key}:`, which "
-                    "leaves every non-matching pull request permanently pending and "
-                    "so unmergeable",
-                )
+        for path in self.LITERALLY_REQUIRED:
+            on = triggers(load_yaml(path))
+            self.assertTrue(
+                on,
+                f"{path.name} declares no triggers at all, so this check would pass "
+                "having read nothing",
+            )
+            for event, config in on.items():
+                if not isinstance(config, dict):
+                    continue
+                for key in ("paths", "paths-ignore"):
+                    self.assertNotIn(
+                        key,
+                        config,
+                        f"{path.name}'s `{event}` trigger declares `{key}:`, which "
+                        "leaves every non-matching pull request permanently pending "
+                        "and so unmergeable",
+                    )
 
 
 class TestSavedPlanIsWhatGetsApplied(unittest.TestCase):
