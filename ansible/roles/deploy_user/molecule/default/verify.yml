@@ -81,13 +81,13 @@
         fail_msg: >-
           deploy-receive exited non-zero ({{ deploy_user_per_app_valid_pipe.rc }}) for
           a single-session pipe of a valid archive. Because this converge
-          installs Docker and the test Compose file declares zero services
-          ("services: {}"), `docker compose pull && docker compose up -d
-          --wait` inside app-deploy is a real, fast, no-registry-needed
-          success when the whole chain (extraction, permissions, sudo
-          escalation, trigger) actually works -- a non-zero rc here means
-          some step in that one-session chain did not complete, not merely
-          that Docker/GHCR content was unavailable.
+          installs Docker and the test Compose file declares one small
+          service on a public base image, `docker compose pull && docker
+          compose up -d --wait` inside app-deploy is a real, fast success
+          when the whole chain (extraction, permissions, sudo escalation,
+          trigger) actually works -- a non-zero rc here means some step in
+          that one-session chain did not complete, not merely that
+          Docker/GHCR content was unavailable.
 
     - name: Confirm commerce-ops's docker-compose.yml and .env landed under /opt/commerce-ops
       ansible.builtin.stat:
@@ -578,3 +578,673 @@
           version control (Ansible Vault or a GitHub Actions Environment
           secret, per tasks.md 2.2) and SHALL NOT appear in plaintext in
           the repository.
+
+    # ================================================================
+    # ADDED requirement: "Superseded Application Images Are Reclaimed at
+    # Deploy Time" -- openspec/changes/reclaim-superseded-app-images/
+    # specs/iac-host-configuration/spec.md, 11 scenarios.
+    #
+    # Derived from that delta spec ahead of the implementation, per
+    # tasks.md section 2. THESE TASKS FAIL UNTIL tasks.md section 1 IS
+    # IMPLEMENTED, and that is the intended state: nothing in app-deploy
+    # reclaims anything today.
+    #
+    # openspec/changes/reclaim-superseded-app-images/test-plan.md carries
+    # the scenario-accounting table, the two scenarios (plus one half of a
+    # third) deliberately left uncovered and why, and every assertion's
+    # specified/derived classification. Read it before changing anything
+    # below -- several fixtures look gratuitously specific and are not.
+    #
+    # ORDERING IS LOAD-BEARING (tasks.md 2.8). Reclamation runs on EVERY
+    # deploy, the first included, so an in-namespace fixture standing
+    # before the deploy meant to observe it is a candidate for an EARLIER
+    # deploy, and its scenario then passes for the wrong reason -- the
+    # image having been reclaimed by a deploy the scenario is not about.
+    # Each in-namespace fixture is therefore built immediately before the
+    # deploy that must observe it, and the whole block runs after the
+    # commerce-ops deploy above, which is where alpine:3.19 actually
+    # enters the instance (lines 35 and 46 only write its name into a
+    # Compose file).
+    #
+    # Fixtures are built with `docker build`, never `docker tag`: tagging
+    # yields ONE image ID wearing several tags, which makes `docker image
+    # rm` untag instead of remove -- the wrong-reason pass tasks.md 2.1
+    # and 2.4 each name for themselves. `docker tag` is used exactly once
+    # below, for the out-of-namespace base-image decoy, where a shared
+    # image ID is the point. No fixture points at a real GHCR package;
+    # `reclaim-fixture` and `reclaim-fixture-previous-owner` are owner
+    # segments that exist nowhere, and every fixture service carries
+    # `pull_policy: never` so `docker compose pull` stays a real success
+    # against a locally-built image.
+    #
+    # DELIBERATELY NOT COVERED HERE (tasks.md 2.7 and 2.9), recorded so
+    # the absence of a test is distinguishable from the absence of the
+    # thought:
+    #
+    #   * "An untagged image in the namespace is left alone". The fixture
+    #     it needs is an in-namespace image carrying no tag, which arises
+    #     only from a repo digest -- a real pull from a registry, which
+    #     tasks.md 2.8 forbids on determinism grounds. "Tag then untag"
+    #     does NOT substitute: it yields <none>:<none>, a fully dangling
+    #     image, which is the proposal's first non-goal and outside every
+    #     namespace by construction, so a test built that way would prove
+    #     the wrong property while reading as though it proved this one.
+    #     Held instead by the `:<none>` filter being visible in the
+    #     script (tasks.md 1.5) and by review. Accepted on the operator's
+    #     decision, 2026-09-07, against adding a digest-pinned local
+    #     registry:2 to this scenario. REVISIT IF ANY APPLICATION EVER
+    #     ADOPTS A DIGEST PIN.
+    #
+    #   * "A non-responding runtime does not hold the deploy open", and
+    #     with it the duration-bound half of "A run that ends early says
+    #     why". Wedging a container daemon inside a Molecule container is
+    #     not reproducible without breaking the same daemon the preceding
+    #     `docker compose pull` needs. Held by the `timeout` being
+    #     visible in the script (tasks.md 1.8) and by review.
+    # ================================================================
+
+    - name: Reclaim fixture -- build image A, the tag the first of the two deploys runs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf /tmp/reclaim_build_fixture-tag-a
+        mkdir -p /tmp/reclaim_build_fixture-tag-a
+        printf 'FROM alpine:3.19\nRUN echo fixture-tag-a > /reclaim-fixture-marker\n' \
+          > /tmp/reclaim_build_fixture-tag-a/Dockerfile
+        docker build -t ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-a /tmp/reclaim_build_fixture-tag-a
+      args:
+        executable: /bin/bash
+      # DOCKER_BUILDKIT=0 is not a preference. prepare.yml puts the nested
+      # daemon on the vfs storage driver with containerd-snapshotter
+      # disabled (the only configuration under which a container runs at
+      # all inside this instance), and the classic builder is the one that
+      # mounts anywhere. tasks.md 2.8 names this as the first thing to try
+      # when a build fails; it is set up front rather than after a failure.
+      environment:
+        DOCKER_BUILDKIT: "0"
+      changed_when: false
+
+    - name: Reclaim fixture -- build the deploy archive referencing image A
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf /tmp/reclaim_archive_tag_a
+        mkdir -p /tmp/reclaim_archive_tag_a
+        cat > /tmp/reclaim_archive_tag_a/docker-compose.yml <<'COMPOSE'
+        services:
+          app:
+            image: ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-a
+            pull_policy: never
+            command: ["sleep", "3600"]
+        COMPOSE
+        printf 'FOO=bar\n' > /tmp/reclaim_archive_tag_a/.env
+        tar -czf /tmp/reclaim_archive_tag_a.tar.gz -C /tmp/reclaim_archive_tag_a docker-compose.yml .env
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Reclaim -- deploy commerce-ops at fixture-tag-a (deploy 1 of 2, tasks.md 2.1)
+      ansible.builtin.shell: set -o pipefail; cat /tmp/reclaim_archive_tag_a.tar.gz | /usr/local/bin/deploy-receive commerce-ops
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_reclaim_first_deploy
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the first fixture deploy succeeded (precondition, not a scenario assertion)
+      ansible.builtin.assert:
+        that:
+          - deploy_user_reclaim_first_deploy.rc == 0
+        fail_msg: >-
+          The fixture deploy of commerce-ops at fixture-tag-a exited
+          {{ deploy_user_reclaim_first_deploy.rc }}. Every reclamation
+          assertion below rests on this deploy having succeeded, so this
+          is a broken fixture rather than a defect in reclamation. stdout:
+          {{ deploy_user_reclaim_first_deploy.stdout }} stderr:
+          {{ deploy_user_reclaim_first_deploy.stderr }}
+
+    # Built HERE, not alongside image A: all three live in the namespace
+    # the deploy above clears, so building them earlier would hand deploy
+    # 1 the previous-owner image and the stopped-container image as
+    # candidates, and the previous-owner scenario would then pass for the
+    # wrong reason (tasks.md 2.8). The stopped container is created in the
+    # same task as its image, so that image is never unheld while a deploy
+    # runs.
+    - name: Reclaim fixture -- build image B, the previous-owner image and the stopped-container image
+      ansible.builtin.shell: |
+        set -euo pipefail
+        build_fixture() {
+          marker="$1"
+          ref="$2"
+          rm -rf "/tmp/reclaim_build_${marker}"
+          mkdir -p "/tmp/reclaim_build_${marker}"
+          printf 'FROM alpine:3.19\nRUN echo %s > /reclaim-fixture-marker\n' "${marker}" \
+            > "/tmp/reclaim_build_${marker}/Dockerfile"
+          docker build -t "${ref}" "/tmp/reclaim_build_${marker}"
+        }
+        build_fixture fixture-tag-b ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b
+        build_fixture fixture-legacy ghcr.io/reclaim-fixture-previous-owner/commerce-ops:fixture-legacy
+        build_fixture fixture-held ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped
+        docker rm -f reclaim_stopped_holder >/dev/null 2>&1 || true
+        docker run --name reclaim_stopped_holder \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped /bin/true
+        docker tag alpine:3.19 alpine:reclaim-decoy
+      args:
+        executable: /bin/bash
+      environment:
+        DOCKER_BUILDKIT: "0"
+      changed_when: false
+
+    # Guards the two fixtures whose wrong-reason pass tasks.md 2.1 and 2.4
+    # each call out. If A and B were one image ID with two tags, Docker
+    # would untag rather than remove and both halves of the supersession
+    # assertion would pass with no disk reclaimed; if the held image
+    # carried a second tag, its removal would succeed by untagging and the
+    # unforced-removal assertion would prove nothing.
+    - name: Reclaim fixture self-check -- collect the fixture image IDs and the held image's tag count
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker images -q ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-a
+        docker images -q ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b
+        docker images -q ghcr.io/reclaim-fixture-previous-owner/commerce-ops:fixture-legacy
+        docker images -q ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped
+        docker image inspect --format '{% raw %}{{len .RepoTags}}{% endraw %}' \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped
+      args:
+        executable: /bin/bash
+      register: deploy_user_reclaim_fixture_selfcheck
+      changed_when: false
+
+    - name: Assert the four in-namespace fixtures are distinct images and the held one carries exactly one tag
+      ansible.builtin.assert:
+        that:
+          - deploy_user_reclaim_fixture_selfcheck.stdout_lines | length == 5
+          - deploy_user_reclaim_fixture_selfcheck.stdout_lines[0:4] | unique | length == 4
+          - deploy_user_reclaim_fixture_selfcheck.stdout_lines[4] == "1"
+        fail_msg: >-
+          The fixture images are not what the assertions below assume.
+          Either two of them share an image ID -- in which case
+          `docker image rm` untags instead of removing and the
+          supersession assertions pass without any disk being reclaimed --
+          or the stopped-container image carries more than one tag, which
+          makes its removal succeed by untagging and turns the
+          unforced-removal assertion into a wrong-reason pass. Collected:
+          {{ deploy_user_reclaim_fixture_selfcheck.stdout_lines }}
+
+    - name: Reclaim fixture -- build the deploy archive referencing image B and the shared base image
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf /tmp/reclaim_archive_tag_b
+        mkdir -p /tmp/reclaim_archive_tag_b
+        cat > /tmp/reclaim_archive_tag_b/docker-compose.yml <<'COMPOSE'
+        services:
+          app:
+            image: ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b
+            pull_policy: never
+            command: ["sleep", "3600"]
+          base:
+            image: alpine:3.19
+            pull_policy: never
+            command: ["sleep", "3600"]
+        COMPOSE
+        printf 'FOO=bar\n' > /tmp/reclaim_archive_tag_b/.env
+        tar -czf /tmp/reclaim_archive_tag_b.tar.gz -C /tmp/reclaim_archive_tag_b docker-compose.yml .env
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Reclaim -- deploy commerce-ops at fixture-tag-b (deploy 2 of 2, the run every assertion below reads)
+      ansible.builtin.shell: set -o pipefail; cat /tmp/reclaim_archive_tag_b.tar.gz | /usr/local/bin/deploy-receive commerce-ops
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_reclaim_second_deploy
+      changed_when: false
+      failed_when: false
+
+    - name: Reclaim -- report what survived the second deploy
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for ref in \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-a \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b \
+          ghcr.io/reclaim-fixture-previous-owner/commerce-ops:fixture-legacy \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped \
+          alpine:3.19 \
+          alpine:reclaim-decoy; do
+          if [ -n "$(docker images -q "$ref")" ]; then
+            echo "PRESENT $ref"
+          else
+            echo "ABSENT $ref"
+          fi
+        done
+        if [ -n "$(docker ps -q --filter ancestor=ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b)" ]; then
+          echo "RUNNING-ON fixture-tag-b"
+        else
+          echo "NOT-RUNNING-ON fixture-tag-b"
+        fi
+        if [ -n "$(docker ps -aq --filter name=reclaim_stopped_holder --filter status=exited)" ]; then
+          echo "STOPPED-HOLDER present"
+        else
+          echo "STOPPED-HOLDER absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: deploy_user_reclaim_after_second
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Scenario: A deploy removes the image its predecessor left behind
+    # ------------------------------------------------------------
+    - name: Assert the superseded tag is gone after the second deploy and the deployed tag remains
+      ansible.builtin.assert:
+        that:
+          - "'ABSENT ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-a' in deploy_user_reclaim_after_second.stdout_lines"
+          - "'PRESENT ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b' in deploy_user_reclaim_after_second.stdout_lines"
+        fail_msg: >-
+          After deploying commerce-ops at fixture-tag-b over a host that
+          was running fixture-tag-a, the superseded tag SHALL no longer be
+          present and the deployed tag SHALL be. Present/absent report:
+          {{ deploy_user_reclaim_after_second.stdout_lines }} -- deploy
+          output: {{ deploy_user_reclaim_second_deploy.stdout }}
+          {{ deploy_user_reclaim_second_deploy.stderr }}
+
+    # ------------------------------------------------------------
+    # Scenario: The image the running containers use is never removed
+    # ------------------------------------------------------------
+    - name: Assert every image the current Compose file references survived and its containers are running
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b' in deploy_user_reclaim_after_second.stdout_lines"
+          - "'PRESENT alpine:3.19' in deploy_user_reclaim_after_second.stdout_lines"
+          - "'RUNNING-ON fixture-tag-b' in deploy_user_reclaim_after_second.stdout_lines"
+        fail_msg: >-
+          Reclamation removed an image the application's current Compose
+          file references, or left its containers not running. Both
+          referenced images (fixture-tag-b and the alpine:3.19 base) SHALL
+          still be present and the application SHALL still be up.
+          Present/absent report: {{ deploy_user_reclaim_after_second.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Scenario: An image held by a stopped container is not removed
+    #
+    # The assertion that catches a later `-f`. Without it the design's
+    # only backstop against a defective reference set is unenforced
+    # (tasks.md 2.4). The held image is in the namespace, is referenced by
+    # no Compose service, and carries exactly one tag -- so the runtime's
+    # refusal is the only thing that can keep it, and `-f` or
+    # `image prune -a` would take it.
+    # ------------------------------------------------------------
+    - name: Assert the unreferenced image a stopped container holds was not removed, and the container still holds it
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped' in deploy_user_reclaim_after_second.stdout_lines"
+          - "'STOPPED-HOLDER present' in deploy_user_reclaim_after_second.stdout_lines"
+        fail_msg: >-
+          An in-namespace image that no Compose service references but a
+          STOPPED container still holds was removed. Removal SHALL NOT be
+          forced -- the container runtime's own refusal is what stands
+          between a defective reference set and an image still in use, so
+          this is what `-f` or `docker image prune -a` looks like from the
+          outside. Present/absent report:
+          {{ deploy_user_reclaim_after_second.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Scenario: An image shared with another application is never a
+    # candidate
+    #
+    # alpine:reclaim-decoy is a second tag of the same base repository the
+    # deployed Compose file references. It is deliberately a `docker tag`
+    # of alpine:3.19 rather than a build: that shared image ID is what
+    # gives this assertion teeth, because Docker refuses removal only
+    # where it would drop an image's LAST reference and untags a redundant
+    # tag successfully. A namespace filter wrongly widened to `alpine:*`
+    # would therefore untag the decoy without error, and this assertion
+    # would catch it -- where a fixture whose image nothing else
+    # referenced would have been protected by the running container
+    # instead, and would have proved nothing about the filter.
+    # ------------------------------------------------------------
+    - name: Assert a second tag of a shared base-image repository survived the deploy
+      ansible.builtin.assert:
+        that:
+          - "'PRESENT alpine:reclaim-decoy' in deploy_user_reclaim_after_second.stdout_lines"
+        fail_msg: >-
+          alpine:reclaim-decoy is gone. Reclamation SHALL NOT consider an
+          image reference outside the application's own
+          ghcr.io/<owner>/<app_name> namespace, so a base image shared
+          with another application on the host is never a candidate for
+          removal by any application's deploy. Present/absent report:
+          {{ deploy_user_reclaim_after_second.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Scenario: Images published under a previous owner are reclaimed
+    # ------------------------------------------------------------
+    - name: Assert an image under a previous owner segment but the same application name was reclaimed
+      ansible.builtin.assert:
+        that:
+          - "'ABSENT ghcr.io/reclaim-fixture-previous-owner/commerce-ops:fixture-legacy' in deploy_user_reclaim_after_second.stdout_lines"
+        fail_msg: >-
+          An image under ghcr.io/<previous owner>/commerce-ops survived a
+          deploy referencing ghcr.io/<current owner>/commerce-ops. The
+          namespace is matched on the application name with ANY owner
+          segment, not on the owner in force at the time -- an
+          owner-pinned pattern strands every image published under an
+          owner the application has since left, permanently and invisibly.
+          Present/absent report: {{ deploy_user_reclaim_after_second.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Scenario: A failed reclamation does not fail a successful deploy
+    #
+    # A real induction, not a stubbed one (tasks.md 2.6): the
+    # stopped-container image above makes `docker image rm` genuinely fail
+    # on this very run. A test asserting the exit status without making
+    # any removal fail would pass against a reclamation step that matched
+    # nothing at all.
+    # ------------------------------------------------------------
+    - name: Assert a deploy whose reclamation could not remove an image still exits successfully with its containers up
+      ansible.builtin.assert:
+        that:
+          - deploy_user_reclaim_second_deploy.rc == 0
+          - "'RUNNING-ON fixture-tag-b' in deploy_user_reclaim_after_second.stdout_lines"
+        fail_msg: >-
+          app-deploy exited {{ deploy_user_reclaim_second_deploy.rc }} on a
+          deploy whose containers came up healthy and whose reclamation
+          then met a removal the runtime refused. Reclamation SHALL NOT
+          change the outcome of a deploy that has already succeeded: a
+          failure to enumerate or remove any image SHALL leave the deploy
+          reported as successful and SHALL NOT fail the invoking SSH
+          session. stdout: {{ deploy_user_reclaim_second_deploy.stdout }}
+          stderr: {{ deploy_user_reclaim_second_deploy.stderr }}
+
+    # ------------------------------------------------------------
+    # Scenario: A completed run reports what it did (the removed-something
+    # half; the found-nothing half is asserted on the platform deploy at
+    # the end of this block)
+    #
+    # The report is the step's ONLY per-run signal -- `|| true` swallows
+    # every other one -- so it is asserted on the path it is most often
+    # read on, not only on the early-exit paths.
+    #
+    # DERIVED, and the manifest records it as such: the delta requires a
+    # completed run to "report how many images it considered and how many
+    # it removed" but fixes no wording. The words matched here are
+    # tasks.md 1.9's own (`considered N, removed M`). The removed count is
+    # asserted at 2 -- fixture-tag-a and the previous-owner image -- while
+    # `considered` is only required to be a number, because "considered"
+    # admits both "candidates found" and "namespace members enumerated"
+    # and the delta settles neither.
+    # ------------------------------------------------------------
+    - name: Assert the completed run reported how many images it considered and how many it removed
+      vars:
+        reclaim_second_output: >-
+          {{ deploy_user_reclaim_second_deploy.stdout ~ ' ' ~ deploy_user_reclaim_second_deploy.stderr }}
+        reclaim_second_report: >-
+          {{ (reclaim_second_output
+             | regex_search('app-deploy: reclamation considered [0-9]+, removed ([0-9]+)', '\1')
+             | default([], true) | first) | default('') }}
+      ansible.builtin.assert:
+        that:
+          - reclaim_second_report != ''
+          - reclaim_second_report | int == 2
+        fail_msg: >-
+          A reclamation run that completed SHALL report how many images it
+          considered and how many it removed, and this run removed exactly
+          two (the superseded tag and the previous-owner image; the
+          stopped-container image was refused). Reported removed count
+          read as '{{ reclaim_second_report }}'. Deploy output was:
+          {{ reclaim_second_output }}
+
+    # Built HERE for the same reason as the previous-owner image: an
+    # unheld, unreferenced in-namespace image standing before the second
+    # deploy would simply have been reclaimed by it. Its whole job is to
+    # be removable, so that the degraded run below is discriminating --
+    # without it, every remaining namespace member is held by a container
+    # and a reclamation that ignored the empty/undeterminable guard
+    # entirely would still remove nothing, and the scenario would pass for
+    # the wrong reason.
+    #
+    # NOT one of the four fixtures tasks.md 2.8 enumerates. Recorded in
+    # test-plan.md as a derived addition, with that reasoning.
+    - name: Reclaim fixture -- build the removable canary the degraded run must leave alone
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf /tmp/reclaim_build_fixture-canary
+        mkdir -p /tmp/reclaim_build_fixture-canary
+        printf 'FROM alpine:3.19\nRUN echo fixture-canary > /reclaim-fixture-marker\n' \
+          > /tmp/reclaim_build_fixture-canary/Dockerfile
+        docker build -t ghcr.io/reclaim-fixture/commerce-ops:fixture-canary /tmp/reclaim_build_fixture-canary
+      args:
+        executable: /bin/bash
+      environment:
+        DOCKER_BUILDKIT: "0"
+      changed_when: false
+
+    # The reference set is made UNDETERMINABLE, which is the half of the
+    # scenario tasks.md 2.5 asks for ("with `docker compose config
+    # --images` unable to produce a set"). The other half -- a reference
+    # set determined to be empty -- is not reachable through this path:
+    # `docker compose up -d --wait` over a Compose file declaring no
+    # services at all, or none outside an inactive profile, exits 1 with
+    # "no service selected", so the deploy fails and reclamation never
+    # runs. (Checked directly, 2026-09-07, against Compose v5.4.0. It also
+    # falsifies molecule.yml's header claim that "an empty `services: {}`
+    # Compose file keeps `docker compose pull && up -d --wait` a real,
+    # fast, no-registry-needed success" -- see test-plan.md.)
+    #
+    # So the deploy brings up a service that corrupts the project's own
+    # Compose file and only then reports healthy. `up -d --wait` returns
+    # 0, having loaded the file before it was corrupted; the reclamation
+    # step that follows re-reads it and cannot produce a reference set.
+    # The healthcheck is what makes this deterministic rather than racy:
+    # `--wait` returns only once the corruption has happened.
+    #
+    # This is deliberately the LAST deploy in the scenario, because it
+    # leaves /opt/commerce-ops/docker-compose.yml invalid. A later
+    # `molecule verify` re-run is self-healing -- deploy-receive
+    # overwrites that file from the archive on the first deploy above.
+    - name: Reclaim fixture -- build the deploy archive that makes the reference set undeterminable
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf /tmp/reclaim_archive_degraded
+        mkdir -p /tmp/reclaim_archive_degraded
+        cat > /tmp/reclaim_archive_degraded/docker-compose.yml <<'COMPOSE'
+        services:
+          wrecker:
+            image: alpine:3.19
+            pull_policy: never
+            volumes:
+              - /opt/commerce-ops:/project
+            command: ["sh", "-c", "echo 'services: [' > /project/docker-compose.yml; touch /tmp/wrecked; sleep 3600"]
+            healthcheck:
+              test: ["CMD-SHELL", "test -f /tmp/wrecked"]
+              interval: 1s
+              timeout: 2s
+              retries: 30
+              start_period: 1s
+        COMPOSE
+        printf 'FOO=bar\n' > /tmp/reclaim_archive_degraded/.env
+        tar -czf /tmp/reclaim_archive_degraded.tar.gz -C /tmp/reclaim_archive_degraded docker-compose.yml .env
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Reclaim -- deploy commerce-ops with a Compose file that is corrupted before reclamation reads it
+      ansible.builtin.shell: set -o pipefail; cat /tmp/reclaim_archive_degraded.tar.gz | /usr/local/bin/deploy-receive commerce-ops
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_reclaim_degraded_deploy
+      changed_when: false
+      failed_when: false
+
+    - name: Reclaim -- report what survived the degraded run, and confirm the reference set really was undeterminable
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for ref in \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-canary \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b \
+          ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped; do
+          if [ -n "$(docker images -q "$ref")" ]; then
+            echo "PRESENT $ref"
+          else
+            echo "ABSENT $ref"
+          fi
+        done
+        cd /opt/commerce-ops
+        if docker compose config --images >/dev/null 2>&1; then
+          echo "REFERENCE-SET determinable"
+        else
+          echo "REFERENCE-SET undeterminable"
+        fi
+      args:
+        executable: /bin/bash
+      register: deploy_user_reclaim_after_degraded
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Scenario: An unavailable or empty reference set reclaims nothing
+    # ------------------------------------------------------------
+    - name: Assert a run that could not determine the reference set removed no image in the namespace
+      ansible.builtin.assert:
+        that:
+          - "'REFERENCE-SET undeterminable' in deploy_user_reclaim_after_degraded.stdout_lines"
+          - "'PRESENT ghcr.io/reclaim-fixture/commerce-ops:fixture-canary' in deploy_user_reclaim_after_degraded.stdout_lines"
+          - "'PRESENT ghcr.io/reclaim-fixture/commerce-ops:fixture-tag-b' in deploy_user_reclaim_after_degraded.stdout_lines"
+          - "'PRESENT ghcr.io/reclaim-fixture/commerce-ops:fixture-held-by-stopped' in deploy_user_reclaim_after_degraded.stdout_lines"
+        fail_msg: >-
+          Where the reference set cannot be determined, reclamation SHALL
+          remove nothing on that run. The canary is an in-namespace image
+          that no container holds and no Compose service references, so a
+          filter that degraded to "everything in the namespace is
+          unreferenced" -- which is what `grep -vxF -f` over an empty
+          pattern file does -- takes exactly this image and leaves the
+          held ones behind. If REFERENCE-SET reads determinable instead,
+          the fixture failed to induce the condition and this is a broken
+          test, not a defect. Report:
+          {{ deploy_user_reclaim_after_degraded.stdout_lines }}
+
+    # ------------------------------------------------------------
+    # Scenario: A run that ends early says why (the
+    # empty-or-undeterminable-reference-set half; the duration-bound half
+    # is deliberately uncovered, per the block header)
+    #
+    # DERIVED wording, as above: the delta fixes what must be
+    # distinguishable, not how it is spelled. `considered` is the marker
+    # of tasks.md 1.9's completed-run line and appears on no other path,
+    # so its ABSENCE here is what makes this run distinguishable from a
+    # completed run that found nothing to reclaim.
+    # ------------------------------------------------------------
+    - name: Assert the early-exit run reported its reason, distinguishably from a completed run that found nothing
+      vars:
+        reclaim_degraded_output: >-
+          {{ deploy_user_reclaim_degraded_deploy.stdout ~ ' ' ~ deploy_user_reclaim_degraded_deploy.stderr }}
+      ansible.builtin.assert:
+        that:
+          - deploy_user_reclaim_degraded_deploy.rc == 0
+          - reclaim_degraded_output is search('reference set', ignorecase=True)
+          - not (reclaim_degraded_output is search('considered', ignorecase=True))
+        fail_msg: >-
+          A reclamation abandoned because the reference set was empty or
+          could not be determined SHALL report which of those ended it,
+          distinguishably from a completed run that found nothing to
+          reclaim -- and SHALL still leave the deploy successful. Since
+          every failure here is otherwise swallowed, a run that reports
+          nothing is indistinguishable from one working correctly. Deploy
+          rc {{ deploy_user_reclaim_degraded_deploy.rc }}, output:
+          {{ reclaim_degraded_output }}
+
+    - name: Read the installed app-deploy script
+      ansible.builtin.slurp:
+        src: /usr/local/bin/app-deploy
+      register: deploy_user_reclaim_installed_script
+
+    - name: Assert the installed script keeps its untagged guard, its duration bound, and forces no removal
+      vars:
+        # Line-wise by construction. An earlier form joined the stripped
+        # lines and searched the result, which needed `.split('\n')` -- and in
+        # a folded (>-) scalar that is a LITERAL backslash-n, so it split on
+        # the script's `printf` format strings instead of on lines, leaving
+        # everything before the first `printf` unassertable. Operating on the
+        # list avoids the escaping question entirely.
+        reclaim_code_lines: >-
+          {{ (deploy_user_reclaim_installed_script.content | b64decode).splitlines()
+             | reject('match', '\s*#') | list }}
+      ansible.builtin.assert:
+        that:
+          - reclaim_code_lines | select('search', "grep -v ':<none>\\$'") | list | length > 0
+          - reclaim_code_lines | select('search', 'timeout -k [1-9][0-9]* [1-9][0-9]* bash') | list | length > 0
+          - reclaim_code_lines | select('search', '(rmi|image (rm|remove)).*(\s-f\b|--force)') | list | length == 0
+          - reclaim_code_lines | select('search', '(image|system) prune') | list | length == 0
+        fail_msg: >-
+          The installed app-deploy has lost one of the properties this
+          scenario cannot induce. The `grep -v ':<none>$'` guard keeps a
+          digest-pinned image out of the candidate set -- asserted with its
+          `grep -v` intact, since an inverted guard would still contain the
+          pattern. `timeout -k N M` is what stops a wedged runtime holding
+          the deploy session open; the kill-after is part of it, and the
+          durations must be non-zero, since GNU `timeout 0` disables the
+          bound entirely. A forced removal in any spelling (`-f`, `--force`,
+          `docker rmi`, `image remove`) or any `prune` would destroy the
+          runtime's refusal, which is the only backstop between a defective
+          reference set and an image still in use.
+          Code lines seen: {{ reclaim_code_lines | length }}.
+
+    # ------------------------------------------------------------
+    # Scenario: A completed run reports what it did (the found-nothing
+    # half)
+    #
+    # Asserted against the `platform` deploy this scenario already
+    # performs above, rather than a deploy of its own: `platform`
+    # publishes no image of its own, so ghcr.io/<any owner>/platform is
+    # permanently empty and that deploy is a free instance of the
+    # completed-but-removed-nothing path (tasks.md 2.9). It is also the
+    # path tasks.md 1.9 warns is the ORDINARY one for platform and the
+    # easiest to lose: a `grep` over an empty namespace exits 1, which
+    # under `set -euo pipefail` can abandon the group before the report
+    # runs.
+    # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # Static assertions over the INSTALLED script, in the same idiom as
+    # this scenario's existing authorized_keys and sudoers content checks.
+    #
+    # Two delta clauses are held by review alone because they cannot be
+    # induced here -- the untagged exclusion (no registry, so no repo
+    # digest) and the duration bound (wedging the daemon would break the
+    # `docker compose pull` the deploy needs). The no-force clause IS
+    # induced behaviourally, by the stopped-container fixture above; these
+    # checks are its second line, not its only one.
+    #
+    # Asserted against the script with COMMENT LINES STRIPPED. The script
+    # explains each of these properties in prose, so a naive `search` for
+    # `timeout ` matches the comment describing the bound and stays green
+    # after the bound itself is deleted -- a guard that cannot fail.
+    # ------------------------------------------------------------
+    - name: Assert the platform deploy, whose namespace is empty by design, still reported its counts
+      vars:
+        reclaim_platform_output: >-
+          {{ deploy_user_per_app_decoy_pipe.stdout ~ ' ' ~ deploy_user_per_app_decoy_pipe.stderr }}
+        reclaim_platform_considered: >-
+          {{ (reclaim_platform_output
+             | regex_search('app-deploy: reclamation considered ([0-9]+), removed [0-9]+', '\1')
+             | default([], true) | first) | default('') }}
+        reclaim_platform_removed: >-
+          {{ (reclaim_platform_output
+             | regex_search('app-deploy: reclamation considered [0-9]+, removed ([0-9]+)', '\1')
+             | default([], true) | first) | default('') }}
+      ansible.builtin.assert:
+        that:
+          - reclaim_platform_considered != ''
+          - reclaim_platform_considered | int == 0
+          - reclaim_platform_removed | int == 0
+        fail_msg: >-
+          Reclamation SHALL report on every run, whether it removed images
+          or found nothing to remove. The platform deploy's namespace is
+          empty by design, so this is the completed-but-removed-nothing
+          path, and it is the one most easily lost to an enumeration that
+          exits non-zero before the report runs. Read considered
+          '{{ reclaim_platform_considered }}' / removed
+          '{{ reclaim_platform_removed }}' from deploy rc
+          {{ deploy_user_per_app_decoy_pipe.rc }}, output:
+          {{ reclaim_platform_output }}

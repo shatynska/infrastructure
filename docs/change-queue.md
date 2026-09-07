@@ -405,3 +405,30 @@ meant to prevent. The monitoring stack now collects exactly the data needed —
 `container_memory_usage_bytes` by container, already on the "Container health"
 dashboard. Let it run long enough to show real steady-state and peak, then size
 from observation.
+
+## 10. prune-unreferenced-host-images-periodically
+
+**Not blocked.** Recorded rather than folded into
+`reclaim-superseded-app-images`, whose proposal names both of these as
+non-goals: that change reclaims an application's superseded images *when it
+deploys*, which by construction cannot reach two classes of image.
+
+- **Fully dangling images and layers** carry no repository name, so they fall
+  outside every application's namespace.
+- **Untagged images that are *inside* a namespace** — images referenced by
+  digest, which keep their repository name but show no tag — are deliberately
+  left alone there, because a tag-shaped reference set can never name them and
+  treating them as unreferenced would delete a live pin.
+- **Images of an application that no longer deploys** are never revisited,
+  because reclamation is driven by a deploy that will not happen again.
+
+All three want the opposite trigger — a host-level timer rather than a deploy — and
+a blunter filter (`docker image prune -af --filter until=<age>`), whose
+untargeted nature is acceptable on a timer and was not acceptable inside a
+deploy path. That difference in mechanism, not merely in scope, is why it is a
+separate change.
+
+Worth doing only after `reclaim-superseded-app-images` has been observed
+working: if the per-deploy reclamation is doing its job, this becomes a small
+safety net rather than the primary mechanism, and its retention window can be
+chosen accordingly.

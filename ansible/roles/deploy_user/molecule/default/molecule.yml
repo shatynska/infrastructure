@@ -21,9 +21,13 @@
 # independent of it. Two things in this change's scope need a real
 # `docker` CLI to be meaningfully exercised at all: `app-deploy`'s trigger
 # (assert it actually runs, not just that sudo permits it) and the GHCR
-# credential-store check (task 3.3). An empty `services: {}` Compose file
-# keeps `docker compose pull && up -d --wait` a real, fast,
-# no-registry-needed success even with Docker actually installed.
+# credential-store check (task 3.3). The fixture Compose files declare one
+# small service on a public base image, which keeps
+# `docker compose pull && up -d --wait` a real, fast success even with
+# Docker actually installed. NOT an empty `services: {}` file, which this
+# comment claimed until reclaim-superseded-app-images checked it: Compose
+# exits 1 with `no service selected` on a file declaring no services, so
+# `up -d --wait` would fail rather than succeed quickly.
 dependency:
   name: galaxy
   options:
