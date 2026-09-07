@@ -233,7 +233,7 @@ here. The step is:
 sudo bash -s <<'SH'
 set -euo pipefail
 cd /opt/commerce-ops
-keep=$(docker compose config --images | sort -u) || keep=""
+keep=$(docker compose config --images | sed 's|^[^:]*$|&:latest|' | sort -u) || keep=""
 [ -n "$keep" ] || { echo "reference set empty or unavailable; aborting" >&2; exit 1; }
 docker images --format '{{.Repository}}:{{.Tag}}' \
   | grep -E '^ghcr\.io/[^/]+/commerce-ops:' \
@@ -243,6 +243,12 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 echo "remaining:"; docker images --format '{{.Repository}}:{{.Tag}}' | grep -cE '^ghcr\.io/[^/]+/commerce-ops:' || true
 SH
 ```
+
+The `sed` is the same tag normalisation the script performs, and it is here for
+the same reason: without it a Compose reference rendered without an explicit
+`:latest` fails to match its own local tag, the live image becomes a candidate,
+and the operator sees a refused removal during the one run where this document
+says such noise is most likely to be answered with `-f`.
 
 The two tolerances are not sloppiness. `keep=$(…) || keep=""` exists so a failing
 `docker compose config` reaches the guard's own message instead of being killed

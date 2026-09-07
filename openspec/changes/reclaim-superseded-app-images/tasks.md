@@ -1,45 +1,45 @@
 ## 1. Implementation
 
-- [ ] 1.1 Wrap the script body in `{% raw %}…{% endraw %}`. It lives in a
+- [x] 1.1 Wrap the script body in `{% raw %}…{% endraw %}`. It lives in a
   `copy:` task's `content:`, which Ansible renders as Jinja, and
   `docker images --format '{{.Repository}}:{{.Tag}}'` is Go template syntax that
   Jinja will try to evaluate. No `--format` and no `{% raw %}` appears anywhere
   under `ansible/` today, so there is no precedent to copy. Fails loudly at
   converge, not silently — but budget for it.
-- [ ] 1.2 Extend the `app-deploy` script content in
+- [x] 1.2 Extend the `app-deploy` script content in
   `ansible/roles/deploy_user/tasks/main.yml` with a reclamation step that runs
   after `docker compose up -d --wait`: take the reference set from
   `docker compose config --images`, enumerate local images matching
   `ghcr.io/<any owner>/<app>:`, and remove those not in the reference set.
-- [ ] 1.3 Compute the reference set **first** and abandon the run where it is
+- [x] 1.3 Compute the reference set **first** and abandon the run where it is
   empty or could not be computed. An empty pattern file makes `grep -vxF -f`
   match every line, so the degraded path must be an explicit early return, not
   a consequence of the filter. Match whole lines (`-x`): `-F` alone matches
   substrings, so a reference entry that is a prefix of another local tag would
   protect the wrong image. Normalise both sides to a tagged form first — the
   local listing always emits a tag, a Compose reference without one may not.
-- [ ] 1.4 Remove with plain `docker image rm`. Do not pass `-f`, and do not
+- [x] 1.4 Remove with plain `docker image rm`. Do not pass `-f`, and do not
   substitute `docker image prune -a`: a refused removal is the expected outcome
   for the live tag on every run, and that refusal is the design's only backstop
   against a wrong reference set.
-- [ ] 1.5 Exclude untagged members of the namespace (`<none>` tags), which are
+- [x] 1.5 Exclude untagged members of the namespace (`<none>` tags), which are
   digest-referenced images that cannot appear in a tag-shaped reference set.
-- [ ] 1.6 Isolate the step's failure as a single unit — a function invoked as
+- [x] 1.6 Isolate the step's failure as a single unit — a function invoked as
   `reclaim || true`, or one `{ …; } || true` group. A trailing `|| true` on the
   last of several lines protects only that line, leaving a script under
   `set -euo pipefail` able to fail a deploy that already succeeded.
-- [ ] 1.7 Do not invoke the removal with an empty candidate list: pass `-r`
+- [x] 1.7 Do not invoke the removal with an empty candidate list: pass `-r`
   where `xargs` is used, or guard the loop. Without it `docker image rm` runs
   with no arguments on every deploy that has nothing to reclaim, producing a
   usage error that `|| true` then hides — the recurring noise design.md warns
   invites someone to "make it stop".
-- [ ] 1.8 Bound the whole reclamation step with `timeout`, enumeration included
+- [x] 1.8 Bound the whole reclamation step with `timeout`, enumeration included
   — `docker images` and `docker compose config` are calls to the same daemon the
   removals are, so a bound around only the removals leaves the wedged-daemon case
   reachable. Pick a value generous against a legitimate steady-state run (order
   of a minute, not of a second) and record it in the script comment. Expiry is a
   reclamation failure like any other: swallowed, deploy still successful.
-- [ ] 1.9 Report on every exit path, split by path because the paths cannot
+- [x] 1.9 Report on every exit path, split by path because the paths cannot
   know the same things. The bounded region prints `considered N, removed M` when
   it completes, and prints its reason when it aborts on an empty or
   undeterminable reference set. The **wrapper** prints the timeout line from
@@ -61,7 +61,7 @@
   workflow. A report reachable only on the ordinary path reports only when
   nothing is wrong, which inverts what it is for.
 
-- [ ] 1.10 Update `ansible/roles/deploy_user/README.md`, whose "The unified
+- [x] 1.10 Update `ansible/roles/deploy_user/README.md`, whose "The unified
   shape" section states that `app-deploy` "runs `docker compose pull && docker
   compose up -d --wait` in that directory" — true until this change and
   incomplete after it. Extend the onboarding paragraph in that same section too:
@@ -80,7 +80,7 @@
   leaving behind the part this change makes untrue is not. This repository already carries a queued entry
   (`docs/change-queue.md` 9) about documentation that stopped being true; not
   adding to it is cheaper than sweeping it later.
-- [ ] 1.11 Comment the script body with why the namespace is scoped to the
+- [x] 1.11 Comment the script body with why the namespace is scoped to the
   application's own repository, why the owner segment is a wildcard, why
   removal is never forced, and that the application's deploy name must equal
   the second segment of its image repository for any of it to match — the
@@ -88,7 +88,7 @@
 
 ## 2. Tests
 
-- [ ] 2.1 Extend `ansible/roles/deploy_user/molecule/default/` to deploy an
+- [x] 2.1 Extend `ansible/roles/deploy_user/molecule/default/` to deploy an
   application twice at two different tags of one namespaced repository, and
   assert the superseded tag is gone and the live one remains. Assert the
   reported counts of that second run too — otherwise nothing anywhere checks the
@@ -97,26 +97,26 @@
   two tags of one image ID: Docker untags rather than removes in that case, so
   both assertions would pass without any disk having been reclaimed — the same
   hazard 2.4 names for its own fixture.
-- [ ] 2.2 Cover the shared-base case: a second tag of a base image repository
+- [x] 2.2 Cover the shared-base case: a second tag of a base image repository
   present on the host survives a deploy of an application referencing that
   repository.
-- [ ] 2.3 Cover the previous-owner case: an image under a different owner
+- [x] 2.3 Cover the previous-owner case: an image under a different owner
   segment but the same application name is reclaimed.
-- [ ] 2.4 Cover unforced removal: an in-namespace image that no Compose service
+- [x] 2.4 Cover unforced removal: an in-namespace image that no Compose service
   references, held by a **stopped** container, survives the deploy. This is the
   assertion that catches a later `-f`; without it the backstop is unenforced.
   The fixture image MUST carry exactly one tag — Docker refuses removal only
   where it would drop the last reference, so a second tag makes the command
   succeed by untagging and the assertion fails against a correct
   implementation, or passes for the wrong reason.
-- [ ] 2.5 Cover the degraded reference set: with `docker compose config
+- [x] 2.5 Cover the degraded reference set: with `docker compose config
   --images` unable to produce a set, no image in the namespace is removed.
-- [ ] 2.6 Cover failure isolation with a real induction, not a stubbed one: the
+- [x] 2.6 Cover failure isolation with a real induction, not a stubbed one: the
   stopped-container image from 2.4 makes `docker image rm` genuinely fail, and
   `app-deploy` must still exit zero with the containers running. A test that
   asserts the exit status without making any removal fail would pass against a
   reclamation step that matched nothing at all.
-- [ ] 2.7 The untagged exclusion is **not covered by a test**, and this is a
+- [x] 2.7 The untagged exclusion is **not covered by a test**, and this is a
   deliberate, recorded gap in the same shape as 2.9's. The fixture it would need
   is an in-namespace image carrying no tag, and that arises only from a repo
   digest — i.e. a real pull from a registry, which 2.8 forbids on determinism
@@ -133,7 +133,7 @@
   is currently unreachable. **Revisit this if any application ever adopts a
   digest pin**, at which point the registry fixture becomes worth its scope.
 
-- [ ] 2.8 Build **four** distinct `ghcr.io/…`-shaped fixture images inside the
+- [x] 2.8 Build **four** distinct `ghcr.io/…`-shaped fixture images inside the
   instance, one `docker build` each from a two-line `FROM alpine:3.19` plus a
   per-fixture distinguishing layer: two tags of one namespaced repository for
   2.1, a previous-owner reference for 2.3, and the stopped-container image for
@@ -173,7 +173,7 @@
   repository's control is the class of dependency that capability's
   digest-pinning obligation exists to exclude. Where the local-build route
   fails, **raise it**.
-- [ ] 2.9 Cover the early-exit reports: assert the empty/undeterminable
+- [x] 2.9 Cover the early-exit reports: assert the empty/undeterminable
   reference-set path reports its reason, distinguishably from a run that found
   nothing to reclaim. Assert the found-nothing branch too, on the `platform`
   deploy the scenario already performs at `verify.yml:121` — `platform`
@@ -187,10 +187,10 @@
 
 ## 3. Verification
 
-- [ ] 3.1 `pre-commit run --all-files` (`ansible-lint`,
+- [x] 3.1 `pre-commit run --all-files` (`ansible-lint`,
   `ansible-playbook --syntax-check`, `gitleaks`, `terraform fmt`).
-- [ ] 3.2 `molecule test -s default` for the `deploy_user` role.
-- [ ] 3.3 `python3 -m unittest discover --start-directory .github/tests` from
+- [x] 3.2 `molecule test -s default` for the `deploy_user` role.
+- [x] 3.3 `python3 -m unittest discover --start-directory .github/tests` from
   the repository root. Not merely a formality: `AGENTS.md` puts
   `ansible/roles/*/molecule/*/molecule.yml` in that suite's scope, and this
   change may touch that file.

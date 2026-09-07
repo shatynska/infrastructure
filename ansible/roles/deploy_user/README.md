@@ -30,12 +30,30 @@ those two members into `/opt/<name>` -- nothing else the archive might
 contain, regardless of its name -- sets restrictive permissions on the
 extracted `.env`, and triggers `sudo /usr/local/bin/app-deploy <name>`,
 which runs `docker compose pull && docker compose up -d --wait` in that
-directory. No second command ever needs to reach the host over a given
-key.
+directory and then reclaims the images that application's previous
+deploys left behind. No second command ever needs to reach the host over
+a given key.
+
+Reclamation is scoped to the application's own image namespace --
+`ghcr.io/<any owner>/<name>` -- and removes the tags there that the
+application's current Compose file does not reference. It runs after the
+containers are healthy, never forces a removal, is bounded in duration,
+reports what it did, and cannot fail a deploy that has already succeeded.
+See `openspec/specs/iac-host-configuration/spec.md`, "Superseded
+Application Images Are Reclaimed at Deploy Time".
 
 Onboarding a new application requires only a new keypair, one
 `authorized_keys` line, one `sudoers.d` entry, and one `/opt/<name>`
 directory -- not a new Unix account, home directory, or sudoers structure.
+
+One coupling to honour while doing so: an application's images must live
+at exactly `ghcr.io/<owner>/<name>` -- two path segments after the
+registry, the last of them equal to the name used here -- because that is
+how reclamation identifies the images it owns. Both an application
+deployed as `foo` whose images live at `ghcr.io/<owner>/bar`, and one
+publishing to a deeper path such as `ghcr.io/<owner>/foo/api`, have an
+empty namespace and reclaim nothing -- silently, and indistinguishably
+from an application that had nothing to reclaim.
 
 ## Key storage
 

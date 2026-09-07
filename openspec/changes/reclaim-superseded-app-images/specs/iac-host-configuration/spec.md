@@ -12,9 +12,10 @@ was invoked with and **any** owner segment. Reclamation SHALL NOT consider an
 image reference outside that namespace, so an image shared with another
 application on the host — a base image such as `postgres:16` or
 `traefik:v3.7.10` — is never a candidate for removal by any application's
-deploy. An application whose deploy name is not the second path segment of its
-own image repository therefore has an empty namespace and reclaims nothing at
-all — silently, and indistinguishably from an application that had nothing to
+deploy. The namespace is exactly two path segments after the registry, the last
+of them equal to the application name, so an application whose images live at a
+deeper path (`ghcr.io/<owner>/<app_name>/<component>`) or under a differing
+name has an empty namespace and reclaims nothing at all — silently, and indistinguishably from an application that had nothing to
 reclaim. That coupling SHALL be recorded in the deploy role's own onboarding
 documentation, so it is discoverable where an application is onboarded rather
 than only in the body of the script.
@@ -73,9 +74,16 @@ prevent.
 What is reported differs by how the run ended, because not every path can know
 the same things. A run that **completed** SHALL report how many images it
 considered and how many it removed. A run **abandoned early** — because the
-reference set was empty or undeterminable, or because it reached its duration
-bound — SHALL instead report which of those ended it, and SHALL be
-distinguishable from a completed run that found nothing to reclaim.
+reference set was empty or undeterminable, because the local images could not be
+enumerated, or because it reached its duration bound — SHALL instead report
+which of those ended it, and SHALL be distinguishable from a completed run that
+found nothing to reclaim.
+
+A failure to enumerate SHALL NOT be reported as a completed run of zero. Zero
+considered and zero removed is the truthful report of an application whose
+namespace is legitimately empty, so a broken enumeration reported that way is
+indistinguishable from a healthy one — which is the state this requirement
+exists to prevent, arrived at by the report itself.
 
 The duration-bound report SHALL be emitted from outside the bounded region: a
 report printed inside that region cannot survive it being killed, which would
@@ -116,7 +124,7 @@ kill either.
 - **THEN** it SHALL report how many images it considered and how many it removed
 
 #### Scenario: A run that ends early says why
-- **WHEN** reclamation is abandoned because the reference set was empty or could not be determined, or because it reached its duration bound
+- **WHEN** reclamation is abandoned because the reference set was empty or could not be determined, because the local images could not be enumerated, or because it reached its duration bound
 - **THEN** it SHALL report which of those ended it, distinguishably from a completed run that found nothing to reclaim
 
 #### Scenario: A non-responding runtime does not hold the deploy open

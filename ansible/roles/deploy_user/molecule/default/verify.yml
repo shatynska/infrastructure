@@ -81,13 +81,13 @@
         fail_msg: >-
           deploy-receive exited non-zero ({{ deploy_user_per_app_valid_pipe.rc }}) for
           a single-session pipe of a valid archive. Because this converge
-          installs Docker and the test Compose file declares zero services
-          ("services: {}"), `docker compose pull && docker compose up -d
-          --wait` inside app-deploy is a real, fast, no-registry-needed
-          success when the whole chain (extraction, permissions, sudo
-          escalation, trigger) actually works -- a non-zero rc here means
-          some step in that one-session chain did not complete, not merely
-          that Docker/GHCR content was unavailable.
+          installs Docker and the test Compose file declares one small
+          service on a public base image, `docker compose pull && docker
+          compose up -d --wait` inside app-deploy is a real, fast success
+          when the whole chain (extraction, permissions, sudo escalation,
+          trigger) actually works -- a non-zero rc here means some step in
+          that one-session chain did not complete, not merely that
+          Docker/GHCR content was unavailable.
 
     - name: Confirm commerce-ops's docker-compose.yml and .env landed under /opt/commerce-ops
       ansible.builtin.stat:
@@ -979,19 +979,20 @@
       vars:
         reclaim_second_output: >-
           {{ deploy_user_reclaim_second_deploy.stdout ~ ' ' ~ deploy_user_reclaim_second_deploy.stderr }}
-        reclaim_second_removed: >-
-          {{ (reclaim_second_output | regex_search('removed[^0-9]*([0-9]+)', '\1', ignorecase=True) | default([], true) | first) | default('-1') }}
+        reclaim_second_report: >-
+          {{ (reclaim_second_output
+             | regex_search('app-deploy: reclamation considered [0-9]+, removed ([0-9]+)', '\1')
+             | default([], true) | first) | default('') }}
       ansible.builtin.assert:
         that:
-          - reclaim_second_output is search('considered[^0-9]*[0-9]+', ignorecase=True)
-          - reclaim_second_output is search('removed[^0-9]*[0-9]+', ignorecase=True)
-          - reclaim_second_removed | int == 2
+          - reclaim_second_report != ''
+          - reclaim_second_report | int == 2
         fail_msg: >-
           A reclamation run that completed SHALL report how many images it
           considered and how many it removed, and this run removed exactly
           two (the superseded tag and the previous-owner image; the
           stopped-container image was refused). Reported removed count
-          read as '{{ reclaim_second_removed }}'. Deploy output was:
+          read as '{{ reclaim_second_report }}'. Deploy output was:
           {{ reclaim_second_output }}
 
     # Built HERE for the same reason as the previous-owner image: an
@@ -1168,17 +1169,68 @@
     # under `set -euo pipefail` can abandon the group before the report
     # runs.
     # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # Static assertions over the INSTALLED script, in the same idiom as
+    # this scenario's existing authorized_keys and sudoers content checks.
+    #
+    # Two delta clauses are held by review alone because they cannot be
+    # induced here -- the untagged exclusion (no registry, so no repo
+    # digest) and the duration bound (wedging the daemon would break the
+    # `docker compose pull` the deploy needs). The no-force clause IS
+    # induced behaviourally, by the stopped-container fixture above; these
+    # checks are its second line, not its only one.
+    #
+    # Asserted against the script with COMMENT LINES STRIPPED. The script
+    # explains each of these properties in prose, so a naive `search` for
+    # `timeout ` matches the comment describing the bound and stays green
+    # after the bound itself is deleted -- a guard that cannot fail.
+    # ------------------------------------------------------------
+    - name: Read the installed app-deploy script
+      ansible.builtin.slurp:
+        src: /usr/local/bin/app-deploy
+      register: deploy_user_reclaim_installed_script
+
+    - name: Assert the installed script keeps its untagged guard, its duration bound, and forces no removal
+      vars:
+        reclaim_script_code: >-
+          {{ (deploy_user_reclaim_installed_script.content | b64decode).split('\n')
+             | reject('match', '\s*#') | join('\n') }}
+      ansible.builtin.assert:
+        that:
+          - reclaim_script_code is search("grep -v ':<none>\\$'")
+          - reclaim_script_code is search('timeout -k [0-9]+ [0-9]+ bash')
+          - not (reclaim_script_code is search('(rmi|image rm)[^\n]*(\s-f\b|--force)'))
+          - not (reclaim_script_code is search('image prune'))
+        fail_msg: >-
+          The installed app-deploy has lost one of the properties this
+          scenario cannot induce. The `grep -v ':<none>$'` guard keeps a
+          digest-pinned image out of the candidate set -- asserted with its
+          `grep -v` intact, since an inverted guard would still contain the
+          pattern. `timeout -k N M` is what stops a wedged runtime holding
+          the deploy session open, and the kill-after is part of it: SIGTERM
+          alone is only as strong as the signalled process's willingness to
+          return. A forced removal in any spelling (`-f`, `--force`, via
+          `docker rmi`) or a `prune` would destroy the runtime's refusal,
+          which is the only backstop between a defective reference set and
+          an image still in use -- and refused removals are the NORMAL
+          outcome here, so forcing is the likeliest well-intentioned
+          regression.
+
     - name: Assert the platform deploy, whose namespace is empty by design, still reported its counts
       vars:
         reclaim_platform_output: >-
           {{ deploy_user_per_app_decoy_pipe.stdout ~ ' ' ~ deploy_user_per_app_decoy_pipe.stderr }}
         reclaim_platform_considered: >-
-          {{ (reclaim_platform_output | regex_search('considered[^0-9]*([0-9]+)', '\1', ignorecase=True) | default([], true) | first) | default('-1') }}
+          {{ (reclaim_platform_output
+             | regex_search('app-deploy: reclamation considered ([0-9]+), removed [0-9]+', '\1')
+             | default([], true) | first) | default('') }}
         reclaim_platform_removed: >-
-          {{ (reclaim_platform_output | regex_search('removed[^0-9]*([0-9]+)', '\1', ignorecase=True) | default([], true) | first) | default('-1') }}
+          {{ (reclaim_platform_output
+             | regex_search('app-deploy: reclamation considered [0-9]+, removed ([0-9]+)', '\1')
+             | default([], true) | first) | default('') }}
       ansible.builtin.assert:
         that:
-          - reclaim_platform_output is search('considered[^0-9]*[0-9]+', ignorecase=True)
+          - reclaim_platform_considered != ''
           - reclaim_platform_considered | int == 0
           - reclaim_platform_removed | int == 0
         fail_msg: >-

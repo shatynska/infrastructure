@@ -80,12 +80,135 @@
     owner: root
     group: root
     mode: "0755"
+    # `{% raw %}` because the reclamation step below uses Go template
+    # syntax (`docker images --format '{{.Repository}}:{{.Tag}}'`) that
+    # Jinja would otherwise try to evaluate when rendering this content.
     content: |
-      #!/bin/bash
+      {% raw %}#!/bin/bash
       set -euo pipefail
-      cd "/opt/$1"
+      app="$1"
+      cd "/opt/$app"
       docker compose pull
       docker compose up -d --wait
+
+      # Reclaim the images this application's previous deploys left behind.
+      # See openspec/specs/iac-host-configuration/spec.md, "Superseded
+      # Application Images Are Reclaimed at Deploy Time". Four decisions in
+      # here look like they could be simplified and cannot:
+      #
+      #   * The namespace is this application's OWN repository, matched with
+      #     ANY owner segment -- not everything the Compose file names. The
+      #     wide form would make a shared base like postgres:16 a candidate
+      #     for whichever application happens to reference it, with only a
+      #     running container in the way. The owner is a wildcard so that an
+      #     ownership transfer does not strand its whole pre-transfer tail
+      #     permanently, since no later deploy would ever name that owner.
+      #
+      #   * The match requires the application's image repository to be
+      #     exactly `ghcr.io/<owner>/<app name>` -- two segments after the
+      #     registry, the last of them equal to the name app-deploy was
+      #     invoked with. A deeper repository (ghcr.io/<owner>/<app>/api) is
+      #     NOT matched. Where the names do not line up the namespace is
+      #     empty and this reclaims nothing, silently. See the role README's
+      #     onboarding paragraph.
+      #
+      #   * Removal is NEVER forced. The runtime's refusal to remove an
+      #     image a container still holds is the only backstop against a
+      #     wrong reference set, and refusals are the NORMAL outcome here --
+      #     the live tag is refused on every run. Adding -f to quiet that
+      #     removes the guard.
+      #
+      #   * An empty or undeterminable reference set reclaims NOTHING. This
+      #     is an explicit early return, not a property of the filter:
+      #     `grep -vxF -f` with an empty pattern file matches every line,
+      #     so the degraded path would otherwise clear the whole namespace.
+      reclaim() {
+        local app="$1"
+        local keep listing candidates considered=0 removed=0 ref
+
+        # Normalised to a tagged form on both sides: the local listing always
+        # emits a tag, a Compose reference without one may not.
+        keep=$(docker compose config --images 2>/dev/null \
+          | sed 's|^[^:]*$|&:latest|' | sort -u) || keep=""
+        if [ -z "$keep" ]; then
+          printf 'app-deploy: reclamation abandoned -- reference set empty or undeterminable\n'
+          return 0
+        fi
+
+        # Enumerated in its own right, with its status checked, rather than as
+        # the head of the filter pipeline. Folded into the pipeline its failure
+        # would be swallowed by the `|| true` below and reported as
+        # `considered 0, removed 0` -- byte-identical to a healthy run over an
+        # empty namespace. A reclamation whose enumeration never works would
+        # then be indistinguishable from one working correctly, which is the
+        # exact outcome the report requirement exists to prevent.
+        if ! listing=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null); then
+          printf 'app-deploy: reclamation abandoned -- could not enumerate local images\n'
+          return 0
+        fi
+
+        # `|| true`: an empty namespace makes the filter match nothing and exit
+        # 1, which is the ordinary case for an application that publishes no
+        # image of its own, and must still reach the report below.
+        #
+        # Matched field-wise rather than by a regex holding "$app": an
+        # application name is operator-supplied at onboarding and may legally
+        # contain a regex metacharacter (a `.` is legal in a GitHub repository
+        # name), which interpolated into an ERE would widen this pattern into
+        # another package's namespace -- an app named `commerce.ops` matched
+        # `commerce-ops`. NF==3 also states the segment rule exactly:
+        # ghcr.io/<owner>/<app>, and nothing deeper.
+        candidates=$(printf '%s\n' "$listing" \
+          | awk -F/ -v a="$app" 'NF==3 && $1=="ghcr.io" && index($3, a ":")==1' \
+          | grep -v ':<none>$' \
+          | grep -vxF -f <(printf '%s\n' "$keep") || true)
+
+        if [ -n "$candidates" ]; then
+          considered=$(printf '%s\n' "$candidates" | wc -l | tr -d ' ')
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            if docker image rm "$ref" >/dev/null 2>&1; then
+              removed=$((removed + 1))
+            fi
+          done < <(printf '%s\n' "$candidates")
+        fi
+
+        printf 'app-deploy: reclamation considered %s, removed %s\n' "$considered" "$removed"
+      }
+      export -f reclaim
+
+      # The bound covers enumeration as well as removal: `docker images` and
+      # `docker compose config` are calls to the same daemon the removals are,
+      # so a bound around only the removals could never engage against a
+      # daemon that stops answering. 60s is generous against a legitimate
+      # steady-state run, which removes one image.
+      #
+      # The timeout line is printed HERE, outside the bounded region, because
+      # a report emitted inside it cannot survive that region being killed --
+      # the one run most worth hearing about would be the silent one. It
+      # carries a reason and no counts, since no count survives the kill.
+      #
+      # The whole step is isolated as one unit: reclamation must never change
+      # the outcome of a deploy that has already succeeded.
+      # `-k 10`: SIGTERM alone is only as strong as the signalled process's
+      # willingness to return, so a hard SIGKILL follows ten seconds later.
+      # The child gets `-u` and `pipefail` but deliberately NOT `-e`: this
+      # function handles its own failures, and `-e` would turn a refused
+      # removal -- the normal outcome -- into an abandoned run.
+      reclaim_rc=0
+      timeout -k 10 60 bash -c 'set -uo pipefail; reclaim "$0"' "$app" || reclaim_rc=$?
+      if [ "$reclaim_rc" -eq 124 ]; then
+        printf 'app-deploy: reclamation abandoned -- duration bound reached\n'
+      elif [ "$reclaim_rc" -ne 0 ]; then
+        # Every other non-zero status still owes a report: `timeout` returns
+        # 125/126/127 when it cannot run the command at all, and 128+N when
+        # the command dies from a signal -- 137 if the OOM killer takes the
+        # bounded region, which is not far-fetched on a host under the disk
+        # and memory pressure this step exists to relieve. Reporting only 124
+        # would leave those exactly as silent as having no report at all.
+        printf 'app-deploy: reclamation abandoned -- exited %s\n' "$reclaim_rc"
+      fi
+      {% endraw %}
 
 # deploy:deploy, 0755 -- the SSH-layer forced command for every key
 # (authorized_keys task below). Explicit member list, not a general
