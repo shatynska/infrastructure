@@ -15,6 +15,12 @@ of queued — they had branches and handoffs, not entries here:
   by it, and the note under entry 4 comes from verifying it.
 - `refresh-readme-accuracy` — README statements that are no longer true
 
+`decide-archived-change-reference-policy` — the citation form live source uses
+for this repository's own change records, and a check that enforces it.
+**Archived 2026-09-07** (PR #70). It delivered the former entries 1 and 2, which
+are gone with it, and unblocked entry 3; entries 8 and 8a below were opened by
+verifying it.
+
 Most entries below are queued because they are **blocked on something that must
 happen first**, and they are listed in dependency order. Where an entry is not
 blocked, it says instead why it was recorded rather than folded into the change
@@ -23,45 +29,14 @@ that change was closing.
 
 ---
 
-## 1. decide-archived-change-reference-policy
-
-**Blocks entries 2 and 3. Nothing else should start until this is settled.**
-
-Source files across this repository cite changes by their pre-archive path
-(`openspec/changes/<name>/design.md`). Archiving moves a change to
-`openspec/changes/archive/<date>-<name>/`, so every such citation breaks at the
-moment its change succeeds. As of the audit: **33 live source files carry 58
-such references**, 29 of those files under `ansible/`, plus `README.md`,
-`platform/docker-compose.yml`, `platform/README.md` and
-`.github/workflows/pr-validation.yml`.
-
-This has been swept before — `openspec/changes/archive/…-sweep-stale-terraform-paths`
-did exactly that — and has fully re-accumulated since. Sweeping again without
-changing the rule underneath just resets a counter that will climb back.
-
-The decision to make is what archiving owes these references. Three coherent
-answers, each with a real cost:
-
-| Option | Keeps traceability | Cost |
-|---|---|---|
-| Rewrite refs to `archive/<date>-<name>/` during archive | Yes | Archiving becomes a repo-wide edit; every archive touches ~30 files |
-| Strip change-name citations from source; git log carries provenance | No (indirectly) | Loses the "which change decided this" trail these comments are unusually good at |
-| Accept the rot; re-sweep periodically | Partially | Known-broken paths sit in production config between sweeps |
-
-The choice is the operator's, not a reviewer's. It probably belongs in
-`AGENTS.md` as a rule, not in a change's design.
-
-## 2. sweep-stale-openspec-references
-
-**Blocked on entry 1.** Mechanical once the policy exists; the policy
-determines whether this is a rewrite, a deletion, or a decision not to run.
-
-Do not start this as a standalone tidy-up. That is what happened last time.
-
 ## 3. separate-history-from-rationale-in-source-comments
 
-**Blocked on entry 1**, and should follow entry 2 rather than race it — both
-touch the same comment blocks.
+**No longer blocked.** It waited on the citation-form decision and on the
+sweep that followed it; both were delivered by
+`decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which
+also converted every citation in the comment blocks below. What remains here is
+the separation this change deliberately did not do: it changed citation *form*
+only, and left the prose around it alone.
 
 Source comments in this repository currently mix three kinds of text with no
 way to tell them apart:

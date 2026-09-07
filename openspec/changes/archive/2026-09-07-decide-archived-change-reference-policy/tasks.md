@@ -39,7 +39,40 @@ Each task converts every citation in its files to the form Decision 1 sets: a de
 
 ## 6. Review, ship and record
 
-- [ ] 6.1 Dispatch `ai-toolkit:change-code-reviewer` over the change's diff once section 5 passes. Verify each finding is fixed or answered before proceeding.
-- [ ] 6.2 Open the pull request and wait for the operator's confirmation that continuous integration passed, that it merged, and that the deploy is healthy. Verify the required status check's log names the new test class, so the check demonstrably ran rather than being skipped.
-- [ ] 6.3 Confirm the effect on the trunk, and wait for the operator's confirmation of it. The observation: on `main` after the merge, a search for the pre-archive citation form outside `openspec/` returns nothing, where it returned 75 matches across 44 files before; and a branch that reintroduces one — a single comment line — fails the required status check on its own pull request, naming the file and line. Where the second half cannot be run against real continuous integration, say so and record what was observed instead rather than inferring it from the first half. **Half of this was already observed unprompted during the code-review gate**: the `code-review` skill's mutation check appended a citation to `platform/README.md` and then reverted the file to its committed content rather than to the swept working-tree content, silently restoring six pre-archive citations. The check went red and named all six by file and line, and nothing else in the session noticed. That is the requirement's first scenario, demonstrated against an accidental regression rather than a seeded one.
-- [ ] 6.4 On archive, delete `docs/change-queue.md` entries 1 and 2, and edit entry 3's blocking line so that neither clause dangles: it names "**Blocked on entry 1**" and "should follow entry 2 rather than race it", and both entries are gone. Leave the entry itself queued. Verify the file still parses as the queue's stated structure and that no other entry's dependency text is stale.
+- [x] 6.1 Dispatch `ai-toolkit:change-code-reviewer` over the change's diff once section 5 passes. Verify each finding is fixed or answered before proceeding.
+- [x] 6.2 Open the pull request and wait for the operator's confirmation that continuous integration passed, that it merged, and that the deploy is healthy. Verify the required status check's log names the new test class, so the check demonstrably ran rather than being skipped.
+- [x] 6.3 Confirm the effect on the trunk, and wait for the operator's confirmation of it. The observation: on `main` after the merge, a search for the pre-archive citation form outside `openspec/` returns nothing, where it returned 75 matches across 44 files before; and a branch that reintroduces one — a single comment line — fails the required status check on its own pull request, naming the file and line. Where the second half cannot be run against real continuous integration, say so and record what was observed instead rather than inferring it from the first half. **Half of this was already observed unprompted during the code-review gate**: the `code-review` skill's mutation check appended a citation to `platform/README.md` and then reverted the file to its committed content rather than to the swept working-tree content, silently restoring six pre-archive citations. The check went red and named all six by file and line, and nothing else in the session noticed. That is the requirement's first scenario, demonstrated against an accidental regression rather than a seeded one.
+- [x] 6.4 On archive, delete `docs/change-queue.md` entries 1 and 2, and edit entry 3's blocking line so that neither clause dangles: it names "**Blocked on entry 1**" and "should follow entry 2 rather than race it", and both entries are gone. Leave the entry itself queued. Verify the file still parses as the queue's stated structure and that no other entry's dependency text is stale.
+
+## Outcome
+
+Merged as PR #70 at 2026-09-07T20:00:28Z (`4be7fa7`); `validate` and `discover`
+both passed. The operator confirmed the merge and a healthy deploy.
+
+**Confirm gate: satisfied by observation, not waived.** Same search, same
+exclusions, run against the two trunk commits:
+
+| | Trunk before (`9420798`) | Trunk after (`4be7fa7`) |
+|---|---|---|
+| Pre-archive citations outside `openspec/` | 75 | 0 |
+| Files carrying them | 46 | 0 |
+
+The rule is in `AGENTS.md` on the trunk and the check is in
+`.github/tests/test_ci_configuration.py` on the trunk, so the count holding at
+zero does not depend on anyone remembering — which is what distinguishes this
+from `sweep-stale-terraform-paths`, which cleaned up, changed no rule, and
+re-accumulated in three weeks.
+
+The second half of the observation — that a reintroduction fails the check —
+was demonstrated twice during this change, both times by accident and neither
+staged:
+
+1. The `code-review` skill's mutation check reverted `platform/README.md` to its
+   committed content mid-review, silently restoring six citations. The check
+   went red and named all six by file and line; nothing else in the session
+   noticed. Recorded as `docs/change-queue.md` entry 8a.
+2. Rebasing onto the trunk brought in `reclaim-superseded-app-images`, which had
+   written two fresh pre-archive citations into `deploy_user`'s default
+   scenario. The check caught both on the rebase — a change that passed its own
+   review and merged cleanly still introduced the defect this change exists to
+   stop, one day after it was written. Swept in `9c7ce60`.
