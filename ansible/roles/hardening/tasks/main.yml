@@ -5,6 +5,30 @@
 # firewall (terraform/modules/server's hcloud_firewall) already allows --
 # see this role's README for the sync obligation between the two.
 
+# FIRST, before any task that changes the host. hardening_ssh_allowed_cidrs
+# has no default and no safe one (defaults/main.yml says why), and without
+# this it surfaced as `'hardening_ssh_allowed_cidrs' is undefined` from the
+# SSH rule's loop below -- by which point UFW is installed and its default
+# incoming policy is deny, leaving a host reachable only by SSH with no SSH
+# allow rule written yet. A refusal to proceed is the correct outcome, not a
+# partial application.
+#
+# Definedness, deliberately NOT `| length > 0`: an empty list is a coherent,
+# stricter posture here, since the tailnet CGNAT rule further down admits SSH
+# independently. Asserting non-emptiness would forbid tailnet-only SSH, which
+# is safer than what prod runs.
+- name: Fail loudly if the required SSH source CIDRs were not supplied
+  ansible.builtin.assert:
+    that:
+      - hardening_ssh_allowed_cidrs is defined
+      - hardening_ssh_allowed_cidrs is sequence
+      - hardening_ssh_allowed_cidrs is not string
+    fail_msg: >-
+      hardening_ssh_allowed_cidrs was not supplied, or is not a list. This
+      role has no default for it and there is no safe default source CIDR for
+      SSH -- set it in ansible/inventory/group_vars/prod.yml (see this role's
+      defaults/main.yml and README).
+
 - name: Ensure UFW is installed
   ansible.builtin.apt:
     name: ufw

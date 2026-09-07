@@ -1,7 +1,12 @@
 ---
 # hardening_ssh_allowed_cidrs has no default — it must be supplied by the
 # caller (e.g. group_vars), since there is no safe default source CIDR for
-# SSH. hardening_web_allowed_cidrs defaults closed: a safe default for
+# SSH. That absence is enforced, not merely documented: tasks/main.yml's
+# first task, "Fail loudly if the required SSH source CIDRs were not
+# supplied", asserts it before any task changes the host. Keep the two in
+# step — adding a default here would silently defeat that assertion.
+#
+# hardening_web_allowed_cidrs defaults closed: a safe default for
 # this role in general, independent of what any particular environment's
 # group_vars sets it to (see ansible/inventory/group_vars/prod.yml for
 # this project's actual prod value).

@@ -66,16 +66,16 @@ way to tell them apart:
 
 - **why the code is shaped this way** — irreplaceable, keep it. The tailnet
   polarity note (`ansible/roles/tailscale/tasks/main.yml:76-82`) and the GHCR
-  tolerated/not-tolerated block (`ansible/roles/deploy_user/tasks/main.yml:124-148`)
+  tolerated/not-tolerated block (the `ghcr_pull_*` comment block in
+  `ansible/roles/deploy_user/tasks/main.yml`)
   are load-bearing and must survive any pass.
 - **what a past change did** — git log and the archive already own this.
 - **a TODO whose condition has passed** — dead, and quietly misleading.
 
-Only the first kind survives archiving. Concrete instances of the other two:
+Only the first kind survives archiving. Concrete instances of the other two
+(the `platform/docker-compose.yml` header, formerly listed first, was removed
+by `fix-volume-discovery-and-consistency`, which was editing that file anyway):
 
-- `platform/docker-compose.yml:1-4` — a commit message stuck to the top of the
-  production stack definition ("Comment-only change … exercises
-  add-per-app-deploy-keys tasks.md 5.2's validation deploy").
 - `terraform/environments/prod/ssh_key.tf:20-28` — a `moved` block that
   documents its own removal condition ("Safe to delete once the next apply has
   run") from a change archived 2026-08-18.
@@ -85,7 +85,48 @@ Only the first kind survives archiving. Concrete instances of the other two:
 The tailscale role is 48 comment lines against 90 non-blank; this is a style
 question with a real maintenance cost, not a cosmetic one.
 
+## 3a. decide-multiple-volume-selection-policy
+
+**Not blocked on anything; recorded rather than folded in, because it is a
+policy decision about the host rather than a defect.**
+
+`fix-volume-discovery-and-consistency` made `platform_data_volume`'s device
+discovery deterministic: where more than one `/dev/disk/by-id/scsi-0HC_Volume_*`
+device is attached, it now sorts and takes the first instead of taking whatever
+`find` returned first. That closes the nondeterminism, and a Molecule scenario
+(`multiple-devices-discoverable`) holds it closed under both creation orders.
+
+What it does **not** decide is whether a deterministic pick is the right
+behaviour at all. The alternative — fail when discovery matches more than one
+device, on the grounds that an ambiguous pick is worse than a refusal — was
+considered in that change's `design.md` Decision 2 and rejected *for that
+change*, not on the merits: the role does not own what else may be attached to
+the host, and a second Hetzner Volume mounted for a reason unrelated to
+`platform/` would then break `host-baseline.yml` for every host.
+
+Deciding it needs an answer to a question that is the operator's: is a second
+attached volume something this project ever expects, and if so, should the role
+be told which one is `main-data` rather than inferring it? Note that being told
+is close to the `linux_device` hand-copying that `add-platform-monitoring`
+already considered and rejected, so this is not a free choice either.
+
+Today the question is academic — prod has one volume attached — which is why it
+is queued rather than opened.
+
 ## 4. promote-molecule-to-a-required-check
+
+**Reading the run log: `molecule test --all` stops at the first failing
+scenario.** Every scenario sorting after a failing one is neither executed nor
+listed in that run's SCENARIO RECAP. This does *not* weaken the
+"consecutive green runs" evidence below — a green run did execute everything —
+but a **red** run establishes less than it appears to, which matters for the
+per-role outcomes recorded here. Molecule's own remedy is unavailable to this
+repository: `--continue-on-failure` applies only with `--workers`, and
+`--workers > 1` refuses with `only supported in collection mode (galaxy.yml
+required)` (observed 2026-09-07). The remedy that would work is a CI matrix over
+*scenarios* rather than roles — which also parallelises the suite's longest role,
+and is adjacent to the workflow reshaping point 2 below already names as the real
+remaining work. Recorded by `fix-volume-discovery-and-consistency`.
 
 **Blocked on evidence only.** `close-ci-verification-gaps` put the Molecule
 suite in CI as `ansible-verify.yml`, advisory: it is not a required status

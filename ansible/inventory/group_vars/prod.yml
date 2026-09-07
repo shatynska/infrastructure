@@ -55,13 +55,6 @@ ops_user_accounts:
   - name: ops-claude
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICc/YzvZTHHNETGGAy89vD7IpzTU3jDAphOeKD6q5Kiu ops-claude"
 
-# ghcr_pull_username is not secret (it's the GitHub account the token
-# below belongs to) and is committed in plain text. ghcr_pull_token is a
-# genuine secret (a read:packages-scoped GHCR token, tasks.md 2.3:
-# generated out-of-band) and is therefore Ansible-Vault-encrypted in place
-# below, not plain text -- decrypting it requires the Vault password,
-# which is not stored anywhere in this repository (per this project's
-# Secrets convention).
 # Subdirectories platform_data_volume creates on the mounted main-data
 # volume for platform/docker-compose.yml's Prometheus and Grafana services
 # to bind-mount (add-platform-monitoring). Owner/group match each image's
@@ -78,6 +71,13 @@ platform_data_volume_subdirs:
     group: "472"
     mode: "0755"
 
+# ghcr_pull_username is not secret (it's the GitHub account the token
+# below belongs to) and is committed in plain text. ghcr_pull_token is a
+# genuine secret (a read:packages-scoped GHCR token, tasks.md 2.3:
+# generated out-of-band) and is therefore Ansible-Vault-encrypted in place
+# below, not plain text -- decrypting it requires the Vault password,
+# which is not stored anywhere in this repository (per this project's
+# Secrets convention).
 ghcr_pull_username: shatynska
 ghcr_pull_token: !vault |
           $ANSIBLE_VAULT;1.1;AES256
