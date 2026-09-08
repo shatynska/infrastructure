@@ -1,6 +1,6 @@
 ## Purpose
 
-GitHub Actions workflows covering PR validation/planning, saved-plan gated apply, the destroy-policy gate, branch protection and least-privilege permissions, and scheduled drift detection. Also covers Ansible verification — lint and syntax checks that block a merge, and an advisory Molecule suite — and an executable test suite over this pipeline's own configuration, so the guarantees above are machine-checked rather than resting on a reviewer noticing.
+GitHub Actions workflows covering PR validation/planning, saved-plan gated apply, the destroy-policy gate, branch protection and least-privilege permissions, and scheduled drift detection. Also covers Ansible verification — lint and syntax checks and a Molecule suite, all of which block a merge — and an executable test suite over this pipeline's own configuration, so the guarantees above are machine-checked rather than resting on a reviewer noticing.
 
 ## Requirements
 
@@ -46,13 +46,39 @@ Any module directory containing `*.tftest.hcl` test files SHALL also have `terra
 - **THEN** the validation workflow SHALL run `terraform test` against that directory and fail the check if any test fails
 
 ### Requirement: Required Status Checks Report on Every Pull Request
-The pull request check that is registered as a required status check SHALL report a conclusion on every pull request, including pull requests that touch no Terraform files.
+Every workflow registered as a required status check SHALL report a conclusion on every pull request, including pull requests that touch none of the files that workflow's work is about.
 
-Terraform work MAY be path-filtered, but the filtering SHALL occur *inside* an always-running job rather than via a workflow-level `paths` filter. A workflow-level `paths` filter on a required check never reports for non-matching pull requests, leaving those pull requests permanently unmergeable under the branch protection rule below.
+That work MAY be path-filtered, but the filtering SHALL occur *inside* an always-running job rather than via a workflow-level `paths` or `paths-ignore` filter. A workflow-level path filter on a required check never reports for non-matching pull requests, leaving those pull requests permanently pending and unmergeable under the branch protection rule below.
+
+Where a required check's work is performed by a job whose name is generated rather than literal — a matrix job, whose context names vary with the matrix — that job SHALL NOT be the registered context. A job whose name is a literal SHALL depend on it, run regardless of its outcome, and conclude on its behalf. A generated context cannot be enumerated in branch protection in advance; a role or directory added to the matrix would introduce a context nobody registered; and a matrix that is empty or skipped produces no context at all, which is the same permanent pending reached by another route.
+
+Such an aggregating job SHALL distinguish a skipped dependency from a successful one, and SHALL conclude failure where a dependency was skipped while the pull request changed files that dependency's work covers. `skipped` and `success` are different conclusions; read as one — which `success()` over a skipped dependency does — the check reports green having verified nothing, the same defect this capability's discovery, destroy-policy gate and secret-scanning requirements each forbid elsewhere.
+
+An aggregating job SHALL treat its own change-detection input as trustworthy only where the job producing it concluded successfully. Where that job did not, its outputs are empty, and an empty "nothing changed" is indistinguishable from a genuine one.
 
 #### Scenario: Documentation-only pull request remains mergeable
-- **WHEN** a pull request changes only files outside `terraform/environments/` and `terraform/modules/` (e.g. a README)
-- **THEN** the required status check SHALL report success rather than remaining pending, and the pull request SHALL be mergeable
+- **WHEN** a pull request changes only files outside the paths a required check's work covers (e.g. a README)
+- **THEN** that required status check SHALL report success rather than remaining pending, and the pull request SHALL be mergeable
+
+#### Scenario: A required check reports without doing work it was not asked to do
+- **WHEN** a pull request changes no file a required check's path-filtered work covers
+- **THEN** that work SHALL be skipped rather than executed, and the check SHALL still conclude
+
+#### Scenario: A required check whose work was skipped does not report success
+- **WHEN** a pull request changes files a required check's work covers, and that work concludes as skipped rather than as executed
+- **THEN** the required status check SHALL report failure rather than success
+
+#### Scenario: A required check whose change detection did not conclude does not report success
+- **WHEN** the job producing a required check's change-detection output fails
+- **THEN** the required status check SHALL report failure, rather than reading that job's empty output as "nothing changed"
+
+#### Scenario: A cancelled dependency does not report success
+- **WHEN** a required check's work concludes as cancelled
+- **THEN** the required status check SHALL report failure, whether or not the pull request changed files that work covers — a cancelled job has verified nothing
+
+#### Scenario: A failed dependency reports failure whatever the change detection said
+- **WHEN** a required check's work concludes as failed on a pull request that changed none of the files that work covers
+- **THEN** the required status check SHALL report failure, rather than treating the absence of relevant changes as licence to disregard the result
 
 ### Requirement: Pull Request Plan Visibility
 When validation checks pass, the workflow SHALL run `terraform plan` against the prod environment and post the full plan output as a comment on the pull request.
@@ -103,7 +129,7 @@ This ensures the approving reviewer sees the exact diff that will be applied. A 
 
 The apply workflow SHALL be triggered only by pushes that can affect the Terraform configuration, identified by a workflow-level path filter. A merge that cannot change infrastructure SHALL NOT raise a `production` Environment approval request. An approval prompt that appears on merges with nothing to approve trains the approver to grant it without reading, which defeats the gate it exists to enforce; out-of-band divergence remains covered by scheduled drift detection rather than by an approval request per merge.
 
-This path filter is permissible **only** because the apply workflow is not a required status check. The workflow that is registered as a required check SHALL NOT be path-filtered at the workflow level — see the Required Status Checks Report on Every Pull Request requirement, whose constraint is the opposite of this one and takes precedence for that workflow.
+This path filter is permissible **only** because the apply workflow is not a required status check. Any workflow that is registered as a required check SHALL NOT be path-filtered at the workflow level — see the Required Status Checks Report on Every Pull Request requirement, whose constraint is the opposite of this one and takes precedence for those workflows. There is more than one such workflow, and the constraint holds of each.
 
 Because a saved plan file stores sensitive values in cleartext, the `tfplan` artifact SHALL be treated as a secret: retention SHALL be set to the shortest workable period, and the artifact SHALL NOT be produced in a public repository without symmetric encryption using a key held in repository secrets.
 
@@ -162,7 +188,13 @@ State locking alone prevents concurrent state mutation but does not prevent two 
 - **THEN** the second apply run SHALL queue until the first completes, and SHALL NOT cancel it or run concurrently with it
 
 ### Requirement: Branch Protection on the Default Branch
-The `main` branch SHALL be protected such that changes arrive only via pull request: direct pushes and force-pushes SHALL be rejected, a pull request SHALL be required, and the validation workflow's status check SHALL be required to pass before merge.
+The `main` branch SHALL be protected such that changes arrive only via pull request: direct pushes and force-pushes SHALL be rejected, branch deletion SHALL be rejected, a pull request SHALL be required, and the status checks named below SHALL be required to pass before merge. The protection SHALL apply to administrators, and SHALL require a branch to be up to date with `main` before it merges.
+
+The required status check contexts SHALL be `validate`, from `pr-validation.yml`, and `ansible-verify`, from `ansible-verify.yml`. Each names a job whose name is a literal in its workflow; neither names a job whose name is generated from a matrix, per the requirement above.
+
+Requiring a branch to be up to date means an Ansible pull request re-runs the Molecule suite after each trunk update. That cost is accepted: the alternative is merging Ansible changes against a trunk they were never verified against.
+
+Registering a context is repository settings rather than repository content, so nothing in this repository can verify that it happened — the pipeline's own test suite makes no network call. What that suite SHALL assert instead is that each named workflow is shaped so that it can be registered safely: no workflow-level path filter, and a literal job name to register. It SHALL NOT be written so as to imply it has established more than that.
 
 Every other safeguard in this capability — plan review, the destroy-policy gate, and the approval-gated apply — assumes changes reach `main` through a reviewed pull request. Without branch protection, a direct push to `main` bypasses all of them and triggers an apply.
 
@@ -173,6 +205,10 @@ Every other safeguard in this capability — plan review, the destroy-policy gat
 #### Scenario: Pull request with failing checks cannot merge
 - **WHEN** a pull request's validation workflow fails
 - **THEN** the pull request SHALL be blocked from merging until the checks pass
+
+#### Scenario: Every registered context names a literal job
+- **WHEN** the workflow behind each registered required status check is read
+- **THEN** the job that context names SHALL carry a literal `name:`, containing no GitHub Actions expression
 
 ### Requirement: Least-Privilege Workflow Permissions
 The repository's default `GITHUB_TOKEN` permission SHALL be set to read-only, and each workflow or job SHALL declare only the additional permissions it requires.
@@ -208,16 +244,41 @@ The workflow SHALL also be triggerable via `workflow_dispatch`, and its plan SHA
 - **WHEN** the scheduled drift plan runs while an approved `terraform apply` holds the state lock
 - **THEN** the drift plan SHALL proceed without waiting on or failing due to the lock, because it runs with `-lock=false`
 
-### Requirement: Ansible Configuration Is Verified in Continuous Integration
-Every pull request that changes files under `ansible/` SHALL trigger continuous-integration checks over that configuration. Verification SHALL be split into two tiers by cost and by confidence in the check itself.
+### Requirement: The Continuous-Integration Configuration Is Itself Verified
+The properties this capability requires of its own configuration — which checks are gated on which paths, which versions are pinned where, which jobs declare a deployment `environment:`, and which directories a dependency-update configuration covers — SHALL be asserted by an executable test suite, and that suite SHALL run on every pull request as part of the required status check, unconditionally.
 
-**Blocking tier.** `ansible-lint` and `ansible-playbook --syntax-check` SHALL run as part of the required pull request status check, using the same invocation the repository's `pre-commit` configuration uses locally, so that a pull request cannot merge with Ansible content that fails either. These checks require no container runtime and no credential.
+These properties are assertions about repository files rather than about infrastructure, so the project's module-level Terraform test mechanism cannot reach them. A capability whose guarantees are checked only by a reviewer noticing is guaranteed only until someone does not notice; the gaps this change closes were each introduced that way.
 
-**Advisory tier.** The Molecule suite SHALL run in continuous integration on pull requests changing `ansible/`, and SHALL NOT be registered as a required status check while its behavior on a hosted runner is unestablished. Its scenarios exercise host-level firewalling, `fail2ban` and service management inside containers; whether every scenario is reproducible on a containerised runner has never been observed. An advisory result makes that observable without a failure of the runner environment blocking every merge.
+The suite SHALL depend only on its runtime's standard library and on dependencies pinned exactly in a repository manifest, and SHALL require no network access, credential, container runtime or Terraform binary — it gates every pull request, including those that change nothing it asserts about.
+
+#### Scenario: A regression in CI configuration fails the pull request that introduces it
+- **WHEN** a pull request changes the continuous-integration configuration such that a property this capability requires no longer holds
+- **THEN** the required status check SHALL fail on that pull request
+
+#### Scenario: The suite runs regardless of what a pull request touched
+- **WHEN** a pull request changes no file under `.github/`
+- **THEN** the required status check SHALL still run the suite and report its result
+
+#### Scenario: The suite needs no privileged or external resource
+- **WHEN** the suite runs in continuous integration
+- **THEN** it SHALL complete without a network call, a credential, a container runtime or a Terraform binary
+
+### Requirement: Ansible Configuration Is Verified in Continuous Integration and Gates the Merge
+Every pull request that changes files under `ansible/` SHALL trigger continuous-integration checks over that configuration. Both tiers block a merge; they remain distinguished by cost, which governs how each is triggered rather than whether it gates.
+
+**Lint tier.** `ansible-lint` and `ansible-playbook --syntax-check` SHALL run as part of the required pull request status check, using the same invocation the repository's `pre-commit` configuration uses locally, so that a pull request cannot merge with Ansible content that fails either. These checks require no container runtime and no credential.
+
+**Suite tier.** The Molecule suite SHALL run in continuous integration on pull requests changing `ansible/`, and SHALL be registered as a required status check. Its scenarios exercise host-level firewalling, `fail2ban` and service management inside containers; that these are reproducible on a hosted runner is established by consecutive green runs on pull requests with independent subjects, which is what the previously advisory tier existed to observe. A scenario that fails SHALL block the merge.
+
+Because the suite is costly and the lint tier is not, the suite SHALL be triggered by change detection *inside* an always-running workflow rather than by a workflow-level path filter, per the requirement above, and a pull request touching nothing under `ansible/` SHALL start no container. Its conclusion SHALL be reported by an aggregating job whose name is a literal, which SHALL fail where the suite was skipped on a pull request that did change files under `ansible/`.
+
+Change detection resolves against a pull request's diff. Where the workflow is started by any other event there is no diff to resolve against, and the suite SHALL run in full rather than defaulting to skipped. A default of skipped would report a green conclusion on precisely the trigger this repository uses to observe the suite against the trunk.
+
+Discovery SHALL declare the least privilege its change detection needs, per the *Least-Privilege Workflow Permissions* requirement, and SHALL receive no write scope: reading which files a pull request touched is a read.
 
 The Molecule run SHALL discover role scenarios rather than enumerate them, so that a role or scenario added under `ansible/roles/` is covered without a workflow edit, and SHALL execute every scenario a role declares rather than only its `default` scenario.
 
-Discovery SHALL fail loudly rather than succeed vacuously: where it finds no role to run, the run SHALL fail with a message identifying discovery as the cause, and SHALL NOT report success. A discovery that silently matches nothing is indistinguishable from a suite that passed, which is the same defect this capability's destroy-policy gate and secret scanning requirements each forbid elsewhere.
+Discovery SHALL fail loudly rather than succeed vacuously: where it finds no role to run, the run SHALL fail with a message identifying discovery as the cause, and SHALL NOT report success. A discovery that silently matches nothing is indistinguishable from a suite that passed, which is the same defect this capability's destroy-policy gate and secret scanning requirements each forbid elsewhere. Discovery SHALL run on every pull request rather than only on those changing `ansible/`: a repository state in which no role carries scenarios has lost the check that gates every merge, and the pull request that removes it is not the only one that should stop.
 
 The Molecule run SHALL install its toolchain from the repository's exact pinned manifests — `ansible/requirements-test.txt` for the Python toolchain and `ansible/requirements.yml` for Galaxy content — and SHALL NOT resolve any dependency version freshly at run time.
 
@@ -247,9 +308,21 @@ Neither tier SHALL declare a deployment `environment:` or receive any production
 - **WHEN** the Molecule run's role discovery yields an empty set
 - **THEN** the run SHALL fail with a message identifying discovery as the cause, rather than concluding successfully having executed no scenario
 
-#### Scenario: A failing Molecule scenario does not block a merge
+#### Scenario: A failing Molecule scenario blocks the merge
 - **WHEN** a Molecule scenario fails on a pull request
-- **THEN** the failure SHALL be visible on the pull request, and the required status checks SHALL be unaffected by it
+- **THEN** the failure SHALL be visible on the pull request, the aggregating job SHALL conclude failure, and the pull request SHALL be blocked from merging
+
+#### Scenario: A pull request touching no Ansible file starts no container
+- **WHEN** a pull request changes no file under `ansible/`
+- **THEN** the Molecule matrix SHALL be skipped rather than executed, and the workflow SHALL still conclude and report
+
+#### Scenario: Role discovery runs even where the suite does not
+- **WHEN** a pull request changes no file under `ansible/`
+- **THEN** role discovery SHALL still run, and where it finds no role its failure SHALL fail the required status check — the suite that gates every merge having silently disappeared is not a fact only pull requests touching `ansible/` should learn
+
+#### Scenario: A manual run verifies the whole suite
+- **WHEN** the Molecule workflow is started other than by a pull request
+- **THEN** the suite SHALL run in full rather than being skipped for want of a diff to inspect, and the workflow SHALL NOT conclude success having skipped it
 
 #### Scenario: Ansible verification receives no production credential
 - **WHEN** any Ansible verification job runs on a pull request
@@ -274,22 +347,3 @@ Neither tier SHALL declare a deployment `environment:` or receive any production
 #### Scenario: An upstream re-push cannot change what the suite ran against
 - **WHEN** the upstream registry re-publishes the tag a scenario's image was originally named by, and no commit is made to this repository
 - **THEN** the scenario SHALL continue to resolve the same image content it resolved before the re-push
-
-### Requirement: The Continuous-Integration Configuration Is Itself Verified
-The properties this capability requires of its own configuration — which checks are gated on which paths, which versions are pinned where, which jobs declare a deployment `environment:`, and which directories a dependency-update configuration covers — SHALL be asserted by an executable test suite, and that suite SHALL run on every pull request as part of the required status check, unconditionally.
-
-These properties are assertions about repository files rather than about infrastructure, so the project's module-level Terraform test mechanism cannot reach them. A capability whose guarantees are checked only by a reviewer noticing is guaranteed only until someone does not notice; the gaps this change closes were each introduced that way.
-
-The suite SHALL depend only on its runtime's standard library and on dependencies pinned exactly in a repository manifest, and SHALL require no network access, credential, container runtime or Terraform binary — it gates every pull request, including those that change nothing it asserts about.
-
-#### Scenario: A regression in CI configuration fails the pull request that introduces it
-- **WHEN** a pull request changes the continuous-integration configuration such that a property this capability requires no longer holds
-- **THEN** the required status check SHALL fail on that pull request
-
-#### Scenario: The suite runs regardless of what a pull request touched
-- **WHEN** a pull request changes no file under `.github/`
-- **THEN** the required status check SHALL still run the suite and report its result
-
-#### Scenario: The suite needs no privileged or external resource
-- **WHEN** the suite runs in continuous integration
-- **THEN** it SHALL complete without a network call, a credential, a container runtime or a Terraform binary
