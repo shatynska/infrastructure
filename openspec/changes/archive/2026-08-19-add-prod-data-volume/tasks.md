@@ -17,9 +17,6 @@
 - [x] 3.1 Run `terraform fmt -check -recursive` from the repo root. Clean, no diff.
 - [x] 3.2 Run `terraform test` in `modules/volume` (independently authored tests already exist at `modules/volume/tests/*.tftest.hcl` — see `openspec/changes/add-prod-data-volume/test-manifest.md`); confirm all 8 `run` blocks pass. Confirmed: `Success! 8 passed, 0 failed.`
 - [x] 3.3 Run `terraform validate` in `environments/prod`. Confirmed: `Success! The configuration is valid.`
-- [ ] 3.4 Run a live `terraform plan` in `environments/prod` (read-only token) with `volume_enabled = true` (the committed default): confirm it shows exactly one addition (the `main-data` volume, attached to the existing server, 10 GB, `hel1`, correctly labeled), and no changes to the server or firewall. **Skipped by user decision**: never run locally (no `HCLOUD_TOKEN` in the authoring sandbox) — the user chose to skip straight to opening the PR (4.1) rather than supply a token or run this themselves first. Superseded by the PR's own CI-run plan (see 4.2), which additionally revealed the server itself needed recreating — an outcome this task's premise ("no changes to the server or firewall") didn't anticipate, since it assumed the server was untouched.
-- [ ] 3.5 Locally (uncommitted) set `volume_enabled = false` and re-plan: confirm the volume is planned for destruction and nothing else changes. Locally (uncommitted) set `server_enabled = false` instead (`volume_enabled` back to `true`): confirm the plan destroys the server, firewall, **and** the volume together, per the `volume_enabled && server_enabled` coupling (design.md Decision 3). Revert both local-only changes afterward — this task exercises the coupling that `modules/volume/tests/` cannot (see test-manifest.md's "Unresolved project questions" — resolved by the user in favor of this live-plan review step, not an added automated test). **Skipped by user decision**, same as 3.4 — the `volume_enabled && server_enabled` coupling was never actually exercised against live state before this change was applied. Still open; consider doing this as a follow-up plan-only check (never apply) if the coupling should be verified before it's next relied on.
-- [ ] 3.6 Run `tflint` and the `gitleaks`/pre-commit hooks (or `pre-commit run --all-files`) before committing. **Partially covered, not by this task**: CI's `validate` job ran `terraform fmt -check -recursive` (repo-wide, covers `modules/volume`), Trivy, and `gitleaks` (both scan the whole repo) — all passed. However `.github/workflows/pr-validation.yml` hardcodes `terraform validate`/`tflint` to only `modules/server` and `environments/prod` (lines 58–83) — **`modules/volume` was never `terraform validate`'d or `tflint`'d by CI**, and `terraform test` isn't wired into the pipeline at all (only run locally, by hand, in this session). This is a real gap this change exposed, not one it was scoped to fix — flagged to the user as a separate follow-up rather than folded in here.
 
 ## 4. Rollout
 
@@ -28,3 +25,32 @@
 - [x] 4.3 Merge the PR and approve the gated `production` apply. Merged by the user (`shatynska`) at 2026-08-19T07:22:49Z; the gated `Terraform Apply (prod)` workflow ran automatically on merge and completed successfully (run 32227555636).
 - [x] 4.4 Confirm the apply succeeds: `main-data` volume created and attached, server and firewall unchanged, no errors. Apply log: `Apply complete! Resources: 2 added, 1 changed, 0 destroyed.` — firewall renamed in-place (`prod-server` → `prod-main-server`), server created (`main-server`, id `162697124`, `2.29.14.98`), volume created (`main-data`, id `106651381`, device `/dev/disk/by-id/scsi-0HC_Volume_106651381`). No errors. (Note: "server and firewall unchanged" from this task's original wording didn't hold — see 4.2's note on the drift discovered.)
 - [x] 4.5 Confirm via the Hetzner API or console that the volume is attached to `main-server`, sized 10 GB, and carries `environment = prod` / `managed_by = terraform` labels. Confirmed via the CI apply log rather than an independent Hetzner API/console call (no `HCLOUD_TOKEN` in this session): the applied plan declared `size = 10`, `server_id` derived from the created server, and `labels = {environment = "prod", managed_by = "terraform"}`, and `terraform apply` completed with no errors — Hetzner would have rejected a location/attachment mismatch at apply time.
+
+## Not performed
+
+Three tasks in section 3 were not performed. They were left unticked rather than
+recorded, so this change's archived record could not distinguish *this was
+verified* from *nobody said* — and, because nothing ran
+`openspec validate --archived`, nobody saw it for three weeks. They are moved
+here with their original dispositions preserved word for word, by the change
+`make-openspec-validation-a-usable-gate`. Nothing this change decided, built or
+specified is altered.
+
+- 3.4 Run a live `terraform plan` in `environments/prod` (read-only token) with `volume_enabled = true` (the committed default): confirm it shows exactly one addition (the `main-data` volume, attached to the existing server, 10 GB, `hel1`, correctly labeled), and no changes to the server or firewall.
+  Reason: **Skipped by user decision**: never run locally (no `HCLOUD_TOKEN` in the authoring sandbox) — the user chose to skip straight to opening the PR (4.1) rather than supply a token or run this themselves first. Superseded by the PR's own CI-run plan (see 4.2), which additionally revealed the server itself needed recreating — an outcome this task's premise ("no changes to the server or firewall") didn't anticipate, since it assumed the server was untouched.
+- 3.5 Locally (uncommitted) set `volume_enabled = false` and re-plan: confirm the volume is planned for destruction and nothing else changes. Locally (uncommitted) set `server_enabled = false` instead (`volume_enabled` back to `true`): confirm the plan destroys the server, firewall, **and** the volume together, per the `volume_enabled && server_enabled` coupling (design.md Decision 3). Revert both local-only changes afterward — this task exercises the coupling that `modules/volume/tests/` cannot (see test-manifest.md's "Unresolved project questions" — resolved by the user in favor of this live-plan review step, not an added automated test).
+  Reason: **Skipped by user decision**, same as 3.4 — the `volume_enabled && server_enabled` coupling was never actually exercised against live state before this change was applied. Still open; consider doing this as a follow-up plan-only check (never apply) if the coupling should be verified before it's next relied on.
+- 3.6 Run `tflint` and the `gitleaks`/pre-commit hooks (or `pre-commit run --all-files`) before committing.
+  Reason: **Partially covered, not by this task**: CI's `validate` job ran `terraform fmt -check -recursive` (repo-wide, covers `modules/volume`), Trivy, and `gitleaks` (both scan the whole repo) — all passed. However `.github/workflows/pr-validation.yml` hardcodes `terraform validate`/`tflint` to only `modules/server` and `environments/prod` (lines 58–83) — **`modules/volume` was never `terraform validate`'d or `tflint`'d by CI**, and `terraform test` isn't wired into the pipeline at all (only run locally, by hand, in this session). This is a real gap this change exposed, not one it was scoped to fix — flagged to the user as a separate follow-up rather than folded in here.
+
+  **Closed since.** Re-checked 2026-09-08: `fix-ci-module-coverage` replaced the
+  hardcoded directory list with a discovery loop, so `pr-validation.yml` no longer
+  names module directories at all. `terraform validate` and `tflint` iterate both
+  `terraform/modules/*/` and `terraform/environments/*/` holding `.tf` files;
+  `terraform test` iterates `terraform/modules/*/` only, guarded on that module
+  having `tests/*.tftest.hcl`. All three are conditioned on the pull request
+  touching a Terraform path. So `modules/volume` is now covered by all three —
+  which is what this task's gap was about — while environments are covered by two
+  of the three, `terraform test` having nothing to run in them. The gap this task
+  recorded is gone; the record of it stays, because the task genuinely was not
+  performed at the time.

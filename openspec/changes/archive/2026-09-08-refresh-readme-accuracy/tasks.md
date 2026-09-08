@@ -76,4 +76,27 @@
 - [x] 8.4 **Confirm the effect.** The observation is performable and is not waivable. On the merged `main`: `grep -n 'fsn1' README.md` returns nothing and the region line names `hel1`; `grep -rn "ansible-galaxy install -r ansible/requirements.yml" . --exclude-dir=openspec` returns nothing, with `.github/workflows/pr-validation.yml:232` — a deliberate negative example quoting the `-p` form — still present and unchanged; the local-setup Galaxy commands, copy-pasted into a fresh clone, leave `geerlingguy.docker` inside `ansible/roles/` and a subsequent `molecule create -s default` in one role resolves the dependency; the CI/CD section corresponds one-to-one with `ls .github/workflows/`. Propose these to the operator and wait for confirmation.
   - **Performed and confirmed 2026-09-08**, against a fresh clone of merged `main` (`48eef02`) — tracked files only, which is the state a new reader gets. `fsn1` absent; `location = "hel1"` present and attributed; the defective command gone from all four files with `pr-validation.yml:232`'s negative example intact; the two Galaxy commands run verbatim landed `geerlingguy.docker` in `ansible/roles/`, ignored per `.gitignore:30`, and `ansible-playbook --syntax-check` then resolved `host-baseline.yml`; CI/CD one-to-one with `.github/workflows/`; the layout list equal to its own stated command's output. Resolution was proved by syntax-check rather than `molecule create`, per `docs/change-queue.md` entry 8 — a colliding run from a concurrent working tree can pass against another session's container. Operator confirmed. Not a waiver: the gate was performable and was performed.
 - [x] 8.5 Archive: bring the branch to the freshly fetched trunk, delete `docs/change-queue.md` entry 9 **and** the intro bullet naming `refresh-readme-accuracy` as an opened change, commit the specification record, and open the change's second pull request. Confirm before deleting entry 9 that section 4 actually delivered it in all four files.
-- [ ] 8.6 Remove the branch locally and on the remote, and remove the working tree from the repository's main working tree — not from inside the tree being removed. Read the merges from each pull request's state, not from branch ancestry.
+
+## Branch and working tree removed
+
+Task 8.6 asked for the branch and working tree to be removed, and both were:
+verified 2026-09-08 by `make-openspec-validation-a-usable-gate` —
+`git ls-remote --heads origin` returns no `refresh-readme-accuracy` ref, no such
+branch exists locally, and no such working tree is registered. (Narrowed from an
+earlier wording that said the command returned `refs/heads/main` alone: that was
+true when run and stopped being true within the day, as Dependabot opened
+branches. A citation that cannot be re-run is what the correction rule in
+`AGENTS.md` exists to prevent, and this record should not be the first to break
+it.)
+
+The task is recorded here in prose rather than as a checkbox, and this is **not**
+a disclosure of unperformed work: it was performed. It could never have been
+ticked, because removal happens after the record's own pull request merges,
+which is after the commit that writes this file. A checkbox for it is unticked
+by construction and stays that way forever — which is exactly what
+`openspec validate --archived` reported, and the only reason this change was red.
+
+The rule that follows from it now lives in `AGENTS.md`'s project conventions: a
+change's `tasks.md` ends at the archive commit. This is the only archived change
+that put a post-archive step in its task list, so the rule is written narrowly —
+the archive step itself belongs in `tasks.md` and is unaffected.
