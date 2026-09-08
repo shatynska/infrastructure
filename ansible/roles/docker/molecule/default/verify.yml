@@ -13,6 +13,15 @@
   hosts: all
   become: true
   tasks:
+    - name: Deliberate failure -- observing that a red scenario blocks a merge
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] == 'NotARealOsFamily'
+        fail_msg: >-
+          Deliberate failure. This branch exists only to observe that a failing
+          Molecule scenario blocks a pull request now that ansible-verify is a
+          required status check. IT MUST NEVER BE MERGED.
+
     # --- "External role version is pinned" (specified) ---
     - name: Read the committed requirements.yml from the repository (not the managed node)
       ansible.builtin.set_fact:
