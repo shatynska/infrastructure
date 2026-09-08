@@ -6189,14 +6189,55 @@ def compose_coverage_offences(
 
 def dependency_name(image: str) -> str:
     """The name Dependabot matches a group's patterns against: the image
-    reference with its tag and digest stripped.
+    reference with its tag, its digest AND ITS REGISTRY HOST stripped.
 
-    NOT the Compose service key. The two differ for all six monitoring images
-    (design.md Decision 4's table), which is why a group written in service
-    names would match nothing at all rather than merely under-match, leaving
-    the grouping inert with nothing red to say so.
+    NOT the Compose service key. The two differ for all six monitoring images,
+    which is why a group written in service names would match nothing at all
+    rather than merely under-match, leaving the grouping inert with nothing red
+    to say so.
+
+    AND NOT the reference as written, either. `dependabot-core`'s
+    `shared_file_parser.rb` builds the dependency as
+    `Dependency.new(name: details.fetch("image"), ..., source:
+    source_from(details))` -- the `image` capture group alone. The registry is
+    carried in the requirement's `source`, never in the name. So
+    `quay.io/prometheuscommunity/postgres-exporter:v0.17.1` is the dependency
+    `prometheuscommunity/postgres-exporter`.
+
+    This function asserted the opposite until 2026-09-08 and the configuration
+    agreed with it, because both were written from the same wrong reading of an
+    external system. `cover-platform-images-with-dependabot` shipped two
+    registry-prefixed patterns that matched nothing; the suite stayed green,
+    having established only that the check and the config shared an
+    assumption. Dependabot's first run said otherwise, opening
+    `prometheuscommunity/postgres-exporter` as its own pull request outside the
+    group. `OBSERVED_DEPENDENCY_NAMES` below is anchored to that run so this
+    cannot be re-derived from a reading of the docs alone.
+
+    WHAT IS OBSERVED HERE AND WHAT IS STILL INFERRED
+    ------------------------------------------------
+    Of the registry-bearing images this stack declares, only the `quay.io` one
+    has been seen in a Dependabot pull request -- `ghcr.io/google/cadvisor`
+    opened none, because v0.60.5 was current. So "a host-looking first segment
+    is stripped" is OBSERVED for `quay.io` and INFERRED for everything else,
+    `ghcr.io`, a `host:port` and a bare `localhost` included. Add cadvisor's
+    pair below the first time Dependabot names it, rather than treating the
+    inference as settled.
+
+    One known divergence, hypothetical for this repository. The test below is
+    `"." in head`, which accepts a dotted-quad address, so `10.0.0.1/img` reads
+    here as registry + `img`. `dependabot-core`'s own registry pattern is
+    reported to require an alphabetic top-level domain and would keep the
+    address in the name. Nothing in `platform/docker-compose.yml` is addressed
+    that way. It is recorded rather than coded around because a narrower test
+    written from another unverified reading is exactly what produced the defect
+    this function exists to document.
     """
-    return parse_image_reference(image)[0]
+    repository = parse_image_reference(image)[0]
+    head, _, rest = repository.partition("/")
+    if rest and ("." in head or ":" in head or head == "localhost"):
+        return rest
+    return repository
 
 
 def pattern_matches_dependency(pattern: str, name: str) -> bool:
@@ -6566,6 +6607,80 @@ class TestTheFetcherFilenamePatternIsTranscribedFaithfully(unittest.TestCase):
             accepted,
             "the pattern accepts these names, so a stack definition under one of them "
             f"would be reported covered while never being fetched: {accepted}",
+        )
+
+
+class TestDependencyNamingMatchesWhatDependabotActuallyDid(unittest.TestCase):
+    """DERIVED -- no scenario states it, and it exists because its absence let a
+    defect ship.
+
+    `cover-platform-images-with-dependabot` grouped six monitoring images and
+    asserted the grouping. Two of its patterns carried a registry host
+    (`quay.io/...`, `ghcr.io/...`) and matched nothing, because Dependabot's
+    dependency name excludes the registry. The assertion passed anyway: it
+    computed expected names with the same helper the configuration had been
+    written from, so it established that the check and the config agreed --
+    never that either matched Dependabot.
+
+    A test derived from a belief about an external system can only be anchored
+    by an observation of that system. These pairs are transcribed from the pull
+    requests Dependabot opened against this repository on 2026-09-08, the first
+    run after that change merged, and each is quoted with the title it came
+    from. Replace one only against a newer observation, never against a reading
+    of the documentation.
+    """
+
+    # (image as `platform/docker-compose.yml` writes it, dependency name
+    #  Dependabot used) -- from the titles and bodies of these pull requests:
+    #
+    #   #92 "Bump prometheuscommunity/postgres-exporter from v0.17.1 to v0.20.1
+    #        in /platform"                    <- registry host absent
+    #   #91 "Bump postgres from 16.15 to 18.6 in /platform"
+    #   #90 "Bump traefik from v3.7.10 to v3.7.13 in /platform"
+    #   #89 "Bumps the platform-monitoring-images group in /platform with 4
+    #        updates: prom/node-exporter, prom/prometheus, prom/alertmanager
+    #        and grafana/grafana."
+    OBSERVED_DEPENDENCY_NAMES = (
+        ("quay.io/prometheuscommunity/postgres-exporter:v0.17.1", "prometheuscommunity/postgres-exporter"),
+        ("postgres:16.15", "postgres"),
+        ("traefik:v3.7.10", "traefik"),
+        ("prom/node-exporter:v1.9.1", "prom/node-exporter"),
+        ("prom/prometheus:v3.7.3", "prom/prometheus"),
+        ("prom/alertmanager:v0.28.1", "prom/alertmanager"),
+        ("grafana/grafana:12.3.0", "grafana/grafana"),
+    )
+
+    def test_the_helper_reproduces_every_observed_dependency_name(self) -> None:
+        """The anchor. Every pair here was read off a real Dependabot pull
+        request rather than inferred."""
+        wrong = {
+            image: dependency_name(image)
+            for image, observed in self.OBSERVED_DEPENDENCY_NAMES
+            if dependency_name(image) != observed
+        }
+        self.assertEqual(
+            {},
+            wrong,
+            "the dependency-name helper disagrees with the names Dependabot used in "
+            f"pull requests it actually opened: {wrong}. Every group pattern is "
+            "matched through this helper, so a disagreement here means the committed "
+            "patterns are asserted against names that do not exist",
+        )
+
+    def test_a_registry_prefixed_pattern_is_shown_not_to_match(self) -> None:
+        """The specific defect, kept as a regression rather than only as prose.
+        `ghcr.io/google/cadvisor` produced no pull request on 2026-09-08 only
+        because v0.60.5 was current, so this failure mode was invisible in the
+        observation above and is pinned here instead."""
+        self.assertEqual(
+            set(),
+            dependencies_matched_by(
+                ["ghcr.io/google/cadvisor", "quay.io/prometheuscommunity/postgres-exporter"],
+                {dependency_name("ghcr.io/google/cadvisor:v0.60.5"),
+                 dependency_name("quay.io/prometheuscommunity/postgres-exporter:v0.17.1")},
+            ),
+            "a registry-prefixed pattern now reads as matching, so the assertion that "
+            "caught this defect would no longer catch it",
         )
 
 
