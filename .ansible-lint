@@ -1,10 +1,10 @@
 ---
 # ansible/roles/geerlingguy.docker/ is third-party content fetched by
-# `ansible-galaxy install -r ansible/requirements.yml` (pinned by exact
-# version there, gitignored, never committed — see .gitignore). It's not
-# this project's code to lint or fix; excluding it is what keeps
-# pre-commit's `ansible-lint ansible/` hook working for anyone who has
-# actually installed the pinned dependency locally, rather than failing
+# `ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`
+# (pinned by exact version there, gitignored, never committed — see
+# .gitignore). It's not this project's code to lint or fix; excluding it is
+# what keeps pre-commit's `ansible-lint ansible/` hook working for anyone who
+# has actually installed the pinned dependency locally, rather than failing
 # on upstream issues in a role we don't own.
 exclude_paths:
   - ansible/roles/geerlingguy.docker/

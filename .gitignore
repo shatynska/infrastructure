@@ -24,9 +24,9 @@ secrets.auto.tfvars
 .DS_Store
 *.swp
 
-# Ansible: Galaxy-installed role/collection content (fetched via
-# `ansible-galaxy install -r ansible/requirements.yml`), pinned by exact
-# version in that file, not committed itself.
+# Ansible: Galaxy-installed role content, pinned by exact version in that
+# file, not committed itself. Fetched via:
+#   ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
 ansible/roles/geerlingguy.docker/
 
 # Python bytecode from the CI-configuration test suite (.github/tests/).

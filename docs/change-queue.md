@@ -508,9 +508,74 @@ favourable but neither obvious:
   (`molecule test --all`, both scenarios, `failed=0`), but CI is the first run
   on a hosted runner rather than this workstation.
 
----
+## 13. assert-the-readme-agrees-with-the-tree
 
-## 13. alert when the host prune stops working
+**Not blocked; recorded rather than folded into `refresh-readme-accuracy`,
+which is the change that found it.** That change corrected eleven statements in
+`README.md` that had gone stale. Two of them are static reads of committed
+files, and nothing noticed either for weeks:
+
+- the region, which the README stated as `fsn1` while
+  `terraform/environments/prod/terraform.tfvars` said `hel1` — a reader
+  trusting it would look in the wrong Hetzner location;
+- the Molecule scenario count, stated as eight against twelve in the tree.
+
+Both are inside what `.github/tests` can assert — a static read of two
+committed files, no network, no credential, no container runtime — and this
+repository already enforces a documentation convention that way. The
+citation-form check exists because "no author or reviewer can catch a
+violation: the citation is correct when written, correct when reviewed, and
+wrong only once the change it cites has succeeded". A README fact that
+duplicates another file's value is the same shape.
+
+It was not folded in for two reasons, and the first is the binding one.
+**It needs a requirement.** This repository does not enforce a convention it
+has not recorded, and `refresh-readme-accuracy` declares no specification
+delta — adding one would have made a documentation truth pass into a change
+owing derived tests, with a different set of gates.
+
+**Its scope is a real question, not a detail.** The region pair is one
+assertion and the scenario count another, both cheap. Whether the CI/CD
+section's workflow list should also be checked against `ls .github/workflows/`
+is the interesting case, and it has a cost: the section would then have to be
+edited in the same commit as any new workflow, or the build goes red. Deciding
+that inside a documentation fix would have decided it badly. The same question
+applies to the Repository layout section, which that change made checkable by
+`git ls-files | grep / | sed 's|/.*||' | sort -u` without asserting it.
+
+Note that `refresh-readme-accuracy` reduced the surface deliberately: where the
+useful content was a count or a list of examples, it replaced the answer with
+the command that produces it. What remains to assert is the handful of facts
+that are genuinely duplicated rather than derived.
+
+## 14. The specification says `terraform.tfvars` holds labels; it does not
+
+**Not a change to open — a correction to batch into whatever change next
+touches `iac-repo-foundations`.** Recorded so the divergence is tracked rather
+than silent.
+
+*Version Control Excludes State and Secrets*
+(`openspec/specs/iac-repo-foundations/spec.md`) describes
+`terraform/environments/<env>/terraform.tfvars` as holding "server type,
+region, image, labels, allowed CIDRs". The file holds no labels; the only
+`labels` block under `terraform/environments/prod/` is in `ssh_key.tf`.
+`refresh-readme-accuracy` corrected the README's copy of that list and left
+this one, because correcting a requirement means a `MODIFIED` delta.
+
+The parenthetical is illustrative rather than an inventory — the requirement's
+normative content is that the file is committed and non-secret, and labels
+genuinely are non-secret environment configuration, simply set on the resource
+— in the module, or in `ssh_key.tf` — rather than passed through this file. So
+the two are in factual, not normative, disagreement.
+
+The reason not to take the delta then, rather than merely the cost: a
+`MODIFIED` delta owes derived tests, and the test it would owe is "the
+requirement's parenthetical agrees with `terraform.tfvars`" — precisely the
+cross-file assertion entry 13 defers as needing its own requirement and its own
+scope decision. Taking it would have settled that queued question in passing,
+by implication.
+
+## 15. alert when the host prune stops working
 
 **Blocked on nothing, but only worth doing once entry 10 has shipped.**
 
@@ -526,7 +591,7 @@ file, and an alert on staleness rather than on failure — a unit that stops bei
 scheduled at all produces no failure to alert on. That is a `platform/` change,
 which is why entry 10 named it a non-goal rather than folding it in.
 
-## 14. report refused removals in the host prune
+## 16. report refused removals in the host prune
 
 `prune-host-images` reports `considered N, removed M`, where `considered` is
 every distinct image identity on the host rather than a candidate set. A
@@ -542,7 +607,7 @@ Recorded rather than folded into entry 10 because it adds a field to a report
 the delta specifies exactly, and that is a specification change, not an
 implementation detail.
 
-## 15. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
+## 17. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
 
 Entry 10 ships two guards that no assertion covers: local images are enumerated
 *before* the keep set is computed, and each tag is re-resolved immediately
@@ -562,7 +627,7 @@ together and strike it from here."
 Adopting it would also cover the two abandon branches added by that review's
 own fix, which are likewise unasserted.
 
-## 16. give the Molecule shared-state hazard a permanent home
+## 18. give the Molecule shared-state hazard a permanent home
 
 Molecule's instance name, `~/.ansible/tmp/molecule.*` and
 `~/.cache/molecule/<role>` are shared across working trees and stable per role.
@@ -580,3 +645,4 @@ entry that will be deleted again.
 Entry 8 (`namespace-the-molecule-suite-per-working-tree`) would remove the
 hazard rather than document it; this entry is worth doing anyway and is much
 cheaper, and stays true until entry 8 lands.
+
