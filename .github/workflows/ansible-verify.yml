@@ -1,33 +1,57 @@
-name: Ansible Verify (advisory)
+name: Ansible Verify
 
-# The Molecule suite -- this repository's largest test asset, and until now
-# reachable only by a human remembering to run it locally.
+# The Molecule suite -- this repository's largest test asset, and the only
+# thing that observes what a role actually does to a host.
 #
-# ADVISORY: this workflow is deliberately NOT registered as a required status
-# check. Its scenarios exercise host-level firewalling, fail2ban and service
-# management inside privileged containers, and whether every one of them is
-# reproducible on a hosted runner has never been observed. Advisory status
-# comes from branch protection not requiring this workflow -- never from
-# swallowing a step's result, which would report a green conclusion for a
-# failed scenario and destroy the signal this tier exists to collect.
+# REQUIRED STATUS CHECK. The `ansible-verify` job below is the context to
+# register in `main`'s branch protection, so that a failing scenario blocks the
+# merge. See the Ansible Configuration Is Verified in Continuous Integration
+# and Gates the Merge requirement.
 #
-# PROMOTION IS NOT A BRANCH-PROTECTION TOGGLE. The workflow-level `paths:`
-# filter below is correct while this is advisory and disqualifying the moment
-# it is not: a `paths:`-filtered required check never reports on a
-# non-matching pull request, leaving it permanently pending and unmergeable.
-# See the Required Status Checks Report on Every Pull Request requirement, and
-# `pr-validation.yml`'s top comment. Promoting this workflow means FIRST
-# removing this filter and moving the gating inside an always-running job, then
-# adding it to branch protection. See docs/change-queue.md.
+# Whether it IS registered is repository settings rather than repository
+# content, and nothing here can tell you: `.github/tests` makes no network
+# call, and asserts only that this file is SHAPED so the context can be
+# registered safely. Read the branch protection API if you need to know. This
+# comment is deliberately written to stay true either way, because the setting
+# is applied by hand after this file merges and a comment claiming otherwise
+# would be false for as long as that took.
+#
+# THREE THINGS ABOUT THAT SHAPE, each of which reintroduces a permanently
+# pending pull request if undone:
+#
+# 1. NO WORKFLOW-LEVEL `paths:` FILTER. A path-filtered required check never
+#    reports on a non-matching pull request, leaving it unmergeable. The
+#    filtering happens INSIDE the always-running discovery job instead -- the
+#    shape `pr-validation.yml` uses. See the Required Status Checks Report on
+#    Every Pull Request requirement.
+#
+# 2. THE REGISTERED CONTEXT IS THE `ansible-verify` JOB, NOT THE MATRIX. A
+#    matrix job's context name is generated from the matrix, so it cannot be
+#    enumerated in branch protection in advance, a role added under
+#    `ansible/roles/` would introduce a context nobody registered, and an
+#    empty or skipped matrix produces no context at all.
+#
+# 3. A SKIPPED MATRIX IS NOT A SUCCESS. `success()` over a skipped job is
+#    true, and `needs.<job>.result` returns `skipped` both for a job whose
+#    `if:` was false and for one whose matrix was empty. The gate below reads
+#    the difference explicitly. Advisory status was never achieved by
+#    swallowing a step's result and blocking status is not achieved by
+#    conflating a skip with a pass; either would report a green conclusion for
+#    a suite that verified nothing.
+#
+# Role discovery itself runs on EVERY pull request, not only those touching
+# `ansible/`: a repository state in which no role carries scenarios has lost
+# the check that gates every merge, and the pull request that removed it is
+# not the only one that should stop.
 #
 # `workflow_dispatch` is here because a manual dispatch is resolved through the
 # default branch's workflow listing: this file cannot be dispatched until it is
 # on `main`, and the `ref` input then chooses which branch's code runs, not
-# whether the workflow can be found.
+# whether the workflow can be found. Such a run carries no diff, so the change
+# filter is skipped and the suite runs in full -- see the resolution step.
 on:
   pull_request:
-    paths:
-      - "ansible/**"
+    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
@@ -41,11 +65,85 @@ jobs:
   discover:
     name: discover
     runs-on: ubuntu-latest
+    # A job-level `permissions:` block REPLACES the workflow-level one rather
+    # than adding to it, so `contents: read` is repeated here or the checkout
+    # below loses its own scope. `pull-requests: read` is what the change
+    # filter's API read needs. Neither of the other two jobs needs either, so
+    # this is declared on the job rather than on the workflow -- see the
+    # Least-Privilege Workflow Permissions requirement. No write scope
+    # anywhere: reading which files a pull request touched is a read.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       roles: ${{ steps.discover.outputs.roles }}
+      run-suite: ${{ steps.gate.outputs.run-suite }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # The filter that replaces the workflow-level one. Same action and same
+      # pin as `pr-validation.yml`, which resolves the same paths for its own
+      # lint tier -- one mechanism in this repository rather than two, and one
+      # version to move rather than two.
+      #
+      # Conditioned on the event because it resolves a pull request's diff and
+      # there is none on any other event. Skipping it there is what makes the
+      # resolution below single-branched on a dispatch, so the polarity it
+      # warns about is unreachable rather than merely handled.
+      - name: Detect changes under the configuration directory
+        id: changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            ansible:
+              - 'ansible/**'
+
+      # Resolves whether the suite runs, for both triggers. THE POLARITY IS THE
+      # POINT: a run that is not a pull request has no diff, the step above did
+      # not run, and its output is the empty string. Reading that as "nothing
+      # changed" would skip the suite and report a green conclusion on exactly
+      # the trigger this repository uses to run it against the trunk. So the
+      # branch is on the event name, not on the filter's output.
+      #
+      # Free of `${{ }}` on purpose -- both inputs arrive through `env:` -- so
+      # `.github/tests` can pull this body out of the workflow and run it under
+      # bash across the event names it must distinguish. The same is true of
+      # the gate in the `ansible-verify` job; they are two scripts and are
+      # tested separately.
+      - name: Resolve whether the suite runs
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FILTER_RESULT: ${{ steps.changes.outputs.ansible }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # An unresolvable value is refused rather than read as `false`. On a
+            # pull request the filter above MUST have run, so anything other
+            # than `true` or `false` means it did not -- and the empty string
+            # that a skipped step leaves behind is indistinguishable from
+            # "nothing changed" unless it is rejected here. Read as `false` it
+            # skips the matrix, and the gate then concludes success on a pull
+            # request nothing verified. Any narrowing of that step's condition
+            # produces exactly this, which is why the refusal lives here rather
+            # than in an assertion about how the condition is spelled.
+            case "$FILTER_RESULT" in
+              true|false)
+                run_suite="$FILTER_RESULT"
+                echo "Pull request: the change filter reported '${FILTER_RESULT}', so run-suite=${run_suite}."
+                ;;
+              *)
+                echo "::error::The change filter produced '${FILTER_RESULT}' on a pull request, where it must produce 'true' or 'false'. It did not run. Refusing to read that as 'nothing changed': doing so skips the suite and reports a green required status check for a pull request nothing verified."
+                exit 1
+                ;;
+            esac
+          else
+            run_suite=true
+            echo "Event '${EVENT_NAME}' carries no diff to filter on, so the whole suite runs: run-suite=true."
+          fi
+          echo "run-suite=${run_suite}" >>"$GITHUB_OUTPUT"
 
       # Discovers rather than enumerates, so a role or scenario added under
       # ansible/roles/ is covered without a workflow edit -- the same shape the
@@ -80,6 +178,10 @@ jobs:
   molecule:
     name: molecule (${{ matrix.role }})
     needs: discover
+    # Gated on the JOB, never on its steps. A step-level condition leaves the
+    # job itself running and concluding success having executed nothing, which
+    # the gate below would then read as a genuine pass rather than as a skip.
+    if: needs.discover.outputs.run-suite == 'true'
     runs-on: ubuntu-latest
     # No `environment:` and no secret: the suite runs offline against local
     # containers. Setting MOLECULE_GHCR_PULL_TOKEN would additionally exercise
@@ -122,3 +224,60 @@ jobs:
       - name: molecule test --all
         working-directory: ansible/roles/${{ matrix.role }}
         run: molecule test --all
+
+  # The registered required status check. Its name is a literal, so branch
+  # protection has something stable to point at; the matrix job's name is not,
+  # which is why this job exists at all.
+  ansible-verify:
+    name: ansible-verify
+    needs: [discover, molecule]
+    # Runs whatever its dependencies concluded. Without this the job is itself
+    # skipped when a dependency fails or is skipped -- and a skipped job
+    # produces no status check context, which under branch protection is a
+    # required check that never reports.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # Reads three results and concludes. Free of `${{ }}`: the inputs arrive
+      # through `env:`, so `.github/tests` can pull this body out and run it
+      # across every row of the table it implements.
+      #
+      # Discovery is checked FIRST, and not for tidiness. When it fails, its
+      # outputs are empty strings, so RUN_SUITE is "" and MATRIX_RESULT is
+      # "skipped" -- which the "nothing changed, nothing ran" branch would
+      # otherwise pass. The gate would report success precisely when discovery
+      # had refused to.
+      #
+      # `skipped` is refused where the suite was asked for, and accepted only
+      # where it was not. `cancelled` is refused either way: a cancelled job
+      # has verified nothing, and a run superseded by a newer push reports on
+      # that older commit rather than on the one being merged.
+      - name: Conclude on the suite's behalf
+        env:
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          MATRIX_RESULT: ${{ needs.molecule.result }}
+          RUN_SUITE: ${{ needs.discover.outputs.run-suite }}
+        run: |
+          set -euo pipefail
+
+          if [ "$DISCOVER_RESULT" != "success" ]; then
+            echo "::error::Role discovery concluded '${DISCOVER_RESULT}', not 'success'. Its outputs are empty, so whether the suite was owed cannot be read from them. Refusing to conclude success on a run whose own precondition did not hold."
+            exit 1
+          fi
+
+          case "$MATRIX_RESULT" in
+            success)
+              echo "The suite ran and passed (run-suite=${RUN_SUITE})."
+              ;;
+            skipped)
+              if [ "$RUN_SUITE" = "true" ]; then
+                echo "::error::The suite was skipped on a run that asked for it (run-suite=true). A skipped job is not a passing one: concluding success here would report a green required status check for a suite that verified nothing."
+                exit 1
+              fi
+              echo "Nothing under the configuration directory changed, so the suite was skipped rather than run. Concluding success having correctly done no work."
+              ;;
+            *)
+              echo "::error::The suite concluded '${MATRIX_RESULT}' (run-suite=${RUN_SUITE}). Only 'success', or a skip on a run that did not ask for the suite, may conclude success."
+              exit 1
+              ;;
+          esac
