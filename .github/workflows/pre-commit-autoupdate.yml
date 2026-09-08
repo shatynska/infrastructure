@@ -3,6 +3,54 @@ name: Pre-commit Autoupdate
 # Dependabot has no `pre-commit` ecosystem, so pinned hook revisions in
 # .pre-commit-config.yaml are refreshed here instead. See the
 # Automated Dependency Updates requirement.
+#
+# THE PULL REQUEST IS NOT OPENED BY `GITHUB_TOKEN`, and must not become so
+# again. An event caused by `GITHUB_TOKEN` starts no workflow run, and
+# `validate` and `ansible-verify` -- the two job names intended to gate a merge
+# -- are `on: pull_request` only. A pull request this workflow opened with the
+# default token would therefore receive neither, and would sit permanently
+# pending and unmergeable: the same dead end `ansible-verify.yml`'s header
+# guards against from the path-filter side, reached instead through the pull
+# request's authorship. That is worse than this workflow simply failing,
+# because a failure is red whereas an unmergeable pull request merely never
+# finishes.
+#
+# So the pull request is opened with a short-lived installation token minted
+# below from the `infrastructure-autoupdate` GitHub App. Three consequences
+# worth keeping in view:
+#
+# 1. THE JOB'S OWN `GITHUB_TOKEN` IS READ-ONLY, inherited from the workflow
+#    level. It authenticates the checkout and nothing else -- the App token
+#    pushes the branch and opens the pull request. Do not restore a job-level
+#    `permissions:` block granting writes this job no longer performs. Equally,
+#    do not delete the workflow-level block: permissions absent at both levels
+#    fall back to a repository setting, which is not repository content and can
+#    change without a commit.
+# 2. THE MINTED TOKEN IS DOWN-SCOPED HERE, not merely at the App. The two
+#    `permission-*` inputs below are what the pull-request step exercises:
+#    Contents to push the branch, Pull requests to open one. They are committed
+#    content, so widening the App later does not widen this token -- the request
+#    stays down-scoped and keeps working. NARROWING the App is what breaks:
+#    an installation token cannot be granted more than the App holds, so minting
+#    fails with a 422. If you are reading this next to a 422, look for a
+#    permission that was taken away, not one that was added.
+# 3. THAT SCOPE BOUNDS WHICH INPUTS THE STEP MAY USE. `labels` and `assignees`
+#    are issue operations and would need Issues. `team-reviewers` is not
+#    available at all: it needs an organisation permission, and this App is
+#    user-owned on a personal repository. Individual `reviewers` would work,
+#    being a pull-request operation. Widening the inputs means revisiting both
+#    the App and item 2, not just this file.
+#
+# `.github/tests/test_ci_configuration.py` asserts the identity of whatever opens
+# the pull request, the ordering of the two steps, and the job's own
+# `GITHUB_TOKEN` permissions. It asserts NEITHER of the two things items 2 and 3
+# are about: not the `permission-*` down-scoping, and not the restricted input
+# set. Both are enforced by reading this file, which is why they are written
+# here rather than left to the delta spec. `docs/deferred-work.md` records that
+# gap. The suite also cannot assert that the App exists or is still installed --
+# that is repository settings rather than repository content -- so the README
+# runbook records what the App is, what it is scoped to, and how its key is
+# rotated.
 on:
   schedule:
     - cron: "0 4 * * 1" # weekly, Monday 04:00 UTC
@@ -15,9 +63,6 @@ jobs:
   autoupdate:
     name: autoupdate
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # only this job pushes the update branch
-      pull-requests: write # only this job opens the PR
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -33,9 +78,27 @@ jobs:
       - name: pre-commit autoupdate
         run: pre-commit autoupdate
 
+      # Must stay ahead of the step below: it consumes this step's output.
+      - name: Mint a token for the App that opens the pull request
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          # `client-id`, not `app-id`: the latter is deprecated in v3 and emits
+          # a deprecation annotation on every run.
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Open PR if hook revisions changed
         uses: peter-evans/create-pull-request@v8
         with:
+          # `branch-token` is left defaulted to this value on purpose. Splitting
+          # them would open the pull request correctly and then push every later
+          # update to the branch as `GITHUB_TOKEN`, producing no `synchronize`
+          # event and so no re-run of the checks that gate the merge -- the same
+          # defect on the update path instead of the create path, and subtler.
+          token: ${{ steps.app-token.outputs.token }}
           commit-message: "chore: update pre-commit hook revisions"
           title: "chore: update pre-commit hook revisions"
           body: Automated `pre-commit autoupdate` run.

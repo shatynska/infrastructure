@@ -206,6 +206,44 @@ allowed CIDRs, volume name and size, and the server/volume enable flags). Files
 matching `*.secret.tfvars` or `secrets.auto.tfvars` are gitignored and must
 never be committed.
 
+Repository secrets in GitHub hold `HCLOUD_TOKEN`, `TF_API_TOKEN` (see CI/CD
+below for the privilege split on those) and `APP_CLIENT_ID` /
+`APP_PRIVATE_KEY`. This is not the full list of secrets the workflows read: the
+`PLATFORM_*` and `TAILSCALE_OAUTH_*` values, and the read-write overrides of
+`HCLOUD_TOKEN` and `TF_API_TOKEN`, are consumed only by jobs declaring
+`environment: production` and are Environment secrets rather than repository
+ones.
+
+`APP_CLIENT_ID` and `APP_PRIVATE_KEY` identify a GitHub App named
+**`infrastructure-autoupdate`**, owned by `shatynska` and reachable at
+<https://github.com/settings/apps/infrastructure-autoupdate>. It exists for one
+reason: `pre-commit-autoupdate.yml` opens a pull request, and a pull request
+opened with a workflow's default `GITHUB_TOKEN` starts no workflow run — so
+`validate` and `ansible-verify` would never report on it and it could never be
+merged. The workflow mints a short-lived installation token from the App
+instead, and the App authors the pull request.
+
+Its scope is deliberately the smallest thing that works: installed on this
+repository alone, with repository permissions Contents (to push the update
+branch) and Pull requests (to open one) at read and write, and no account-level
+permissions at all. Nothing else in this repository uses it. The minting step
+additionally down-scopes each token it issues to those same two permissions, in
+committed content, so widening the App later does not silently widen the token.
+
+That scope bounds what the workflow's pull-request step may ask for. `labels`
+and `assignees` are issue operations and would need Issues. `team-reviewers` is
+unavailable rather than merely withheld: it needs an organisation permission,
+and this App is user-owned on a personal repository. Adding either of the first
+two means revisiting the App's permissions, not only editing the workflow.
+
+To rotate the credential, generate a new private key on that App's settings page
+and replace the `APP_PRIVATE_KEY` secret with it, then delete the old key. The
+App itself is not recreated and `APP_CLIENT_ID` does not change. A GitHub App
+private key does not expire, which is why the App was chosen over a personal
+access token — a token with a mandatory expiry date would stop this workflow
+opening pull requests on a date nobody chose, which is the exact failure the App
+was introduced to end.
+
 ## CI/CD
 
 One entry per file in `.github/workflows/`:
@@ -236,7 +274,10 @@ One entry per file in `.github/workflows/`:
   real infrastructure, and closes it once resolved.
 - **`pre-commit-autoupdate.yml`** (weekly) — runs `pre-commit autoupdate` and
   opens a pull request with the result. Dependabot has no `pre-commit`
-  ecosystem, so pinned hook revisions are refreshed here.
+  ecosystem, so pinned hook revisions are refreshed here. The pull request is
+  opened by the `infrastructure-autoupdate` GitHub App rather than by
+  `GITHUB_TOKEN`, so that `validate` and `ansible-verify` actually report on it;
+  see Environment variables and secrets.
 
 `validate` and `ansible-verify` are the two job names intended to gate a merge.
 Whether they are registered as required contexts is a repository setting, not
