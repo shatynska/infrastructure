@@ -943,8 +943,15 @@ reader to re-do work that has been done.
 
 ## 36. cover-the-pip-manifests-with-dependabot
 
-**Not blocked; a one-stanza change in `.github/dependabot.yml`,** the same shape
-as entry 31.
+**Not blocked; the same shape as `cover-platform-images-with-dependabot`** —
+the former entry 31, deleted from this file when that change landed.
+
+**Do not inherit that entry's estimate.** It called itself "a one-stanza change
+in `.github/dependabot.yml`" and was not one: *Automated Dependency Updates*
+(`openspec/specs/iac-safety-hardening/spec.md`) enumerates its ecosystems by
+name and the CI-configuration suite reads that enumeration back, so a fourth
+ecosystem is a stanza **plus** a specification delta widening that enumeration
+**plus** the tests that hold it. Budget for the same here.
 
 Dependabot watches `terraform` and `github-actions`. Nothing watches the five
 pip pins: `.github/requirements-ci.txt` (`pre-commit==4.6.2`, `PyYAML==6.0.1`)
@@ -952,9 +959,10 @@ and `ansible/requirements-test.txt` (`ansible-core==2.21.3`, `molecule==26.8.0`,
 `molecule-plugins[docker]==26.7.15`). Dependabot's `pip` ecosystem reads both
 file shapes.
 
-Lower stakes than entry 31 -- these are the test and CI toolchain rather than
-production services -- but the cost is a few lines and the alternative is the
-same "when a person notices" that entry 35 is the consequence of.
+Lower stakes than the platform images were -- these are the test and CI
+toolchain rather than production services -- but the cost is a few lines and
+the alternative is the same "when a person notices" that entry 35 is the
+consequence of.
 
 Note the ordering constraint against entry 35: `ansible-core` is pinned here and
 the collections are pinned there, and the two are a matched set --
@@ -968,19 +976,24 @@ the collections are pinned there, and the two are a matched set --
 recommendation attached, so that revisiting it starts from a position rather
 than from scratch.
 
-Seven manifests in this repository carry pins. Three are watched -- the
-Terraform lockfiles and Actions refs by Dependabot, `.pre-commit-config.yaml` by
-the workflow `open-autoupdate-pr-with-app-token` repaired. Four are not: the
-eight `platform/docker-compose.yml` images (entry 31), the five galaxy pins
-(entry 35), and the five pip pins across two files (entry 36).
+Seven manifests in this repository carry pins. Four are watched -- the Terraform
+lockfiles and Actions refs by Dependabot, `.pre-commit-config.yaml` by the
+workflow `open-autoupdate-pr-with-app-token` repaired, and the eight
+`platform/docker-compose.yml` images by the `docker-compose` ecosystem
+`cover-platform-images-with-dependabot` added (this was the former entry 31,
+unwatched when this entry was written). Three are not: the five galaxy pins
+(entry 35) and the five pip pins across two files (entry 36).
 
 Renovate has native managers for all seven, including `pre-commit` and
 `ansible-galaxy`, which Dependabot has for neither. One tool and one config
 would close every gap and retire the bespoke workflow.
 
-**The recommendation is to stay with Dependabot, for now.** Entries 31 and 36
-close two of the four gaps with configuration alone and no new trust
-relationship. What Renovate uniquely adds is the galaxy manager -- and entry 35
+**The recommendation is to stay with Dependabot, for now,** and it is stronger
+than when written: one of the two gaps this paragraph counted on configuration
+to close has since been closed that way, by
+`cover-platform-images-with-dependabot`, with no new trust relationship. Entry
+36 closes the other on the same terms. What Renovate uniquely adds is the
+galaxy manager -- and entry 35
 argues that a four-major backlog wants a deliberate migration, not a bot
 proposing it. Hosted Renovate is also a third-party application with write
 access, which cuts against the reasoning already recorded in the
