@@ -87,14 +87,33 @@ will carry it forward like every other pin.
 The minting step must come before the pull-request step, and its output is passed
 as that step's `token:` input.
 
-The App's permission set was checked against what the step actually uses rather than
-assumed. `create-pull-request`'s inputs in this workflow are `commit-message`, `title`,
-`body`, `branch` and `delete-branch` — none of which needs authority beyond pushing a
-branch and opening a pull request. Contents: Read and write plus Pull requests: Read and
-write is therefore sufficient *and* is the whole of what is exercised. Had the step used
-`labels` or `assignees` it would additionally need Issues, and `team-reviewers` would
-need an organisation permission this design refuses; adding any of those later means
-revisiting the App's scope, not just the workflow.
+Two inputs are chosen deliberately.
+
+**`client-id`, not `app-id`.** v3 marks `app-id` deprecated (`deprecationMessage: "Use
+'client-id' instead."`); it still resolves, but annotates every run and is a plausible
+removal in a future major that Dependabot will propose. The secret is named
+`APP_CLIENT_ID` to match. This costs nothing today precisely because the secrets do not
+exist yet — deferring it would mean renaming a live secret later, and a rename that goes
+half-done fails this workflow in the way the change exists to end.
+
+**`permission-contents: write` and `permission-pull-requests: write`.** The requirement
+says the credential carries no authority beyond what the pull-request step exercises,
+and without these that is a claim about the App's settings page — invisible from the
+tree and silently falsified if the App is ever widened. Declaring them puts the token's
+scope in committed content: an installation token cannot exceed what the App holds, so
+if the App is later narrowed minting fails with a 422 rather than degrading, and if the
+App is later widened the token does not follow. This is the same instinct as Decision 5
+— prefer the assertion that lives in the repository over the one that lives in a setting.
+
+The permission set was checked against what the step actually uses rather than assumed.
+`create-pull-request`'s inputs here are `commit-message`, `title`, `body`, `branch` and
+`delete-branch` — none needing authority beyond pushing a branch and opening a pull
+request. Had the step used `labels` or `assignees` it would additionally need Issues, and
+`team-reviewers` an organisation permission that does not exist to grant here — the
+App is user-owned on a personal repository, so that input is unavailable rather
+than withheld. Individual `reviewers`
+would in fact work, being a pull-request operation; the bound is real but it is not
+"any reviewer input", and stating it too broadly would be its own small falsehood.
 
 ### 3. One token for both the branch push and the pull request
 

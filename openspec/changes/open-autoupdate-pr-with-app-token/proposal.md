@@ -27,9 +27,11 @@ currently name.
 ## What Changes
 
 - The autoupdate workflow mints a short-lived GitHub App installation token with
-  `actions/create-github-app-token`, from new `APP_ID` and `APP_PRIVATE_KEY`
-  repository secrets, and passes it to `peter-evans/create-pull-request` as
-  `token:`. The pull request is then authored by the App rather than by
+  `actions/create-github-app-token`, from new `APP_CLIENT_ID` and
+  `APP_PRIVATE_KEY` repository secrets, and passes it to
+  `peter-evans/create-pull-request` as `token:`. The minting step down-scopes
+  each token it issues to Contents and Pull requests, so the credential's bound
+  is committed content rather than a claim about a settings page. The pull request is then authored by the App rather than by
   `GITHUB_TOKEN`, so `validate` and `ansible-verify` run on it and it is
   mergeable.
 - The workflow's `pull-requests: write` job permission becomes unnecessary for
@@ -85,12 +87,22 @@ None.
 - `.github/workflows/pre-commit-autoupdate.yml` — a new token-minting step, a
   `token:` input on the pull-request step, narrowed job permissions.
 - `.github/tests/test_ci_configuration.py` — new static assertions.
+- `README.md` — the runbook passage naming the App, its scope and its rotation
+  procedure. This is not incidental: the delta's "documented where it can be
+  found" clause is discharged here and nowhere else.
+- `docs/change-queue.md` — entry 32, the unaddressed signal gap this change
+  names as a non-goal.
+- `docs/deferred-work.md` — the shape assumptions in the new tests, and the two
+  properties of the workflow header that are enforced by reading rather than by
+  the suite.
 - **Operator steps outside the repository, which the change cannot perform for
-  itself**: create a GitHub App, install it on `shatynska/infrastructure` with
-  Contents: Read and write and Pull requests: Read and write, and add its App ID
-  and private key as the `APP_ID` and `APP_PRIVATE_KEY` repository secrets. Until
-  those exist the workflow fails at the minting step rather than at the
-  pull-request step — a different error, not a fixed one.
+  itself**: create a GitHub App named `infrastructure-autoupdate`, install it on
+  `shatynska/infrastructure` with Contents: Read and write and Pull requests:
+  Read and write, and add its Client ID and private key as the `APP_CLIENT_ID`
+  and `APP_PRIVATE_KEY` repository secrets. The name is not cosmetic — the README
+  names it so a later reader can find the App whose key they are being told to
+  rotate. Until the secrets exist the workflow fails at the minting step rather
+  than at the pull-request step — a different error, not a fixed one.
 - `origin/chore/pre-commit-autoupdate` is left in place. It is the branch the
   workflow reuses by name; once this change is on `main`, a `workflow_dispatch`
   run updates that branch and opens its pull request, and merging it deletes the

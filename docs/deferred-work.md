@@ -127,3 +127,70 @@ tests, which is a change of its own rather than a rider on one whose subject is
 the pins. **Revisit when** something else needs to reason about that boundary, or
 when a directory appears that the two rules would classify differently — at
 which point the disagreement stops being theoretical.
+
+## Four shape assumptions in the pull-request-identity checks
+
+`open-autoupdate-pr-with-app-token` added a section to
+`.github/tests/test_ci_configuration.py` that discovers every workflow step
+opening a pull request and asserts what identity it uses. The discovery and its
+helpers make four assumptions that are true of this repository today and would
+each produce a **false positive** — a failing build on a legitimate change —
+rather than a false negative:
+
+- `token_inputs` reads only step-level `env:`. A pull-request-opening `run:`
+  step taking `GH_TOKEN` from a job- or workflow-level `env:`, which is the
+  ordinary `gh` idiom, would be reported as having no explicit token.
+- `step_opens_a_pull_request` requires a POST and the string `/pulls` somewhere
+  in the same `run:` block, not in the same command. `apply.yml` already
+  contains `/pulls` twice for read-only fetches; adding any `gh api --method
+  POST` to that step would classify a read-only step as one that opens a pull
+  request.
+- `secrets_referenced_by` scans the whole job rather than the identity path. If
+  the `autoupdate` job ever gains an unrelated secret — plausible, given
+  change-queue entry 32's alerting proposal — the README tests would demand that
+  secret be documented in the same passage as the App credential, which could
+  only be satisfied by misdescribing it.
+- `readme_sections` splits the README at any line beginning with `#`, including
+  inside a fenced code block. Adding a shell snippet with a comment line to the
+  section documenting the App would split that passage in two and fail two
+  otherwise-correct tests.
+
+None is a defect in what the tests assert; each is a limit on the shapes they
+can read. They are recorded rather than fixed because fixing them means editing
+passing tests written by an independent author from the delta specs, which is a
+change of its own rather than a rider on the one that introduced them.
+
+**Revisit when** any of those four shapes is actually needed — most likely the
+`env:` one, the first time a workflow here opens a pull request with `gh`
+instead of an action.
+
+## Two properties of the autoupdate workflow that only reading enforces
+
+`open-autoupdate-pr-with-app-token` left `.github/workflows/pre-commit-autoupdate.yml`
+carrying two properties its own test section does not assert:
+
+- The minting step's `permission-contents: write` / `permission-pull-requests:
+  write` inputs, which down-scope every token it issues. The delta spec's
+  clause that the credential carries no authority beyond what the pull-request
+  step exercises is *readable* from committed content because of them, but not
+  *checked*: an edit dropping those two lines passes the whole suite.
+- The restricted input set on the pull-request step. Adding `labels` or
+  `assignees` would need Issues, which the App does not hold, and nothing fails
+  until the workflow next runs.
+
+Neither is a live risk today: the App's own scope is exactly the two permissions
+the inputs name, so dropping them changes nothing until the App is widened. The
+exposure is second-order — a later widening of the App plus a later edit here.
+
+Not folded in because a check for either is a test, and this repository has
+tests for a change's delta specs written by an author other than whoever wrote
+the implementation. Adding them during that change's own build phase would have
+inverted that, and neither property has a scenario in the delta to derive from —
+they come from a prose clause. The honest options were a test derived properly or
+a note; this is the note, and the workflow header says plainly which of its
+claims the suite does not stand behind.
+
+**Revisit when** the App's permissions are widened beyond Contents and Pull
+requests, which is the moment the exposure stops being second-order — or sooner,
+as a small change of its own that adds the scenario and has the assertion derived
+from it.
