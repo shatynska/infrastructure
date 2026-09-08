@@ -4269,15 +4269,116 @@ class TestChangeDetectionResolvesTheGatesInput(
                     text=True,
                     timeout=60,
                 )
+                combined = (result.stdout + result.stderr).strip()
                 self.assertNotEqual(
                     0,
                     result.returncode,
                     f"on a pull request whose change filter produced {filtered!r} -- "
                     "which is what a filter step that did not run leaves behind -- the "
                     "resolution concluded successfully. Whatever it wrote, the suite "
-                    "is then gated on a value nothing produced: "
-                    f"{(result.stdout + result.stderr).strip()[-400:]!r}",
+                    f"is then gated on a value nothing produced: {combined[-400:]!r}",
                 )
+                # Turning a silent green into a red is worth only as much as the
+                # red is diagnosable. The whole reason this refusal exists is
+                # that the empty string is indistinguishable from "nothing
+                # changed" -- so the message has to say which one it is, or the
+                # next person reads a failed discovery job and looks at the
+                # discovery step.
+                self.assertIn(
+                    "filter",
+                    combined.lower(),
+                    "the resolution refused the value without naming the change "
+                    f"filter as the cause; it emitted {combined[-400:]!r}",
+                )
+
+    # Representative of the configuration directory's breadth, not of its
+    # current contents: a filter narrowed to any one of these subtrees reports
+    # a legitimate `false` for a pull request that changed another.
+    CONFIGURATION_PATHS = (
+        "ansible/playbooks/host-baseline.yml",
+        "ansible/roles/some_role/tasks/main.yml",
+        "ansible/roles/some_role/molecule/default/molecule.yml",
+        "ansible/requirements.yml",
+        "ansible/requirements-test.txt",
+        "ansible/ansible.cfg",
+        "ansible/inventory/hcloud.yml",
+    )
+    NON_CONFIGURATION_PATHS = (
+        "README.md",
+        "terraform/environments/prod/main.tf",
+        "platform/docker-compose.yml",
+        ".github/workflows/ansible-verify.yml",
+    )
+
+    def test_the_change_filter_selects_the_whole_configuration_directory(self) -> None:
+        """SPECIFIED -- "Every pull request that changes files under `ansible/`
+        SHALL trigger continuous-integration checks over that configuration",
+        and its converse, scenario "A pull request touching no Ansible file
+        starts no container".
+
+        This is the third input to the gate, and the one neither other check
+        reaches. Whether the filter step RUNS is asserted below; whether it
+        produced a real value is refused at run time by the resolution itself.
+        What it LOOKS AT is asserted here, and nothing else does.
+
+        Narrow the pattern to a subdirectory and the failure is silent in a way
+        the other two are not: the filter runs, reports a perfectly legitimate
+        `false` for a pull request that changed `ansible/playbooks/`, the matrix
+        skips, the refusal does not fire because the value is valid, and the
+        gate concludes success on a pull request that changed files under
+        `ansible/`. That is the sentence the requirement opens with, defeated
+        without a single check going red.
+
+        Asserted behaviourally rather than as the literal string `ansible/**`,
+        so that any pattern covering the directory passes and any pattern
+        missing part of it fails.
+        """
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        patterns: list[str] = []
+        for step in discovery_job.get("steps") or []:
+            if "paths-filter" not in str(step.get("uses", "")):
+                continue
+            declared = (step.get("with") or {}).get("filters")
+            parsed = yaml.safe_load(declared) if isinstance(declared, str) else declared
+            self.assertIsInstance(
+                parsed,
+                dict,
+                f"the change-filter step in `{discovery_key}` declares `filters:` as "
+                f"{declared!r}, which is not a mapping of filter name to patterns",
+            )
+            for entry in parsed.values():
+                patterns.extend(entry if isinstance(entry, list) else [entry])
+        self.assertTrue(
+            patterns,
+            f"the change-filter step in `{discovery_key}` declares no patterns, so "
+            "this check would pass having read nothing",
+        )
+        unmatched = [
+            path
+            for path in self.CONFIGURATION_PATHS
+            if not any(gh_glob_matches(str(pattern), path) for pattern in patterns)
+        ]
+        self.assertEqual(
+            [],
+            unmatched,
+            f"the change filter's patterns {patterns} do not select these files under "
+            f"ansible/: {unmatched}. A pull request changing one of them would be "
+            "reported as touching nothing, the suite would be skipped, and the "
+            "required check would conclude success having verified nothing",
+        )
+        overmatched = [
+            path
+            for path in self.NON_CONFIGURATION_PATHS
+            if any(gh_glob_matches(str(pattern), path) for pattern in patterns)
+        ]
+        self.assertEqual(
+            [],
+            overmatched,
+            f"the change filter's patterns {patterns} also select these files outside "
+            f"ansible/: {overmatched}, so the suite would run on pull requests that "
+            "cannot affect it -- the cost this gating exists to avoid",
+        )
 
     def test_the_change_filter_itself_runs_only_where_there_is_a_diff(self) -> None:
         """DERIVED (design.md Decision 1, tasks.md 2.3) -- no scenario states
