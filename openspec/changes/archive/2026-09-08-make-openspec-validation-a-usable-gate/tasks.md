@@ -298,15 +298,14 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
 
 ## 13. Pull request 3 — archive
 
-- [ ] 13.1 Bring the branch back to the freshly fetched trunk and apply the delta
+- [x] 13.1 Bring the branch back to the freshly fetched trunk and apply the delta
   to `openspec/specs/iac-cicd-pipeline/spec.md`. Update that capability's
   `## Purpose` paragraph too: it enumerates the capability's tiers and does not
   mention specification-record validation, and no delta reaches it because it is
   not a requirement.
-- [ ] 13.2 Delete `docs/change-queue.md` entry 12, confirming first that both of
+- [x] 13.2 Delete `docs/change-queue.md` entry 12, confirming first that both of
   its halves were delivered — the records settled **and** the gate wired — and
   that the entries added in sections 2 and 12.3 are not deleted with it.
-- [ ] 13.3 Open the record's own pull request.
 
 ## Notes from implementation
 
@@ -522,3 +521,29 @@ request that cannot satisfy them, gated by an unconditional required check. This
 is exactly what the apportionment in this file exists to prevent, and it was
 missed on the first pass. Undone before pushing; the gate group is held out and
 returns in the commit that wires the gate. `test-plan.md` records it.
+
+## The record's own pull request
+
+Task 13.3 asked for it, and it is opened immediately after the commit that
+writes this file — so it could never have been ticked here. It is recorded in
+prose for the same reason `refresh-readme-accuracy`'s task 8.6 is, one directory
+over: **a change's `tasks.md` ends at the archive commit.**
+
+That rule is this change's own, written into `AGENTS.md` after 8.6 turned out to
+be the only reason that record was red. This change then broke it — 13.3 is an
+act that happens after the archive commit, and it went into the task list
+anyway.
+
+What is worth recording is how it was caught. `openspec validate --archived`,
+the gate this change installs, ran on this branch and reported:
+
+```
+✗ change/2026-09-08-make-openspec-validation-a-usable-gate
+  ✗ 3 incomplete tasks (34/37 completed)
+```
+
+Two of those were simply not yet ticked. The third was 13.3, and without the
+gate it would have merged unticked and this change would have joined the four
+records it was written to settle — red on arrival, in the archive, for the exact
+defect it diagnosed. The rule caught its author, and the check caught the rule
+being broken, before either reached the trunk.
