@@ -626,3 +626,295 @@ Entry 8 (`namespace-the-molecule-suite-per-working-tree`) would remove the
 hazard rather than document it; this entry is worth doing anyway and is much
 cheaper, and stays true until entry 8 lands.
 
+
+---
+
+Entries 19 to 30 came out of a second full review on 2026-09-08 (trunk at
+`74c7101`), made to judge whether this repository's shape can be reused for a
+second, company-owned host. Only what applies to **this** host too is recorded
+here; the company-only findings (repository visibility, a second approver, an
+organisation-owned repository) are not this repository's concern. The review's
+verdict repeated the first audit's: the architecture is sound, and what follows
+is operational rather than structural. It read the live host as well as the
+tree, so where an entry cites a host fact, that is what `main-server` showed on
+2026-09-08, not an inference from the code.
+
+## 19. back-up-the-shared-database-logically-and-off-host
+
+**Not blocked. The most consequential entry in this file.**
+
+The only backup that exists is Hetzner's daily server snapshot -- `backups =
+true` in `terraform/environments/prod/terraform.tfvars`, seven retained, taken
+in the 02:00-06:00 window. It covers the root disk only: the `main-data`
+Volume is not part of a server backup, and Postgres's data lives in a named
+Docker volume on the root disk, so it *is* captured, but crash-consistently,
+once a day, restorable only by rolling the entire server back to that image.
+There is no logical dump, no copy outside the Hetzner project, and nothing in
+this repository records a restore ever having been performed.
+
+*Data Durability for Stateful Resources* (`openspec/specs/iac-safety-hardening/spec.md`)
+says of this exactly what it should: "Restoring from a backup is the only remedy
+... and no Terraform-level guardrail substitutes for it". It does not say the
+backup has to be one a database can actually be restored from.
+
+What this wants is a scheduled `pg_dump` per database inside the shared
+instance, written to object storage outside the server (Hetzner Object Storage
+is the same vendor and the same bill), with a retention policy, an alert on
+staleness rather than on failure -- the same reasoning as entry 15: a job that
+stops being scheduled produces no failure -- and a restore rehearsed once and
+written down. The host has `deploy`'s `/opt/platform` and the `platform_edge`
+network to reach Postgres from; whether the dump runs as a platform service or a
+host timer is the design question.
+
+Note that the instance it would back up currently holds no application
+database at all (entry 20). The two entries are independent but land better
+together.
+
+## 20. decide-the-database-model-and-define-per-application-provisioning
+
+**Not blocked; recorded because the specification and the host disagree, and
+the disagreement was found by reading the host.**
+
+*Single Shared PostgreSQL Instance, Per-Application Databases*
+(`openspec/specs/iac-platform-services/spec.md`) requires every application to
+be given a database inside the platform's one instance rather than its own
+container. On 2026-09-08 `docker ps` on the host showed `commerce-ops-postgres-1`
+(`postgres:16-alpine`, on the application's own `app_db` network) alongside
+`platform-postgres-1`, and `\l` on the shared instance listed no database
+beyond the defaults. The one application this host runs does not use the
+shared instance, and the requirement is not met.
+
+The cause is the gap `platform/README.md` states openly: "How a new
+application actually gets its own database/role inside that instance is not
+yet defined". With no provisioning mechanism, the first application did the
+only thing it could. Nothing here is the application's fault.
+
+Two coherent resolutions, and this repository should pick one rather than keep
+a requirement it does not enforce:
+
+- **Keep the shared instance and define provisioning.** A per-application
+  database and a restricted role, created by something in this repository
+  (the platform deploy, a host-side script, or an operator step written down
+  once), with the credential delivered through that application's own
+  Environment secret the way its deploy key already is. One instance to
+  back up (entry 19), tune, and watch through postgres-exporter.
+- **Drop the requirement and let each application own its Postgres.**
+  Isolates upgrades and failure per application, at the cost of one backup
+  job, one exporter and one set of limits per instance -- and a `MODIFIED`
+  delta removing the requirement.
+
+The first is the better fit for a host expecting several small services; the
+second is what the host does today. Either way the decision is a specification
+change, which is why it is queued rather than folded into entry 19.
+
+## 21. rotate-container-logs
+
+**Not blocked; small.**
+
+`docker info` on the host reports the `json-file` logging driver, and
+`/etc/docker/daemon.json` does not exist, so no container's log is bounded:
+`docker inspect` shows an empty `LogConfig` map on every service. Docker's
+default here is unlimited growth per container, on the root disk, next to
+Postgres's data. The `HostDiskPressure` alert fires at 90% full, which for a
+log that fills a disk is a report of the outage rather than a warning of it.
+
+`geerlingguy.docker` already accepts `docker_daemon_options`; a `log-driver`
+of `json-file` with `max-size` and `max-file` in `log-opts`, set from
+`ansible/inventory/group_vars/prod.yml`, is the whole change. It applies to
+containers created after the daemon restart, so existing ones pick it up at
+their next deploy, and the `docker` role's Molecule scenario can assert the
+rendered file.
+
+## 22. give-the-host-swap-and-treat-entry-7-as-its-companion
+
+**Blocked on the same data as entry 7, and the same decision.**
+
+`swapon --show` on the host is empty: an 8 GB host with no swap and no
+container limits (entry 7) means the first service to leak memory is stopped
+by the OOM killer, and the killer's choice is not the leaking service's --
+Postgres and Prometheus are the largest resident processes and therefore the
+likeliest victims. A modest swap file does not fix a leak but turns a hard
+kill into a slowdown the `HostMemoryPressure` alert has time to report.
+
+Recorded separately from entry 7 because it is a host-level change (an
+Ansible task, a `vm.swappiness` sysctl) where entry 7 is a Compose-level one,
+and because it is worth doing even before entry 7's data is in.
+
+## 23. apply-host-configuration-through-a-gated-workflow
+
+**Not blocked; recorded because it is the one path to production this
+repository still leaves to a workstation.**
+
+`ansible/playbooks/host-baseline.yml` is applied by hand: no workflow runs
+`ansible-playbook` against prod, the Vault password lives only on the
+operator's machine, and the `tailscale_auth_key` is supplied at the prompt.
+`AGENTS.md` says nothing ships from a local machine and that local production
+credentials are for reading, and the Terraform and platform layers honour it;
+the host layer does not, and a converge that changes UFW rules or authorized
+keys is at least as consequential as a Compose change.
+
+The shape already exists twice in `.github/workflows/`: a credential-less job
+that shows the reviewer what will change (`ansible-playbook --check --diff`
+against prod, over the tailnet, with the read-only Hetzner token for
+inventory), then a `production`-gated job that applies it. It needs the Vault
+password and the tailnet auth key as Environment secrets, an SSH identity
+for `root` that is not the operator's personal key, and a decision about
+whether `--check` output is reviewable enough to approve on. That last is the
+part worth thinking about; the rest is plumbing.
+
+## 24. make-the-pipeline-environment-agnostic-before-adding-staging
+
+**Not blocked; recorded because the README's "anticipated next environment"
+is further away than it reads.**
+
+`terraform/modules/` are parameterised for a second environment, and the
+README says staging is "a second `terraform/environments/<name>/` folder
+reusing the same modules". The pipeline does not agree. `apply.yml`,
+`drift.yml` and `pr-validation.yml` each hardcode
+`working-directory: terraform/environments/prod`; `host-baseline.yml` runs
+against `hosts: prod`; `group_vars/prod.yml` carries the host's CIDRs and
+application list by name. A second folder would be validated by `terraform
+validate`'s discovery loop and applied by nothing.
+
+The work is a matrix or a discovery loop over `terraform/environments/*/` in
+the three workflows, a per-environment `production`-style GitHub Environment
+so staging can be applied without prod's approver and prod's token, and the
+same for the playbook. It also needs a decision on whether staging is a second
+Hetzner server (a second `server_type` line and a second bill) or a second
+project. Worth doing before the first change that would benefit from being
+rehearsed -- a PostgreSQL major upgrade is the obvious one.
+
+## 25. close-public-ssh-and-manage-sshd-explicitly
+
+**Not blocked; a policy decision the hardening role already anticipates.**
+
+Port 22 is open on the cloud firewall and in UFW from one ISP `/24`
+(`ssh_allowed_cidrs` in `terraform.tfvars`, mirrored in `group_vars/prod.yml`).
+The tailnet rule in `ansible/roles/hardening/tasks/main.yml` admits SSH from
+`100.64.0.0/10` independently, and that task's own comment says an empty
+public CIDR list "is safer than what prod runs". Every non-operator path (the
+deploy jobs) already uses the tailnet; the public rule exists for the
+operator alone, and the operator is on the tailnet too.
+
+Closing it is `ssh_allowed_cidrs = []` -- except that `modules/server`'s
+validation refuses an empty list on lockout grounds, which was the right
+default before the tailnet existed and is the thing to revisit now. The
+Terraform firewall rule and the UFW rule move together (the *Host-Level
+Security Owned by Ansible, Cloud Firewall Owned by Terraform* requirement's
+sync obligation), and the change should say what the recovery path is if the
+tailnet is unreachable: Hetzner's console, which the cloud firewall does not
+gate.
+
+Two smaller things in the same area, neither managed by any role today, both
+running on the image's defaults: `sshd_config` (the host has no drop-in under
+`/etc/ssh/sshd_config.d/`; `PasswordAuthentication` is unset, harmless only
+because no account has a password) and `unattended-upgrades` (installed and
+enabled by the image, not by `hardening`, with no `Automatic-Reboot` decision
+recorded). Both belong to the hardening role, and both can be asserted by its
+Molecule scenario.
+
+## 26. manage-dns-in-terraform
+
+**Not blocked; recorded because it is the one piece of the running system
+that lives in no repository.**
+
+Traefik obtains certificates for names such as the one commerce-ops routes
+(`Host(...)` in that application's Compose file), and nothing here says where
+those records live or what they point at. A server rebuild (entry 30) or an
+IPv4 change would be followed by a manual DNS edit nobody has written down.
+
+The hcloud provider does not manage DNS; Hetzner's DNS has its own provider,
+and Cloudflare is the other obvious candidate. Either is a `terraform/modules/`
+addition, a new Dependabot directory (the CI suite will insist), and a
+read-only/read-write token split like `HCLOUD_TOKEN`'s. The records themselves
+are non-secret and belong in `terraform.tfvars`.
+
+## 27. check-public-endpoints-from-outside
+
+**Not blocked; recorded because the monitoring stack watches the host and not
+the customer's path to it.**
+
+The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves
+the exporters are. `ApplicationHighErrorRate` needs requests to reach Traefik
+before it can count them. Nothing checks, from outside the host, that a public
+hostname resolves, answers on 443, and presents a certificate that is not about
+to expire -- so a DNS mistake, a Traefik ACME failure, or a cloud-firewall
+change that blocks 443 is invisible until a person notices.
+
+Two shapes: an external uptime service (the dead-man's-switch provider likely
+offers one) with a check per hostname, or `blackbox-exporter` in the platform
+stack probing each hostname and alerting on `probe_success` and
+`probe_ssl_earliest_cert_expiry`. The second stays in the stack and is
+disk-free; the first is independent of the host, which is the property the
+Watchdog was chosen for. Both is not excessive.
+
+## 28. aggregate-container-logs
+
+**Not blocked; lowest priority in this batch for a host running one
+application, and the first thing missed when it runs several.**
+
+Logs are read by `docker logs` over SSH as `ops-claude`, per container, and
+are lost when a container is recreated -- which every deploy does. Alerts say
+*that* a container restarted; the reason is in the log that just went away.
+
+Loki with an Alloy (or Promtail) collector reading the Docker socket is the
+stack-native answer: it joins `platform_monitoring`, Grafana already has the
+datasource provisioning pattern, retention is bounded the way Prometheus's is,
+and it stores on `main-data` under a `platform_data_volume_subdirs` entry the
+way Prometheus does. Entry 21 is a prerequisite in spirit: the collector reads
+the same json-file logs that today are unbounded.
+
+## 29. set-traefik-wide-defaults-for-redirect-and-tls
+
+**Not blocked; small, and it removes a class of application mistake.**
+
+Traefik's `web` entrypoint (80) is open and serves whatever an application
+routes there; there is no entrypoint-level redirect to `websecure`, and no
+default `certresolver`. Every application's Compose file must therefore repeat
+`entrypoints=websecure` and `tls.certresolver=letsencrypt` on each router, and
+one that forgets is served over plain HTTP with no signal. commerce-ops sets
+both; the next application may not.
+
+`--entrypoints.web.http.redirections.entrypoint.to=websecure` and
+`--entrypoints.websecure.http.tls.certresolver=letsencrypt` on the Traefik
+service make the safe form the default and the labels optional. While there,
+Traefik's access log is off; turning it on (to stdout, bounded by entry 21) is
+what makes entry 28 useful for HTTP traffic.
+
+## 30. write-and-rehearse-the-rebuild-runbook
+
+**Not blocked; recorded because every piece exists and nobody has run them in
+sequence.**
+
+Recovering this host from nothing is: a Terraform apply through the gated
+pipeline (with `server_enabled` toggled, and the destroy-override label for
+the replace), DNS (entry 26), a hand-run Ansible converge with the Vault
+password and a fresh tailnet key (entry 23), the platform deploy from a re-run
+of `platform-deploy.yml`, one deploy per application from its own repository,
+the two manual steps `platform/README.md` lists (the `pgexporter` role and the
+dead-man's-switch registration), and a database restore (entry 19). Those live
+in four repositories and two README sections, in no stated order, and the
+time they take is unknown.
+
+A `docs/runbook-rebuild.md` that lists them in order, names the secret each
+step needs, and records the last rehearsal's date and duration is the
+deliverable. The rehearsal is the point; the document is how it survives.
+Entry 24's staging environment is where the rehearsal can happen without
+touching prod.
+
+## 31. cover-platform-images-with-dependabot
+
+**Not blocked; a one-stanza change in `.github/dependabot.yml`.**
+
+Dependabot watches `terraform` and `github-actions` here and nothing else.
+The nine image pins in `platform/docker-compose.yml` -- Traefik, Postgres,
+Grafana, Prometheus, Alertmanager, three exporters, cAdvisor -- are refreshed
+only when a person notices, which is the same shape as the Molecule digest in
+`docs/deferred-work.md`, minus that entry's argument for leaving it: these are
+production services, and a stale Traefik or Postgres is a security exposure
+rather than a test-reproducibility trade. Dependabot's `docker-compose`
+ecosystem reads Compose files directly.
+
+The floor check in `.github/tests` (*Shared-Stack Service Images Are Pinned to
+an Exact Release*) still applies to what Dependabot proposes, and the human
+half of that requirement is what the resulting pull request review is for.
