@@ -24,13 +24,13 @@
 These cannot be performed from the repository and are the precondition for
 `ship`'s confirm gate. They are the operator's, not the implementer's.
 
-- [ ] 5.1 Create a GitHub App named exactly `infrastructure-autoupdate`, owned by `shatynska`, with repository permissions Contents: Read and write and Pull requests: Read and write, and no account permissions; verify the App's settings page shows exactly those two and that its URL is `https://github.com/settings/apps/infrastructure-autoupdate`, which is the address the README gives a reader looking for it
-- [ ] 5.2 Install the App on `shatynska/infrastructure` only, and verify the installation page lists that single repository
-- [ ] 5.3 Generate a private key for the App and add its **Client ID** (not its App ID — `create-github-app-token@v3` deprecates `app-id`) as `APP_CLIENT_ID`, and the key as `APP_PRIVATE_KEY`, both as repository secrets; verify `gh secret list` names both
-- [ ] 5.4 Verify `gh api repos/shatynska/infrastructure/actions/permissions/workflow` still reports `can_approve_pull_request_reviews: false` — this change does not need it and it stays off
+- [x] 5.1 Create a GitHub App named exactly `infrastructure-autoupdate`, owned by `shatynska`, with repository permissions Contents: Read and write and Pull requests: Read and write, and no account permissions; verify the App's settings page shows exactly those two and that its URL is `https://github.com/settings/apps/infrastructure-autoupdate`, which is the address the README gives a reader looking for it
+- [x] 5.2 Install the App on `shatynska/infrastructure` only, and verify the installation page lists that single repository
+- [x] 5.3 Generate a private key for the App and add its **Client ID** (not its App ID — `create-github-app-token@v3` deprecates `app-id`) as `APP_CLIENT_ID`, and the key as `APP_PRIVATE_KEY`, both as repository secrets; verify `gh secret list` names both
+- [x] 5.4 Verify `gh api repos/shatynska/infrastructure/actions/permissions/workflow` still reports `can_approve_pull_request_reviews: false` — this change does not need it and it stays off
 
 ## 6. Confirming the effect
 
-- [ ] 6.1 After this change is merged to `main` and 5.1–5.3 are done, trigger the workflow with `gh workflow run pre-commit-autoupdate.yml` and verify the run concludes successfully
-- [ ] 6.2 Verify a pull request now exists from `chore/pre-commit-autoupdate`, that its author is the App rather than `github-actions[bot]`, and that both `validate` and `ansible-verify` have reported a conclusion on it — the pending-forever failure mode this change exists to prevent would show as those checks never appearing
-- [ ] 6.3 Verify that pull request is **mergeable** — `gh pr view --json mergeable,mergeStateStatus` reporting a state that is not blocked on an unreported check. This is the observation that confirms the change. Whether the bumped hook revision itself passes CI is a property of that bump, not of this change: a red `validate` on it is a real result to act on, and does not mean this change failed or needs re-entering at `build`
+- [x] 6.1 After this change is merged to `main` and 5.1–5.3 are done, trigger the workflow with `gh workflow run pre-commit-autoupdate.yml` and verify the run concludes successfully
+- [x] 6.2 Verify a pull request now exists from `chore/pre-commit-autoupdate`, that its author is the App rather than `github-actions[bot]`, and that both `validate` and `ansible-verify` have reported a conclusion on it — the pending-forever failure mode this change exists to prevent would show as those checks never appearing
+- [x] 6.3 Verify that pull request is **mergeable** — `gh pr view --json mergeable,mergeStateStatus` reporting a state that is not blocked on an unreported check. This is the observation that confirms the change. Whether the bumped hook revision itself passes CI is a property of that bump, not of this change: a red `validate` on it is a real result to act on, and does not mean this change failed or needs re-entering at `build`
