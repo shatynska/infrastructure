@@ -706,22 +706,6 @@ enabled by the image, not by `hardening`, with no `Automatic-Reboot` decision
 recorded). Both belong to the hardening role, and both can be asserted by its
 Molecule scenario.
 
-## 26. manage-dns-in-terraform
-
-**Not blocked; recorded because it is the one piece of the running system
-that lives in no repository.**
-
-Traefik obtains certificates for names such as the one commerce-ops routes
-(`Host(...)` in that application's Compose file), and nothing here says where
-those records live or what they point at. A server rebuild (entry 30) or an
-IPv4 change would be followed by a manual DNS edit nobody has written down.
-
-The hcloud provider does not manage DNS; Hetzner's DNS has its own provider,
-and Cloudflare is the other obvious candidate. Either is a `terraform/modules/`
-addition, a new Dependabot directory (the CI suite will insist), and a
-read-only/read-write token split like `HCLOUD_TOKEN`'s. The records themselves
-are non-secret and belong in `terraform.tfvars`.
-
 ## 27. check-public-endpoints-from-outside
 
 **Not blocked; recorded because the monitoring stack watches the host and not
@@ -781,7 +765,9 @@ sequence.**
 
 Recovering this host from nothing is: a Terraform apply through the gated
 pipeline (with `server_enabled` toggled, and the destroy-override label for
-the replace), DNS (entry 26), a hand-run Ansible converge with the Vault
+the replace), DNS (a manual edit at ukraine.com.ua — the records are listed
+under "Managing DNS in Terraform" in `docs/deferred-work.md`, which is where
+the automation of this step was declined), a hand-run Ansible converge with the Vault
 password and a fresh tailnet key (entry 23), the platform deploy from a re-run
 of `platform-deploy.yml`, one deploy per application from its own repository,
 the two manual steps `platform/README.md` lists (the `pgexporter` role and the
