@@ -208,10 +208,10 @@ performs exactly the ~42.88 GB in-deploy unlinking design.md rules out. The
 clearance does not depend on the new script, so reordering closes that window at
 no cost.
 
-- [ ] 4.1 Record `docker system df` and `docker images --format '{{.Repository}}'
+- [x] 4.1 Record `docker system df` and `docker images --format '{{.Repository}}'
   | sort | uniq -c` as the baseline (2026-09-07: 219 images, 46.43 GB, 42.88 GB
   reclaimable, 190 of them `ghcr.io/shatynska/commerce-ops`).
-- [ ] 4.2 Clear the accumulated backlog by hand on the host, using the command
+- [x] 4.2 Clear the accumulated backlog by hand on the host, using the command
   in design.md's "The one-time backlog is cleared by hand" verbatim — namespace
   -scoped, untagged excluded, empty reference set aborts, plain `docker image rm`,
   never `-f`, never `prune -a`. Run it **privileged**, over the same access path
@@ -219,20 +219,46 @@ no cost.
   accounts hold `docker` group membership but no `sudo`, and `/opt/commerce-ops`
   is `drwxr-x--- deploy:deploy`, so the command's first two steps fail there
   (checked on the host, 2026-09-07). Re-read `docker system df` afterwards.
-- [ ] 4.3 Only then run the host-configuration playbook — from `main`, after
+- [x] 4.3 Only then run the host-configuration playbook — from `main`, after
   the pull request has merged — so the new `app-deploy` reaches `main-server`.
   Running it from this change's own branch would put a script on production
   ahead of the required checks.
-- [ ] 4.4 After the next `commerce-ops` deploy, confirm the single tag that
+- [x] 4.4 After the next `commerce-ops` deploy, confirm the single tag that
   deploy superseded is gone and the tag it deployed remains — the change's
   `ship:confirm` observation. This is the steady-state behaviour every future
   deploy runs, which is what the gate should be proving; 4.2 is disk hygiene,
   not evidence about the mechanism. Should the observation fail, the script
   change is what is reverted: the hand clearance stands, having removed only
   images nothing referenced.
-- [ ] 4.5 Record the reclamation step's reported counts and the deploy's
-  elapsed time from that first steady-state run, so the expectation for every
-  later deploy rests on an observation rather than an estimate.
+
+### Evidence for the retroactive ticks in section 4
+
+Tasks 4.1 to 4.4 were performed but never ticked, so this change archived with
+its rollout — and its `ship:confirm` gate at 4.4 — reading as outstanding. They
+were ticked on 2026-09-08 by `make-openspec-validation-a-usable-gate`, each
+against the evidence that settles **that** task rather than against the pool
+generally. All four are retroactive: the evidence was read after the fact.
+
+- **4.1, the baseline.** `docker system df` on `main-server`, read 2026-09-08:
+  10 images, 3.553 GB, **0 B reclaimable**, against the 219 images / 46.43 GB /
+  42.88 GB reclaimable this task itself records as the 2026-09-07 baseline.
+- **4.2, the hand clearance.** The same reading, plus the tag count: one
+  `ghcr.io/fuperia-it/commerce-ops` tag against the 190 this task records.
+  Corroborated independently by `prune-unreferenced-host-images-periodically`,
+  whose `design.md` — written the following day, by a different change — states
+  *"one `ghcr.io/fuperia-it/commerce-ops` image today against 190 before it"*.
+- **4.3, the playbook run.** `/usr/local/bin/app-deploy` is present on the host,
+  dated 2026-09-07, carrying the `reclaim()` function this change wrote. That is
+  the artefact the task exists to place.
+- **4.4, the `ship:confirm` observation.** The observation this task asks for is
+  *the single tag that deploy superseded is gone and the tag it deployed
+  remains*, and the host shows exactly one `commerce-ops` tag with 0 B
+  reclaimable. **This was not ticked on the reading alone.** `AGENTS.md` forbids
+  an agent confirming its own gate, and neither waiver class fits an observation
+  that was made and whose effect is present — so the reading was put to the
+  operator, who **confirmed it on 2026-09-08**. It closes a gate that should
+  have closed on 2026-09-07, and is recorded as retroactive rather than
+  presented as contemporaneous.
 
 ## 5. Follow-up recorded, not done here
 
@@ -240,3 +266,15 @@ no cost.
   prune covering fully dangling images, untagged namespace members and
   applications that no longer deploy — the three cases this change's proposal
   names as non-goals.
+
+## Not performed
+
+- 4.5 Record the reclamation step's reported counts and the deploy's elapsed
+  time from that first steady-state run, so the expectation for every later
+  deploy rests on an observation rather than an estimate.
+  Reason: never captured, and the run it describes is gone — the counts and
+  timing existed only in that deploy's logs and were not written down. Unlike
+  4.1 to 4.4, no present-day reading recovers it: the host shows the steady
+  state, not what the first run reported. The loss is bounded, because any later
+  deploy can still supply the expectation this task was meant to establish; what
+  is gone is the chance to have based it on the first one.

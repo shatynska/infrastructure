@@ -1065,3 +1065,42 @@ noise.
 shared instance that it would rather not lose, in which case the answer is that
 it should not have been (see the requirements above) and that is the thing to
 fix, not the upgrade.
+## 39. exercise-the-volume-server-coupling-against-live-state
+
+**Not blocked; recorded because an archived change is where it would be lost.**
+Recovered 2026-09-08 by `make-openspec-validation-a-usable-gate` while settling
+the red archived records. `add-prod-data-volume`'s task 3.5 was left unticked
+with the note *"Still open; consider doing this as a follow-up plan-only check"*
+— real outstanding work, sitting in prose inside a change that had already been
+archived, which is precisely where nobody would look for it. That task is now
+disclosed under that change's `## Not performed`; the work it names is here.
+
+`environments/prod` couples the volume to the server:
+`count = var.volume_enabled && var.server_enabled ? 1 : 0`, so the volume cannot
+outlive the server it derives its location from. **That coupling has never been
+exercised against live state.** `terraform/modules/volume/tests/*.tftest.hcl`
+cannot reach it — the coupling lives in the environment, not the module, and the
+module's tests do not evaluate the environment's `count` expression.
+
+Two plan-only reads, **never applied**:
+
+- Set `volume_enabled = false` (uncommitted) and re-plan: the volume is planned
+  for destruction and nothing else changes.
+- Restore it, set `server_enabled = false` instead, and re-plan: the plan
+  destroys server, firewall **and** volume together.
+
+Revert both local edits afterwards. Use the read-only Hetzner token; this is a
+`terraform plan` and never a `terraform apply`, per this project's rule that
+production changes reach Hetzner only through the gated pipeline. A destroy plan
+run locally reads state and proposes; it changes nothing.
+
+The requirement this protects is *Conditional Prod Volume Creation* in
+`openspec/specs/iac-data-volumes/spec.md`, and the two reads above are literally
+its scenarios *Volume toggle disabled creates nothing* and *Disabling the server
+also removes the volume* — both of which say `terraform plan` SHALL show the
+volume planned for destruction. The specification states them; nothing has ever
+run them.
+
+Worth doing before the coupling is next relied on — a volume that survived its
+server would be an orphaned resource with no location, which is the failure the
+coupling exists to prevent and which nothing has yet observed being prevented.
