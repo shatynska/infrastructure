@@ -227,6 +227,23 @@ does, and are called out so they can be argued with rather than discovered:
   the absence of a key would fail the day someone has a good reason for one,
   with the reasoning living only in an archived design.
 
+## Added after this plan was written
+
+One assertion, added during the build in response to the code-review gate, and
+recorded here so this manifest does not understate what the suite now holds.
+
+`TestEveryComposeFileDeclaringAServiceImageIsCovered
+.test_every_configured_directory_holds_a_file_the_fetcher_selects` — DERIVED,
+stated by no scenario. Every assertion this plan derived walks tree →
+configuration: each stack definition must be reachable. Nothing walked
+configuration → tree, and the fetcher fails hard in that direction — it raises
+when the configured directory holds no file its filename pattern selects. A
+directory named in the configuration that holds none errors on every Dependabot
+run, opens no pull request, and leaves the suite green. That mechanism is what
+design.md Decision 1 rests on when it argues `directory: "/"` would fail rather
+than scan, so it is now asserted rather than only reasoned about. Observed red
+against a `directories:` list carrying a phantom `/apps`, then restored.
+
 ## Obsolete tests
 
 One entry. It is a **candidate for human confirmation**, not a conclusion: this

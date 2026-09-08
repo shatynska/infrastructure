@@ -40,6 +40,7 @@ set.
 from __future__ import annotations
 
 import ast
+import functools
 import os
 import re
 import shutil
@@ -5959,10 +5960,6 @@ class TestTheStatedReasonChecksAreARealReadOfTheFile(unittest.TestCase):
         self.assertEqual([], grafana_provisioning_offences(fixture))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # --------------------------------------------------------------------------
 # iac-safety-hardening / Automated Dependency Updates -- the `docker-compose`
 # ecosystem
@@ -6074,7 +6071,8 @@ def declares_a_service_image(document: object) -> bool:
     )
 
 
-def compose_shaped_files(root: Path | None = None) -> list[Path]:
+@functools.lru_cache(maxsize=None)
+def compose_shaped_files(root: Path | None = None) -> tuple[Path, ...]:
     """Every file in the tree whose content is a stack definition.
 
     Walks with this suite's existing `walked_files()` rather than a fresh
@@ -6093,6 +6091,17 @@ def compose_shaped_files(root: Path | None = None) -> list[Path]:
     Every file is offered to the YAML parser rather than only those with a
     `.yml`/`.yaml` suffix, because it is the shape that decides. A file that
     cannot be decoded or parsed is not a stack definition and is passed over.
+
+    The walk reads untracked files too -- deliberately, since that is the safe
+    direction for a coverage obligation, and the same trade `walked_files()`
+    already documents. The local-only consequence: an untracked stack-shaped
+    scratch file under a name the fetcher does not match (`platform/local.yml`)
+    turns this assertion red on a workstation while continuous integration,
+    which checks out tracked files only, stays green.
+
+    Cached because the walk parses every file in the tree and several
+    assertions call this; the cache is keyed on `root`, so a fixture tree is
+    still read on its own.
     """
     found: list[Path] = []
     for path in walked_files(root):
@@ -6106,7 +6115,7 @@ def compose_shaped_files(root: Path | None = None) -> list[Path]:
             continue
         if declares_a_service_image(document):
             found.append(path)
-    return found
+    return tuple(found)
 
 
 def dependabot_config(config: dict | None = None) -> dict:
@@ -6308,10 +6317,12 @@ class TestDependabotWatchesEveryRequiredEcosystem(unittest.TestCase):
         version update" and "Platform image update" scenarios, and establishes
         none of their outcomes -- see the test plan.
 
-        This supersedes `TestDependabotCoverage
+        This superseded `TestDependabotCoverage
         .test_dependabot_configures_both_required_ecosystems`, whose name
-        asserts "both" and would be false of three. That test is not edited
-        here; it is reported as superseded for a human to remove.
+        asserted "both" and whose body iterated that literal pair -- false of
+        three. That method was removed by this change's implementation
+        commit; a note stands in its place. This assertion is a strict
+        superset of it, and is paired with a discrimination test below.
         """
         missing = missing_required_ecosystems()
         self.assertEqual(
@@ -6377,6 +6388,43 @@ class TestEveryComposeFileDeclaringAServiceImageIsCovered(unittest.TestCase):
             offences,
             "these stack definitions are not reachable by the committed "
             f"`{COMPOSE_ECOSYSTEM}` configuration: {offences}",
+        )
+
+    def test_every_configured_directory_holds_a_file_the_fetcher_selects(self) -> None:
+        """DERIVED -- the converse of the assertion above, and the one failure
+        the delta's scenarios do not name.
+
+        The assertion above walks tree -> configuration: every stack definition
+        must be reachable. Nothing there walks configuration -> tree, and the
+        fetcher makes that direction fail hard rather than silently: it
+        `raise_appropriate_error`s when the configured directory holds no file
+        matching its filename pattern ("Repo must contain a docker-compose.yaml
+        file."). A directory named here that holds none -- a stanza added for a
+        path that does not exist yet, a `directories:` entry left behind after a
+        stack moved -- errors on every Dependabot run, opens no pull request,
+        and leaves this suite entirely green.
+
+        That is the mechanism design.md Decision 1 rests on when it argues
+        `directory: "/"` would fail rather than scan, so it is asserted here
+        rather than only reasoned about. Matching the fetcher, the listing is
+        of the directory itself and does not descend.
+        """
+        empty = []
+        for directory in configured_directories(COMPOSE_ECOSYSTEM):
+            resolved = ROOT / directory.lstrip("/")
+            if not resolved.is_dir():
+                empty.append(f"{directory} (no such directory)")
+                continue
+            if not any(
+                entry.is_file() and fetcher_matches_filename(entry.name)
+                for entry in resolved.iterdir()
+            ):
+                empty.append(f"{directory} (no file the fetcher would select)")
+        self.assertEqual(
+            [],
+            empty,
+            f"the `{COMPOSE_ECOSYSTEM}` ecosystem names directories the fetcher would "
+            f"error on rather than read, so it opens no pull request at all: {empty}",
         )
 
 
@@ -6713,3 +6761,15 @@ class TestAProposedImageUpdateIsNotExemptFromTheStacksObligations(unittest.TestC
             "whether the proposed image declares a persistent store the current one does "
             "not, per *No Store on This Host Holds Data Requiring Backup*",
         )
+
+
+# `unittest.main()` stays at the END of this file, not in the middle of it.
+# `cover-platform-images-with-dependabot` appended a section after the block's
+# previous position and a direct `python3 .github/tests/test_ci_configuration.py`
+# then ran 169 tests and reported OK while 23 were never defined -- a check
+# reporting success having verified nothing, which is what this suite exists to
+# refuse. Continuous integration was unaffected (it uses `unittest discover`),
+# which is exactly why nothing caught it. Append below this comment, never
+# above it.
+if __name__ == "__main__":
+    unittest.main()
