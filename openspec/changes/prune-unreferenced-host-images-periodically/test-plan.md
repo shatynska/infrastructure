@@ -285,6 +285,33 @@ intermediate build images, neither of which this pass can pin without asserting
 against the classic builder's internals. The dedup half of `removed` is
 therefore held by `considered`'s exactness and by review.
 
+## Two abandon branches added after code review, 2026-09-08 — not asserted
+
+`2c77c93` added two abandon conditions that no Molecule assertion covers, and
+they are recorded here rather than left to be discovered:
+
+- **a reference that could not be resolved** (as opposed to one that resolved to
+  nothing) — `docker image inspect` exits 1 for both, and the fix reads stderr
+  to tell them apart;
+- **container images that could not be read at all**, as opposed to a host with
+  no containers.
+
+Both need the runtime to answer some calls and fail others *during* a run, which
+is the same mid-run seam `tasks.md` 2.11 records as unavailable to a black-box
+scenario. They are the fix for round 1's HIGH finding, so the guard that closed a
+fail-open is itself unprotected by the suite.
+
+They were exercised instead against a **stubbed runtime**: with
+`docker image inspect` failing as an unreachable daemon does while
+`docker image rm` still works, the pre-fix script deleted a digest-pinned image
+an enumerated application referenced and exited 0 reporting
+`considered 2, removed 1`; the fixed script abandons, removes nothing and exits
+1. That reproduction is what established the finding rather than accepting it.
+
+The same rig is what `tasks.md` 3.7 queues as a follow-up: it supplies the seam
+Molecule lacks, and adopting it would cover these two branches and the two
+guards under "Deliberate non-coverage" together.
+
 ## Assertion classification
 
 **Specified** — traces to a stated sentence of the delta requirement:

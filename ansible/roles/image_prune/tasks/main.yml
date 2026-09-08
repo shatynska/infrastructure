@@ -114,7 +114,9 @@
       # could not be resolved can be told apart from one that resolved to
       # nothing.
       inspect_err="$(mktemp)"
-      trap 'rm -f "$inspect_err"' EXIT
+      # `|| :` so a failing cleanup cannot turn a successful run's exit 0 into
+      # a 1: bash takes the EXIT trap's last status as the script's.
+      trap 'rm -f "$inspect_err" || :' EXIT
 
       # Every abandon path reports its own condition and exits non-zero. The
       # conditions must be distinguishable from one another: the remedy for an
@@ -181,10 +183,16 @@
       # exists to honour, and rejecting it would abandon every run of a host
       # whose applications pin.
       well_formed() {
-        local ref="$1" name tail_seg digest
+        local ref="$1" name repo tail_seg digest
         case "$ref" in
           ''|*' '*|*'$'*|*'//'*|*':/'*|*'::'*) return 1 ;;
         esac
+        # A reference may carry a tag, a digest, or -- canonically -- BOTH, as
+        # `repo:tag@sha256:...`. Strip the digest first and then a tag from what
+        # remains, so the repository is validated on its own in every form.
+        # Validating a still-tagged string here rejected `ghcr.io/o/r:v1@sha256:...`
+        # while accepting `nginx:1.25@sha256:...`, and rejecting a valid
+        # reference abandons EVERY run on a host that pins that way.
         if [ "${ref#*@}" != "$ref" ]; then
           name="${ref%%@*}"
           digest="${ref#*@}"
@@ -194,20 +202,21 @@
           esac
         else
           name="$ref"
-          tail_seg="${ref##*/}"
-          if [ "${tail_seg#*:}" != "$tail_seg" ]; then
-            name="${ref%:*}"
-            [ -n "${ref##*:}" ] || return 1
-          fi
         fi
-        case "$name" in
+        repo="$name"
+        tail_seg="${name##*/}"
+        if [ "${tail_seg#*:}" != "$tail_seg" ]; then
+          repo="${name%:*}"
+          [ -n "${name##*:}" ] || return 1
+        fi
+        case "$repo" in
           ''|*/|/*) return 1 ;;
         esac
         # Only the FIRST segment may carry a colon, as a registry port. A colon
         # anywhere deeper means the tag was mis-split -- `a/b:v1:v2` -- which is
         # a malformed reference and not a repository named `b:v1`.
-        case "${name#*/}" in
-          *:*) [ "${name#*/}" = "$name" ] || return 1 ;;
+        case "${repo#*/}" in
+          *:*) [ "${repo#*/}" = "$repo" ] || return 1 ;;
         esac
         return 0
       }
