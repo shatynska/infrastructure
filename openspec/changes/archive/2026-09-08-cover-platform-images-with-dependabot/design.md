@@ -135,3 +135,37 @@ There is nothing to migrate. The change adds configuration, a specification delt
 Dependabot begins on its own schedule once the stanza reaches `main` — no enablement step, and no credential. The first run will likely open its full complement of pull requests at once, because eight pins have never been refreshed automatically; that is expected rather than a fault, and Decision 4 caps it at three.
 
 Rollback is deleting the stanza. Any pull request it had opened is closed, and no state on the host is involved.
+
+## Confirmed in production, 2026-09-08
+
+The gate this change had to answer was whether image pins actually produce pull
+requests, grouped as Decision 4 specifies. Both halves were observed, and the
+first observation is what found the defect.
+
+**First run, after PR #87 merged.** Six pull requests, four of them this
+ecosystem's — and four is one more than Decision 4 allows:
+
+| PR | What it was | Verdict |
+|---|---|---|
+| #89 | the group, with **4** updates | grouped only `prom/*` and `grafana/*` |
+| #90 | `traefik` v3.7.10 → v3.7.13 | correctly ungrouped |
+| #91 | `postgres` 16.15 → 18.6 | correctly ungrouped |
+| #92 | `prometheuscommunity/postgres-exporter` | **escaped the group** |
+
+#92's title and branch path both omitted the registry host, which is what
+identified the defect: the two registry-prefixed patterns matched nothing. The
+fix is PR #94, and its reasoning is Decision 4's correction above.
+
+**Second run, after PR #94 merged.** Dependabot re-evaluated on its own — no
+trigger, no re-run — closed #89 and #92 as superseded, and opened #95: *"Bump
+the platform-monitoring-images group across 1 directory with 5 updates"*,
+carrying `prom/node-exporter`, `prom/prometheus`, `prom/alertmanager`,
+`grafana/grafana` **and `prometheuscommunity/postgres-exporter`**. The
+ecosystem's open pull requests then stood at three — #95 grouped, #90 and #91
+each alone — which is what Decision 4 specifies.
+
+`google/cadvisor` is still **not** observed. It has opened no pull request
+because v0.60.5 remains its latest release, so its corrected pattern is
+inferred from the same rule the observed one confirms, and nothing here
+establishes it. The anchor test's docstring says so, and the pair should be
+added the first time Dependabot names it rather than assumed settled.
