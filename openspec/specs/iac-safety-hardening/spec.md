@@ -85,11 +85,19 @@ The prohibition SHALL be recorded where it is loaded without being sought: the r
 - **THEN** a repository-root `AGENTS.md` SHALL state that production changes reach Hetzner only through the gated pipeline and that `terraform apply` is not run locally
 
 ### Requirement: Automated Dependency Updates
-The repository SHALL configure Dependabot for both the `terraform` and `github-actions` package ecosystems, opening pull requests when newer versions become available.
+The repository SHALL configure Dependabot for the `terraform`, `github-actions` and `docker-compose` package ecosystems, opening pull requests when newer versions become available.
 
 The `terraform` ecosystem configuration SHALL cover **every** directory in the repository that carries a `.terraform.lock.hcl`. A directory holding a lockfile that no Dependabot entry names is not partially covered — it is uncovered, and its provider pins rot with no signal at all. Because Dependabot's `terraform` ecosystem requires each directory to be listed explicitly and offers no discovery mechanism, adding a Terraform module or environment SHALL include adding it here, and the two SHALL be kept in agreement.
 
 The `github-actions` ecosystem is required, not optional: a compromised or abandoned third-party action is a more realistic supply-chain risk for this repository than a stale Terraform provider.
+
+The `docker-compose` ecosystem is required for the same reason the pinning obligation on the shared stack exists. *Shared-Stack Service Images Are Pinned to an Exact Release* (`openspec/specs/iac-platform-services/spec.md`) forbids that stack a floating tag, so that a version change reaches production as a committed diff the deploy approver sees. A pinned tag never moves on its own, which means the requirement that makes an upgrade reviewable is also the one that makes it depend on a person remembering. This ecosystem supplies the proposal that review acts on. It reads Compose files directly, and is distinct from the `docker` ecosystem, which reads Dockerfiles.
+
+The `docker-compose` ecosystem configuration SHALL cover **every** Compose file in the repository that declares a service image, and the two SHALL be kept in agreement — for the same reason as the `terraform` list above, and by a stronger mechanism than that one's absent discovery. Dependabot's Compose file fetcher lists the contents of the configured directory only; it does not descend into subdirectories, and it fails outright when the configured directory holds no Compose file at all. A Compose file that no configured directory names is therefore not partially covered but uncovered, while every configured entry continues to report success.
+
+Coverage SHALL be read as requiring **both** conditions the fetcher applies, and a check enforcing only one of them SHALL NOT be treated as enforcing this obligation. The fetcher selects files by **name** as well as by directory, so a Compose file sitting in a configured directory under a name the fetcher does not match — one containing no `compose` — is as uncovered as one in a directory the configuration omits, and is the harder of the two to notice, because the directory it sits in is named and reports success. What decides that a file is a stack definition owing coverage is its **content** — a top-level service mapping declaring an image — and the fetcher's filename pattern SHALL be used only to decide whether a file so identified can be reached, never to decide whether a file is a stack definition at all.
+
+Automation SHALL NOT be read as discharging an obligation the stack definition already carries. A pull request this ecosystem opens remains subject to the pinning requirement above — both its automated floor and the human half that floor deliberately does not decide — and to *No Store on This Host Holds Data Requiring Backup* in this capability, whose scope reaches a store "a bumped image newly declares". That last is decidable by no static read of a committed file, because the store is declared by the image rather than by the stack definition, and SHALL be established by review of the pull request rather than assumed absent.
 
 Dependabot has **no `pre-commit` ecosystem**, so pinned hook revisions SHALL instead be maintained by a scheduled workflow that runs `pre-commit autoupdate` and opens a pull request with the result.
 
@@ -116,6 +124,24 @@ The existence, scope and rotation procedure of any such credential SHALL be reco
 #### Scenario: Action version update is proposed automatically
 - **WHEN** a newer version of a GitHub Action referenced by a workflow is released
 - **THEN** Dependabot SHALL open a pull request updating that reference
+
+#### Scenario: Platform image update is proposed automatically
+- **WHEN** a newer release is published of a container image the shared platform Compose stack pins
+- **THEN** Dependabot SHALL open a pull request updating that pin, subject to the same validation pipeline and the same gated deploy approval as any other change to the stack definition
+
+#### Scenario: Every Compose file declaring a service image is covered
+- **WHEN** the set of files in the repository whose content declares a service image is compared against the `docker-compose` ecosystem's configuration
+- **THEN** every such file SHALL sit in a directory that configuration names, **and** SHALL carry a name the fetcher matches
+- **AND** a file failing either condition SHALL be reported as uncovered, rather than the configured entries' own success being read as coverage of the repository
+
+#### Scenario: A stack file the fetcher's name pattern does not match is reported
+- **WHEN** a file declaring a service image sits in a directory the `docker-compose` ecosystem names, under a name that pattern does not match
+- **THEN** it SHALL be reported as uncovered, because the configured directory's own success says nothing about a file within it that is never fetched
+
+#### Scenario: A proposed image update is not exempt from the stack's own obligations
+- **WHEN** Dependabot opens a pull request changing an image pin in the shared platform Compose stack
+- **THEN** that pull request SHALL pass the pinning requirement's automated floor check, and SHALL receive the human review the remaining half of that requirement depends on
+- **AND** whether the proposed image declares a persistent store the current one does not SHALL be established by that review, because no static read of a committed file can establish it
 
 #### Scenario: Pre-commit hook revisions are refreshed on a schedule
 - **WHEN** the scheduled hook-update workflow runs and `pre-commit autoupdate` changes any pinned revision

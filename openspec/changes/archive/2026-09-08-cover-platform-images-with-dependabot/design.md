@@ -83,18 +83,28 @@ Eight images on a weekly schedule is up to eight pull requests, each of which �
 
 **The patterns are written in dependency names, not service names.** Dependabot matches a group's `patterns` against the *dependency* name, which for this ecosystem is the image reference with its tag stripped — not the key the Compose file happens to file the service under. The two differ for **all six** — `grafana` and `grafana/grafana` included — which is exactly why a group written in service names would match nothing at all rather than merely under-matching, leaving Decision 4 inert and every image ungrouped with nothing red to say so:
 
-| Compose service | Dependency name Dependabot matches on |
-|---|---|
-| `prometheus` | `prom/prometheus` |
-| `alertmanager` | `prom/alertmanager` |
-| `node-exporter` | `prom/node-exporter` |
-| `postgres-exporter` | `quay.io/prometheuscommunity/postgres-exporter` |
-| `cadvisor` | `ghcr.io/google/cadvisor` |
-| `grafana` | `grafana/grafana` |
-| *(ungrouped)* `postgres` | `postgres` |
-| *(ungrouped)* `traefik` | `traefik` |
+**Corrected 2026-09-08, after the first Dependabot run contradicted it.** The
+two rows carrying a registry host below were originally written *with* that
+host, and were wrong: Dependabot builds the dependency as
+`Dependency.new(name: details.fetch("image"), ..., source: source_from(details))`
+— the image capture group alone, with the registry carried in the source. The
+shipped patterns therefore matched nothing, and the assertion covering them was
+green because it computed its expected names from this same table. The names
+below are now transcribed from pull requests Dependabot actually opened.
 
-So the group is `prom/*`, `grafana/*`, `ghcr.io/google/cadvisor`, `quay.io/prometheuscommunity/postgres-exporter`. **No pattern may match `postgres` or `traefik`** — which is why postgres-exporter is named in full rather than as `postgres*`, a pattern that would silently pull the shared database into a group whose whole purpose is to keep it out. That is Decision 4's own rejected alternative arrived at by a typo, and it is the reason this decision gets an assertion rather than a `grep` in a task.
+| Compose service | Image as written | Dependency name Dependabot matches on |
+|---|---|---|
+| `prometheus` | `prom/prometheus` | `prom/prometheus` |
+| `alertmanager` | `prom/alertmanager` | `prom/alertmanager` |
+| `node-exporter` | `prom/node-exporter` | `prom/node-exporter` |
+| `postgres-exporter` | `quay.io/prometheuscommunity/postgres-exporter` | `prometheuscommunity/postgres-exporter` |
+| `cadvisor` | `ghcr.io/google/cadvisor` | `google/cadvisor` |
+| `grafana` | `grafana/grafana` | `grafana/grafana` |
+| *(ungrouped)* `postgres` | `postgres` | `postgres` |
+| *(ungrouped)* `traefik` | `traefik` | `traefik` |
+
+So the group is `prom/*`, `grafana/*`, `google/cadvisor`,
+`prometheuscommunity/postgres-exporter`. **No pattern may match `postgres` or `traefik`** — which is why postgres-exporter is named in full rather than as `postgres*`, a pattern that would silently pull the shared database into a group whose whole purpose is to keep it out. That is Decision 4's own rejected alternative arrived at by a typo, and it is the reason this decision gets an assertion rather than a `grep` in a task.
 
 The split is by blast radius, not by tidiness. Traefik terminates TLS for every public hostname on the host, so a bad Traefik release takes everything offline at once; PostgreSQL is the one grouped-out service holding state. Each deserves its own diff and its own approval decision. The monitoring services fail in a direction that is visible to the operator and not to customers, and they move together in practice.
 
@@ -103,6 +113,8 @@ The split is by blast radius, not by tidiness. Traefik terminates TLS for every 
 *Alternatives considered.* No grouping — rejected as up to eight gated deploys a week for a single-host stack. One group for all eight — rejected because it puts Traefik and PostgreSQL behind an approval whose diff is dominated by exporter patch bumps, which is how a consequential line gets skimmed.
 
 *What the assertion establishes, and what it does not.* It establishes that the committed patterns select exactly six of the eight images `platform/docker-compose.yml` declares, and neither `postgres` nor `traefik`, under the `*` wildcard semantics Dependabot documents. It does not establish that Dependabot applies those semantics — that is a service outside this repository, the same boundary Decision 2 draws.
+
+**That boundary turned out to be where this decision failed, and the lesson is worth more than the fix.** The assertion computed its expected dependency names with the same helper the configuration had been written from. Both encoded this table, and the table was wrong, so the check established that the configuration and the check agreed — not that either matched Dependabot. A green run of it proved internal consistency and was read as proving correctness. The general form: **a test derived from a belief about an external system cannot verify that belief, and stating the boundary is not the same as guarding it.** The repair is not a better derivation but an anchor — `TestDependencyNamingMatchesWhatDependabotActuallyDid` holds pairs transcribed from pull requests Dependabot actually opened, so the helper is pinned to an observation rather than to a reading. Where an assumption about an external system decides what gets committed, at least one assertion must trace to that system's observed behaviour rather than to our model of it.
 
 ### Decision 5: `weekly`, and the default open-pull-request limit
 
@@ -123,3 +135,37 @@ There is nothing to migrate. The change adds configuration, a specification delt
 Dependabot begins on its own schedule once the stanza reaches `main` — no enablement step, and no credential. The first run will likely open its full complement of pull requests at once, because eight pins have never been refreshed automatically; that is expected rather than a fault, and Decision 4 caps it at three.
 
 Rollback is deleting the stanza. Any pull request it had opened is closed, and no state on the host is involved.
+
+## Confirmed in production, 2026-09-08
+
+The gate this change had to answer was whether image pins actually produce pull
+requests, grouped as Decision 4 specifies. Both halves were observed, and the
+first observation is what found the defect.
+
+**First run, after PR #87 merged.** Six pull requests, four of them this
+ecosystem's — and four is one more than Decision 4 allows:
+
+| PR | What it was | Verdict |
+|---|---|---|
+| #89 | the group, with **4** updates | grouped only `prom/*` and `grafana/*` |
+| #90 | `traefik` v3.7.10 → v3.7.13 | correctly ungrouped |
+| #91 | `postgres` 16.15 → 18.6 | correctly ungrouped |
+| #92 | `prometheuscommunity/postgres-exporter` | **escaped the group** |
+
+#92's title and branch path both omitted the registry host, which is what
+identified the defect: the two registry-prefixed patterns matched nothing. The
+fix is PR #94, and its reasoning is Decision 4's correction above.
+
+**Second run, after PR #94 merged.** Dependabot re-evaluated on its own — no
+trigger, no re-run — closed #89 and #92 as superseded, and opened #95: *"Bump
+the platform-monitoring-images group across 1 directory with 5 updates"*,
+carrying `prom/node-exporter`, `prom/prometheus`, `prom/alertmanager`,
+`grafana/grafana` **and `prometheuscommunity/postgres-exporter`**. The
+ecosystem's open pull requests then stood at three — #95 grouped, #90 and #91
+each alone — which is what Decision 4 specifies.
+
+`google/cadvisor` is still **not** observed. It has opened no pull request
+because v0.60.5 remains its latest release, so its corrected pattern is
+inferred from the same rule the observed one confirms, and nothing here
+establishes it. The anchor test's docstring says so, and the pair should be
+added the first time Dependabot names it rather than assumed settled.
