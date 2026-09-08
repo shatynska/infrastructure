@@ -6213,6 +6213,25 @@ def dependency_name(image: str) -> str:
     `prometheuscommunity/postgres-exporter` as its own pull request outside the
     group. `OBSERVED_DEPENDENCY_NAMES` below is anchored to that run so this
     cannot be re-derived from a reading of the docs alone.
+
+    WHAT IS OBSERVED HERE AND WHAT IS STILL INFERRED
+    ------------------------------------------------
+    Of the registry-bearing images this stack declares, only the `quay.io` one
+    has been seen in a Dependabot pull request -- `ghcr.io/google/cadvisor`
+    opened none, because v0.60.5 was current. So "a host-looking first segment
+    is stripped" is OBSERVED for `quay.io` and INFERRED for everything else,
+    `ghcr.io`, a `host:port` and a bare `localhost` included. Add cadvisor's
+    pair below the first time Dependabot names it, rather than treating the
+    inference as settled.
+
+    One known divergence, hypothetical for this repository. The test below is
+    `"." in head`, which accepts a dotted-quad address, so `10.0.0.1/img` reads
+    here as registry + `img`. `dependabot-core`'s own registry pattern is
+    reported to require an alphabetic top-level domain and would keep the
+    address in the name. Nothing in `platform/docker-compose.yml` is addressed
+    that way. It is recorded rather than coded around because a narrower test
+    written from another unverified reading is exactly what produced the defect
+    this function exists to document.
     """
     repository = parse_image_reference(image)[0]
     head, _, rest = repository.partition("/")
