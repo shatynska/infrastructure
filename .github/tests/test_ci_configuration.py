@@ -5003,9 +5003,6 @@ class TestTheAutomationCredentialIsDocumentedInTheReadme(
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 # --------------------------------------------------------------------------
 # iac-safety-hardening / No Store on This Host Holds Data Requiring Backup
@@ -5193,6 +5190,13 @@ def stack_declared_stores(path: Path | None = None) -> dict:
         if mount["read_only"] or mount["kind"] == "tmpfs":
             continue
         source = mount["source"]
+        # Known hole, deliberately left. An anonymous volume is keyed on
+        # its target alone, so two services each declaring `- /data` would
+        # collapse into one entry, and classifying either would silently
+        # classify the other. Unreachable today -- the stack declares no
+        # anonymous volume at all -- and closing it changes the shape of
+        # this identifier, which a derived test asserts. Left for whoever
+        # adds the first one.
         identifier = source if source else f"<anonymous volume at {mount['target']}>"
         stores.setdefault(identifier, f"{service} -> {mount['target']}")
     return stores
@@ -5286,7 +5290,11 @@ def service_config_mounts(name: str, path: Path | None = None) -> list[dict]:
 
 
 def _under(directory: str, target: str) -> bool:
-    return target.startswith(directory.rstrip("/") + "/")
+    # `"/".rstrip("/") + "/"` is `"/"`, which every absolute path starts with,
+    # so without the emptiness guard a provider path or volume target of `/`
+    # would satisfy every containment check while provisioning nothing.
+    root = directory.rstrip("/")
+    return bool(root) and target.startswith(root + "/")
 
 
 def config_content(source: str, path: Path | None = None) -> str:
@@ -5584,10 +5592,22 @@ class TestTheStoreCensusIsARealReadOfTheFile(unittest.TestCase):
         fixture = self.compose_fixture(
             self.BASE
             + "  configured:\n    image: nginx:1.29.3\n    configs:\n"
-            "      - source: app_config\n        target: /etc/app/app.yml\n",
-            extra="configs:\n  app_config:\n    content: |\n      key: value\n",
+            "      - source: app_config\n        target: /etc/app/app.yml\n"
+            "    volumes:\n      - configured_data:/data\n",
+            extra=(
+                "configs:\n  app_config:\n    content: |\n      key: value\n"
+                "volumes:\n  configured_data:\n"
+            ),
         )
-        self.assertEqual([], unclassified_stack_declared_stores(fixture))
+        self.assertEqual(
+            ["configured_data (configured -> /data)"],
+            unclassified_stack_declared_stores(fixture),
+            "the config mount was counted as a store, or the volume beside it "
+            "was missed. The service carries both deliberately: with only a "
+            "`configs:` block the census would return [] whether or not it "
+            "distinguished the two, and the test would pass for the wrong "
+            "reason",
+        )
 
     def test_a_stack_whose_stores_all_carry_a_reason_is_accepted(self) -> None:
         """DERIVED -- the converse half. Without it, a census that reported
@@ -5937,3 +5957,7 @@ class TestTheStatedReasonChecksAreARealReadOfTheFile(unittest.TestCase):
             dashboard_target="/var/lib/grafana/dashboards/host-resources.json"
         )
         self.assertEqual([], grafana_provisioning_offences(fixture))
+
+
+if __name__ == "__main__":
+    unittest.main()
