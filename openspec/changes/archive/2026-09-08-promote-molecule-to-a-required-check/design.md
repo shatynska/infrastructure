@@ -364,6 +364,52 @@ gate weaker.
 Recorded in `docs/change-queue.md` as an entry of its own, because entry 4's
 paragraph about it is deleted when this change is archived.
 
+## What was observed
+
+Recorded here because a change is delivered when its effect is observed, not
+when its pull request merges. All three observations were made on 2026-09-08,
+after #72 merged as `7ea8dec` and `ansible-verify` was registered.
+
+**Branch protection, read back from the API rather than assumed:**
+
+```
+contexts: ["validate", "ansible-verify"]   strict: true   enforce_admins: true
+allow_force_pushes: false   allow_deletions: false
+```
+
+Both contexts carry `app_id: 15368`, so only GitHub Actions can satisfy them.
+The registration was applied through the `required_status_checks` sub-resource
+so that nothing else in the protection object was touched.
+
+**A pull request touching nothing under `ansible/` reports without working.**
+Pull request #72, its own first observation: `discover` 5s, the matrix
+**skipped**, `ansible-verify` success 4s. Twelve seconds and no container. The
+log carries the decision rather than only the outcome — *"Pull request: the
+change filter reported 'false', so run-suite=false"*, then *"Nothing under the
+configuration directory changed, so the suite was skipped rather than run.
+Concluding success having correctly done no work."*
+
+**A run with no diff verifies the whole suite.** Manual dispatch on `main`,
+[run 34183298612](https://github.com/shatynska/infrastructure/actions/runs/34183298612):
+all five roles ran, 6m57s, green. *"Event 'workflow_dispatch' carries no diff to
+filter on, so the whole suite runs: run-suite=true."* This is the path Decision
+4 argues about and no test can reach, and it is also the first time anything in
+this repository has observed the change filter being skipped on a diffless
+event — an assumption the plan review flagged as unsupported.
+
+**A failing scenario blocks the merge.** A throwaway pull request, #73, added
+one failing assertion to a single scenario and was closed unmerged once the
+observation was made. `molecule (docker)` red, the other four roles green so
+`fail-fast: false` held, `ansible-verify` red, and the pull request `BLOCKED`.
+`validate` stayed green, so the block is attributable to the Molecule suite
+alone. The gate refused with its three inputs visible — `DISCOVER_RESULT=success
+MATRIX_RESULT=failure RUN_SUITE=true` — and named the row: *"The suite concluded
+'failure' (run-suite=true). Only 'success', or a skip on a run that did not ask
+for the suite, may conclude success."*
+
+That is row 4 of Decision 4's table firing in production, and it is the effect
+this change exists to produce. No part of the gate was waived.
+
 ## Risks
 
 - **A promoted check turns out to be flaky under load.** Three independent
