@@ -1,0 +1,64 @@
+---
+# Molecule scenario for the three abandon branches of the requirement
+# "Unreferenced Host Images Are Pruned on a Schedule" in
+# openspec/specs/iac-host-configuration/spec.md, which the sibling `default`
+# scenario cannot host (the prune-unreferenced-host-images-periodically change,
+# tasks.md 2.4):
+#
+#   1. the enumeration is present and names no application;
+#   2. the host carries no enumeration at all, reported DISTINGUISHABLY from 1;
+#   3. the union of every reference set and every container's image is empty.
+#
+# Why not in `default`: that scenario deliberately carries two stopped
+# containers and a running local registry, and design.md's own "any host with
+# containers has a non-empty union" puts branch 3 permanently out of reach
+# there. THIS SCENARIO THEREFORE CARRIES NO CONTAINERS AT ALL, and must not be
+# given any -- adding one to make a removal observable would delete branch 3.
+#
+# The single fixture image is what makes branch 3's guard mutation-visible:
+# with the guard removed and no fixture image present, an unguarded run would
+# have nothing to remove and the assertion could not go red (tasks.md 2.8).
+#
+# Each arrangement must reach a DIFFERENT branch. They are easy to collapse
+# into one that abandons early and reads as covering all three, which is why
+# verify.yml asserts the three reports are pairwise distinct rather than
+# asserting only that each run abandoned.
+#
+# THESE PLAYBOOKS FAIL UNTIL tasks.md section 1 IS IMPLEMENTED -- the role
+# carries no tasks/main.yml yet, so `converge` fails at role resolution. That is
+# the intended pre-implementation state, recorded in this change's test-plan.md.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s `image_prune-role-instance` and from
+  # every sibling scenario in this repository, so all can be created side by
+  # side without colliding.
+  - name: image_prune-abandon-instance
+    # Digest-pinned, and the SAME digest `default` and every sibling scenario
+    # carries. See ansible/roles/docker/molecule/default/molecule.yml for why a
+    # digest and not a version tag, and for how to refresh it;
+    # .github/tests fails the build on a partial refresh.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

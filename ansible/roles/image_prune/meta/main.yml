@@ -1,0 +1,22 @@
+---
+# `galaxy_info` exists only to give this role a resolvable fully-qualified
+# name, for the same reason the `docker` role carries one: Molecule's bundled
+# ansible-compat resolves an FQRN for any role carrying a meta/main.yml before
+# it will install it locally, and without these two keys it refuses the whole
+# scenario. It is not a step towards publishing this role anywhere.
+galaxy_info:
+  namespace: shatynska
+  role_name: image_prune
+  author: shatynska
+  description: >-
+    Installs a scheduled unit that removes local container images no
+    enumerated application and no container still references.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+
+dependencies: []

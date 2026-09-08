@@ -1,0 +1,64 @@
+---
+# Molecule scenario for the requirement "Unreferenced Host Images Are Pruned on
+# a Schedule" in openspec/specs/iac-host-configuration/spec.md, 24 scenarios.
+#
+# Derived from that delta spec ahead of any implementation, per tasks.md
+# section 2. THESE PLAYBOOKS FAIL UNTIL tasks.md section 1 IS IMPLEMENTED --
+# `ansible/roles/image_prune/` carries no tasks/, defaults/ or meta/ yet, so
+# `converge` fails at role resolution. That is the intended pre-implementation
+# state, recorded in this change's test-plan.md, not a defect in this file.
+#
+# WHAT THIS SCENARIO COVERS, AND WHAT `abandon-paths` COVERS INSTEAD
+# ------------------------------------------------------------------
+# This one holds every keep-set and removal case: the union across enumerated
+# applications, the all-profiles render, the digest pin, removal through each
+# tag, the container contribution, the retired application, and the two abandon
+# branches that need a host WITH fixtures (an unrenderable Compose file and a
+# malformed reference).
+#
+# The three remaining abandon branches -- an empty enumeration, an absent
+# enumeration, and an empty keep set -- are NOT reachable here. This scenario
+# carries two stopped containers and a running registry, and design.md's "any
+# host with containers has a non-empty union" puts the empty-union branch out of
+# reach on such a host. They live in the sibling `abandon-paths` scenario
+# (tasks.md 2.4).
+#
+# ORDERING INSIDE verify.yml IS LOAD-BEARING (tasks.md 2.7): every keep-set and
+# removal assertion is made BEFORE the unresolvable-Compose-file and
+# malformed-reference arrangements are introduced. An abandoning run removes
+# nothing, so once either is in place every "still present" assertion would pass
+# whether or not the keep set was computed correctly.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from every sibling scenario in this repository, so
+  # that scenarios can be created side by side without colliding.
+  - name: image_prune-role-instance
+    # Digest-pinned. See ansible/roles/docker/molecule/default/molecule.yml for
+    # why a digest and not a version tag, and for how to refresh it -- every
+    # scenario must carry the same one, and .github/tests fails the build on a
+    # partial refresh.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

@@ -1,0 +1,22 @@
+---
+# The schedule, its jitter and the run's duration bound. These are the role's
+# only tunable inputs; `deploy_apps` is its one REQUIRED input and deliberately
+# has no default (tasks/main.yml says why).
+#
+# Weekly: the high-rate source of superseded images -- one per merge per
+# application -- is reclaimed at deploy time by `app-deploy`. What reaches this
+# timer arrives when a platform pin changes, when an application is retired and
+# when a moving tag moves, none of them daily events.
+image_prune_on_calendar: "Sun *-*-* 04:00:00 UTC"
+
+# So the run does not land on a fixed minute, for the same reason
+# unattended-upgrades randomises its own.
+image_prune_randomized_delay_sec: 3600
+
+# Generous against a legitimate run, which enumerates a few dozen images and
+# removes a handful. It exists for a container runtime that stops answering:
+# enumeration is as much a daemon call as removal, so the bound covers the
+# whole run. It is the unit's, not a `timeout` inside the script -- systemd
+# records the expiry and marks the unit failed from outside the process, which
+# is where a report about a killed region has to come from.
+image_prune_timeout_start_sec: 600
