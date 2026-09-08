@@ -19,6 +19,7 @@ exclude_paths:
 # and at molecule-test time (each molecule.yml's ANSIBLE_ROLES_PATH).
 mock_roles:
   - docker
+  - image_prune
   - hardening
   - deploy_user
   - tailscale

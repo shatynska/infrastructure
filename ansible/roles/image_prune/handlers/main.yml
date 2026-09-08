@@ -1,0 +1,4 @@
+---
+- name: Reload systemd for image_prune
+  ansible.builtin.systemd:
+    daemon_reload: true

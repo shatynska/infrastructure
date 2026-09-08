@@ -382,34 +382,74 @@ see what was invented rather than agreed:
 each with its reason recorded there and in a comment block at the head of the
 scenario that would otherwise have held it.
 
-## Mutation testing (`tasks.md` 2.8) — NOT PERFORMED, AND WHY
+## Mutation testing — PERFORMED, 2026-09-08
 
-`tasks.md` 2.8 requires each guard to be deleted or inverted, the corresponding
-assertion confirmed **red**, and the guard restored. **None of that could be
-done in this pass: there is no implementation to mutate.** The guards live in
-`ansible/roles/image_prune/tasks/main.yml` and in the prune script, neither of
-which exists at `08954be`, and writing them here would be writing the code under
-test.
+Mapped by the test-derivation pass (`tasks.md` 2.8, which could not run the
+round: there was no implementation to mutate at `08954be`, and writing one
+would have been writing the code under test). **Run by the implementation step
+(`tasks.md` 3.2), and all ten guards are confirmed.**
 
-This is therefore an **outstanding obligation on the implementation step**, not
-a completed one. Do not read section 2 as discharged until the table below is
-filled in. What this pass could do instead — and did — is construct each
-assertion so that the named mutation has a specific, identified assertion to
-turn red, and verify that the assertion's *expression* can evaluate false (see
-"Expression checks" above).
+Each guard was deleted or inverted in
+`ansible/roles/image_prune/tasks/main.yml`, a full `molecule test -s <scenario>`
+run — `verify` is destructive, so a re-verify against an already-pruned host
+would prove nothing — the failing task recorded, and the file restored and
+checked byte-identical (md5 `75a8e801c6344abc076a21c2330efae3`) after every
+run. Driver and per-mutation logs are outside the repository, in the session
+scratchpad.
+
+**Two results are worth more than their row.**
+
+*Mutation 1 was caught by a different assertion than predicted.* The prediction
+was `Assert an enumeration naming no application removed nothing and failed`;
+that assertion stayed **green**. With the guard deleted, an empty enumeration
+falls through to the empty-keep-set guard, which still abandons, still exits
+non-zero and still removes nothing — so every claim that assertion makes
+remains true. What caught it was the *pairwise* distinguishability check, since
+arrangement 1 then reports arrangement 3's condition. Had the scenario asserted
+only "each branch abandoned", as the plan did until review round 5, this guard
+could have been deleted with the suite green.
+
+*Mutation 4 came back green the first time, and that was a defective mutation,
+not a coverage hole.* The script has **two** `could not be rendered` call sites
+— one after `config --profiles`, one after `config --images` — and the first
+anchor matched only the second. The fixture's broken Compose file fails at
+`--profiles` first, so the untouched guard fired and the run abandoned
+correctly. Re-run as 4b against both call sites: **red**. A non-red mutation
+means either "the guard is uncovered" or "the mutation did not remove the
+guard", and those demand opposite responses; reading this one either way
+without checking would have been wrong.
 
 | # | Guard (`tasks.md` 2.8) | Mutation | Assertion that must go RED | Scenario | Result |
 |---|---|---|---|---|---|
-| 1 | The no-application-enumerated abandon | delete the guard, fall through | `Assert an enumeration naming no application removed nothing and failed` — the canary is removed and `RC 0` appears | abandon-paths | **not run** |
-| 2 | The absent-enumeration abandon | delete the guard, fall through | `Assert the three abandon branches report three distinguishable conditions` — with no containers here the mutated run falls to the empty-keep-set guard and reports **arrangement 3's** condition for arrangement 2's premise. It still abandons, still exits non-zero, still removes nothing, so only the pairwise comparison notices. **Do not add a container to this scenario to make a removal observable** — arrangement 3 requires there be none | abandon-paths | **not run** |
-| 3 | The empty-keep-set abandon | delete the guard | `Assert the empty-keep-set arrangement really is one, and removed nothing` — the canary goes | abandon-paths | **not run** |
-| 4 | Abandon on an unrenderable Compose file | omit that application's contribution instead of abandoning | `Assert an unrenderable Compose file abandoned the whole run, removing nothing, and failed` — the canary goes and `alpha`'s own images become candidates | default | **not run** |
-| 5 | The malformed-reference rejection | treat a malformed reference as one resolving to no local image | `Assert a malformed rendered reference abandoned the whole run, removing nothing, and failed` — the canary goes and the run reaches `RC 0` | default | **not run** |
-| 6 | The all-profiles render | call `config --images` without enumerating and passing `--profiles` | `Assert an image referenced only behind an inactive profile was kept` — and **only** that one | default | **not run** |
-| 7 | The container-image contribution to the keep set | drop `docker ps -aq` / `docker inspect` from the union | `Assert both tags of an image a stopped container holds are still present` — one tag goes while the image survives on the runtime's refusal, so the *image* assertions stay green. This is why that fixture carries two tags | default | **not run** |
-| 8 | Removal by tag rather than by ID | remove by ID unconditionally | `Assert an unreferenced two-tag image was removed through each of its tags` — the runtime refuses with "must be forced" and all three references stay present | default | **not run** |
-| 9 | `--no-trunc` on the local enumeration | drop it | The 12-character IDs never compare equal to the full IDs the keep set holds, so every local image becomes unreferenced: `Assert an image only one enumerated application references was kept by the union`, `…defined service…`, `…inactive profile…`, `…digest-pinned image…` and `Assert the completed run reported both counts…` all go red | default | **not run** |
-| 10 | The absence of `-f` | add `-f` to the removals | `Assert an image a stopped container holds was kept and its container still holds it` (behavioural) **and** `Assert the script consults no age criterion and never forces a removal` (static) | default | **not run** |
+| 1 | The no-application-enumerated abandon | delete the guard, fall through | `Assert an enumeration naming no application removed nothing and failed` — the canary is removed and `RC 0` appears | abandon-paths | **RED** — but by `Assert the three abandon branches report three distinguishable conditions`, not the predicted assertion; see above |
+| 2 | The absent-enumeration abandon | delete the guard, fall through | `Assert the three abandon branches report three distinguishable conditions` — with no containers here the mutated run falls to the empty-keep-set guard and reports **arrangement 3's** condition for arrangement 2's premise. It still abandons, still exits non-zero, still removes nothing, so only the pairwise comparison notices. **Do not add a container to this scenario to make a removal observable** — arrangement 3 requires there be none | abandon-paths | **RED** — `Assert the three abandon branches report three distinguishable conditions`, exactly as predicted |
+| 3 | The empty-keep-set abandon | delete the guard | `Assert the empty-keep-set arrangement really is one, and removed nothing` — the canary goes | abandon-paths | **RED** — `Assert the empty-keep-set arrangement really is one, and removed nothing` |
+| 4 | Abandon on an unrenderable Compose file | omit that application's contribution instead of abandoning | `Assert an unrenderable Compose file abandoned the whole run, removing nothing, and failed` — the canary goes and `alpha`'s own images become candidates | default | **RED** as 4b, once both call sites were mutated — `Assert an unrenderable Compose file abandoned the whole run, removing nothing, and failed`; see above |
+| 5 | The malformed-reference rejection | treat a malformed reference as one resolving to no local image | `Assert a malformed rendered reference abandoned the whole run, removing nothing, and failed` — the canary goes and the run reaches `RC 0` | default | **RED** — `Assert a malformed rendered reference abandoned the whole run, removing nothing, and failed` |
+| 6 | The all-profiles render | call `config --images` without enumerating and passing `--profiles` | `Assert an image referenced only behind an inactive profile was kept` — and **only** that one | default | **RED** — `Assert an image referenced only behind an inactive profile was kept` |
+| 7 | The container-image contribution to the keep set | drop `docker ps -aq` / `docker inspect` from the union | `Assert both tags of an image a stopped container holds are still present` — one tag goes while the image survives on the runtime's refusal, so the *image* assertions stay green. This is why that fixture carries two tags | default | **RED** — `Assert both tags of an image a stopped container holds are still present` |
+| 8 | Removal by tag rather than by ID | remove by ID unconditionally | `Assert an unreferenced two-tag image was removed through each of its tags` — the runtime refuses with "must be forced" and all three references stay present | default | **RED** — `Assert an unreferenced two-tag image was removed through each of its tags` |
+| 9 | `--no-trunc` on the local enumeration | drop it | The 12-character IDs never compare equal to the full IDs the keep set holds, so every local image becomes unreferenced: `Assert an image only one enumerated application references was kept by the union`, `…defined service…`, `…inactive profile…`, `…digest-pinned image…` and `Assert the completed run reported both counts…` all go red | default | **RED** — `Assert the superseded tag of the base repository is gone and the referenced one remains` |
+| 10 | The absence of `-f` | add `-f` to the removals | `Assert an image a stopped container holds was kept and its container still holds it` (behavioural) **and** `Assert the script consults no age criterion and never forces a removal` (static) | default | **RED** — `Assert the script consults no age criterion and never forces a removal` |
+
+## One assertion corrected during implementation, 2026-09-08
+
+`Assert the converge armed the timer and executed no prune` read
+`ExecMainStartTimestamp` and `ActiveEnterTimestamp` and expected `[]` for a
+unit that has never run. On systemd 249 (the scenario's own image) those
+properties read `n/a`, not empty, so the assertion failed against an
+implementation that was behaving correctly: the timer was armed, the service
+inactive, and `GONE-SINCE-CONVERGE` empty.
+
+It was **not** widened to accept both spellings. Both properties are now read in
+their `…Monotonic` form, which is `0` for a never-started unit on every systemd
+version. That asserts the property rather than one version's spelling of it, and
+still fails if the service ever runs during a converge — strictly stronger than
+what it replaced.
+
+This assertion had never executed before: the derivation pass's run stopped at
+the first check for an installed artifact, and fail-fast hid everything after
+it.
 
 ## Obsolete tests
 

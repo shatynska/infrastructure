@@ -1,6 +1,6 @@
 ## 1. Implementation
 
-- [ ] 1.1 Create `ansible/roles/image_prune/` with the conventional shape —
+- [x] 1.1 Create `ansible/roles/image_prune/` with the conventional shape —
   `tasks/main.yml`, `defaults/main.yml`, `meta/main.yml`, `README.md`. Put the
   schedule, the randomised delay and the duration bound in `defaults/main.yml`
   as `image_prune_on_calendar`, `image_prune_randomized_delay_sec` and
@@ -11,14 +11,14 @@
   carries: Molecule's bundled ansible-compat refuses a scenario whose role has a
   `meta/main.yml` without a resolvable fully-qualified name (see the `docker`
   role's own comment for the full diagnosis). This role has no dependencies.
-- [ ] 1.2 Assert `deploy_apps` before any task acts on the host, per
+- [x] 1.2 Assert `deploy_apps` before any task acts on the host, per
   "A Role's Absent Required Input Is Reported by Name" — defined, a sequence,
   and neither a string nor a mapping — with a `fail_msg` naming the variable and
   `ansible/inventory/group_vars/prod.yml` as where to set it. Copy the shape
   from `deploy_user/tasks/main.yml`'s existing assert rather than inventing a
   second one. An **empty** `deploy_apps` is a supplied value and this assert
   SHALL accept it; what it means is decided at run time by task 1.6, not here.
-- [ ] 1.3 Template the enumerated application names to a data file — one name
+- [x] 1.3 Template the enumerated application names to a data file — one name
   per line, `root:root`, mode `0644`, at `/etc/prune-host-images/apps` — from
   `deploy_apps | map(attribute='name')`, creating `/etc/prune-host-images/`
   (`root:root`, `0755`) first. The extraction is named because the elements are
@@ -34,13 +34,13 @@
   wrapping only parts of it would leave a `content:` block that is half Jinja
   and half Go template, which is the collision the wrapper exists to prevent.
   Notify nothing — the next scheduled run picks the file up.
-- [ ] 1.4 Install the prune script at `/usr/local/bin/prune-host-images`,
+- [x] 1.4 Install the prune script at `/usr/local/bin/prune-host-images`,
   `root:root`, mode `0755`, via `copy:`. **Wrap the whole `content:` in
   `{% raw %}…{% endraw %}`.** Ansible renders `content:` as Jinja, and this
   script uses Go template syntax (`docker images --format '{{.ID}}'`,
   `docker inspect -f '{{.Image}}'`) that Jinja will otherwise try to evaluate.
   This fails loudly at converge rather than silently, but it will fail.
-- [ ] 1.5 **Enumerate the local images first, then build the keep set.** The
+- [x] 1.5 **Enumerate the local images first, then build the keep set.** The
   order is a guard, not a style choice: with the keep set built first, an image
   a concurrent deploy pulls in between is on the host, outside a keep set read
   from the pre-deploy Compose file, and — before `up -d --wait` — held by no
@@ -96,7 +96,7 @@
      with no arguments exits 1 (checked), which under `set -euo pipefail` would
      abandon the run on a host with no containers, and that is precisely the
      state the empty keep set in scenario `abandon-paths` (task 2.4) arranges.
-- [ ] 1.6 Make each of "the host carries no enumeration", "the enumeration
+- [x] 1.6 Make each of "the host carries no enumeration", "the enumeration
   names no application" and "the keep set is empty" an explicit abandon
   condition that removes nothing, not a property of the comparison. The first
   two abandon alike and report differently (task 1.5.1). These are three
@@ -108,13 +108,13 @@
   degrades the wrong way on a genuinely empty keep set: the previous change's
   `grep -vxF -f` matched every line, and a membership test against an empty set
   is false for everything, which likewise makes the whole host a candidate.
-- [ ] 1.7 Make "an application's Compose file exists but cannot be rendered" and
+- [x] 1.7 Make "an application's Compose file exists but cannot be rendered" and
   "a rendered reference is malformed" abandon the whole run, not that
   application's contribution. Note that `docker compose config` is **not** a
   daemon call — it parses locally and returns 0 against a dead `DOCKER_HOST` —
   so its failure means the file, not the runtime. A missing file is the
   separate, benign case in 1.5.2.
-- [ ] 1.8 Remove an image whose ID is not in the keep set **by each of its
+- [x] 1.8 Remove an image whose ID is not in the keep set **by each of its
   tags**, one `docker image rm <repo>:<tag>` per tag, and by its ID only where
   it carries none. Never pass `-f`. `docker image rm <id>` on a multiply-tagged
   image fails with "must be forced", so removing by ID unconditionally would
@@ -138,7 +138,7 @@
   Do **not** use `docker image prune` in either form: its dangling filter
   selects on absence of a tag, which would sweep a digest-pinned image on a
   property design.md establishes is not evidence.
-- [ ] 1.9 Report on every exit path except the duration bound, which is
+- [x] 1.9 Report on every exit path except the duration bound, which is
   systemd's to record (task 1.10). A completed run prints
   `considered N, removed M` and exits 0. **Both counts are deduplicated by image
   ID**, so a two-tag image counts once however many `docker image rm`
@@ -160,19 +160,19 @@
   checked in its own right, rather than as the head of a pipeline whose failure
   the report would swallow and print as `considered 0, removed 0` —
   byte-identical to a healthy run over a host with nothing to reclaim.
-- [ ] 1.10 Install `prune-host-images.service` as `Type=oneshot` running that
+- [x] 1.10 Install `prune-host-images.service` as `Type=oneshot` running that
   script, with `TimeoutStartSec=` set to a value generous against a legitimate
   run (order of minutes, not seconds) and recorded in a comment. The bound is
   the unit's, not a `timeout` inside the script: systemd records the expiry in
   the journal and marks the unit failed from outside the process, which is
   where `app-deploy` had to work to put its own timeout line. Do **not** also
   wrap the script body in `timeout`.
-- [ ] 1.11 Install `prune-host-images.timer` with a weekly `OnCalendar=`, an
+- [x] 1.11 Install `prune-host-images.timer` with a weekly `OnCalendar=`, an
   explicit `UTC` suffix, `Persistent=true` and a `RandomizedDelaySec=`. Enable
   and start the **timer**, never the service — starting the service runs a prune
   during the converge, which is an Ansible run removing images from a host as a
   side effect of configuring it, and the delta forbids it.
-- [ ] 1.12 Add `image_prune` to `ansible/playbooks/host-baseline.yml`, after
+- [x] 1.12 Add `image_prune` to `ansible/playbooks/host-baseline.yml`, after
   `docker` (the runtime must exist) and with a comment saying why the position
   matters, matching how `ops_user`'s and `platform_data_volume`'s entries
   already explain theirs.
@@ -183,7 +183,7 @@
   against `host-baseline.yml` *and* against both new `converge.yml` files, and
   `pre-commit run --all-files` (task 3.3) fails. That file's own comment states
   the rule; every existing role is listed there.
-- [ ] 1.13 Write `ansible/roles/image_prune/README.md` covering: what the keep
+- [x] 1.13 Write `ansible/roles/image_prune/README.md` covering: what the keep
   set is and that it is a union rendered across every declared profile; that
   `deploy_apps` is read from the same inventory variable `deploy_user` reads and
   not copied; and — stated plainly, because it is the operational consequence
@@ -191,7 +191,7 @@
   that application's images reclaimable by the next scheduled run after the next
   converge**, since the on-host list is written at converge time. The delta
   requires this be recorded in the role's own documentation.
-- [ ] 1.14 Fix `docs/change-queue.md` entry 10's own text: it says the previous
+- [x] 1.14 Fix `docs/change-queue.md` entry 10's own text: it says the previous
   proposal "names both of these as non-goals" and then lists three. A word, not
   a change; the entry is deleted when this change is archived, so fix it in the
   same commit that adds the artifacts rather than leaving it for a sweep.
@@ -450,13 +450,13 @@ commands are in scope; the Terraform row is not.
 
 ## 3. Verification and rollout
 
-- [ ] 3.1 Run `molecule test --all` from `ansible/roles/image_prune/`, per this
+- [x] 3.1 Run `molecule test --all` from `ansible/roles/image_prune/`, per this
   project's Molecule row, and read the **SCENARIO RECAP** rather than the exit
   code: scenarios run in sorted order and the run stops at the first failure, so
   a scenario sorting after a failing one is silently never executed. Confirm the
   recap names every scenario the role has. While the role is red, iterate with
   `-s <name>`.
-- [ ] 3.2 **Run the mutation round** that task 2.8 mapped, now that there is an
+- [x] 3.2 **Run the mutation round** that task 2.8 mapped, now that there is an
   implementation to mutate: for each guard, remove or invert it, confirm the
   named assertion goes **red**, restore it, and fill in that row of
   `test-plan.md`'s mapping. A guard whose assertion stays green is not a

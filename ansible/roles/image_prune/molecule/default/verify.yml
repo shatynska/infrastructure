@@ -159,11 +159,17 @@
     # list converge.yml recorded BEFORE `image_prune` ran is compared against
     # the host's list now.
     # ============================================================
+    # The two timestamps are read in their MONOTONIC form. The human-readable
+    # `ExecMainStartTimestamp` of a unit that has never run is `n/a` on
+    # systemd 249 and empty on some other versions, so a literal `[]` asserts
+    # the spelling of one systemd rather than the property. The monotonic form
+    # is `0` for a unit that has never started, on every version, which is the
+    # property this assertion is about.
     - name: Collect the units' runtime state and the images that survived the converge
       ansible.builtin.shell: |
         set -euo pipefail
-        echo "SERVICE-EXECMAINSTART [$(systemctl show prune-host-images.service --property=ExecMainStartTimestamp --value)]"
-        echo "SERVICE-ACTIVEENTER [$(systemctl show prune-host-images.service --property=ActiveEnterTimestamp --value)]"
+        echo "SERVICE-EXECMAINSTART [$(systemctl show prune-host-images.service --property=ExecMainStartTimestampMonotonic --value)]"
+        echo "SERVICE-ACTIVEENTER [$(systemctl show prune-host-images.service --property=ActiveEnterTimestampMonotonic --value)]"
         echo "SERVICE-ISACTIVE $(systemctl is-active prune-host-images.service || true)"
         echo "TIMER-ISENABLED $(systemctl is-enabled prune-host-images.timer || true)"
         echo "TIMER-ISACTIVE $(systemctl is-active prune-host-images.timer || true)"
@@ -182,8 +188,8 @@
           - "'TIMER-ISENABLED enabled' in image_prune_after_converge.stdout_lines"
           - "'TIMER-ISACTIVE active' in image_prune_after_converge.stdout_lines"
           - "'SERVICE-ISACTIVE inactive' in image_prune_after_converge.stdout_lines"
-          - "'SERVICE-EXECMAINSTART []' in image_prune_after_converge.stdout_lines"
-          - "'SERVICE-ACTIVEENTER []' in image_prune_after_converge.stdout_lines"
+          - "'SERVICE-EXECMAINSTART [0]' in image_prune_after_converge.stdout_lines"
+          - "'SERVICE-ACTIVEENTER [0]' in image_prune_after_converge.stdout_lines"
           - "'GONE-SINCE-CONVERGE []' in image_prune_after_converge.stdout_lines"
         fail_msg: >-
           "Installing or updating the unit SHALL NOT itself remove an image, so
