@@ -19,8 +19,8 @@ production; see `AGENTS.md` for the conventions that assumes.
 ## Non-goals
 
 - **Multi-cloud support.** Hetzner Cloud only.
-- **Multi-region deployment.** Single region (`fsn1`) for the foreseeable
-  future.
+- **Multi-region deployment.** A single region for the foreseeable future —
+  `location = "hel1"` in `terraform/environments/prod/terraform.tfvars`.
 - **Container orchestration.** Plain VMs via `hcloud_server`; no
   Kubernetes, Nomad, or similar.
 
@@ -28,6 +28,12 @@ A staging environment is *not* a non-goal — it's an anticipated near-term
 addition (see Status below), not a rejected idea.
 
 ## Repository layout
+
+This repository commits seven top-level directories:
+
+```sh
+git ls-files | grep / | sed 's|/.*||' | sort -u
+```
 
 - `terraform/` — Terraform provisions infrastructure (server, volumes, cloud
   firewall).
@@ -39,9 +45,19 @@ addition (see Status below), not a rejected idea.
 - `ansible/` — Ansible configures the provisioned host (container runtime,
   host-level security). Scope stops at the container runtime; it never
   templates a service-definition file or manages application lifecycle.
-- `platform/` — the shared Compose stack (reverse proxy, shared PostgreSQL
-  instance) that every application on the host depends on, deployed by a
-  mechanism other than Ansible.
+- `platform/` — the shared Compose stack that every application on the host
+  depends on, deployed by a mechanism other than Ansible: reverse proxy,
+  shared PostgreSQL instance, and the monitoring services (Prometheus,
+  Alertmanager, Grafana and three exporters).
+- `.github/` — the pipeline: workflows, the CI-configuration test suite under
+  `.github/tests/`, `dependabot.yml`, and the pinned CI dependencies.
+- `openspec/` — this repository's specifications (`openspec/specs/`) and the
+  record of every change made to it.
+- `docs/` — `change-queue.md`, identified changes not yet opened, and
+  `deferred-work.md`, what this project has deliberately not done.
+- `.claude/` — coding-agent tooling: the OpenSpec slash commands and skills
+  under `commands/` and `skills/` are committed. Working trees live under
+  `.claude/worktrees/` and are not.
 
 ## Local setup
 
@@ -87,7 +103,8 @@ addition (see Status below), not a rejected idea.
    uv venv ~/.venvs/molecule                                  # or python -m venv
    VIRTUAL_ENV=~/.venvs/molecule uv pip install -r ansible/requirements-test.txt
    export PATH=~/.venvs/molecule/bin:$PATH                    # add to your shell rc
-   ansible-galaxy install -r ansible/requirements.yml
+   ansible-galaxy collection install -r ansible/requirements.yml
+   ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
    ```
 
    Install into a virtualenv, not system Python — recent Debian/Ubuntu mark
@@ -95,6 +112,15 @@ addition (see Status below), not a rejected idea.
    `pip install`. If `python3 -m venv` fails with an `ensurepip` error, that
    is the `python3-venv` package missing; [`uv`](https://docs.astral.sh/uv/)
    sidesteps it entirely, which is why it is shown here.
+
+   `-p ansible/roles` is load-bearing, not a preference. `ansible/ansible.cfg`
+   sets `roles_path = roles`, which *replaces* the default search list rather
+   than extending it, and every Molecule scenario overrides
+   `ANSIBLE_ROLES_PATH` to the same place — so a role installed to the default
+   `~/.ansible/roles` is invisible to all of it, and converge fails on the
+   dependency rather than on anything the scenario asserts. The two commands
+   are separate because `-p` applies only to roles: passing it alongside
+   collections silently ignores them, with a warning that is easy to miss.
 
    CI runs `ansible-lint` and `ansible-playbook --syntax-check` on every pull
    request touching `ansible/`, and the Molecule suite in a separate
@@ -110,15 +136,15 @@ addition (see Status below), not a rejected idea.
    more, not less: it is roughly six minutes of hosted-runner time to find out
    there, and the failure now stops the merge.
 
-   Run them **per role, with `--all`** — several roles now carry more than
-   one scenario (`ops_user` has `default` and `revocation-steady-state`;
-   `deploy_user` has `default`, `ghcr-credential-absent` and
-   `ghcr-credential-rejected`), so `molecule test -s default` silently skips
-   most of the suite:
+   Run them **per role, with `--all`**:
 
    ```sh
    cd ansible/roles/<role> && molecule test --all
    ```
+
+   Several roles carry more than one scenario, so `molecule test -s default`
+   silently skips most of the suite. To see how much, from the repository
+   root: `git ls-files 'ansible/roles/*/molecule/*/molecule.yml'`.
 
    The suite runs offline: no GHCR credential is needed. Setting
    `MOLECULE_GHCR_PULL_TOKEN` and `MOLECULE_GHCR_PULL_USERNAME` **together**
@@ -135,12 +161,19 @@ addition (see Status below), not a rejected idea.
      | jq -r .digest
    ```
 
-   Put that digest in **the eight scenarios this repository owns**. Do not
-   glob `ansible/roles/*/molecule/*/` for them: once you have run
+   Put that digest in **every scenario this repository owns** — the same
+   listing as above, run from the repository root:
+
+   ```sh
+   git ls-files 'ansible/roles/*/molecule/*/molecule.yml'
+   ```
+
+   It selects committed files, which is why it is the right question to ask.
+   Do not glob `ansible/roles/*/molecule/*/` instead: once you have run
    `ansible-galaxy`, that also matches
    `ansible/roles/geerlingguy.docker/molecule/default/molecule.yml`, which is
    installed content on a different image, is gitignored, and is discarded by
-   the next reinstall. All eight must agree, and
+   the next reinstall. All of them must agree, and
    `.github/tests/test_ci_configuration.py` fails the build if they do not.
 
    Write the reference **without** the tag. `…:latest@sha256:…` looks more
@@ -168,30 +201,63 @@ addition (see Status below), not a rejected idea.
 ## Environment variables and secrets
 
 Each `terraform/environments/<env>/terraform.tfvars` is committed and holds **non-secret**
-configuration only (server type, region, image, allowed CIDRs, labels). Files
+configuration only (server name and type, `location`, image, SSH public key,
+allowed CIDRs, volume name and size, and the server/volume enable flags). Files
 matching `*.secret.tfvars` or `secrets.auto.tfvars` are gitignored and must
 never be committed.
 
 ## CI/CD
 
-- **Pull requests**: `terraform fmt -check`, `terraform validate`, `tflint`,
-  Trivy misconfiguration scanning, `gitleaks` secret scanning, then
-  `terraform plan` posted as a PR comment.
-- **Merge to `main`**: a two-job apply — a plan job (read-only Hetzner token)
-  saves a plan file and posts its diff to the run summary and a destroy-policy
-  check; an apply job (read-write Hetzner token) applies that exact saved plan
-  only after a required reviewer approves the `production` GitHub Environment.
-- **Nightly**: a nightly drift-detection plan (no apply) that opens or updates
-  a single GitHub issue when the committed configuration diverges from real
-  infrastructure, and closes it once resolved.
+One entry per file in `.github/workflows/`:
+
+- **`pr-validation.yml`** (every pull request) — the `validate` job. Two checks
+  run **unconditionally**, so a documentation-only pull request is not a
+  pull request that runs nothing: the CI-configuration test suite
+  (`.github/tests`) and `gitleaks` secret scanning. The rest are conditioned on
+  what changed — `terraform fmt -check`, `terraform validate`, `tflint`,
+  `terraform test`, Trivy misconfiguration scanning and a `terraform plan`
+  posted as a PR comment for `terraform/`; `docker compose config` for
+  `platform/`; `ansible-lint` and `ansible-playbook --syntax-check` for
+  `ansible/`.
+- **`ansible-verify.yml`** (every pull request) — the Molecule suite, matrixed
+  over roles, behind an `ansible-verify` job that aggregates the matrix. Like
+  `validate`, it always reports; a pull request touching nothing under
+  `ansible/` starts no container.
+- **`apply.yml`** (merge to `main`, path-filtered) — a two-job apply. A plan
+  job (read-only Hetzner token) saves a plan file and posts its diff to the run
+  summary, plus a destroy-policy check; an apply job (read-write token) applies
+  that exact saved plan only after a required reviewer approves the
+  `production` GitHub Environment.
+- **`platform-deploy.yml`** (merge to `main` touching `platform/`) — the same
+  diff-then-approve split for the Compose stack: a diff job with no credential,
+  then a deploy job gated on the same `production` Environment.
+- **`drift.yml`** (nightly) — a drift-detection plan, no apply. Opens or
+  updates a single GitHub issue when the committed configuration diverges from
+  real infrastructure, and closes it once resolved.
+- **`pre-commit-autoupdate.yml`** (weekly) — runs `pre-commit autoupdate` and
+  opens a pull request with the result. Dependabot has no `pre-commit`
+  ecosystem, so pinned hook revisions are refreshed here.
+
+`validate` and `ansible-verify` are the two job names intended to gate a merge.
+Whether they are registered as required contexts is a repository setting, not
+anything this repository can state — see the note in Local setup step 5 for
+what answers it.
 
 ### Testing
 
-Terraform has no traditional unit-test layer here; verification is the
-static checks and plan review above, plus (as `terraform/modules/` grows past
-`terraform/modules/server`) module-level tests in
-`terraform/modules/<name>/tests/*.tftest.hcl`, run via `terraform test`. See
-the change `project-foundation`'s design.md for the full testing strategy.
+Terraform has no traditional unit-test layer here; verification is the static
+checks and plan review above, plus three test commands, each with its own
+subject:
+
+| Subject | Command | Tests live in |
+|---|---|---|
+| Terraform modules | `terraform test`, from each module directory | `terraform/modules/<name>/tests/*.tftest.hcl` |
+| What an Ansible role does to a host | `molecule test --all`, from each role directory | `ansible/roles/<name>/molecule/<scenario>/` |
+| Any property that is a static read of a committed file | `python3 -m unittest discover --start-directory .github/tests`, from the repository root | `.github/tests/*.py` |
+
+`AGENTS.md` carries the rules for choosing between them, and the caveats that
+matter when running them. See the change `project-foundation`'s design.md for
+the full testing strategy.
 
 ### Re-enabling the drift-detection workflow
 
@@ -202,18 +268,19 @@ then trigger it once manually (`workflow_dispatch`) to confirm it runs clean.
 
 ## Status
 
-This repository is being bootstrapped per the change
-`bootstrap-hetzner-iac`. Several setup steps require manual action outside
-version control (HCP Terraform org/workspace, Hetzner Cloud project and tokens,
-GitHub environment/branch settings) — see that change's `tasks.md` for the
-current checklist. Project identity, scope, and non-goals are recorded in the
-change `project-foundation`'s design.md.
+The bootstrap is done. `prod` is provisioned from
+`terraform/environments/prod/`, configured by
+`ansible/playbooks/host-baseline.yml`, and runs `platform/`'s Compose stack;
+applications deploy onto it from their own repositories, through the
+per-application deploy-key path the `deploy_user` role sets up. Project
+identity, scope, and non-goals are recorded in the change
+`project-foundation`'s design.md; every change since is recorded under
+`openspec/`.
 
-A staging environment (a second `terraform/environments/<name>/` folder reusing the
-same modules) is anticipated as the next environment after `prod` is fully
-stood up, but is not yet in scope.
+A staging environment (a second `terraform/environments/<name>/` folder reusing
+the same modules) is still anticipated as the next environment, but is not yet
+in scope.
 
-The `ansible/` and `platform/` directories, and the `terraform/`/`ansible/`/
-`platform/` structure and pipeline boundary between them, were established by
-the change `integrate-ansible-host-config` — structure and convention only;
-neither directory has role/playbook or Compose service content yet.
+The `terraform/`/`ansible/`/`platform/` structure, and the pipeline boundary
+between the three, were established by the change
+`integrate-ansible-host-config`.

@@ -3,7 +3,9 @@
 # Equivalent" requirement (iac-host-configuration): any external role or
 # collection used, for any purpose, is pinned to an exact version — never a
 # floating range. Install with:
-#   ansible-galaxy install -r ansible/requirements.yml
+#   ansible-galaxy collection install -r ansible/requirements.yml
+#   ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
+# Two commands, and `-p` on the second — see README.md's local setup step 5.
 collections:
   - name: hetzner.hcloud
     version: "7.0.0"
