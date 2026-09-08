@@ -271,17 +271,17 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
 
 ## 12. Pull request 2 — the gate, and confirming it
 
-- [ ] 12.1 Open the pull request carrying sections 9–10. Let continuous
+- [x] 12.1 Open the pull request carrying sections 9–10. Let continuous
   integration run and wait for the operator's confirmation that it merged and the
   deploy is healthy.
-- [ ] 12.2 **Confirm the effect — this is the `ship:confirm` gate.** On the merged
+- [x] 12.2 **Confirm the effect — this is the `ship:confirm` gate.** On the merged
   pull request, the new step ran, reported and passed, and it ran on a pull request
   touching no Terraform file, which is what distinguishes *the check is present*
   from *the check is not skipped*. This is performable by reading the run, needs
   nobody's cooperation, and is a genuine observation of the change's effect. Do
   not waive it; an observation is performable, which is what the waiver classes
   exclude.
-- [ ] 12.3 **Observe the composition.** Propose to the operator a throwaway pull
+- [x] 12.3 **Observe the composition.** Propose to the operator a throwaway pull
   request that unticks one task in an archived change, confirm the check fails on
   it, and close it without merging.
   Be accurate about what this adds, per Decision 8. Two of the three facts behind
@@ -401,6 +401,87 @@ a disclosure written as prose, each producing zero offences) and a latent
 `AttributeError` that would have broken pull request 2. Fixing a test to make it
 stricter is legitimate, but the derived tests have an independent author and the
 correction belongs with them.
+
+**12.3 — the composition, observed 2026-09-08.** The operator authorised the
+throwaway experiment rather than the disclosure, so this was performed rather
+than disclosed.
+
+Pull request #102, opened against `main` from a branch carrying one edit: task
+`2.2` of the archived record `2026-09-04-fix-cadvisor-containerd-snapshotter`
+unticked. Nothing else. Run `34272343180` reported:
+
+```
+success  Validate the specification record
+failure  Validate archived change records
+```
+
+with
+
+```
+✗ change/2026-09-04-fix-cadvisor-containerd-snapshotter
+  ✗ 1 incomplete task (9/10 completed)
+Totals: 29 passed, 1 failed (30 items)
+```
+
+Three things that matter, none of which the green run could show:
+
+1. **The required check went red and the pull request became unmergeable.** That
+   is the gate gating, rather than a step that happens to pass.
+2. **The two invocations are genuinely distinct.** `--all` passed on the same run
+   that `--archived` failed. The delta says neither implies the other; here that
+   is observed rather than asserted.
+3. **The failure propagated.** A step holding the closed form cannot swallow its
+   result, and the job's conclusion followed the step's — which is the half of
+   Decision 9 that static assertion cannot reach.
+
+The pull request was closed without merging and its branch deleted locally and on
+the remote. `openspec validate --archived` on this branch afterwards: 30 passed,
+0 failed. Nothing from the experiment reached `main` or this change.
+
+**12.1 / 12.2 — the observation, made 2026-09-08.** Pull request 2 is
+[#100](https://github.com/shatynska/infrastructure/pull/100), merged as
+`4474b24` with `validate` green.
+
+The `ship:confirm` observation this change owes is *the step ran, reported and
+passed, on a pull request touching no Terraform file* — which is what separates
+**the check is present** from **the check is not skipped**. Run `34271103275`,
+the gate's own pull request, gives it directly. That pull request touched no path
+under `terraform/` (checked: zero of its files), and the run's step conclusions
+read:
+
+```
+success  Setup Node (specification record validation)
+success  Install OpenSpec (pinned)
+success  Validate the specification record
+success  Validate archived change records
+skipped  Setup Terraform
+skipped  terraform fmt -check
+skipped  terraform validate
+skipped  tflint
+skipped  terraform test
+skipped  Trivy misconfiguration scan
+```
+
+Every Terraform-conditional step skipped; all four record-validation steps ran
+and succeeded. A step that merely existed would have skipped alongside them.
+
+Note what this run is: the first pull request the gate ever validated was the one
+that installed it. The check read this repository's own specification record —
+including this change's active delta and all thirty archived records — and passed.
+
+**Confirmed by the operator on 2026-09-08.** Put to them rather than ticked on
+this session's reading, per `AGENTS.md`: an agent does not close its own gate.
+The observation was performable and was performed, so no waiver was sought and
+none would have been available — both waiver classes exclude an observation that
+was made and whose effect is present.
+
+**The watcher proved itself the same hour.** Adding `actions/setup-node` put a
+new action under the `github-actions` Dependabot stanza, which raised a v6 to v7
+bump as PR #101; it merged, and the suite stayed green at 255 against v7. The
+`npm` stanza added by this change covers the OpenSpec pin the same way. That is
+the argument in Decision 7 — a pinned dependency nothing watches is the failure
+this repository has recorded against itself four times — working on day one
+rather than in principle.
 
 **9.x / 10.2 — what the gate implementation turned up.**
 
