@@ -100,7 +100,7 @@ services:
 
   # ---------------------------------------------------------------------
   # add-platform-monitoring: metrics collection, alerting, dashboards.
-  # See openspec/changes/add-platform-monitoring/design.md for the full
+  # See add-platform-monitoring's design.md for the full
   # rationale behind every decision below (network placement, inline
   # configs:, the Traefik/postgres-exporter split, Grafana's tailnet-only
   # binding, retention sizing).

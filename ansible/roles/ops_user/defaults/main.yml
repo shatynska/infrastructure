@@ -1,7 +1,7 @@
 ---
 # ops_user_accounts: list of {name, public_key, state} -- one entry per
 # operator identity allowed an unprivileged, interactive login on this host
-# (openspec/changes/add-ops-account). `state` is per-entry and defaults to
+# (the change add-ops-account). `state` is per-entry and defaults to
 # `present`; `absent` revokes that identity on the next converge.
 #
 # Defaults to the empty list on purpose. Unlike deploy_user's credential

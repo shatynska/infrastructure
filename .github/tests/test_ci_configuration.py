@@ -1,10 +1,11 @@
 """Static-assertion tests for the CI configuration this repository ships.
 
-Derived from the delta specs of the OpenSpec change `close-ci-verification-gaps`
-(`openspec/changes/close-ci-verification-gaps/specs/`), before any implementation
-of that change existed. Every assertion below is annotated SPECIFIED (it traces
-to SHALL text in a delta spec) or DERIVED (it traces to `design.md`/`tasks.md`
-rather than to a scenario). See that change's `test-plan.md` for the
+Derived from the delta specs of the OpenSpec change `close-ci-verification-gaps`,
+before any implementation of that change existed. Those deltas span several
+capabilities, so no single `openspec/specs/<capability>/spec.md` names them all;
+each section below cites the one it traces to. Every assertion is annotated
+SPECIFIED (it traces to SHALL text in a delta spec) or DERIVED (it traces to
+`design.md`/`tasks.md` rather than to a scenario). See that change's `test-plan.md` for the
 scenario-to-test mapping and for the scenarios deliberately left uncovered.
 
 Sections added later carry their own provenance comment naming the change they
@@ -462,12 +463,23 @@ class TestTerraformChecksDiscoverDirectories(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Ansible Configuration Is Verified in CI (ADDED)
+# iac-cicd-pipeline / Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge
 # --------------------------------------------------------------------------
 
 
 class TestAnsibleBlockingTier(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge.
+
+    The tier this class covers is the requirement's *Lint tier*, called the
+    *Blocking tier* when this class was written -- a name that distinguished it
+    from an advisory one, which no longer exists. The class and its methods
+    keep their names: they are runner-selectable identifiers cited by an
+    archived `test-plan.md`, and renaming them would break that citation to say
+    nothing new. The assertions are unchanged; both tiers block, and this one
+    always did.
+    """
 
     def setUp(self) -> None:
         self.workflow = load_yaml(PR_VALIDATION)
@@ -508,7 +520,8 @@ class TestAnsibleBlockingTier(unittest.TestCase):
 
 
 class TestVerificationJobsCarryNoCredential(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
 
     def test_no_pull_request_validation_job_declares_an_environment(self) -> None:
         """SPECIFIED -- scenario "Ansible verification receives no production
@@ -519,7 +532,11 @@ class TestVerificationJobsCarryNoCredential(unittest.TestCase):
         self.assertEqual([], offenders, f"jobs declaring `environment:`: {offenders}")
 
     def test_the_molecule_workflow_declares_no_environment(self) -> None:
-        """SPECIFIED -- same scenario, advisory tier."""
+        """SPECIFIED -- same scenario, suite tier. The requirement's two tiers
+        were named *Blocking* and *Advisory* while only one of them gated;
+        `promote-molecule-to-a-required-check` renamed them *Lint* and *Suite*,
+        because both gate now and what separates them is what they run. The
+        credential prohibition was always over both and is unchanged."""
         workflow = load_yaml(ANSIBLE_VERIFY)
         offenders = [name for name, job in jobs(workflow).items() if "environment" in job]
         self.assertEqual([], offenders, f"jobs declaring `environment:`: {offenders}")
@@ -536,7 +553,8 @@ class TestVerificationJobsCarryNoCredential(unittest.TestCase):
 
 
 class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
 
     # The discovery snippet is real shell: it calls these before it can reach
     # its own failure branch. Without them it exits non-zero for a reason that
@@ -612,17 +630,27 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
         )
 
     def test_the_workflow_uses_no_continue_on_error(self) -> None:
-        """SPECIFIED -- scenario "A failing Molecule scenario does not block a
-        merge": the failure SHALL be visible on the pull request. Advisory
-        status comes from not registering the workflow as a required check, not
-        from swallowing its conclusion. Establishes the visibility half only;
-        branch-protection registration is not repository state."""
+        """SPECIFIED -- scenario "A failing Molecule scenario blocks the merge":
+        the failure SHALL be visible on the pull request and the aggregating job
+        SHALL conclude failure.
+
+        The assertion is unchanged; what it protects is not. While this workflow
+        was advisory, `continue-on-error` would have destroyed the signal the
+        tier existed to collect. Now that the workflow is a required check, it
+        would report a GREEN REQUIRED STATUS CHECK for a failed suite and let
+        the merge through -- the same conflation the aggregating gate refuses
+        for a skipped matrix, reached by a different route.
+
+        Establishes the visibility half only. Whether the merge is then blocked
+        is branch protection, which is repository settings and not repository
+        state this suite can read.
+        """
         self.assertNotIn(
             "continue-on-error",
             self.text,
             "ansible-verify.yml uses continue-on-error, which reports a green "
-            "conclusion for a failed scenario and destroys the signal the advisory "
-            "tier exists to collect",
+            "conclusion for a failed scenario -- on a required status check, that "
+            "is a merge let through by a suite that failed",
         )
 
     def test_role_discovery_fails_when_it_finds_nothing(self) -> None:
@@ -694,7 +722,8 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
 
 
 class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
-    """ADDED requirement: Ansible Configuration Is Verified in CI."""
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
 
     PIP_INSTALL = re.compile(r"pip\d*\s+install\s+(?P<args>[^\n]*)")
 
@@ -739,14 +768,16 @@ class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Ansible Configuration Is Verified in CI --
+# iac-cicd-pipeline / Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge --
 # the container image each scenario executes inside
 # --------------------------------------------------------------------------
 #
 # Derived from the delta spec of the OpenSpec change
-# `pin-and-fix-molecule-suite`
-# (openspec/changes/pin-and-fix-molecule-suite/specs/iac-cicd-pipeline/spec.md),
-# before any implementation of that change existed. See that change's
+# `pin-and-fix-molecule-suite`, before any implementation of that change
+# existed. The requirement these assertions trace to is
+# `iac-cicd-pipeline`'s "Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge" (openspec/specs/iac-cicd-pipeline/spec.md). See that change's
 # test-plan.md for the scenario-to-test mapping, the baseline, and the
 # scenarios deliberately left uncovered.
 
@@ -982,7 +1013,7 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
     ScenarioTreeFixtureMixin, unittest.TestCase
 ):
     """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
-    Integration -- the clause bounding the pinning obligation to the scenarios
+    Integration and Gates the Merge -- the clause bounding the pinning obligation to the scenarios
     this repository authors."""
 
     def test_discovery_finds_the_scenarios_this_repository_authors(self) -> None:
@@ -1194,7 +1225,7 @@ class TestMoleculeScenarioImagesArePinnedByDigest(
     ScenarioTreeFixtureMixin, unittest.TestCase
 ):
     """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
-    Integration -- the extension of the pinned-manifest obligation to the
+    Integration and Gates the Merge -- the extension of the pinned-manifest obligation to the
     container image each scenario executes inside."""
 
     def test_every_scenario_declares_its_platform_image_by_immutable_digest(self) -> None:
@@ -1393,7 +1424,7 @@ class TestMoleculeScenarioImagesArePinnedByDigest(
 
 class TestImageReferenceParsing(unittest.TestCase):
     """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
-    Integration. Unit-level cover for the reference splitting every check above
+    Integration and Gates the Merge. Unit-level cover for the reference splitting every check above
     depends on -- the smallest level at which these cases are observable."""
 
     def test_the_combined_tag_and_digest_form_is_read_as_pinned(self) -> None:
@@ -1525,25 +1556,61 @@ class TestRequiredCheckIsNotPathFiltered(unittest.TestCase):
     """MODIFIED requirement: Gated Production Apply Applies the Reviewed Plan.
 
     The delta adds the constraint that the path filter is permissible only
-    because the apply workflow is not a required check, and that the required
+    because the apply workflow is not a required check, and that a required
     check must not carry one. This asserts the second half.
+
+    `promote-molecule-to-a-required-check` made a second workflow a required
+    check, and that requirement's "The workflow that is registered as a
+    required check" became "Any workflow that is registered as a required
+    check". The workflows below are therefore named LITERALLY rather than read
+    out of `REQUIRED_STATUS_CHECK_WORKFLOWS`, which
+    `TestEveryRequiredCheckIsShapedToBeRegistrable` iterates. That is
+    deliberate duplication, not an oversight: a loop over a mapping passes
+    vacuously if the mapping is emptied, and this constraint is the one whose
+    violation leaves every pull request in the repository unmergeable. Two
+    workflows spelled out here cost one line each and survive that edit.
+
+    The method name is left unchanged: it is a runner-selectable identifier
+    that an archived `test-plan.md` cites.
     """
 
+    LITERALLY_REQUIRED = (PR_VALIDATION, ANSIBLE_VERIFY)
+
+    def test_the_two_lists_of_required_check_workflows_agree(self) -> None:
+        """DERIVED -- no scenario states it. Deliberate duplication has a
+        deliberate failure mode: a third required check added to
+        `REQUIRED_STATUS_CHECK_WORKFLOWS` and not to `LITERALLY_REQUIRED` would
+        leave the literal guard covering two of three workflows, silently. This
+        is the assertion that makes forgetting loud instead."""
+        self.assertEqual(
+            sorted(REQUIRED_STATUS_CHECK_WORKFLOWS.values(), key=str),
+            sorted(self.LITERALLY_REQUIRED, key=str),
+            "the mapping the shape checks iterate and the literal tuple this class "
+            "names have diverged; a workflow in one and not the other is covered by "
+            "only half of the path-filter prohibition",
+        )
+
     def test_the_required_check_declares_no_workflow_level_path_filter(self) -> None:
-        """SPECIFIED -- "The workflow that is registered as a required check
+        """SPECIFIED -- "Any workflow that is registered as a required check
         SHALL NOT be path-filtered at the workflow level"."""
-        on = triggers(load_yaml(PR_VALIDATION))
-        for event, config in on.items():
-            if not isinstance(config, dict):
-                continue
-            for key in ("paths", "paths-ignore"):
-                self.assertNotIn(
-                    key,
-                    config,
-                    f"pr-validation.yml's `{event}` trigger declares `{key}:`, which "
-                    "leaves every non-matching pull request permanently pending and "
-                    "so unmergeable",
-                )
+        for path in self.LITERALLY_REQUIRED:
+            on = triggers(load_yaml(path))
+            self.assertTrue(
+                on,
+                f"{path.name} declares no triggers at all, so this check would pass "
+                "having read nothing",
+            )
+            for event, config in on.items():
+                if not isinstance(config, dict):
+                    continue
+                for key in ("paths", "paths-ignore"):
+                    self.assertNotIn(
+                        key,
+                        config,
+                        f"{path.name}'s `{event}` trigger declares `{key}:`, which "
+                        "leaves every non-matching pull request permanently pending "
+                        "and so unmergeable",
+                    )
 
 
 class TestSavedPlanIsWhatGetsApplied(unittest.TestCase):
@@ -1969,11 +2036,12 @@ class TestTheSuiteNeedsNoPrivilegedResource(unittest.TestCase):
 # Release, and Metrics Dashboards Are Available
 #
 # Derived from the delta specs of the OpenSpec change
-# `fix-volume-discovery-and-consistency`
-# (openspec/changes/fix-volume-discovery-and-consistency/specs/
-# iac-platform-services/spec.md), before any implementation of that change
-# existed. See that change's test-plan.md for the scenario-to-test mapping, the
-# baseline, and the scenarios deliberately left uncovered.
+# `fix-volume-discovery-and-consistency`, before any implementation of that
+# change existed. Both requirements named in this section's heading above are
+# held in `iac-platform-services`
+# (openspec/specs/iac-platform-services/spec.md). See that change's
+# test-plan.md for the scenario-to-test mapping, the baseline, and the
+# scenarios deliberately left uncovered.
 #
 # These assertions live in THIS suite rather than in `terraform test` or in a
 # Molecule scenario because both are static reads of a committed file the
@@ -2612,6 +2680,1773 @@ class TestRequiredRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
                     f"{defaults_path} now defines {variable}; the assertion in {path} "
                     f"would pass on the default rather than on a supplied value",
                 )
+
+
+# --------------------------------------------------------------------------
+# iac-repo-foundations / Source Files Cite Specifications by Path and Changes
+# by Name
+#
+# Derived from the delta spec of the OpenSpec change
+# `decide-archived-change-reference-policy`, before any implementation of that
+# change existed. See that change's test-plan.md for the scenario-to-test
+# mapping, the baseline, and the scenarios deliberately left uncovered. Both
+# citations in this comment take the second of the two forms the requirement
+# names -- the change's name and the artifact's name, in prose, with no path --
+# because the artifacts they name live only inside a change and so have no
+# permanent path to cite.
+#
+# Reflexivity note (design Decision 6). This suite is itself a committed file
+# outside `openspec/`, so it is inside the set of files the check below reads.
+# No fixture here may therefore carry a literal of the prohibited form: every
+# one is assembled at run time from CHANGE_PATH_PREFIX and a separate segment.
+# The matcher's own patterns need no such treatment -- there the prefix is
+# followed by a regular-expression group rather than by a change-shaped
+# segment, so the pattern does not match itself.
+#
+# These assertions live in THIS suite rather than in `terraform test` or in a
+# Molecule scenario because they are a static read of committed files at
+# repository scope, which is the only thing that can perform them: the
+# requirement obliges the prohibition to be asserted by the executable suite
+# that gates every pull request, and this is that suite (AGENTS.md, "Testing";
+# design Decision 4). They add no import, spawn no subprocess, and need no
+# network call, credential, container runtime or Terraform binary.
+# --------------------------------------------------------------------------
+
+CHANGE_PATH_PREFIX = "openspec/changes/"
+ARCHIVE_SEGMENT = "archive"
+
+# A change name's shape: lowercase kebab-case (design Decision 5). Requiring
+# the shape rather than any segment is what lets documentation state the rule
+# with a metasyntactic placeholder without tripping the check it describes.
+_CHANGE_NAME = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+
+# Across a line break the segment must additionally carry a hyphen. Without
+# that narrowing, any prose line ending in the prefix whose continuation begins
+# with an ordinary lowercase word would be flagged. The requirement records
+# what this excludes: a wrapped citation of a single-word change name.
+_HYPHENATED_CHANGE_NAME = r"[a-z0-9]+(?:-[a-z0-9]+)+"
+
+# Nothing is required after the segment. Twenty-seven of the citations this
+# requirement removes name the change and stop there, and requiring a trailing
+# separator is the exact error that made two earlier counts of the problem low.
+CONTIGUOUS_CITATION = re.compile(
+    re.escape(CHANGE_PATH_PREFIX) + r"(?P<segment>" + _CHANGE_NAME + r")"
+)
+
+WRAPPED_CITATION = re.compile(
+    re.escape(CHANGE_PATH_PREFIX)
+    + r"[ \t]*\r?\n[ \t]*(?:[#>*]+|//|--)?[ \t]*"
+    + r"(?P<segment>"
+    + _HYPHENATED_CHANGE_NAME
+    + r")"
+)
+
+# Pruned wherever they occur, at any depth: `.terraform` in particular exists
+# under each of `terraform/environments/*/`, and a root-anchored reading would
+# leave the walk reading provider binaries.
+#
+# `__pycache__` is here because the requirement is scoped to committed files and
+# `.gitignore` ignores it, so the compiled module is not one -- and because
+# running this suite is what creates it, making it a false positive the check
+# would inflict on itself on every run rather than one a developer provokes and
+# can see. That is what separates it from the untracked scratch file design
+# Decision 7 deliberately accepts.
+# NOTE: this list and `PRUNED_AT_ROOT_RELATIVE` below hand-mirror part of
+# `.gitignore`, and nothing keeps the two in step. The prohibition is over
+# *committed* files, so an ignored path added to `.gitignore` later -- a second
+# Galaxy role from `ansible/requirements.yml`, a repo-local `.venv`,
+# `.pytest_cache` -- becomes readable here and can turn the check red on a file
+# nobody committed. That is local-only; continuous integration checks out a
+# clean tree. When adding an ignore rule for something that lands inside the
+# working tree, add it here too.
+PRUNED_ANYWHERE = frozenset({".git", ".terraform", "__pycache__", "node_modules"})
+
+# Pruned only at their path relative to the walk root. `.claude` is NOT pruned
+# wholesale, only its `worktrees` subdirectory: the files tracked under
+# `.claude/commands/` and `.claude/skills/` are committed files outside
+# `openspec/`, and the prohibition covers them (design Decision 7).
+PRUNED_AT_ROOT_RELATIVE = frozenset(
+    {"openspec", "ansible/roles/geerlingguy.docker", ".worktrees", ".claude/worktrees"}
+)
+
+
+def walked_files(root: Path | None = None) -> list[Path]:
+    """Every file the prohibition covers, found by walking rather than by
+    asking the version-control tool.
+
+    `subprocess` is confined to `bash`/`sh` by this suite's own assertions, so
+    a tracked-file listing is unavailable (design Decision 7). The walk is a
+    superset of the tracked files -- an untracked scratch file in the tree is
+    read too -- which is the safe direction for a prohibition.
+    """
+    root = ROOT if root is None else root
+    found: list[Path] = []
+    for directory, subdirectories, filenames in os.walk(root):
+        here = Path(directory)
+        relative = here.relative_to(root).as_posix()
+        kept = []
+        for name in sorted(subdirectories):
+            child = name if relative == "." else f"{relative}/{name}"
+            if name in PRUNED_ANYWHERE or child in PRUNED_AT_ROOT_RELATIVE:
+                continue
+            kept.append(name)
+        subdirectories[:] = kept
+        for name in sorted(filenames):
+            path = here / name
+            if path.is_file():
+                found.append(path)
+    return found
+
+
+def pre_archive_citations(root: Path | None = None) -> list[str]:
+    """Every citation of a change's own directory under `openspec/changes/`,
+    as `<path>:<line>: <matched text>`.
+
+    Raises rather than reporting a clean tree when the walk reaches no file at
+    all: a check that read nothing would otherwise report success having
+    verified nothing.
+    """
+    root = ROOT if root is None else root
+    files = walked_files(root)
+    if not files:
+        raise AssertionError(
+            f"the walk from {root} reached no file at all, so every citation "
+            f"assertion over it would pass having read nothing"
+        )
+    offences: list[str] = []
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        found = []
+        for pattern in (CONTIGUOUS_CITATION, WRAPPED_CITATION):
+            for match in pattern.finditer(text):
+                if match.group("segment") == ARCHIVE_SEGMENT:
+                    continue
+                found.append((match.start(), match.group(0)))
+        for offset, matched in sorted(found):
+            line = text.count("\n", 0, offset) + 1
+            relative = path.relative_to(root).as_posix()
+            offences.append(f"{relative}:{line}: {' '.join(matched.split())}")
+    return offences
+
+
+class TestNoCommittedFileOutsideOpenSpecCarriesAPreArchiveCitation(unittest.TestCase):
+    """ADDED requirement: Source Files Cite Specifications by Path and Changes
+    by Name."""
+
+    def test_the_walk_reaches_the_committed_files_the_prohibition_covers(self) -> None:
+        """DERIVED -- no scenario states it. The requirement is normative over
+        every committed file outside `openspec/`, and a walk that reached none
+        of them would pass the assertion below having read nothing. Anchors on
+        files at four different depths rather than on a count, which any edit
+        to the repository would move."""
+        walked = {path.relative_to(ROOT).as_posix() for path in walked_files()}
+        anchors = {
+            "AGENTS.md",
+            "README.md",
+            "platform/docker-compose.yml",
+            ".github/tests/test_ci_configuration.py",
+        }
+        self.assertEqual(
+            set(),
+            anchors - walked,
+            f"the walk did not reach these committed files: {sorted(anchors - walked)}",
+        )
+
+    def test_the_walk_reaches_the_tracked_files_under_the_agent_directory(self) -> None:
+        """DERIVED -- design Decision 7, which prunes `.claude/worktrees` only
+        and not `.claude` wholesale, because the files tracked beneath it are
+        committed files outside `openspec/` and are the likeliest future source
+        of the prohibited form: they document OpenSpec's change layout.
+
+        Asserted against an enumeration of the directory rather than against a
+        count of what it holds today. A count fails on an unrelated file the
+        OpenSpec CLI adds or removes; this fails on what actually matters -- a
+        prune-list edit that drops part of `.claude` out of the prohibition's
+        scope. The two subtree assertions are the floor beneath it: without
+        them, pruning `.claude` in its entirety would empty both sides of the
+        comparison and pass.
+        """
+        agent_directory = ROOT / ".claude"
+        if not agent_directory.is_dir():
+            self.skipTest("this repository has no .claude/ directory")
+        walked = {path.relative_to(ROOT).as_posix() for path in walked_files()}
+        # Independent of PRUNED_AT_ROOT_RELATIVE, which is what this test is
+        # about. It excludes only the `worktrees` subtree, which Decision 7
+        # prunes because it is a second checkout of this repository, and the
+        # any-depth entries, which are not at issue here.
+        expected = {
+            path.relative_to(ROOT).as_posix()
+            for path in agent_directory.rglob("*")
+            if path.is_file()
+            and path.relative_to(agent_directory).parts[0] != "worktrees"
+            and not set(path.relative_to(ROOT).parts) & PRUNED_ANYWHERE
+        }
+        missing = sorted(expected - walked)
+        self.assertEqual(
+            [],
+            missing,
+            f"the walk did not reach these files under .claude/, so the "
+            f"prohibition is silently unenforced over them: {missing}",
+        )
+        for subtree in (".claude/commands/", ".claude/skills/"):
+            self.assertTrue(
+                any(name.startswith(subtree) for name in walked),
+                f"the walk reached no file under {subtree}; pruning it would "
+                f"drop the files OpenSpec installs there out of the "
+                f"prohibition's scope without failing anything",
+            )
+
+    def test_no_committed_file_outside_openspec_carries_a_pre_archive_citation(self) -> None:
+        """SPECIFIED -- "No committed file outside `openspec/` SHALL contain a
+        path naming a change's own directory under `openspec/changes/`", and
+        scenario "Archiving a change breaks no citation": a citation that names
+        no change directory cannot be invalidated by that directory moving."""
+        offences = pre_archive_citations()
+        self.assertEqual(
+            [],
+            offences,
+            f"{len(offences)} citation(s) name a change's own directory and so "
+            f"break when that change is archived:\n" + "\n".join(offences),
+        )
+
+    def test_the_walk_reads_nothing_inside_the_specification_directory(self) -> None:
+        """SPECIFIED -- scenario "A change's own artifacts are out of scope":
+        the prohibition does not apply to a change's planning artifacts, live
+        or archived, since they move together with what they cite."""
+        inside = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in walked_files()
+            if path.relative_to(ROOT).as_posix().startswith("openspec/")
+        )
+        self.assertEqual(
+            [], inside, f"the walk descended into openspec/: {inside[:10]}"
+        )
+
+    def test_a_changes_own_artifacts_do_carry_the_form_the_walk_excludes(self) -> None:
+        """DERIVED -- no scenario states it. Without it, the exclusion above is
+        indistinguishable from an exclusion of a directory that never contained
+        the form, and the scenario it covers would be satisfied vacuously."""
+        specification_root = ROOT / "openspec"
+        if not specification_root.is_dir():
+            self.skipTest("this repository has no openspec/ directory")
+        carrying = []
+        for path in sorted(specification_root.rglob("*.md")):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for match in CONTIGUOUS_CITATION.finditer(text):
+                if match.group("segment") != ARCHIVE_SEGMENT:
+                    carrying.append(path.relative_to(ROOT).as_posix())
+                    break
+            if carrying:
+                break
+        self.assertTrue(
+            carrying,
+            "no artifact under openspec/ carries a citation of a change's own "
+            "directory, so excluding openspec/ from the walk demonstrates "
+            "nothing about the exclusion",
+        )
+
+
+class CitationTreeFixtureMixin:
+    """Builds throwaway trees the citation check is run over.
+
+    Every citation is assembled at run time from CHANGE_PATH_PREFIX and a
+    segment, so that no literal of the prohibited form is committed in this
+    file (design Decision 6).
+    """
+
+    def citation(self, segment: str, tail: str = "") -> str:
+        return CHANGE_PATH_PREFIX + segment + tail
+
+    def wrapped_citation(self, segment: str, tail: str = "") -> str:
+        """The same citation split across a line break immediately after the
+        prefix, with a comment marker opening the continuation line."""
+        return CHANGE_PATH_PREFIX + "\n# " + segment + tail
+
+    def citation_tree(self, files: dict[str, str]) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="citation-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for relative, body in files.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        return root
+
+    def offences_over(self, body: str, name: str = "notes.md") -> list[str]:
+        return pre_archive_citations(self.citation_tree({name: body}))
+
+
+class TestThePreArchiveCitationCheckIsARealReadOfTheTree(
+    CitationTreeFixtureMixin, unittest.TestCase
+):
+    """ADDED requirement: Source Files Cite Specifications by Path and Changes
+    by Name.
+
+    The assertion over the committed tree passes identically whether the check
+    reads the files or matches nothing at all, and it will keep passing once
+    the tree is swept. These tests run the same check over throwaway trees
+    differing in exactly one property, so its verdict is shown to depend on
+    what a file says.
+    """
+
+    def test_a_citation_naming_an_artifact_inside_a_change_is_flagged(self) -> None:
+        """SPECIFIED -- scenario "A pull request reintroducing the pre-archive
+        citation form is rejected"."""
+        offences = self.offences_over("# see " + self.citation("some-change", "/design.md"))
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_citation_that_names_the_change_and_stops_is_flagged(self) -> None:
+        """SPECIFIED -- "whether or not a further path component follows it".
+        A prohibition written to require a trailing separator permits this
+        form, and better than a third of the citations the requirement removes
+        take it."""
+        offences = self.offences_over("# see " + self.citation("some-change") + "\n")
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_citation_of_a_delta_specification_inside_a_change_is_flagged(self) -> None:
+        """SPECIFIED -- scenario "A requirement is cited at its permanent
+        location": a requirement is named at `openspec/specs/<capability>/
+        spec.md` "rather than the delta specification inside the change that
+        proposed it"."""
+        offences = self.offences_over(
+            "# see " + self.citation("some-change", "/specs/iac-repo-foundations/spec.md")
+        )
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_wrapped_citation_naming_a_further_component_is_flagged(self) -> None:
+        """SPECIFIED -- the requirement excludes exactly one wrapped rendering,
+        the single-word change name, which entails that a wrapped hyphenated
+        one is inside the check. No citation in the tree wraps in this
+        position, so only a synthesised fixture can exercise it."""
+        offences = self.offences_over(
+            "# a note ending at " + self.wrapped_citation("some-change", "/design.md")
+        )
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_a_wrapped_citation_that_names_the_change_and_stops_is_flagged(self) -> None:
+        """SPECIFIED -- the same exclusion, combined with "whether or not a
+        further path component follows it"."""
+        offences = self.offences_over(
+            "# a note ending at " + self.wrapped_citation("some-change") + "\n"
+        )
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+
+    def test_an_offence_names_the_file_the_line_and_the_citation(self) -> None:
+        """SPECIFIED -- scenario "A pull request reintroducing the pre-archive
+        citation form is rejected": the check fails "naming the file, the line
+        and the citation". A verdict that named none of the three would leave
+        the author unable to act on it."""
+        body = "first\nsecond\n# see " + self.citation("some-change", "/design.md") + "\n"
+        offences = self.offences_over(body, name="ansible/roles/example/tasks/main.yml")
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+        reported = offences[0]
+        self.assertTrue(
+            reported.startswith("ansible/roles/example/tasks/main.yml:3: "),
+            f"the offence names neither the file nor the line it is on: {reported}",
+        )
+        self.assertIn(CHANGE_PATH_PREFIX + "some-change", reported)
+
+    def test_the_archived_location_is_not_flagged(self) -> None:
+        """SPECIFIED -- "A citation MAY additionally give a change's archived
+        location as `openspec/changes/archive/<date>-<name>/...` once that
+        location exists"."""
+        offences = self.offences_over(
+            "# see "
+            + self.citation(ARCHIVE_SEGMENT, "/2026-08-18-project-foundation/design.md")
+        )
+        self.assertEqual([], offences, f"the archived location was flagged: {offences}")
+
+    def test_a_metasyntactic_placeholder_is_not_flagged(self) -> None:
+        """DERIVED -- design Decision 5, not a scenario. The rule has to be
+        statable in AGENTS.md and in this suite's own prose; a check that
+        flagged its own statement would be unshippable, and exempting those
+        files by name would punch a hole that later drifts into a real
+        violation."""
+        offences = self.offences_over("# never write " + self.citation("<name>", "/design.md"))
+        self.assertEqual([], offences, f"a placeholder was flagged: {offences}")
+
+    def test_a_requirement_cited_at_its_permanent_location_is_not_flagged(self) -> None:
+        """SPECIFIED -- scenario "A requirement is cited at its permanent
+        location": the form the requirement obliges must itself pass, or the
+        check would forbid the only permitted way to cite a requirement."""
+        offences = self.offences_over(
+            "# see openspec/specs/iac-repo-foundations/spec.md, requirement "
+            "Source Files Cite Specifications by Path and Changes by Name"
+        )
+        self.assertEqual([], offences, f"the permitted form was flagged: {offences}")
+
+    def test_prose_ending_in_the_prefix_before_an_ordinary_word_is_not_flagged(self) -> None:
+        """SPECIFIED -- the requirement's own statement of what the wrapped
+        match must not reach: "a continuation line's first word is itself a
+        valid single-word change name". Documentation describing this rule
+        wraps exactly here, and flagging it would redden the required check on
+        the files that state the rule."""
+        offences = self.offences_over(
+            "# a path naming a change's own directory under " + CHANGE_PATH_PREFIX + "\n"
+            "# is not permitted in a committed file\n"
+        )
+        self.assertEqual([], offences, f"prose describing the rule was flagged: {offences}")
+
+    def test_a_wrapped_single_word_change_name_is_knowingly_not_flagged(self) -> None:
+        """SPECIFIED -- and unusual: it asserts a gap the requirement records
+        rather than a behaviour it wants. "One rendering lies outside it: a
+        citation split across a line break immediately after
+        the prefix whose change name is a single word with no hyphen."
+        Pinning it means a later change that closes the gap does so knowingly,
+        and sees that it must also keep the prose case above passing."""
+        offences = self.offences_over(
+            "# a note ending at " + self.wrapped_citation("foundation", "/design.md")
+        )
+        self.assertEqual(
+            [],
+            offences,
+            "the wrapped single-word rendering was flagged; the requirement "
+            f"records it as outside the check: {offences}",
+        )
+
+    def test_a_tree_carrying_no_such_citation_yields_no_offence(self) -> None:
+        """DERIVED -- the converse half. Without it, a check that reported
+        every file as an offender would satisfy every positive case above
+        while failing every pull request regardless of what it changed."""
+        offences = pre_archive_citations(
+            self.citation_tree(
+                {
+                    "README.md": "# see openspec/specs/iac-repo-foundations/spec.md\n",
+                    "ansible/roles/example/tasks/main.yml": (
+                        "# rationale: see the change decide-archived-change-reference-"
+                        "policy, design.md\n"
+                    ),
+                }
+            )
+        )
+        self.assertEqual([], offences, f"a clean tree was reported as offending: {offences}")
+
+    def test_a_tree_the_walk_finds_nothing_in_fails_rather_than_reading_nothing(self) -> None:
+        """DERIVED -- the non-vacuity guard at the tree level, the same one
+        this suite applies to Molecule scenario discovery. A check that read no
+        file would report success having verified nothing."""
+        root = Path(tempfile.mkdtemp(prefix="citation-fixture-empty-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        with self.assertRaises(AssertionError):
+            pre_archive_citations(root)
+
+    def test_the_pruned_directories_are_not_read(self) -> None:
+        """DERIVED -- design Decision 7. Without pruning, the check descends
+        into a second checkout of this repository sitting on another branch and
+        reports every finding twice, and into `openspec/`, whose artifacts the
+        requirement puts out of scope."""
+        citation = "# see " + self.citation("some-change", "/design.md") + "\n"
+        root = self.citation_tree(
+            {
+                CHANGE_PATH_PREFIX + "some-change/design.md": citation,
+                ".claude/worktrees/other/README.md": citation,
+                ".worktrees/other/README.md": citation,
+                "terraform/environments/prod/.terraform/providers/notes.md": citation,
+                "ansible/roles/geerlingguy.docker/README.md": citation,
+                "node_modules/package/readme.md": citation,
+                "README.md": "# see openspec/specs/iac-repo-foundations/spec.md\n",
+            }
+        )
+        self.assertEqual(
+            [],
+            pre_archive_citations(root),
+            "a pruned directory was read",
+        )
+
+    def test_compiled_bytecode_beneath_a_pycache_directory_is_not_read(self) -> None:
+        """DERIVED -- design Decision 7, which prunes `__pycache__` wherever it
+        occurs. The requirement is scoped to committed files and `.gitignore`
+        ignores `__pycache__/`, so a compiled module is not one; and running
+        this suite is what writes it, so a compiled copy of a citation swept
+        out of the source would otherwise keep the check red after the sweep
+        had already made it true. Written over a fixture rather than over this
+        repository's own bytecode, which exists only after a run."""
+        citation = "# see " + self.citation("some-change", "/design.md") + "\n"
+        root = self.citation_tree(
+            {
+                ".github/tests/__pycache__/test_ci_configuration.cpython-312.pyc": citation,
+                "ansible/roles/example/__pycache__/module.cpython-312.pyc": citation,
+                "README.md": "# see openspec/specs/iac-repo-foundations/spec.md\n",
+            }
+        )
+        self.assertEqual(
+            [],
+            pre_archive_citations(root),
+            "compiled bytecode under __pycache__ was read, so every run of this "
+            "suite would report a citation it had just compiled itself",
+        )
+
+    def test_a_file_outside_the_pruned_directories_is_still_read(self) -> None:
+        """DERIVED -- the converse of the test above: a prune list that
+        excluded the whole tree would satisfy it while checking nothing. Pairs
+        with it over one fixture differing in exactly one file."""
+        offences = pre_archive_citations(
+            self.citation_tree(
+                {
+                    CHANGE_PATH_PREFIX + "some-change/design.md": (
+                        "# see " + self.citation("some-change", "/design.md") + "\n"
+                    ),
+                    ".claude/skills/example/SKILL.md": (
+                        "# see " + self.citation("some-change", "/design.md") + "\n"
+                    ),
+                }
+            )
+        )
+        self.assertEqual(
+            # The matched text is the prefix and the change-name segment; the
+            # trailing path component is not part of the match, because nothing
+            # may be required after the segment.
+            [".claude/skills/example/SKILL.md:1: " + CHANGE_PATH_PREFIX + "some-change"],
+            offences,
+            "a tracked file under .claude/ was not read, or openspec/ was",
+        )
+
+
+class TestThePreArchiveCitationCheckGatesEveryPullRequest(unittest.TestCase):
+    """ADDED requirement: Source Files Cite Specifications by Path and Changes
+    by Name -- "This prohibition SHALL be asserted by the executable test suite
+    that gates every pull request, because the author of such a citation cannot
+    detect it"."""
+
+    def test_the_citation_check_lives_in_the_suite_the_required_check_invokes(self) -> None:
+        """SPECIFIED -- scenario "A pull request reintroducing the pre-archive
+        citation form is rejected": the required status check fails on that
+        pull request. The check discriminating correctly establishes nothing if
+        nothing runs it."""
+        module = sys.modules[pre_archive_citations.__module__]
+        location = Path(module.__file__).resolve().as_posix()
+        self.assertIn(
+            SUITE_MARKER,
+            location,
+            f"the citation check is defined in {location}, outside the directory "
+            f"the required status check runs",
+        )
+        workflow = load_yaml(PR_VALIDATION)
+        invoking = [
+            step_label(job, index, step)
+            for job, index, step in steps(workflow)
+            if SUITE_MARKER in str(step.get("run", ""))
+        ]
+        self.assertTrue(
+            invoking,
+            f"no step in pr-validation.yml runs the suite under {SUITE_MARKER}/",
+        )
+
+
+# --------------------------------------------------------------------------
+# iac-cicd-pipeline / Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge; Required Status Checks Report on Every Pull
+# Request; Branch Protection on the Default Branch
+#
+# Derived from the delta specs of the OpenSpec change
+# `promote-molecule-to-a-required-check`, before any implementation of that
+# change existed. See that change's test-plan.md for the scenario-to-test
+# mapping, the baseline, the assertion classifications, and the scenarios no
+# test command in this repository can reach.
+#
+# NOTHING IN THIS SECTION ESTABLISHES THAT A STATUS CHECK CONTEXT IS
+# REGISTERED. Registering a context is repository settings rather than
+# repository content, and this suite makes no network call -- The
+# Continuous-Integration Configuration Is Itself Verified requires that, and
+# `TestTheSuiteNeedsNoPrivilegedResource` asserts it of this suite. Every
+# assertion below is a static read of a committed workflow file, or an
+# execution of a snippet taken out of one. Together they establish only that
+# the workflow is *shaped* so a context can be registered on it safely: no
+# workflow-level path filter, a literal job name to register, and a gate that
+# discriminates. Whether the operator registered it, whether a direct push to
+# `main` is rejected, and whether a red check blocks a merge are read from the
+# branch-protection API and from the forge during this change's ship stage, and
+# are not things a green run here has checked.
+#
+# The requirement name above does not appear in openspec/specs/ until this
+# change is archived. That bounded interval is recorded deliberately in this
+# change's design.md rather than being an oversight.
+# --------------------------------------------------------------------------
+
+# The status check contexts branch protection registers on `main`, each mapped
+# to the workflow that produces it. A third required check is then added here
+# as a name rather than as a test.
+REQUIRED_STATUS_CHECK_WORKFLOWS = {
+    "validate": PR_VALIDATION,
+    "ansible-verify": ANSIBLE_VERIFY,
+}
+
+# The context this change adds, and the job whose literal `name:` produces it.
+AGGREGATING_CONTEXT = "ansible-verify"
+
+
+def job_context_name(job_key: str, job: dict) -> str:
+    """The status check context a job produces: its `name:` where it declares
+    one, otherwise its key."""
+    name = job.get("name")
+    return str(name) if name else job_key
+
+
+def compact(value: object) -> str:
+    """An Actions expression with its whitespace removed, so
+    `${{ needs.discover.result }}` and `${{needs.discover.result}}` are matched
+    by the same substring."""
+    return re.sub(r"\s+", "", str(value))
+
+
+def require_external_tools(case: unittest.TestCase, tools, purpose: str) -> None:
+    """Precondition, not an assertion: refuse to read a subprocess's exit
+    status as evidence about a workflow snippet when the snippet could not run
+    at all.
+
+    Same skip-vs-fail handling as
+    `TestMoleculeDiscoveryAndScenarioCoverage._require_discovery_snippet_tools`,
+    for the same reason: outside CI a missing tool is a fact about the machine
+    and the test skips naming it, while under CI it fails instead, because a
+    silently skipped check on a runner is a required status check reporting
+    success having verified nothing.
+    """
+    missing = [tool for tool in tools if shutil.which(tool) is None]
+    if not missing:
+        return
+    reason = (
+        f"cannot {purpose}: it needs {', '.join(missing)}, absent on this machine, "
+        "so an exit status from it would say nothing about the workflow"
+    )
+    if os.environ.get("CI"):
+        case.fail(
+            f"{reason}. Running under CI, where skipping this test would report "
+            "success having verified nothing; install the tool on the runner."
+        )
+    case.skipTest(reason)
+
+
+def github_output_pairs(path: Path) -> dict:
+    """Parse a `$GITHUB_OUTPUT` file the way the runner does: `key=value`
+    lines, plus the heredoc form a multi-line value uses."""
+    pairs: dict = {}
+    lines = path.read_text(encoding="utf-8").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        heredoc = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*)<<(\S+)\s*$", line)
+        if heredoc:
+            key, delimiter = heredoc.groups()
+            body = []
+            index += 1
+            while index < len(lines) and lines[index].strip() != delimiter:
+                body.append(lines[index])
+                index += 1
+            pairs[key] = "\n".join(body)
+        elif "=" in line:
+            key, _, value = line.partition("=")
+            pairs[key.strip()] = value
+        index += 1
+    return pairs
+
+
+class MoleculeWorkflowShapeMixin:
+    """Locators shared by the classes below.
+
+    Each asserts rather than returning nothing, so a workflow that has not been
+    reshaped yet fails these tests for the reason the specification names
+    rather than erroring on a `None`.
+    """
+
+    def _workflow(self) -> dict:
+        return load_yaml(ANSIBLE_VERIFY)
+
+    def _job_named(self, workflow: dict, context: str):
+        matches = [
+            (key, job)
+            for key, job in jobs(workflow).items()
+            if job_context_name(key, job) == context
+        ]
+        self.assertEqual(
+            1,
+            len(matches),
+            f"ansible-verify.yml declares {len(matches)} jobs whose status check "
+            f"context is `{context}`; branch protection registers exactly one, and "
+            "the contexts this workflow declares are "
+            f"{sorted(job_context_name(k, j) for k, j in jobs(workflow).items())}",
+        )
+        return matches[0]
+
+    def _discovery_job(self, workflow: dict):
+        """The job that feeds the matrix, read from the matrix's own expression.
+
+        Identified structurally rather than by what its shell says. Selecting
+        on `ansible/roles` matched the matrix job too, which installs Galaxy
+        content into that directory; narrowing to `find ansible/roles` fixed
+        that but coupled six tests to one spelling of a path, so quoting it --
+        an ordinary refactor changing no behaviour -- would break them all.
+
+        What actually makes a job the discovery job is that the matrix is built
+        from its output. That is what is read here, and it survives any rewrite
+        of the discovery shell.
+        """
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        expression = compact((matrix_job.get("strategy") or {}).get("matrix"))
+        referenced = sorted(set(re.findall(r"needs\.([A-Za-z0-9_-]+)\.outputs\.", expression)))
+        self.assertEqual(
+            1,
+            len(referenced),
+            f"the matrix job `{matrix_key}` builds its matrix from "
+            f"{len(referenced)} job outputs, {referenced}; exactly one job supplies "
+            "the roles to run, and it is that job these checks call the discovery "
+            f"job. The matrix expression is {(matrix_job.get('strategy') or {}).get('matrix')!r}",
+        )
+        discovery_key = referenced[0]
+        declared = jobs(workflow)
+        self.assertIn(
+            discovery_key,
+            declared,
+            f"the matrix job `{matrix_key}` reads an output of `{discovery_key}`, "
+            f"which this workflow does not declare; its jobs are {sorted(declared)}",
+        )
+        return discovery_key, declared[discovery_key]
+
+    def _matrix_job(self, workflow: dict):
+        """The job whose name is generated from a matrix -- the one that must
+        never be the registered context."""
+        matches = [
+            (key, job)
+            for key, job in jobs(workflow).items()
+            if (job.get("strategy") or {}).get("matrix")
+        ]
+        self.assertTrue(
+            matches, "no job in ansible-verify.yml declares a `strategy.matrix`"
+        )
+        return matches[0]
+
+
+class TestEveryRequiredCheckIsShapedToBeRegistrable(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """MODIFIED requirements: Required Status Checks Report on Every Pull
+    Request; Branch Protection on the Default Branch.
+
+    Establishes the workflow-file half of both, and nothing else. It does NOT
+    establish that either context is registered in `main`'s branch protection,
+    that a direct push to `main` is rejected, or that a pull request with a
+    failing check is blocked from merging: those are repository settings and
+    merge outcomes, which this suite makes no network call to read. A green run
+    here means the workflows are shaped so those settings can be applied
+    safely, never that they were applied.
+    """
+
+    def test_no_required_check_workflow_declares_a_workflow_level_path_filter(self) -> None:
+        """SPECIFIED -- "That work MAY be path-filtered, but the filtering SHALL
+        occur *inside* an always-running job rather than via a workflow-level
+        `paths` or `paths-ignore` filter", and scenario "Documentation-only pull
+        request remains mergeable" in its workflow-file half. Both keys are
+        checked because the requirement forbids the mechanism rather than one
+        spelling of it, and every workflow behind a registered context is
+        checked because the requirement is now over each of them.
+
+        Says nothing about whether such a pull request is in fact mergeable:
+        that is a merge outcome, observed on the forge rather than here.
+        """
+        for context, path in sorted(REQUIRED_STATUS_CHECK_WORKFLOWS.items()):
+            on = triggers(load_yaml(path))
+            self.assertTrue(
+                on,
+                f"{path.name} declares no triggers at all, so this check over the "
+                f"context `{context}` would pass having read nothing",
+            )
+            for event, config in on.items():
+                if not isinstance(config, dict):
+                    continue
+                for key in ("paths", "paths-ignore"):
+                    self.assertNotIn(
+                        key,
+                        config,
+                        f"{path.name}'s `{event}` trigger declares `{key}:`, which "
+                        "leaves every non-matching pull request permanently pending "
+                        f"on the required context `{context}` and so unmergeable",
+                    )
+
+    def test_every_required_context_names_a_job_whose_name_is_a_literal(self) -> None:
+        """SPECIFIED -- scenario "Every registered context names a literal job":
+        "the job that context names SHALL carry a literal `name:`, containing no
+        GitHub Actions expression".
+
+        Establishes the workflow-file half only: that each named workflow
+        declares a job producing that context, by a literal. It does NOT
+        establish that the context is registered on `main` -- that half is read
+        from the protection API, not from this repository.
+        """
+        for context, path in sorted(REQUIRED_STATUS_CHECK_WORKFLOWS.items()):
+            workflow = load_yaml(path)
+            declared = {
+                job_context_name(key, job): job for key, job in jobs(workflow).items()
+            }
+            self.assertIn(
+                context,
+                sorted(declared),
+                f"{path.name} declares no job whose status check context is "
+                f"`{context}`, so registering that context would register a check "
+                f"that never reports; the workflow declares {sorted(declared)}",
+            )
+            self.assertNotIn(
+                "${{",
+                str(declared[context].get("name", context)),
+                f"{path.name}'s `{context}` job carries an Actions expression in its "
+                "`name:`, so the context it produces is generated rather than literal "
+                "and cannot be enumerated in branch protection in advance",
+            )
+
+    def test_the_generated_matrix_context_is_not_the_one_registered(self) -> None:
+        """SPECIFIED -- "Where a required check's work is performed by a job
+        whose name is generated rather than literal -- a matrix job, whose
+        context names vary with the matrix -- that job SHALL NOT be the
+        registered context".
+
+        Establishes that the matrix job's context differs from the registered
+        name. It does NOT establish which contexts branch protection holds.
+        """
+        workflow = self._workflow()
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        self.assertNotEqual(
+            AGGREGATING_CONTEXT,
+            job_context_name(matrix_key, matrix_job),
+            "the matrix job itself produces the context this change registers, so a "
+            "role added under ansible/roles/ would change which contexts report",
+        )
+        self.assertIn(
+            "${{",
+            str(matrix_job.get("name", matrix_key)),
+            "the matrix job's name is a literal, which means either it no longer "
+            "varies with the matrix or the matrix has moved to another job; re-read "
+            "which job produces which context before relying on the assertions about "
+            "the aggregating job below",
+        )
+
+
+class TestTheMoleculeWorkflowRunsOnPullRequestsAndOnDispatch(unittest.TestCase):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
+
+    def test_the_workflow_triggers_on_pull_requests_and_on_a_manual_dispatch(self) -> None:
+        """SPECIFIED for the `pull_request` limb -- "Every pull request that
+        changes files under `ansible/` SHALL trigger continuous-integration
+        checks over that configuration".
+
+        DERIVED for the `workflow_dispatch` limb: scenario "A manual run
+        verifies the whole suite" states what SHALL happen when the workflow is
+        started other than by a pull request, which presupposes such a trigger
+        without requiring this spelling of it. Reconsider that limb, do not
+        weaken it, if the manual path is provided by another event.
+        """
+        on = triggers(load_yaml(ANSIBLE_VERIFY))
+        self.assertIn(
+            "pull_request",
+            on,
+            "ansible-verify.yml no longer runs on pull requests, so the required "
+            f"context `{AGGREGATING_CONTEXT}` would never report on one",
+        )
+        self.assertIn(
+            "workflow_dispatch",
+            on,
+            "ansible-verify.yml declares no manual trigger, so the suite cannot be "
+            "run against the trunk, which is the run the scenario \"A manual run "
+            'verifies the whole suite" is about',
+        )
+
+
+class TestTheAggregatingJobConcludesOnTheSuitesBehalf(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Required Status Checks Report on Every Pull
+    Request.
+
+    Establishes the structure that lets a literal-named job report for a
+    generated-name matrix. It does NOT establish that this job is registered as
+    a required status check: that is repository settings, unreadable here.
+    """
+
+    def test_the_aggregating_job_depends_on_discovery_and_on_the_matrix(self) -> None:
+        """SPECIFIED -- "A job whose name is a literal SHALL depend on it, run
+        regardless of its outcome, and conclude on its behalf", and "An
+        aggregating job SHALL treat its own change-detection input as
+        trustworthy only where the job producing it concluded successfully",
+        which it cannot read at all without depending on that job."""
+        workflow = self._workflow()
+        _, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
+        discovery_key, _ = self._discovery_job(workflow)
+        matrix_key, _ = self._matrix_job(workflow)
+        declared = aggregating.get("needs") or []
+        declared = [declared] if isinstance(declared, str) else list(declared)
+        for required in (discovery_key, matrix_key):
+            self.assertIn(
+                required,
+                declared,
+                f"the `{AGGREGATING_CONTEXT}` job does not depend on `{required}`, so "
+                "it can neither read that job's result nor conclude on its behalf; it "
+                f"depends on {declared}",
+            )
+
+    def test_the_aggregating_job_runs_whatever_its_dependencies_concluded(self) -> None:
+        """SPECIFIED -- "run regardless of its outcome". A job left with the
+        default `success()` condition is itself skipped when a dependency fails
+        or is skipped, and a skipped job produces no context at all -- the same
+        permanent pending this requirement exists to prevent, reintroduced one
+        layer down."""
+        workflow = self._workflow()
+        _, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
+        self.assertIn(
+            "always()",
+            compact(aggregating.get("if", "")),
+            f"the `{AGGREGATING_CONTEXT}` job's condition is "
+            f"{aggregating.get('if')!r}; without `always()` it is skipped whenever a "
+            "dependency fails or is skipped, and then produces no context for branch "
+            "protection to read",
+        )
+
+
+class TestOnlyTheMoleculeMatrixIsGated(MoleculeWorkflowShapeMixin, unittest.TestCase):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge."""
+
+    def test_the_matrix_job_is_conditioned_on_the_change_detection_output(self) -> None:
+        """SPECIFIED -- scenario "A pull request touching no Ansible file starts
+        no container": "the Molecule matrix SHALL be skipped rather than
+        executed". The condition reads an output of the discovery job because
+        that is where the requirement puts change detection -- "triggered by
+        change detection *inside* an always-running workflow rather than by a
+        workflow-level path filter"."""
+        workflow = self._workflow()
+        discovery_key, _ = self._discovery_job(workflow)
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        condition = compact(matrix_job.get("if", ""))
+        self.assertTrue(
+            condition,
+            f"the matrix job `{matrix_key}` carries no `if:`, so every pull request "
+            "starts the containers the suite runs in, including one that touches "
+            "nothing under ansible/",
+        )
+        self.assertIn(
+            f"needs.{discovery_key}.outputs.",
+            condition,
+            f"the matrix job's condition {matrix_job.get('if')!r} reads no output of "
+            f"the discovery job `{discovery_key}`, so whatever it is gated on is not "
+            "the change detection this requirement places inside that job",
+        )
+        # The polarity, not merely the reference. Reading an output of the
+        # discovery job is satisfied equally by the inverse condition, which
+        # runs the whole container matrix on every pull request that touches
+        # nothing under ansible/ -- the outcome this scenario forbids -- while
+        # skipping it on the ones that do.
+        self.assertIn(
+            "=='true'",
+            condition,
+            f"the matrix job's condition {matrix_job.get('if')!r} does not run the "
+            "suite WHERE the change detection says to. Inverted, a documentation-only "
+            "pull request starts every container and an Ansible one starts none",
+        )
+        # Scoped to the operand, for the reason given on the change-filter
+        # step's own negation check.
+        for negation in ("!='true'", "!("):
+            self.assertNotIn(
+                negation,
+                condition,
+                f"the matrix job's condition {matrix_job.get('if')!r} negates the "
+                "change detection -- see above",
+            )
+
+    def test_no_step_inside_the_matrix_job_carries_its_own_condition(self) -> None:
+        """SPECIFIED -- the same scenario, in the half a job-level assertion
+        alone would miss. A step-level condition leaves the job itself running:
+        it concludes success having executed nothing, and the aggregating job
+        then reads that as a genuine success rather than as a skip."""
+        workflow = self._workflow()
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        offenders = [
+            step_label(matrix_key, index, step)
+            for index, step in enumerate(matrix_job.get("steps") or [])
+            if step.get("if") is not None
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            "these steps inside the matrix job carry their own condition, which "
+            "leaves the job green having run nothing rather than skipping it: "
+            f"{offenders}",
+        )
+
+    def test_role_discovery_runs_whatever_a_pull_request_touched(self) -> None:
+        """SPECIFIED -- scenario "Role discovery runs even where the suite does
+        not": "role discovery SHALL still run, and where it finds no role its
+        failure SHALL fail the required status check". Checks the discovery step
+        and its job, because moving the condition to the job would leave a
+        step-level assertion green while reopening the hole."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        self.assertIsNone(
+            discovery_job.get("if"),
+            f"the discovery job `{discovery_key}` is conditioned on "
+            f"{discovery_job.get('if')!r}, so a repository state in which no role "
+            "carries a molecule/ directory would stop only the pull requests that "
+            "touch ansible/ -- the suite that gates every merge having silently "
+            "disappeared is not a fact only those pull requests should learn",
+        )
+        offenders = [
+            step_label(discovery_key, index, step)
+            for index, step in enumerate(discovery_job.get("steps") or [])
+            if step.get("if") is not None
+            and re.search(r"ansible/roles", str(step.get("run", "")))
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            f"these role-discovery steps carry an `if:`: {offenders}",
+        )
+
+
+class TestDiscoveryDeclaresTheLeastPrivilegeItNeeds(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge -- "Discovery SHALL declare the least
+    privilege its change detection needs, per the *Least-Privilege Workflow
+    Permissions* requirement, and SHALL receive no write scope"."""
+
+    WRITE_SCOPES = {"write", "write-all"}
+
+    def test_the_discovery_job_declares_the_read_scopes_its_change_detection_uses(self) -> None:
+        """SPECIFIED -- the sentence above. `pull-requests: read` is what
+        reading which files a pull request touched needs; `contents: read` is
+        asserted beside it because a job-level `permissions:` block replaces the
+        workflow-level one rather than adding to it, so a block naming only the
+        new scope silently strips the job's own checkout."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        declared = discovery_job.get("permissions")
+        self.assertIsInstance(
+            declared,
+            dict,
+            f"the discovery job `{discovery_key}` declares no job-level "
+            "`permissions:` block, so it inherits the workflow's `contents: read` "
+            "alone and its change detection has no scope to read a pull request with",
+        )
+        for scope in ("contents", "pull-requests"):
+            self.assertEqual(
+                "read",
+                str(declared.get(scope)),
+                "the discovery job's `permissions:` block declares "
+                f"`{scope}: {declared.get(scope)!r}`; a job-level block replaces the "
+                "workflow-level one, so both scopes are named here or the job loses "
+                "one of them, and neither may exceed read",
+            )
+
+    def test_no_job_in_the_molecule_workflow_receives_a_write_scope(self) -> None:
+        """SPECIFIED -- "SHALL receive no write scope: reading which files a
+        pull request touched is a read"."""
+        workflow = self._workflow()
+        # Refuse to read this workflow's job blocks as evidence when the block
+        # they inherit from is absent. Widening the workflow-level block is
+        # caught by the loop below; DELETING it is not -- every job would then
+        # contribute no offenders while receiving the repository's default
+        # token scope. That default is "SHALL be set to read-only" per
+        # Least-Privilege Workflow Permissions, but it is a repository setting,
+        # and this suite makes no network call to read one. Passing here would
+        # be resting on an assumption about settings, which is the one thing
+        # this workflow is otherwise careful never to do.
+        self.assertIsInstance(
+            workflow.get("permissions"),
+            dict,
+            "ansible-verify.yml declares no workflow-level `permissions:` block, so "
+            "every job with no block of its own receives the repository's default "
+            "token scope -- a repository setting this suite cannot read, and so a "
+            "scope this check would be passing without having read",
+        )
+        offenders = []
+        for key, job in jobs(workflow).items():
+            # What a job RECEIVES, which is what the requirement is about --
+            # not what it declares. A job-level block replaces the
+            # workflow-level one; a job with no block of its own inherits it
+            # whole, so reading `job.get("permissions")` alone would leave two
+            # of this workflow's three jobs unchecked and a workflow-level
+            # `contents: write` invisible to every test in this file.
+            declared = job.get("permissions", workflow.get("permissions"))
+            if isinstance(declared, str):
+                if declared != "read-all":
+                    offenders.append(f"{key}: {declared}")
+                continue
+            for scope, level in (declared or {}).items():
+                if str(level) in self.WRITE_SCOPES:
+                    offenders.append(f"{key}: {scope}: {level}")
+        self.assertEqual(
+            [],
+            offenders,
+            f"these jobs in ansible-verify.yml receive a write scope: {offenders}",
+        )
+
+
+class GateRow:
+    """One row of the aggregating gate's decision table.
+
+    A row names one or more matrix results, exactly as the table's own cells do
+    -- `failure / cancelled` is a single cell there -- because the delta states
+    those two as separate scenarios and a gate can discriminate one while
+    conflating the other.
+    """
+
+    def __init__(self, label, discovery, changed, matrix_results, concludes_success):
+        self.label = label
+        self.discovery = discovery
+        self.changed = changed
+        self.matrix_results = matrix_results
+        self.concludes_success = concludes_success
+
+
+# design.md Decision 4's table, in its own order: seven rows, four refusals and
+# three passes. The refusals are what the gate is for; the passes are what
+# stops a gate that refuses everything from satisfying them.
+GATE_TABLE = (
+    GateRow(
+        "discovery did not conclude, so its outputs are empty strings",
+        discovery="failure",
+        changed="",
+        matrix_results=("skipped",),
+        concludes_success=False,
+    ),
+    GateRow(
+        "the suite ran and passed on a pull request that changed ansible/",
+        discovery="success",
+        changed="true",
+        matrix_results=("success",),
+        concludes_success=True,
+    ),
+    GateRow(
+        "the suite was skipped on a pull request that changed ansible/",
+        discovery="success",
+        changed="true",
+        matrix_results=("skipped",),
+        concludes_success=False,
+    ),
+    GateRow(
+        "the suite failed or was cancelled on a pull request that changed ansible/",
+        discovery="success",
+        changed="true",
+        matrix_results=("failure", "cancelled"),
+        concludes_success=False,
+    ),
+    GateRow(
+        "nothing under ansible/ changed and the suite was skipped",
+        discovery="success",
+        changed="false",
+        matrix_results=("skipped",),
+        concludes_success=True,
+    ),
+    GateRow(
+        "nothing under ansible/ changed and the suite ran anyway",
+        discovery="success",
+        changed="false",
+        matrix_results=("success",),
+        concludes_success=True,
+    ),
+    GateRow(
+        "the suite failed or was cancelled although nothing under ansible/ changed",
+        discovery="success",
+        changed="false",
+        matrix_results=("failure", "cancelled"),
+        concludes_success=False,
+    ),
+)
+
+# The row the gate is most likely to get wrong, selected by the inputs that
+# DEFINE it rather than by its position, so that reordering the table above
+# cannot silently retarget the message assertion onto another row. An index
+# would have said the same thing in a comment while not doing it: retargeted
+# onto the `changed="false"` skip, the message assertion below passes on that
+# row's SUCCESS message, which also contains the word "skip".
+SKIPPED_YET_CHANGED = next(
+    row
+    for row in GATE_TABLE
+    if row.discovery == "success"
+    and row.changed == "true"
+    and row.matrix_results == ("skipped",)
+)
+
+
+class TestTheAggregatingGateDiscriminates(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Required Status Checks Report on Every Pull
+    Request; ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge.
+
+    Runs the gate rather than reading it. Its `run:` body is free of `${{ }}`
+    and takes its three inputs through the step's `env:` block, so it can be
+    pulled out of the workflow and executed under `bash` once per row of the
+    table above -- the same extract-and-run shape
+    `TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`
+    uses for role discovery. Grepping would establish that a gate exists; only
+    running it establishes that it discriminates.
+
+    What a green run here does NOT establish: that this gate's conclusion
+    blocks anything. Blocking is branch protection -- repository settings this
+    suite makes no network call to read.
+    """
+
+    def _gate_step(self):
+        """The aggregating job's gate step, with its three inputs identified by
+        the expressions its `env:` block assigns rather than by whatever names
+        the implementation chose for them."""
+        workflow = self._workflow()
+        discovery_key, _ = self._discovery_job(workflow)
+        matrix_key, _ = self._matrix_job(workflow)
+        job_key, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
+
+        candidates = []
+        for index, step in enumerate(aggregating.get("steps") or []):
+            if not step.get("run"):
+                continue
+            inputs = {}
+            for name, value in (step.get("env") or {}).items():
+                expression = compact(value)
+                if f"needs.{discovery_key}.result" in expression:
+                    inputs["discovery"] = name
+                elif f"needs.{matrix_key}.result" in expression:
+                    inputs["matrix"] = name
+                elif f"needs.{discovery_key}.outputs." in expression:
+                    inputs["changed"] = name
+            if set(inputs) == {"discovery", "matrix", "changed"}:
+                candidates.append((index, step, inputs))
+
+        self.assertEqual(
+            1,
+            len(candidates),
+            f"expected exactly one `run:` step in the `{AGGREGATING_CONTEXT}` job "
+            "whose `env:` block carries all three of the discovery job's result, the "
+            "matrix job's result and the discovery job's change-detection output, but "
+            f"found {len(candidates)}. The gate takes its inputs through `env:` so "
+            "that its body stays free of Actions expressions and can be executed "
+            "standalone; a gate written as an `if:` expression, or reading those "
+            "expressions inline, cannot be exercised by this suite at all. The job's "
+            "steps declare: "
+            + repr(
+                [
+                    (step.get("name"), sorted(step.get("env") or {}))
+                    for step in (aggregating.get("steps") or [])
+                ]
+            ),
+        )
+        index, step, inputs = candidates[0]
+        return job_key, index, step, inputs
+
+    def _run_gate(self, script: str, inputs: dict, row: GateRow, matrix_result: str):
+        scratch = Path(tempfile.mkdtemp(prefix="ansible-verify-gate-"))
+        try:
+            outputs = scratch / "github_output"
+            summary = scratch / "step_summary"
+            outputs.touch()
+            summary.touch()
+            env = dict(
+                os.environ,
+                GITHUB_OUTPUT=str(outputs),
+                GITHUB_ENV=str(outputs),
+                GITHUB_STEP_SUMMARY=str(summary),
+            )
+            env[inputs["discovery"]] = row.discovery
+            env[inputs["changed"]] = row.changed
+            env[inputs["matrix"]] = matrix_result
+            return subprocess.run(
+                ["bash", "-e", "-c", script],
+                cwd=scratch,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_the_gate_script_can_be_executed_standalone(self) -> None:
+        """DERIVED (design.md Decision 5, tasks.md 3.2) -- no scenario states
+        this shape. The scenarios state what the gate SHALL conclude; that its
+        body is free of `${{ }}` and takes its inputs through `env:` is how this
+        repository makes such a gate testable at all, decided in design.md
+        rather than required by the specification. Reconsider this assertion, do
+        not weaken it, if the gate is made executable by another means."""
+        job_key, index, step, _ = self._gate_step()
+        self.assertNotIn(
+            "${{",
+            str(step["run"]),
+            f"the gate {step_label(job_key, index, step)} embeds a GitHub Actions "
+            "expression in its body, so it cannot be run against the table of "
+            "conclusions it is responsible for and only its existence could be "
+            "checked",
+        )
+
+    def test_the_gate_concludes_as_the_table_says_on_every_row(self) -> None:
+        """SPECIFIED -- one row per stated conclusion:
+
+        - "A required check whose change detection did not conclude does not
+          report success" (row 1: discovery `failure`, whose outputs are then
+          empty strings -- an empty "nothing changed" is indistinguishable from
+          a genuine one, and this is the row a gate that checks the change
+          detection first would pass);
+        - "A required check whose work was skipped does not report success"
+          (row 3, the vacuous green);
+        - "A cancelled dependency does not report success" and "A failed
+          dependency reports failure whatever the change detection said"
+          (rows 4 and 7, each run for both results);
+        - "A required check reports without doing work it was not asked to do"
+          and "Documentation-only pull request remains mergeable" in their
+          reporting half (rows 5 and 6: the check concludes rather than pending
+          when the work was skipped for want of a relevant change);
+        - "A failing Molecule scenario blocks the merge" in its aggregating-job
+          half (row 4): "the aggregating job SHALL conclude failure". Whether
+          the merge is then blocked is branch protection, and is not established
+          here.
+
+        Rows 2, 5 and 6 are the converse the refusals need: a gate that failed
+        every row would satisfy the four refusals while blocking every pull
+        request in the repository.
+        """
+        _, _, step, inputs = self._gate_step()
+        script = str(step["run"])
+        require_external_tools(self, ("bash",), "execute ansible-verify.yml's gate")
+        for row in GATE_TABLE:
+            for matrix_result in row.matrix_results:
+                with self.subTest(row=row.label, matrix=matrix_result):
+                    result = self._run_gate(script, inputs, row, matrix_result)
+                    detail = (result.stdout + result.stderr).strip()[-800:]
+                    if row.concludes_success:
+                        self.assertEqual(
+                            0,
+                            result.returncode,
+                            f"the gate refused the row `{row.label}` (discovery="
+                            f"{row.discovery!r}, changed={row.changed!r}, matrix="
+                            f"{matrix_result!r}), which the specification requires it "
+                            f"to pass: {detail!r}",
+                        )
+                    else:
+                        self.assertNotEqual(
+                            0,
+                            result.returncode,
+                            f"the gate concluded success on the row `{row.label}` "
+                            f"(discovery={row.discovery!r}, changed={row.changed!r}, "
+                            f"matrix={matrix_result!r}), reporting a green required "
+                            f"status check for a suite that verified nothing: "
+                            f"{detail!r}",
+                        )
+
+    def test_the_gate_names_the_skip_when_it_refuses_the_vacuous_green(self) -> None:
+        """DERIVED (tasks.md 3.2) -- the specification requires the conclusion,
+        not a message. A distinct message is what makes this refusal
+        diagnosable rather than a bare non-zero exit, and this is the row a
+        reader is least likely to expect. Reconsider this assertion, do not
+        weaken it, if the implementation reports the case another way."""
+        _, _, step, inputs = self._gate_step()
+        script = str(step["run"])
+        require_external_tools(self, ("bash",), "execute ansible-verify.yml's gate")
+        result = self._run_gate(script, inputs, SKIPPED_YET_CHANGED, "skipped")
+        combined = (result.stdout + result.stderr).lower()
+        # Anchor the message to the refusal. Without this the test reads a
+        # message and never checks what the gate concluded, so it would pass on
+        # a gate that named the skip and then exited 0 -- reporting the vacuous
+        # green in prose while producing it.
+        self.assertNotEqual(
+            0,
+            result.returncode,
+            "the gate concluded success on the skipped-yet-changed row, so this "
+            "message assertion would be describing a green required status check "
+            f"for a suite that verified nothing: {combined.strip()!r}",
+        )
+        self.assertIn(
+            "skip",
+            combined,
+            "the gate refused the skipped-yet-changed row without naming the skip as "
+            f"the reason; it emitted {combined.strip()!r}",
+        )
+
+
+class TestChangeDetectionResolvesTheGatesInput(
+    MoleculeWorkflowShapeMixin, unittest.TestCase
+):
+    """ADDED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge.
+
+    A second extracted script, and not a row of the gate's table. The gate
+    takes "Ansible changed" as given and decides what to conclude from it; this
+    step decides what that input *is*, from the event name. The polarity lives
+    here, and is invisible to a test that feeds the gate its input directly.
+    """
+
+    def _resolution_step(self):
+        """The discovery job's change-detection resolution step, identified by
+        the `github.event_name` its `env:` block passes in."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        candidates = []
+        for index, step in enumerate(discovery_job.get("steps") or []):
+            if not step.get("run"):
+                continue
+            inputs = {}
+            for name, value in (step.get("env") or {}).items():
+                expression = compact(value)
+                if "github.event_name" in expression:
+                    inputs["event"] = name
+                elif re.search(r"steps\.[A-Za-z0-9_-]+\.outputs\.", expression):
+                    inputs["filter"] = name
+            if "event" in inputs:
+                candidates.append((index, step, inputs))
+        self.assertEqual(
+            1,
+            len(candidates),
+            "expected exactly one `run:` step in the discovery job "
+            f"`{discovery_key}` taking `github.event_name` through its `env:` block "
+            "-- the step that resolves whether the suite runs -- but found "
+            f"{len(candidates)}. Without it the workflow either performs no such "
+            "resolution, or expresses it as an Actions expression this suite cannot "
+            "execute, leaving the manual-run polarity asserted nowhere.",
+        )
+        index, step, inputs = candidates[0]
+        self.assertIn(
+            "filter",
+            inputs,
+            "the resolution step takes the event name but no output of an earlier "
+            "step, so on a pull request it cannot be taking the change filter's "
+            f"result; its `env:` block declares {sorted(step.get('env') or {})}",
+        )
+        return discovery_key, discovery_job, index, step, inputs
+
+    def _resolved_output_name(self, discovery_job: dict, step: dict) -> str:
+        """The output key this step writes, read from the job's own `outputs:`
+        block so that the test does not have to guess the name."""
+        step_id = step.get("id")
+        self.assertTrue(
+            step_id,
+            "the resolution step declares no `id:`, so the job cannot expose its "
+            "result as an output and the matrix job has nothing to be gated on",
+        )
+        for expression in (discovery_job.get("outputs") or {}).values():
+            match = re.search(
+                r"steps\." + re.escape(str(step_id)) + r"\.outputs\.([A-Za-z0-9_-]+)",
+                compact(expression),
+            )
+            if match:
+                return match.group(1)
+        self.fail(
+            "no entry in the discovery job's `outputs:` block reads "
+            f"`steps.{step_id}.outputs.*`, so whatever this step resolves never "
+            "leaves the job, and neither the matrix job nor the gate can read it; "
+            f"the job declares the outputs {sorted(discovery_job.get('outputs') or {})}"
+        )
+
+    def _resolve(self, script: str, inputs: dict, output_name: str, event: str, filtered: str):
+        scratch = Path(tempfile.mkdtemp(prefix="ansible-verify-resolution-"))
+        try:
+            outputs = scratch / "github_output"
+            summary = scratch / "step_summary"
+            outputs.touch()
+            summary.touch()
+            env = dict(
+                os.environ,
+                GITHUB_OUTPUT=str(outputs),
+                GITHUB_ENV=str(outputs),
+                GITHUB_STEP_SUMMARY=str(summary),
+            )
+            env[inputs["event"]] = event
+            env[inputs["filter"]] = filtered
+            result = subprocess.run(
+                ["bash", "-e", "-c", script],
+                cwd=scratch,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                0,
+                result.returncode,
+                f"the resolution step exited {result.returncode} on a {event!r} run "
+                f"whose change filter reported {filtered!r}: "
+                f"{(result.stdout + result.stderr).strip()[-800:]!r}",
+            )
+            written = github_output_pairs(outputs)
+            self.assertIn(
+                output_name,
+                written,
+                f"the resolution step wrote no `{output_name}` to $GITHUB_OUTPUT on a "
+                f"{event!r} run; it wrote {written!r}",
+            )
+            return written[output_name].strip()
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_a_run_that_is_not_a_pull_request_resolves_to_the_whole_suite(self) -> None:
+        """SPECIFIED -- scenario "A manual run verifies the whole suite": "the
+        suite SHALL run in full rather than being skipped for want of a diff to
+        inspect, and the workflow SHALL NOT conclude success having skipped it",
+        and "Where the workflow is started by any other event there is no diff
+        to resolve against, and the suite SHALL run in full rather than
+        defaulting to skipped".
+
+        The `false` case on a dispatch is the polarity itself: the resolution
+        has to branch on the event, not on whatever value an unrun filter left
+        behind.
+        """
+        _, discovery_job, _, step, inputs = self._resolution_step()
+        output_name = self._resolved_output_name(discovery_job, step)
+        script = str(step["run"])
+        require_external_tools(
+            self, ("bash",), "execute ansible-verify.yml's change-detection resolution"
+        )
+        for event, filtered in (
+            ("workflow_dispatch", ""),
+            ("workflow_dispatch", "false"),
+            ("push", ""),
+            ("schedule", ""),
+        ):
+            with self.subTest(event=event, filter_output=filtered):
+                self.assertEqual(
+                    "true",
+                    self._resolve(script, inputs, output_name, event, filtered),
+                    f"on a `{event}` run the resolution produced something other than "
+                    "`true`, so the matrix is skipped and the workflow reports a green "
+                    "conclusion on precisely the trigger this repository uses to run "
+                    "the suite against the trunk",
+                )
+
+    def test_a_pull_request_resolves_to_what_the_change_filter_found(self) -> None:
+        """SPECIFIED -- "Change detection resolves against a pull request's
+        diff", in the two conclusions the delta's scenarios state: a pull
+        request changing files under `ansible/` runs the suite (scenario "A
+        failing Molecule scenario blocks the merge" presupposes it ran), and one
+        changing none of them does not (scenario "A pull request touching no
+        Ansible file starts no container")."""
+        _, discovery_job, _, step, inputs = self._resolution_step()
+        output_name = self._resolved_output_name(discovery_job, step)
+        script = str(step["run"])
+        require_external_tools(
+            self, ("bash",), "execute ansible-verify.yml's change-detection resolution"
+        )
+        for filtered, expected in (("true", "true"), ("false", "false")):
+            with self.subTest(filter_output=filtered):
+                self.assertEqual(
+                    expected,
+                    self._resolve(script, inputs, output_name, "pull_request", filtered),
+                    f"on a pull request whose change filter reported {filtered!r} the "
+                    f"resolution produced something other than {expected!r}, so the "
+                    "matrix is gated on something other than the diff",
+                )
+
+    def test_a_pull_request_whose_change_filter_did_not_run_is_refused(self) -> None:
+        """SPECIFIED -- "An aggregating job SHALL treat its own change-detection
+        input as trustworthy only where the job producing it concluded
+        successfully. Where that job did not, its outputs are empty, and an
+        empty 'nothing changed' is indistinguishable from a genuine one." The
+        requirement states it of the aggregating job; the same emptiness
+        reaches the same conclusion one step earlier, and is refused here too.
+
+        This is the failure mode that makes the change-filter step's condition
+        load-bearing beyond its polarity. A skipped filter leaves the empty
+        string, and reading that as `false` skips the matrix and concludes
+        SUCCESS on a pull request nothing verified. NARROWING that condition
+        produces it just as surely as inverting it does -- a plausible-looking
+        `&& github.actor != 'dependabot[bot]'` would silently green every
+        Dependabot pull request. Refusing the value here makes every such
+        narrowing loud, which no assertion about the condition's spelling can
+        do without also rejecting conditions that are fine.
+        """
+        _, discovery_job, _, step, inputs = self._resolution_step()
+        self._resolved_output_name(discovery_job, step)
+        script = str(step["run"])
+        require_external_tools(
+            self, ("bash",), "execute ansible-verify.yml's change-detection resolution"
+        )
+        for filtered in ("", "skipped", "TRUE"):
+            with self.subTest(filter_output=filtered):
+                result = subprocess.run(
+                    ["bash", "-e", "-c", script],
+                    cwd=tempfile.gettempdir(),
+                    env=dict(
+                        os.environ,
+                        GITHUB_OUTPUT=os.devnull,
+                        GITHUB_ENV=os.devnull,
+                        GITHUB_STEP_SUMMARY=os.devnull,
+                        **{inputs["event"]: "pull_request", inputs["filter"]: filtered},
+                    ),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                combined = (result.stdout + result.stderr).strip()
+                self.assertNotEqual(
+                    0,
+                    result.returncode,
+                    f"on a pull request whose change filter produced {filtered!r} -- "
+                    "which is what a filter step that did not run leaves behind -- the "
+                    "resolution concluded successfully. Whatever it wrote, the suite "
+                    f"is then gated on a value nothing produced: {combined[-400:]!r}",
+                )
+                # Turning a silent green into a red is worth only as much as the
+                # red is diagnosable. The whole reason this refusal exists is
+                # that the empty string is indistinguishable from "nothing
+                # changed" -- so the message has to say which one it is, or the
+                # next person reads a failed discovery job and looks at the
+                # discovery step.
+                self.assertIn(
+                    "filter",
+                    combined.lower(),
+                    "the resolution refused the value without naming the change "
+                    f"filter as the cause; it emitted {combined[-400:]!r}",
+                )
+
+    # Representative of the configuration directory's breadth, not of its
+    # current contents: a filter narrowed to any one of these subtrees reports
+    # a legitimate `false` for a pull request that changed another.
+    CONFIGURATION_PATHS = (
+        "ansible/playbooks/host-baseline.yml",
+        "ansible/roles/some_role/tasks/main.yml",
+        "ansible/roles/some_role/molecule/default/molecule.yml",
+        "ansible/requirements.yml",
+        "ansible/requirements-test.txt",
+        "ansible/ansible.cfg",
+        "ansible/inventory/hcloud.yml",
+    )
+    NON_CONFIGURATION_PATHS = (
+        "README.md",
+        "terraform/environments/prod/main.tf",
+        "platform/docker-compose.yml",
+        ".github/workflows/ansible-verify.yml",
+    )
+
+    def test_the_change_filter_selects_the_whole_configuration_directory(self) -> None:
+        """SPECIFIED -- "Every pull request that changes files under `ansible/`
+        SHALL trigger continuous-integration checks over that configuration",
+        and its converse, scenario "A pull request touching no Ansible file
+        starts no container".
+
+        This is the third input to the gate, and the one neither other check
+        reaches. Whether the filter step RUNS is asserted below; whether it
+        produced a real value is refused at run time by the resolution itself.
+        What it LOOKS AT is asserted here, and nothing else does.
+
+        Narrow the pattern to a subdirectory and the failure is silent in a way
+        the other two are not: the filter runs, reports a perfectly legitimate
+        `false` for a pull request that changed `ansible/playbooks/`, the matrix
+        skips, the refusal does not fire because the value is valid, and the
+        gate concludes success on a pull request that changed files under
+        `ansible/`. That is the sentence the requirement opens with, defeated
+        without a single check going red.
+
+        Asserted behaviourally rather than as the literal string `ansible/**`,
+        so that any pattern covering the directory passes and any pattern
+        missing part of it fails.
+        """
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        patterns: list[str] = []
+        for step in discovery_job.get("steps") or []:
+            if "paths-filter" not in str(step.get("uses", "")):
+                continue
+            declared = (step.get("with") or {}).get("filters")
+            parsed = yaml.safe_load(declared) if isinstance(declared, str) else declared
+            self.assertIsInstance(
+                parsed,
+                dict,
+                f"the change-filter step in `{discovery_key}` declares `filters:` as "
+                f"{declared!r}, which is not a mapping of filter name to patterns",
+            )
+            for entry in parsed.values():
+                patterns.extend(entry if isinstance(entry, list) else [entry])
+        self.assertTrue(
+            patterns,
+            f"the change-filter step in `{discovery_key}` declares no patterns, so "
+            "this check would pass having read nothing",
+        )
+        unmatched = [
+            path
+            for path in self.CONFIGURATION_PATHS
+            if not any(gh_glob_matches(str(pattern), path) for pattern in patterns)
+        ]
+        self.assertEqual(
+            [],
+            unmatched,
+            f"the change filter's patterns {patterns} do not select these files under "
+            f"ansible/: {unmatched}. A pull request changing one of them would be "
+            "reported as touching nothing, the suite would be skipped, and the "
+            "required check would conclude success having verified nothing",
+        )
+        overmatched = [
+            path
+            for path in self.NON_CONFIGURATION_PATHS
+            if any(gh_glob_matches(str(pattern), path) for pattern in patterns)
+        ]
+        self.assertEqual(
+            [],
+            overmatched,
+            f"the change filter's patterns {patterns} also select these files outside "
+            f"ansible/: {overmatched}, so the suite would run on pull requests that "
+            "cannot affect it -- the cost this gating exists to avoid",
+        )
+
+    def test_the_change_filter_itself_runs_only_where_there_is_a_diff(self) -> None:
+        """DERIVED (design.md Decision 1, tasks.md 2.3) -- no scenario states
+        it. The specification requires the suite to run in full on an event
+        carrying no diff; skipping the filter step on such an event is how this
+        change makes the polarity above structurally unreachable rather than
+        merely handled, which is a design choice rather than a stated
+        obligation. Nothing in this repository has observed the filter action on
+        a diffless event, which is why this change also observes it on a manual
+        dispatch after merge. Reconsider this assertion, do not weaken it, if
+        the filter is made safe on such an event by another means."""
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        filters = [
+            (index, step)
+            for index, step in enumerate(discovery_job.get("steps") or [])
+            if "paths-filter" in str(step.get("uses", ""))
+        ]
+        self.assertTrue(
+            filters,
+            f"the discovery job `{discovery_key}` carries no change-filter step, so "
+            "the resolution above has nothing to resolve on a pull request",
+        )
+        for index, step in filters:
+            condition = compact(step.get("if", ""))
+            label = step_label(discovery_key, index, step)
+            self.assertIn(
+                "github.event_name",
+                condition,
+                f"the change-filter step {label} is conditioned on "
+                f"{step.get('if')!r}, which does not test the event: on an event "
+                "carrying no diff it runs anyway, and what it does there is not "
+                "something this repository has observed",
+            )
+            # The polarity, not merely the mention. Asserting that the condition
+            # names the event would be satisfied by its own negation, and the
+            # negation is not a lesser version of this check -- it is silently
+            # catastrophic. With the filter skipped on a pull request its output
+            # is the empty string, the resolution reads that as `false`, the
+            # matrix skips, and the gate's skipped-and-not-asked-for branch
+            # concludes SUCCESS. That is a green required status check on
+            # exactly the pull requests this workflow exists to gate, and every
+            # other test in this file stays green while it happens.
+            self.assertIn(
+                "=='pull_request'",
+                condition,
+                f"the change-filter step {label} is conditioned on "
+                f"{step.get('if')!r}, which does not run it ON a pull request. "
+                "Inverted, the filter is skipped where the diff exists, its output "
+                "is empty, the matrix is skipped as though nothing changed, and the "
+                "required check reports success having run no scenario",
+            )
+            # Scoped to the OPERAND, not to the whole condition. Checking for
+            # `!=` anywhere reasons about the condition as a bag of characters:
+            # it rejects a legitimate conjunct such as
+            # `... && github.actor != 'dependabot[bot]'`, while still admitting
+            # `!(github.event_name == 'pull_request')` -- valid Actions syntax,
+            # identical in effect to the inversion, and containing no `!=` at
+            # all. One mistake with two faces, so one fix for both.
+            for negation in ("!='pull_request'", "!("):
+                self.assertNotIn(
+                    negation,
+                    condition,
+                    f"the change-filter step {label} is conditioned on "
+                    f"{step.get('if')!r}, which negates the event test -- see "
+                    "above: the failure is a green conclusion, not a red one",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

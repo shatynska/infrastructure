@@ -4,7 +4,7 @@
 # persists the mount across reboot, and creates the subdirectories
 # monitoring's containers bind-mount into — iac-host-configuration's ADDED
 # "Platform Data Volume Is Mounted at a Fixed Host Path" requirement
-# (openspec/changes/add-platform-monitoring/specs/iac-host-configuration/spec.md).
+# (openspec/specs/iac-host-configuration/spec.md, from add-platform-monitoring).
 #
 # Scope stops at the mount and its filesystem layout: this role never
 # templates or starts a platform/ service, consistent with the existing

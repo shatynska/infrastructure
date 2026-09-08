@@ -57,7 +57,7 @@ network — see `iac-platform-services`'s "Single Shared PostgreSQL
 Instance, Per-Application Databases" requirement. How a new application
 actually gets its own database/role inside that instance is not yet
 defined (tracked as follow-up work, see
-`openspec/changes/deploy-platform-compose-stack/proposal.md`).
+`deploy-platform-compose-stack`'s proposal.md).
 
 ## Monitoring and alerting
 
@@ -66,7 +66,7 @@ container on the host), postgres-exporter (the shared Postgres instance),
 and Traefik's own metrics endpoint (per-application HTTP status/error-rate
 counts). Alertmanager routes alerts to Slack, plus a permanent Watchdog
 alert routed to an external dead-man's-switch heartbeat service. Grafana
-provides dashboards. See `openspec/changes/add-platform-monitoring/design.md`
+provides dashboards. See `add-platform-monitoring`'s design.md
 for the full rationale — network placement, why configuration is inline in
 `docker-compose.yml`, and the trade-offs accepted along the way.
 
@@ -118,10 +118,9 @@ whole platform stack goes down, this is what notices.
 `docker-compose.yml` defines Traefik (ACME-issued TLS, Docker-label
 routing), a single shared PostgreSQL instance, and the monitoring/alerting
 stack described above, deployed by `.github/workflows/platform-deploy.yml`.
-See `openspec/changes/deploy-platform-compose-stack/` for the change that
-built the original stack, `openspec/changes/integrate-ansible-host-config/`
-for the change that established the boundary above, and
-`openspec/changes/add-platform-monitoring/` for the monitoring/alerting
+See `deploy-platform-compose-stack` for the change that built the original
+stack, `integrate-ansible-host-config` for the change that established the
+boundary above, and `add-platform-monitoring` for the monitoring/alerting
 stack.
 
 Every service in this stack defines a real Docker `healthcheck:` reflecting
@@ -129,5 +128,5 @@ its own readiness, not just that its process is running -- this is what
 lets `docker compose up -d --wait` (in `app-deploy` on the host) actually
 fail the deploy job when a service comes up broken, instead of reporting
 false success. When adding a new service here, give it a real healthcheck
-too (see `openspec/changes/add-platform-service-healthchecks/` for why this
+too (see `add-platform-service-healthchecks` for why this
 matters and what it does and doesn't catch).

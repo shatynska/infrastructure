@@ -4,8 +4,8 @@ Provisions the restricted `deploy` system account that every application's
 GitHub Actions deploy job (`platform`'s included) authenticates as to
 deploy its own Compose stack over SSH -- one shared account, isolated per
 application, rather than a dedicated Unix account per application. See
-`openspec/changes/add-per-app-deploy-keys/design.md` for the full
-rationale, and `openspec/changes/bootstrap-ansible-host-baseline/design.md`
+`add-per-app-deploy-keys`'s design.md for the full
+rationale, and `bootstrap-ansible-host-baseline`'s design.md
 for why this account exists at all.
 
 ## The unified shape
@@ -82,7 +82,7 @@ image.
 
 **The GHCR login is skipped when either half of the credential is missing,
 and the run still reports success.** That is deliberate
-(`openspec/changes/repair-ansible-test-harness`): a host that pulls no
+(`repair-ansible-test-harness`): a host that pulls no
 private image should not need a GHCR credential, and requiring one made the
 whole Molecule suite unrunnable without a live token.
 
@@ -110,7 +110,7 @@ Its only privileged capability, per application, is `sudo`-triggering one
 fixed, fully-qualified invocation of `/usr/local/bin/app-deploy <name>` --
 no `docker`-group membership, no raw `docker`/`docker compose` access, and
 no application's key can trigger another application's deploy. See
-`openspec/changes/add-per-app-deploy-keys/design.md` for the accepted
+`add-per-app-deploy-keys`'s design.md for the accepted
 content-layer trust boundary this restriction does and doesn't cover.
 
 ## Variables

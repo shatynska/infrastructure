@@ -12,8 +12,14 @@ of queued — they had branches and handoffs, not entries here:
 
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift.
   **Archived 2026-09-07** (PR #66). Entries 3a, 3b, 3c and 3d below were opened
-  by it, and the note under entry 4 comes from verifying it.
+  by it.
 - `refresh-readme-accuracy` — README statements that are no longer true
+
+`decide-archived-change-reference-policy` — the citation form live source uses
+for this repository's own change records, and a check that enforces it.
+**Archived 2026-09-07** (PR #70). It delivered the former entries 1 and 2, which
+are gone with it, and unblocked entry 3; entries 8 and 8a below were opened by
+verifying it.
 
 Most entries below are queued because they are **blocked on something that must
 happen first**, and they are listed in dependency order. Where an entry is not
@@ -23,45 +29,14 @@ that change was closing.
 
 ---
 
-## 1. decide-archived-change-reference-policy
-
-**Blocks entries 2 and 3. Nothing else should start until this is settled.**
-
-Source files across this repository cite changes by their pre-archive path
-(`openspec/changes/<name>/design.md`). Archiving moves a change to
-`openspec/changes/archive/<date>-<name>/`, so every such citation breaks at the
-moment its change succeeds. As of the audit: **33 live source files carry 58
-such references**, 29 of those files under `ansible/`, plus `README.md`,
-`platform/docker-compose.yml`, `platform/README.md` and
-`.github/workflows/pr-validation.yml`.
-
-This has been swept before — `openspec/changes/archive/…-sweep-stale-terraform-paths`
-did exactly that — and has fully re-accumulated since. Sweeping again without
-changing the rule underneath just resets a counter that will climb back.
-
-The decision to make is what archiving owes these references. Three coherent
-answers, each with a real cost:
-
-| Option | Keeps traceability | Cost |
-|---|---|---|
-| Rewrite refs to `archive/<date>-<name>/` during archive | Yes | Archiving becomes a repo-wide edit; every archive touches ~30 files |
-| Strip change-name citations from source; git log carries provenance | No (indirectly) | Loses the "which change decided this" trail these comments are unusually good at |
-| Accept the rot; re-sweep periodically | Partially | Known-broken paths sit in production config between sweeps |
-
-The choice is the operator's, not a reviewer's. It probably belongs in
-`AGENTS.md` as a rule, not in a change's design.
-
-## 2. sweep-stale-openspec-references
-
-**Blocked on entry 1.** Mechanical once the policy exists; the policy
-determines whether this is a rewrite, a deletion, or a decision not to run.
-
-Do not start this as a standalone tidy-up. That is what happened last time.
-
 ## 3. separate-history-from-rationale-in-source-comments
 
-**Blocked on entry 1**, and should follow entry 2 rather than race it — both
-touch the same comment blocks.
+**No longer blocked.** It waited on the citation-form decision and on the
+sweep that followed it; both were delivered by
+`decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which
+also converted every citation in the comment blocks below. What remains here is
+the separation this change deliberately did not do: it changed citation *form*
+only, and left the prose around it alone.
 
 Source comments in this repository currently mix three kinds of text with no
 way to tell them apart:
@@ -197,150 +172,90 @@ a gap in it. Closing it means either widening the requirement to cover element
 shape or adding the check as a local nicety; that choice is the reason this is
 recorded rather than done.
 
-## 4. promote-molecule-to-a-required-check
+## 11. matrix-the-molecule-suite-over-scenarios
 
-**Reading the run log: `molecule test --all` stops at the first failing
-scenario.** Every scenario sorting after a failing one is neither executed nor
-listed in that run's SCENARIO RECAP. This does *not* weaken the
-"consecutive green runs" evidence below — a green run did execute everything —
-but a **red** run establishes less than it appears to, which matters for the
-per-role outcomes recorded here. Molecule's own remedy is unavailable to this
-repository: `--continue-on-failure` applies only with `--workers`, and
+**Not blocked; recorded rather than folded into
+`promote-molecule-to-a-required-check`**, whose proposal names it as a non-goal.
+That change decides which job is required and reshapes the workflow's triggers;
+this one changes what a job *is*. Landing both in one diff would mean the
+change that picks the registered context also redefines the thing being
+registered.
+
+`molecule test --all` runs a role's scenarios in sorted order and **stops at the
+first failure**. Every scenario sorting after a failing one is neither executed
+nor listed in that run's SCENARIO RECAP, so a red run establishes less than it
+appears to and the recap still looks complete. Molecule's own remedy is
+unavailable here: `--continue-on-failure` applies only with `--workers`, and
 `--workers > 1` refuses with `only supported in collection mode (galaxy.yml
-required)` (observed 2026-09-07). The remedy that would work is a CI matrix over
-*scenarios* rather than roles — which also parallelises the suite's longest role,
-and is adjacent to the workflow reshaping point 2 below already names as the real
-remaining work. Recorded by `fix-volume-discovery-and-consistency`.
+required)` — these are plain roles, not a collection (observed 2026-09-07).
 
-**Blocked on evidence only.** `close-ci-verification-gaps` put the Molecule
-suite in CI as `ansible-verify.yml`, advisory: it is not a required status
-check, because whether its privileged-systemd scenarios are reproducible on a
-hosted runner had never been observed.
+The remedy that works is a continuous-integration matrix over **scenarios**
+rather than roles. Each scenario becomes its own job, so one failing scenario
+stops only itself and the rest still report. It also parallelises the suite's
+longest role, which carries three scenarios and is what sets the workflow's
+wall clock.
 
-This entry originally had a third blocker — the platform image floating on
-`:latest`, and a scenario assertion that failed deterministically. Both were
-delivered by `pin-and-fix-molecule-suite` (archived 2026-09-07), and their
-queue entries are gone with it. Two things remain:
+**What promotion changes about its priority, in both directions.** A red
+required check that under-reports is slower to diagnose — you fix one scenario,
+push, and wait six minutes to discover the next one. That is an argument for
+doing this. Against it: the gate is not weaker for under-reporting. A red check
+blocks the merge whether or not it enumerated every failure, so this is about
+the cost of diagnosis rather than about the guarantee.
 
-1. **Consecutive green runs** on pull requests touching `ansible/`. How many is
-   a judgement call; two or three across different roles is meaningful, one is
-   not. See the run log below for what has actually been observed — it is less
-   than it first appears.
-2. **Removing the workflow-level `paths:` filter first**, and moving the gating
-   inside an always-running job — the shape `pr-validation.yml` already uses. A
-   `paths:`-filtered required check never reports on a non-matching pull
-   request, leaving it permanently pending and unmergeable under branch
-   protection. This is exactly what the *Required Status Checks Report on Every
-   Pull Request* requirement exists to forbid, and promotion is **not** just a
-   branch-protection toggle. `ansible-verify.yml`'s own top comment says so.
-   **This is the real remaining work.**
+Two things it must not undo, both in
+`openspec/specs/iac-cicd-pipeline/spec.md`. *Required Status Checks Report on
+Every Pull Request* forbids registering a job whose name is generated from a
+matrix — a per-scenario matrix generates more of those names, not fewer, so the
+literal-named aggregating job stays and keeps concluding on their behalf.
+*Ansible Configuration Is Verified in Continuous Integration and Gates the
+Merge* requires discovery rather than enumeration, so scenario discovery must
+find `ansible/roles/*/molecule/*/` without a workflow edit, and must keep
+failing loudly on an empty result.
 
-**First observed baseline** — to be filled in from the post-merge
-`workflow_dispatch` run on `main` (that trigger is only exposed once the file is
-on the default branch). Record per-role outcome and duration here, not in the
-change's own artifacts, which are archived:
+Worth noting that the per-job cost changes shape: each scenario job pays its own
+checkout and toolchain install, which the current per-role jobs amortise across
+a role's scenarios. Whether that is cheaper overall is an empirical question
+this entry does not answer.
 
-First run was on PR #57 itself, not a post-merge dispatch — that change
-fixed three lint violations under `ansible/`, so its own pull request matched
-the `ansible/**` filter after all:
+## 12. make-openspec-validation-a-usable-gate
 
-| Role | Outcome | Duration |
-|---|---|---|
-| `deploy_user` (3 scenarios) | pass | 6m33s |
-| `ops_user` (2 scenarios) | pass | 4m47s |
-| `hardening` | pass | 3m03s |
-| `docker` | pass | 2m55s |
-| `platform_data_volume` | **fail** — a defect in its own assertion, fixed by `pin-and-fix-molecule-suite` | 2m12s |
+**Not blocked; recorded because a check that is already red cannot tell anyone
+when something new goes wrong.** Found 2026-09-08 while closing
+`promote-molecule-to-a-required-check`, whose own archived tasks pass — the
+three below predate it.
 
-Repeated post-merge as a manual `workflow_dispatch` on `main`
-([run 34046099603](https://github.com/shatynska/infrastructure/actions/runs/34046099603)),
-which also confirmed that trigger works — promotion depends on it. Same
-outcome, same single failure: `deploy_user` 7m38s, `ops_user` 4m42s,
-`hardening` 2m36s, `docker` 2m41s, `platform_data_volume` fail 2m07s. Two
-independent runs agreeing means the failure is deterministic, not flaky.
+`openspec validate --archived` reports three archived changes with unticked
+tasks:
 
-So the suite **does** run on a hosted runner: the privileged-systemd
-scenarios, UFW and fail2ban all converge and verify. That was the open
-question the advisory tier existed to answer, and the answer is yes. Longest
-role is under eight minutes, and the roles run in parallel.
+| Change | Tasks |
+|---|---|
+| `2026-08-19-add-prod-data-volume` | 16/19 |
+| `2026-09-04-fix-cadvisor-containerd-snapshotter` | 10/11 |
+| `2026-09-07-reclaim-superseded-app-images` | 24/29 |
 
-The one failure is a defect in a scenario's own assertion, not a runner
-problem.
+Every one of them is a **verification** task — a live `terraform plan` against
+prod, a destroy-plan check, a full `pre-commit` run — and each was left unticked
+rather than recorded as not done. So the archived record cannot distinguish
+"this was verified" from "nobody said". That is the same ambiguity this
+repository refuses everywhere else: a check that cannot tell you which of the
+two it is has told you nothing.
 
-**Neither of those two runs is a green run**, and that matters for point 1:
-they establish that the privileged-systemd scenarios work on a hosted runner,
-which was the question the advisory tier existed to answer, but a run with a
-failing job is not evidence toward "consecutive green".
+Deciding it means reading each one and either ticking it with the evidence, or
+replacing it with a line saying it was not performed and why. Both are honest;
+leaving it unticked is the only option that is not.
 
-**Third run — the first fully green one.** On PR #64
-([run 34057674462](https://github.com/shatynska/infrastructure/actions/runs/34057674462)),
-which pinned the platform image and fixed the assertion:
+**The second half is why none of this was noticed.** `openspec validate` runs
+**nowhere**: not in `.pre-commit-config.yaml`, not in any workflow. Nothing
+checks that the specifications parse, that a change's deltas are well-formed, or
+that an archived change's tasks are complete. The pipeline verifies its own
+configuration thoroughly and does not verify the specifications that describe
+what it is for.
 
-| Role | Outcome | Duration | Was |
-|---|---|---|---|
-| `deploy_user` (3 scenarios) | pass | 6m06s | 6m33s |
-| `ops_user` (2 scenarios) | pass | 4m29s | 4m42s |
-| `docker` | pass | 2m31s | 2m41s |
-| `hardening` | pass | 2m11s | 2m36s |
-| `platform_data_volume` | **pass** | 1m40s | **fail** 2m07s |
-
-Every scenario green, and modestly faster across the board. The speed-up is
-smaller than the same change produced locally, which is what one would expect:
-removing an `apt-get` install helps a developer's connection more than a hosted
-runner sitting next to a package mirror.
-
-**Fourth run — post-merge `workflow_dispatch` on `main`**
-([run 34058142743](https://github.com/shatynska/infrastructure/actions/runs/34058142743)),
-at `d635965`. All five roles green, workflow conclusion success:
-`deploy_user` 5m53s, `ops_user` 4m20s, `hardening` 2m32s, `docker` 2m23s,
-`platform_data_volume` 1m35s. This is the same trigger on the same branch that
-concluded **failure** two runs earlier, so it is a direct before/after on the
-trunk rather than an inference from a green pull request.
-
-**Fifth run — the independent observation point 1 was waiting for.** On PR #66
-([`fix-volume-discovery-and-consistency`](https://github.com/shatynska/infrastructure/pull/66)),
-a change about Ansible role behaviour rather than about the suite itself:
-
-| Role | Outcome | Duration |
-|---|---|---|
-| `deploy_user` (3 scenarios) | pass | 7m05s |
-| `ops_user` (2 scenarios) | pass | 5m07s |
-| `platform_data_volume` (4 scenarios) | pass | 4m53s |
-| `hardening` (2 scenarios) | pass | 4m20s |
-| `docker` | pass | 3m19s |
-
-This is the run the paragraph below asks for: green, and observing a **different
-subject** than runs three and four did. Point 1 now rests on two independent
-observations rather than one seen twice. That change also added three scenarios
-(`platform_data_volume` went from one to four, `hardening` from one to two), so
-the suite is larger than when the earlier runs were recorded — the durations
-above are not comparable with them role for role.
-
-Note also that a `platform_data_volume` job passing now means something stricter
-than it did: two of its four scenarios assert a *failure* path, and one of those
-would go red if the role stopped failing. See the abort caveat above for why a
-recap must be read scenario by scenario rather than by exit code.
-
-**Where point 1 stood before that run: two green runs, both of the same change.**
-Runs one and two carried a failing job and are not evidence toward
-"consecutive green". Runs three and four are green, but both observe
-`pin-and-fix-molecule-suite` — the change that fixed the failure — from a
-pull request and then from the trunk. That is one subject observed twice, not
-two independent observations.
-
-What would settle it is a green run on the next unrelated pull request
-touching `ansible/`. Until then, treat point 1 as **partially** satisfied and
-resist reading the run log as three-of-four green.
-
-One thing that change establishes bears on the evidence question: until now the
-suite installed `python3 sudo bash ca-certificates iproute2 python3-apt
-aptitude rsync` via `apt-get` inside every container on every `molecule
-create`, because no scenario set `pre_build_image` and all used the driver's
-default `Dockerfile.j2`. Runs before that change were therefore not
-reproducible in a second respect beyond the floating image tag, and a red run
-could have been attributable to a package archive. Runs after it reach no
-package archive during `create` at all, so "consecutive green runs" starts
-meaning something stricter than it did.
+Wiring it in is cheap — it needs no network, no credential and no container, so
+it fits the `.github/tests` row's constraints, though as a subprocess rather
+than as a Python assertion. But it should not be wired in while it is red,
+because a gate that fails on arrival gets disabled rather than fixed. Hence one
+change: settle the three, then add the check.
 
 ## 6. two-deferred-ci-items
 
@@ -393,6 +308,142 @@ not folded into it: that change's subject is the suite's pins and one broken
 assertion, and this is a documentation defect in a file it otherwise does not
 touch.
 
+## 8. namespace-the-molecule-suite-per-working-tree
+
+**Not blocked; recorded because it is a gap in this project's own verification
+rules rather than a defect in any change, and because it silently invalidates
+results.** Observed 2026-09-07 by two sessions at once —
+`decide-archived-change-reference-policy` and `reclaim-superseded-app-images` —
+which is why the evidence below spans two working trees.
+
+`AGENTS.md:27` already names the hazard — *"Where verification writes to a
+shared service, take your own namespace within it, named deterministically from
+your working tree"* — and `AGENTS.md:29` says that where this project binds that
+rule to a particular service, the binding is an adjacent section of the file.
+**No such section exists, for any service.** The rule is stated and nothing is
+bound to it, while Molecule is the one shared service this project's
+verification actually writes to.
+
+Three handles are shared across every working tree on the machine, and none is
+derived from the working tree:
+
+- **The container name** — every scenario's `molecule.yml` sets
+  `platforms[0].name` to a literal, e.g. `deploy_user-role-instance` in
+  `ansible/roles/deploy_user/molecule/default/molecule.yml`. Two working trees
+  running the same role create, converge and destroy *the same container*.
+  **This is the collision that matters**, and no environment variable reaches
+  it. (Named by key rather than by line: an earlier draft of this entry cited
+  `molecule.yml:40`, which was already wrong when written and which this very
+  change shifted by one — a line citation rotting inside the change whose
+  subject is citations that rot.)
+- **Molecule's ephemeral directory**, `~/.ansible/tmp/molecule.<id>.<scenario>`.
+  The `<id>` is **derived from the role, not from the path**, so it is identical
+  across working trees by construction: on 2026-09-07 every `deploy_user` run
+  from either working tree resolved to `molecule.dnU2.*`, while the other roles
+  each held their own — `1UjF` `docker`, `Dp-1` `platform_data_volume`, `E127`
+  `ops_user`, `HeLe` `hardening`. Relocating a working tree therefore does not
+  escape it, and `MOLECULE_EPHEMERAL_DIRECTORY` is the only lever.
+- **Molecule's cache**, `~/.cache/molecule/<role>` — keyed by role name alone.
+
+Because the ephemeral id is stable per role rather than per run, **inheriting
+another working tree's directory is the default rather than the exception**.
+Molecule does not remove the directory when a run finishes — verified after a
+clean `exit 0` run, which left all three of its scenario directories in place —
+so clearing before a run is a standing requirement, not something owed only
+after a crash.
+
+The failure presents at three different stages, which is what makes it read as
+three unrelated defects rather than one cause. One session hit them in this
+order — progressively later in the run — which is the point: the window is not
+one moment but anywhere the other party touches a shared handle.
+
+| Stage | Symptom |
+|---|---|
+| `create` | `lookup plugin 'file' failed: Unable to access .../molecule.dnU2.default/molecule.yml` — a `destroy` pruned the ephemeral directory a later `create` then read |
+| `prepare` | the container torn down under a running play; `UNREACHABLE ... Failed to create temporary directory` |
+| `verify` | 18 tasks in, after five `All assertions passed`, a task unrelated to the change dies with **rc 137** |
+
+The `verify` symptom is the one most likely to be misread, so it is worth
+naming precisely. What makes it diagnosable is the *pairing*: SIGKILL together
+with **empty** stdout and stderr. A module that fails prints something; a module
+that is killed prints nothing, and Ansible then reports `Module result
+deserialization failed: No start of json char found` — which reads like a module
+bug, and is not.
+
+**Serialising is necessary but not sufficient, and neither is the environment
+variable.** `flock` on a shared lock file stops two runs overlapping in time; it
+does nothing about a run inheriting a directory the previous session left
+behind. Observed directly: a locked run, with no concurrent process anywhere on
+the machine, still failed at `create` on an ephemeral directory another working
+tree had created earlier.
+
+That is contention across *time*, not a standalone defect in the suite — the
+same `destroy`-then-`create` sequence runs clean on a directory the working tree
+owns, as four other roles demonstrated in the same session. The distinction
+matters: the suite is not broken on its own, so the fix is separating the
+handles rather than reworking the test sequence.
+
+It also means clearing the shared state is part of the safeguard and not merely
+tidying, and that a session reporting it left nothing behind should be checked
+rather than believed — on 2026-09-07 one did, and `molecule.dnU2.default` was
+still there.
+
+`MOLECULE_EPHEMERAL_DIRECTORY` and a cache override stop a run inheriting stale
+state, but leave both runs fighting over one container. Only separating all
+three handles makes a concurrent-worktree result mean anything; until then,
+coordination between sessions is the whole safeguard.
+
+`molecule test --all` compounds it. It stops at the first failing scenario, so a
+collision in `default` — which sorts first for `deploy_user` — leaves
+`ghcr-credential-absent` and `ghcr-credential-rejected` neither executed nor
+listed in the recap, while the recap still looks complete.
+
+The danger is not the red runs. A colliding run can equally **pass** against a
+container the other session converged, which reads as evidence the change under
+test is sound.
+
+The fix is one decision covering all three: a per-working-tree instance name —
+which means templating it in every `molecule.yml`, with `.github/tests`
+asserting that each one does — plus the ephemeral-directory and cache
+overrides, and a binding section in `AGENTS.md` that ties `AGENTS.md:27` to
+Molecule the way it was always meant to be tied to something.
+
+## 8a. a review agent's mutation check writes to the tree it is reviewing
+
+**Not blocked; recorded next to entry 8 because it is the same class of hazard —
+a shared handle nobody namespaced — and was found the same day.**
+
+The `code-review` skill performs mutation checks against the **live working
+tree**: it appends a violation to a real file, confirms the gate goes red, then
+reverts. Observed 2026-09-07 during `decide-archived-change-reference-policy`'s
+code-review gate, on `platform/README.md`.
+
+The revert restored the file to its **committed** content, not to the
+working-tree content it had displaced. The change under review was a 45-file
+sweep of uncommitted edits, so the revert silently undid the sweep in that file
+and restored six pre-archive citations. The stash list and the reflog showed
+nothing, because neither a stash nor a branch checkout was involved, which is
+why the cause took a while to find.
+
+Two things follow, and only the first is about this incident:
+
+- **A review agent that writes to the tree can destroy the work it is
+  reviewing**, and does so in a way that looks like nothing happened. The
+  working tree is a shared handle between a session and its own review agent,
+  exactly as the container name is between two Molecule runs.
+- **The mutation check itself is sound and worth keeping.** Appending a
+  violation and confirming the gate goes red is what distinguishes a check that
+  reads the tree from a tautology. What is wrong is performing it in place. It
+  belongs against a copy, or must restore the content it displaced rather than
+  the committed content.
+
+Worth deciding whether this project constrains review agents to a read-only
+tree, or accepts in-place mutation checks and requires the dispatching session
+to verify the tree afterwards. In this instance the change's own new check
+caught the regression unprompted and named all six restored citations by file
+and line — which is evidence for that check, not a reason to assume one exists
+next time.
+
 ## 7. size-platform-container-resource-limits
 
 **Blocked on data, not on another change.** No service in
@@ -439,3 +490,20 @@ image, compared by image identity. See the change's `design.md`.
 Worth doing only after `reclaim-superseded-app-images` has been observed
 working: if the per-deploy reclamation is doing its job, this is a safety net
 rather than the primary mechanism.
+
+**It is already opened and well past proposal** — a branch, a proposal, derived
+tests and a verified implementation of a new `image_prune` role, at
+`build:reviewed` as of 2026-09-08, with three code-review rounds closed. The
+session that resumes it should know that the ground moved underneath it:
+`ansible-verify` became a **required** status check on `main` that day
+(`promote-molecule-to-a-required-check`, PR #72). Two consequences, both
+favourable but neither obvious:
+
+- Role discovery enumerates `ansible/roles/*/molecule/`, so `image_prune`'s two
+  scenarios are picked up with **no workflow edit** — the property that change
+  claimed and did not get to demonstrate, since its own pull requests touched
+  nothing under `ansible/`. This will be the first pull request to exercise it.
+- Those scenarios must be **green to merge**. Under the advisory tier a red run
+  was information; it now blocks. They are green locally at `d5493fe`
+  (`molecule test --all`, both scenarios, `failed=0`), but CI is the first run
+  on a hosted runner rather than this workstation.

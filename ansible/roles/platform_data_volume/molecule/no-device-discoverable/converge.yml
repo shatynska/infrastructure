@@ -6,9 +6,11 @@
 # all, so "matches nothing" is the container's natural state and needs no
 # fixture.
 #
-# Delta scenarios under test
-# (openspec/changes/fix-volume-discovery-and-consistency/specs/
-# iac-host-configuration/spec.md):
+# Scenarios under test, from the "Platform Data Volume Is Mounted at a Fixed
+# Host Path" and "A Role's Absent Required Input Is Reported by Name"
+# requirements
+# (openspec/specs/iac-host-configuration/spec.md,
+# from fix-volume-discovery-and-consistency):
 #
 #   "No device is supplied and none can be discovered"
 #     WHEN the host-baseline playbook runs against a host where no device

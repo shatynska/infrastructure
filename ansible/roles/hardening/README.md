@@ -20,7 +20,7 @@ maintained by hand in two separate places:
 Whenever either side's CIDR list changes, check the other. Leaving UFW
 stricter than the cloud firewall silently blocks traffic the cloud layer
 already permits (this happened once already — see
-`openspec/changes/bootstrap-ansible-host-baseline/design.md`'s Context
+`bootstrap-ansible-host-baseline`'s design.md, Context
 section for the `web_allowed_cidrs` correction that prompted this note).
 Leaving UFW looser than the cloud firewall doesn't expose anything new
 (the cloud layer still blocks it first), but defeats the point of having

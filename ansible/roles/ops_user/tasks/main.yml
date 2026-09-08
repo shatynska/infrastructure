@@ -2,7 +2,7 @@
 # Provisions unprivileged, interactive operator accounts per
 # iac-host-configuration's "Unprivileged Operator Accounts Support
 # Interactive Host Inspection" requirement
-# (openspec/changes/add-ops-account). See that change's design.md for why
+# (add-ops-account). See that change's design.md for why
 # this is a separate account rather than another key on `deploy`, and for
 # the honest statement of what it does and does not bound -- `docker` group
 # membership is root-equivalent by escalation, and this role must never be

@@ -153,15 +153,48 @@ This project has **three** test commands, and a change may owe tests under any o
 |---|---|---|
 | Terraform modules | `terraform test`, run from each module directory | `terraform/modules/<name>/tests/*.tftest.hcl` |
 | The behaviour of an Ansible role on a host — what it converges to, and how it fails | `molecule test --all`, run from each role directory | `ansible/roles/<name>/molecule/<scenario>/` |
-| CI configuration, and any committed file the pipeline reads or executes — workflows, `dependabot.yml`, `.pre-commit-config.yaml`, and static properties of what CI runs, such as the image pins in `ansible/roles/*/molecule/*/molecule.yml` | `python3 -m unittest discover --start-directory .github/tests`, run from the repository root | `.github/tests/*.py` |
+| Any property that is a static read of a committed file — CI configuration such as workflows, `dependabot.yml` and `.pre-commit-config.yaml`; static properties of what CI runs, such as the image pins in `ansible/roles/*/molecule/*/molecule.yml`; and repository-wide conventions such as the citation form below | `python3 -m unittest discover --start-directory .github/tests`, run from the repository root | `.github/tests/*.py` |
 
 The `.github/tests` suite exists because `terraform test` can only exercise Terraform modules, so the guarantees this pipeline makes about its own configuration were unverifiable by anything the project had. Its dependencies are pinned in `.github/requirements-ci.txt`.
 
-Its subject is deliberately wider than `.github/`: a property the pipeline depends on is in scope wherever the file holding it lives, so long as the assertion is a static read of a committed file. What is *not* in scope is anything needing a network call, a credential, a container runtime or a Terraform binary — those constraints are themselves asserted by tests in that suite, and a check that cannot be written within them belongs somewhere else.
+Its subject is deliberately wider than `.github/`, and wider than the pipeline: a property is in scope wherever the file holding it lives, so long as the assertion is a static read of a committed file. Most of what it asserts is something the pipeline depends on, but that is not the boundary — the suite is this repository's only mechanism that reads committed files at repository scope, so a convention that has to hold across the tree is asserted here or nowhere. What is *not* in scope is anything needing a network call, a credential, a container runtime or a Terraform binary — those constraints are themselves asserted by tests in that suite, and a check that cannot be written within them belongs somewhere else.
 
 The Molecule row and the `.github/tests` row are near-opposites and are easy to confuse. Molecule asserts what a role *does* — it needs a container runtime and converges a real host, so it is the only place a role's failure path can be observed. `.github/tests` asserts what a committed file *says*, statically, and may not spawn a container at all. A property of a `molecule.yml` — its image pin — is therefore asserted by `.github/tests`, while the behaviour that scenario exercises is asserted by Molecule. Its toolchain is pinned in `ansible/requirements-test.txt`, and CI runs it as `ansible-verify.yml`.
 
 Two things about `molecule test --all` that a verification claim depends on. It runs a role's scenarios in sorted order and **stops at the first failure**, so every scenario sorting after a failing one is silently not executed and not listed in the run's SCENARIO RECAP — read the recap and confirm it names every scenario the role has, rather than reading the exit code alone. While a role is red, run its scenarios individually with `-s <name>`. Molecule's own `--continue-on-failure` is not available here: it applies only with `--workers`, and `--workers > 1` requires collection mode (`galaxy.yml`), which these plain roles are not.
+
+### Citing this repository's own specifications and change records
+
+A change's planning artifacts move when it is archived — from
+`openspec/changes/<name>/` to `openspec/changes/archive/<date>-<name>/` — and the
+archive date does not exist until archiving happens. A citation of the
+pre-archive path therefore cannot be written correctly in advance, and breaks in
+the same commit that proves the change worked. Cite by what you are pointing at:
+
+| What you are citing | How to write it |
+|---|---|
+| A requirement | `openspec/specs/<capability>/spec.md`, plus the requirement's own name |
+| Rationale or history that lives only inside a change — its `proposal.md`, `design.md`, `test-plan.md`, `test-manifest.md` | The change's name and the artifact's name, in prose, with no path |
+
+Archiving merges a change's delta specifications into the main specification, so
+the first form's path is permanent — and it names the requirement as it stands
+now, rather than as one change once proposed it. The second form has no path to
+break. Once a change is archived you may also give its location as
+`openspec/changes/archive/<date>-<name>/…`, which is stable.
+
+Do not write a path naming a change's own directory under `openspec/changes/`,
+whether or not a further path component follows the change's name. Over a third
+of the citations this rule replaced named the change and stopped there.
+
+One interval is accepted. Where a change introduces a **new** capability,
+archiving is what creates `openspec/specs/<capability>/spec.md`, so a citation of
+it does not resolve until that change is archived. That is bounded by the
+change's own life and is not rot.
+
+`.github/tests/test_ci_configuration.py` asserts this, because no author or
+reviewer can catch a violation: the citation is correct when written, correct
+when reviewed, and wrong only once the change it cites has succeeded. The
+previous sweep of these paths changed no rule and re-accumulated in three weeks.
 
 ### Development tooling
 

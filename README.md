@@ -3,7 +3,7 @@
 Terraform-managed infrastructure on Hetzner Cloud. State lives in HCP Terraform
 (CLI-driven, local execution); GitHub Actions runs the `terraform` CLI and
 gates every apply behind manual approval. See
-`openspec/changes/bootstrap-hetzner-iac/design.md` for the full rationale
+`bootstrap-hetzner-iac`'s design.md for the full rationale
 behind these choices.
 
 Manual, ad-hoc server provisioning is hard to audit and drifts silently from
@@ -96,14 +96,19 @@ addition (see Status below), not a rejected idea.
    is the `python3-venv` package missing; [`uv`](https://docs.astral.sh/uv/)
    sidesteps it entirely, which is why it is shown here.
 
-   CI now runs `ansible-lint` and `ansible-playbook --syntax-check` on every
-   pull request touching `ansible/`, and those **block a merge**. The Molecule
-   suite also runs in CI, in a separate `Ansible Verify (advisory)` workflow
-   that is deliberately **not** a required check while it is established
-   whether every scenario is reproducible on a hosted runner — so a red run
-   there is information, not a blocked merge. Running the suite locally is
-   still worthwhile before opening a pull request; it is no longer the only
-   place it runs.
+   CI runs `ansible-lint` and `ansible-playbook --syntax-check` on every pull
+   request touching `ansible/`, and the Molecule suite in a separate
+   `Ansible Verify` workflow. **All three are meant to block a merge**: the
+   `ansible-verify` job is the status check context registered on `main`, so a
+   red scenario is a blocked pull request rather than something to notice. A
+   pull request touching nothing under `ansible/` starts no container and the
+   check still reports. Whether the context is registered is a repository
+   setting rather than anything in this repository — `gh api
+   repos/:owner/:repo/branches/main/protection` is what answers it.
+
+   Running the suite locally before opening a pull request is therefore worth
+   more, not less: it is roughly six minutes of hosted-runner time to find out
+   there, and the failure now stops the merge.
 
    Run them **per role, with `--all`** — several roles now carry more than
    one scenario (`ops_user` has `default` and `revocation-steady-state`;
@@ -186,8 +191,7 @@ Terraform has no traditional unit-test layer here; verification is the
 static checks and plan review above, plus (as `terraform/modules/` grows past
 `terraform/modules/server`) module-level tests in
 `terraform/modules/<name>/tests/*.tftest.hcl`, run via `terraform test`. See
-`openspec/changes/project-foundation/design.md` for the full testing
-strategy.
+the change `project-foundation`'s design.md for the full testing strategy.
 
 ### Re-enabling the drift-detection workflow
 
@@ -198,12 +202,12 @@ then trigger it once manually (`workflow_dispatch`) to confirm it runs clean.
 
 ## Status
 
-This repository is being bootstrapped per
-`openspec/changes/bootstrap-hetzner-iac/`. Several setup steps require
-manual action outside version control (HCP Terraform org/workspace, Hetzner
-Cloud project and tokens, GitHub environment/branch settings) — see that
-change's `tasks.md` for the current checklist. Project identity, scope, and
-non-goals are recorded in `openspec/changes/project-foundation/design.md`.
+This repository is being bootstrapped per the change
+`bootstrap-hetzner-iac`. Several setup steps require manual action outside
+version control (HCP Terraform org/workspace, Hetzner Cloud project and tokens,
+GitHub environment/branch settings) — see that change's `tasks.md` for the
+current checklist. Project identity, scope, and non-goals are recorded in the
+change `project-foundation`'s design.md.
 
 A staging environment (a second `terraform/environments/<name>/` folder reusing the
 same modules) is anticipated as the next environment after `prod` is fully
@@ -211,5 +215,5 @@ stood up, but is not yet in scope.
 
 The `ansible/` and `platform/` directories, and the `terraform/`/`ansible/`/
 `platform/` structure and pipeline boundary between them, were established by
-`openspec/changes/integrate-ansible-host-config/` — structure and convention
-only; neither directory has role/playbook or Compose service content yet.
+the change `integrate-ansible-host-config` — structure and convention only;
+neither directory has role/playbook or Compose service content yet.

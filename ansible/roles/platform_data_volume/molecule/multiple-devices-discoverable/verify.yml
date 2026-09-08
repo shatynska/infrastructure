@@ -2,7 +2,7 @@
 # Verifies which of the two candidate devices the role's discovery selected.
 #
 # Provenance of each assertion (full classification in
-# openspec/changes/fix-volume-discovery-and-consistency/test-plan.md):
+# fix-volume-discovery-and-consistency's test-plan.md):
 #
 #   both candidates are present   DERIVED. No scenario states it; it exists
 #                                 so this file cannot pass vacuously against

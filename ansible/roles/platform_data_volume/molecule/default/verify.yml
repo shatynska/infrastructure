@@ -1,7 +1,7 @@
 ---
 # Verifies iac-host-configuration's ADDED "Platform Data Volume Is Mounted
 # at a Fixed Host Path" requirement (3 scenarios) --
-# openspec/changes/add-platform-monitoring/specs/iac-host-configuration/spec.md.
+# openspec/specs/iac-host-configuration/spec.md, from add-platform-monitoring.
 #
 # Written before ansible/roles/platform_data_volume/ exists. Nothing here
 # was shaped to match an implementation; every assertion traces to the delta

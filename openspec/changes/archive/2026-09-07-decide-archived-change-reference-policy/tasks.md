@@ -1,0 +1,78 @@
+## 1. Record the rule
+
+- [x] 1.1 Add a `### Citing this repository's own specifications and change records` subsection to `AGENTS.md`'s project conventions, carrying the two-form rule from the delta spec: a requirement is cited as `openspec/specs/<capability>/spec.md` plus the requirement's name; rationale or history held only inside a change is cited by change name and artifact name with no path; `openspec/changes/archive/<date>-<name>/…` is permitted once it exists; a path naming a change's own directory under `openspec/changes/` is not. State why — the archive date does not exist until archiving happens, so the pre-archive form can never be written correctly — and state the one interval the rule accepts: where a change introduces a new capability, `openspec/specs/<capability>/spec.md` is created by archiving, so a citation of it does not resolve until that change is archived. Verify by reading it back and confirming every form it names appears with a metasyntactic placeholder rather than a real change name, so the file does not violate the rule it states.
+- [x] 1.2 Widen the `.github/tests` row of `AGENTS.md`'s Testing table to describe the suite's subject as a static read of any committed file rather than only files the pipeline reads or executes, per design Decision 4. Verify the row still names the same test command and test-path glob, and that the three-row table's other two rows are unchanged.
+
+## 2. Derive the tests
+
+- [x] 2.1 Dispatch `ai-toolkit:change-test-writer` with the `.github/tests` row of the Testing table — test command `python3 -m unittest discover --start-directory .github/tests` from the repository root, test-path glob `.github/tests/*.py` — with this change's own `specs/iac-repo-foundations/spec.md` as the delta under test — the requirement does not reach `openspec/specs/iac-repo-foundations/spec.md` until archive — and with `openspec/specs/` as the specs root. Verify a `test-plan.md` exists in this change's directory mapping every scenario in the delta spec to a test or recording why it is uncovered.
+- [x] 2.2 Record the baseline: run the suite before any implementation and confirm the new tests fail for the reason the specification names — a citation of the pre-archive form is present — rather than by error or by import failure. Verify by capturing the failure output in `test-plan.md`.
+
+## 3. Implement the check
+
+Delivered by the test-derivation step, not by the implementer. The check *is* the assertion the requirement calls for — there is no separate implementation of it — so it is test content inside the dispatched glob, and nothing outside `.github/tests/` imports it. Verify rather than re-author. The code under test is the repository's citations, which section 4 changes and this section does not touch.
+
+- [x] 3.1 Add the enumeration helper to `.github/tests/test_ci_configuration.py`: walk from `ROOT`, pruning — per design Decision 7, which distinguishes the two kinds of entry — `.git`, `.terraform`, `node_modules` and `__pycache__` wherever they occur at any depth, and `openspec`, `ansible/roles/geerlingguy.docker`, `.worktrees` and `.claude/worktrees` at their path relative to `ROOT`, reading each remaining file as UTF-8 with undecodable bytes replaced. `.claude` is pruned only at its `worktrees` subdirectory: the twelve tracked files under `.claude/commands/opsx/` and `.claude/skills/openspec-*/` are committed files outside `openspec/` and the prohibition covers them. Verify the walk reaches all twelve, and that it adds no import outside the standard library and no `subprocess` call, so `TestTheSuiteNeedsNoPrivilegedResource` still passes.
+- [x] 3.2 Add the citation matcher: a regex over each file's whole text — not line by line — that finds `openspec/changes/` followed by a path segment matching `^[a-z0-9]+(?:-[a-z0-9]+)*$` other than `archive`, with nothing required after the segment: 27 of the 75 citations name the change and stop there, and requiring a trailing `/` is the error that made both earlier counts low. Where the prefix and the segment are separated by a line break plus a leading comment marker and whitespace, the segment must additionally contain a hyphen — without that narrowing the wrapped form flags any prose line ending in the prefix whose continuation begins with an ordinary lowercase word, and every change this repository has recorded is named in multiple hyphenated words. No citation in the tree wraps in that position — the wraps that exist fall after the change-name segment, as at `ansible/roles/platform_data_volume/molecule/no-device-discoverable/molecule.yml:8`, and a contiguous match already catches those — so the tolerance is insurance against a form not yet written and can only be verified by the synthesised fixture in 3.4. Verify contiguous matching against that file and against `ansible/roles/tailscale/tasks/main.yml:4`.
+- [x] 3.3 Add the test class asserting no committed file outside `openspec/` carries such a citation, reporting each offence as file, line and matched text. Assemble every fixture and seeded citation at run time from a prefix constant and a segment constant so that no literal of the forbidden form is committed in this file — the suite is inside the set it reads, and a literal would make it flag its own source. Verify the failure message names file, line and matched text for a seeded violation.
+- [x] 3.4 Add a discrimination test proving the check is a real read of the tree rather than a tautology. Over a temporary fixture directory whose contents are assembled at run time from parts, per 3.3, it flags a pre-archive citation, a bare one that names the change and stops, and the same citation wrapped between the prefix and the segment both with and without a further path component; and it does not flag anything under `__pycache__`, the `archive/<date>-<name>/` form, a metasyntactic `<name>` placeholder, an `openspec/specs/<capability>/spec.md` path, or a prose line ending in the prefix whose continuation begins with an ordinary lowercase word. Verify all seven cases, following the pattern `TestTheSuiteDiscriminates` and `TestTheSharedStackPinningCheckIsARealReadOfTheFile` already use.
+
+## 4. Sweep the repository
+
+Each task converts every citation in its files to the form Decision 1 sets: a delta-spec citation becomes `openspec/specs/<capability>/spec.md` plus the requirement's name; a `design.md`, `proposal.md`, `test-plan.md`, `test-manifest.md` or bare-name citation becomes the change's name and the artifact's name in prose. Comment prose is otherwise left alone — separating history from rationale is `docs/change-queue.md` entry 3, not this change.
+
+- [x] 4.1 Sweep `ansible/roles/deploy_user/` (11 files). Verify the GHCR tolerated/not-tolerated comment block in `tasks/main.yml` is byte-identical apart from its citation, by diffing the block before and after.
+- [x] 4.2 Sweep `ansible/roles/platform_data_volume/` (10 files).
+- [x] 4.3 Sweep `ansible/roles/ops_user/` (8 files).
+- [x] 4.4 Sweep `ansible/roles/hardening/` (4 files).
+- [x] 4.5 Sweep `ansible/roles/tailscale/` (2 files). Verify the `POLARITY` comment block in `tasks/main.yml` is byte-identical, by diffing the block before and after — the citation being converted is in the file header, not in that block.
+- [x] 4.6 Sweep `ansible/roles/docker/` (2 files), `ansible/playbooks/host-baseline.yml` and `ansible/requirements-test.txt`.
+- [x] 4.7 Sweep `platform/README.md`, `platform/docker-compose.yml`, `README.md`, `.github/workflows/pr-validation.yml` and `.github/tests/test_ci_configuration.py` — including that suite's own three citations, which the check it now carries would otherwise flag. Verify no literal of the forbidden form remains anywhere in that file, fixtures included.
+- [x] 4.8 Verify the sweep is complete: the tests from section 3 pass, and a manual grep for the pre-archive form outside `openspec/` returns nothing.
+
+## 5. Verify
+
+- [x] 5.1 Run `python3 -m unittest discover --start-directory .github/tests` from the repository root and verify every test passes, including the pre-existing ones.
+- [x] 5.2 Run `pre-commit run --all-files` and verify `ansible-lint`, `ansible-playbook --syntax-check`, `terraform fmt`, `tflint`, `terraform validate` and `gitleaks` all pass — the sweep edits YAML comments in files these hooks parse.
+- [x] 5.3 Provision the working tree for Molecule per `README.md`'s local setup, then run `molecule test --all` from each of `ansible/roles/{deploy_user,platform_data_volume,ops_user,hardening,docker}`. Verify by reading each run's SCENARIO RECAP and confirming it names every scenario that role has — the run stops at the first failure and silently skips the rest, so an exit code alone establishes nothing. `tailscale` has no scenario; note that rather than reporting it as run.
+- [x] 5.4 Confirm the working tree was provisioned before 5.3 was claimed — the Galaxy role installed to `ansible/roles/`, the pinned toolchain from `ansible/requirements-test.txt` present, and a container runtime reachable. Report Molecule as not run, and why, if any of these is absent.
+
+## 6. Review, ship and record
+
+- [x] 6.1 Dispatch `ai-toolkit:change-code-reviewer` over the change's diff once section 5 passes. Verify each finding is fixed or answered before proceeding.
+- [x] 6.2 Open the pull request and wait for the operator's confirmation that continuous integration passed, that it merged, and that the deploy is healthy. Verify the required status check's log names the new test class, so the check demonstrably ran rather than being skipped.
+- [x] 6.3 Confirm the effect on the trunk, and wait for the operator's confirmation of it. The observation: on `main` after the merge, a search for the pre-archive citation form outside `openspec/` returns nothing, where it returned 75 matches across 44 files before; and a branch that reintroduces one — a single comment line — fails the required status check on its own pull request, naming the file and line. Where the second half cannot be run against real continuous integration, say so and record what was observed instead rather than inferring it from the first half. **Half of this was already observed unprompted during the code-review gate**: the `code-review` skill's mutation check appended a citation to `platform/README.md` and then reverted the file to its committed content rather than to the swept working-tree content, silently restoring six pre-archive citations. The check went red and named all six by file and line, and nothing else in the session noticed. That is the requirement's first scenario, demonstrated against an accidental regression rather than a seeded one.
+- [x] 6.4 On archive, delete `docs/change-queue.md` entries 1 and 2, and edit entry 3's blocking line so that neither clause dangles: it names "**Blocked on entry 1**" and "should follow entry 2 rather than race it", and both entries are gone. Leave the entry itself queued. Verify the file still parses as the queue's stated structure and that no other entry's dependency text is stale.
+
+## Outcome
+
+Merged as PR #70 at 2026-09-07T20:00:28Z (`4be7fa7`); `validate` and `discover`
+both passed. The operator confirmed the merge and a healthy deploy.
+
+**Confirm gate: satisfied by observation, not waived.** Same search, same
+exclusions, run against the two trunk commits:
+
+| | Trunk before (`9420798`) | Trunk after (`4be7fa7`) |
+|---|---|---|
+| Pre-archive citations outside `openspec/` | 75 | 0 |
+| Files carrying them | 46 | 0 |
+
+The rule is in `AGENTS.md` on the trunk and the check is in
+`.github/tests/test_ci_configuration.py` on the trunk, so the count holding at
+zero does not depend on anyone remembering — which is what distinguishes this
+from `sweep-stale-terraform-paths`, which cleaned up, changed no rule, and
+re-accumulated in three weeks.
+
+The second half of the observation — that a reintroduction fails the check —
+was demonstrated twice during this change, both times by accident and neither
+staged:
+
+1. The `code-review` skill's mutation check reverted `platform/README.md` to its
+   committed content mid-review, silently restoring six citations. The check
+   went red and named all six by file and line; nothing else in the session
+   noticed. Recorded as `docs/change-queue.md` entry 8a.
+2. Rebasing onto the trunk brought in `reclaim-superseded-app-images`, which had
+   written two fresh pre-archive citations into `deploy_user`'s default
+   scenario. The check caught both on the rebase — a change that passed its own
+   review and merged cleanly still introduced the defect this change exists to
+   stop, one day after it was written. Swept in `9c7ce60`.

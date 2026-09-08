@@ -3,9 +3,10 @@
 # candidate devices, supplying no `platform_data_volume_device` so the role's
 # own on-host discovery runs and has to choose between them.
 #
-# Delta scenario under test
-# (openspec/changes/fix-volume-discovery-and-consistency/specs/
-# iac-host-configuration/spec.md):
+# Scenario under test, from the "Platform Data Volume Is Mounted at a Fixed
+# Host Path" requirement
+# (openspec/specs/iac-host-configuration/spec.md,
+# from fix-volume-discovery-and-consistency):
 #
 #   "More than one candidate device is attached"
 #     WHEN on-host discovery matches more than one attached volume device

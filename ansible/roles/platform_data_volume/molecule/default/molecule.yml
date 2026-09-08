@@ -2,11 +2,11 @@
 # Molecule scenario for the `platform_data_volume` role, written BEFORE that
 # role exists (ansible/roles/platform_data_volume/ has no tasks/defaults yet
 # at the time this scenario was authored -- see
-# openspec/changes/add-platform-monitoring/test-manifest.md for the
+# add-platform-monitoring's test-manifest.md for the
 # scenario-by-scenario accounting, the assumed variable interface, and the
 # baseline that was and was not taken). It verifies iac-host-configuration's
 # ADDED "Platform Data Volume Is Mounted at a Fixed Host Path" requirement
-# (openspec/changes/add-platform-monitoring/specs/iac-host-configuration/spec.md).
+# (openspec/specs/iac-host-configuration/spec.md, from add-platform-monitoring).
 #
 # Same overall shape as this project's other role scenarios (see
 # ansible/roles/docker/molecule/default/molecule.yml for the shared

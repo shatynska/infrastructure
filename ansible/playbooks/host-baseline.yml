@@ -1,7 +1,7 @@
 ---
 # Host configuration for the prod server: container runtime, host-level
 # hardening, and the restricted deploy account. See
-# openspec/changes/bootstrap-ansible-host-baseline for the full rationale.
+# the change bootstrap-ansible-host-baseline for the full rationale.
 # Ansible's scope stops here -- it never templates platform/'s Compose
 # file or invokes a Compose lifecycle command (iac-platform-services'
 # "Platform Stack Deployment Is Not Ansible's Responsibility").
@@ -14,7 +14,7 @@
     - role: tailscale
     - role: deploy_user
     # After `docker`: the `docker` group must exist before an operator
-    # account can join it (openspec/changes/add-ops-account).
+    # account can join it (the change add-ops-account).
     - role: ops_user
     # Order-independent of every role above: a mount, not a service --
     # see ansible/roles/platform_data_volume/README.md

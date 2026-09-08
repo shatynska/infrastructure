@@ -16,9 +16,9 @@
 # allowed to deploy to this host, `platform` included. Drives every
 # per-application resource this role renders: the /opt/<name> directory,
 # the app-deploy sudoers.d rule, and the authorized_keys forced-command
-# entry (openspec/changes/add-per-app-deploy-keys).
+# entry (the change add-per-app-deploy-keys).
 
 # ghcr_pull_token / ghcr_pull_username: the read-only (`read:packages`),
 # shared GHCR credential `docker login`'d into root's Docker credential
 # store, so app-deploy's `docker compose pull` can pull a private package
-# (openspec/changes/add-per-app-deploy-keys).
+# (the change add-per-app-deploy-keys).

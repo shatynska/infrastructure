@@ -1,7 +1,7 @@
 ---
 # Second Molecule scenario for the ADDED "Unprivileged Operator Accounts
 # Support Interactive Host Inspection" requirement
-# (openspec/changes/add-ops-account/specs/iac-host-configuration/spec.md).
+# (openspec/specs/iac-host-configuration/spec.md, from add-ops-account).
 #
 # WHY THIS EXISTS, SEPARATELY FROM `default`
 # ------------------------------------------
