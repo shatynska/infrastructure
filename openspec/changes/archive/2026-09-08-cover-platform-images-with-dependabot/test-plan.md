@@ -307,6 +307,29 @@ a dispatched subagent with no channel to ask on.
    *Tests depending on it*: all five in `TestTheImageGroupSplitsByBlastRadius`,
    and both README tests in
    `TestAProposedImageUpdateIsNotExemptFromTheStacksObligations`.
+2a. **What is a Dependabot dependency name?** — **recorded after the fact, on
+   2026-09-08, because this list did not carry it and that omission is what
+   let the defect through.** This section exists to expose unverified beliefs
+   about Dependabot, and the belief that actually failed was never written
+   down: it sat in design.md Decision 4's table as though it were a fact, and
+   both the helper and the configuration were derived from it.
+   *Assumption originally taken*: the image reference with its tag stripped,
+   registry host included. **Wrong.** `dependabot-core` builds the dependency
+   as `Dependency.new(name: details.fetch("image"), ..., source:
+   source_from(details))` — the registry lives in the source, never in the
+   name — so `quay.io/prometheuscommunity/postgres-exporter` is the dependency
+   `prometheuscommunity/postgres-exporter`. Two group patterns therefore
+   matched nothing, and `TestTheImageGroupSplitsByBlastRadius` stayed green
+   because it computed its expected names from the same wrong helper.
+   *Now*: anchored to pull requests Dependabot actually opened, in
+   `TestDependencyNamingMatchesWhatDependabotActuallyDid`. Of the images this
+   stack declares, only `quay.io/...` has been **observed**; `ghcr.io`,
+   `host:port` and bare `localhost` are still inferred, and the helper's
+   docstring says so.
+   *The general lesson, which outlives this entry*: an assumption about an
+   external system that decides what gets committed needs at least one
+   assertion tracing to that system's observed behaviour. Deriving the check
+   and the artefact from one belief tests the belief against itself.
 3. **Which wildcard semantics does Dependabot apply to a group's patterns?**
    Read from documentation rather than from source, unlike the file fetcher's
    regex, which design.md quotes from `dependabot-core`.
