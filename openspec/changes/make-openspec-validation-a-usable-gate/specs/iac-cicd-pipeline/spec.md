@@ -9,7 +9,9 @@ Validation SHALL cover both the active record and the archived one. These are di
 
 The check SHALL run on every pull request rather than only on those that change a file under the specification directory. A record is falsified by what merged before it, not by the diff under review; a path filter would report green on precisely the pull request that carries an unrelated stale failure past it. The job enclosing the check SHALL itself be unconditional, and the workflow SHALL NOT reach it through a workflow-level path filter — a step that cannot be skipped inside a job that can is skippable.
 
-The validating tool SHALL be installed from a manifest that pins it to an exact version and is committed to this repository, and SHALL NOT be resolved freshly at run time. The runtime that executes it SHALL be pinned in the same sense: a freshly resolved interpreter beneath an exactly pinned tool leaves the pin describing less than it appears to. That manifest SHALL be covered by the repository's dependency-update configuration, so that the pin is maintained rather than left to rot — a pinned dependency nothing watches is the failure this repository has recorded against itself four times over.
+The validating tool SHALL be installed from a manifest that pins it to an exact version and is committed to this repository, and SHALL NOT be resolved freshly at run time.
+
+The runtime that executes it SHALL be pinned to an explicit major version, declared in the workflow and in the manifest's `engines`, rather than left to whatever the runner defaults to. This is deliberately weaker than the tool's exact pin, and the difference is stated rather than glossed: an exact patch pin on a language runtime rots into a version that stops receiving security fixes, and the failure it would prevent — a patch release changing what the validator concludes — is not one this tool's behaviour is sensitive to, where the major version is (it requires import attributes, which the runner's own default may not provide). A floating *major* would leave the pin describing nothing; an exact patch would buy precision this check cannot use at a cost it would pay every month. That manifest SHALL be covered by the repository's dependency-update configuration, so that the pin is maintained rather than left to rot — a pinned dependency nothing watches is the failure this repository has recorded against itself four times over.
 
 An archived change whose task list records outstanding work SHALL fail this check.
 
@@ -59,7 +61,7 @@ This validation SHALL NOT be performed by the executable suite that verifies the
 
 #### Scenario: The validating tool is not resolved freshly at run time
 - **WHEN** the check installs the tool it validates with
-- **THEN** it SHALL install the exact version the committed manifest pins, on a pinned runtime, and SHALL fail rather than proceed where the manifest and its lockfile disagree
+- **THEN** it SHALL install the exact version the committed manifest pins, on a runtime whose major version the workflow names explicitly, and SHALL fail rather than proceed where the manifest and its lockfile disagree
 
 #### Scenario: The pin is watched by the dependency-update configuration
 - **WHEN** a new version of the validating tool is published

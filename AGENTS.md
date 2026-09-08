@@ -157,6 +157,13 @@ So two of the three end at a reviewer, and the wording below is what they review
 
 **An archived change's record may be corrected only to make it say what actually happened, with the evidence cited, and never to change what was decided or built.** Retroactive edits to an archived `tasks.md` are legitimate — a task performed but never ticked should be ticked — but only against evidence named in the record, and the tick itself SHALL be marked retroactive so it cannot be read as contemporaneous. Cite evidence that can still be checked: a figure another committed file records, a file's presence and date, an image digest or timestamp. Evidence that has already expired when it is written down is the thing this rule exists to prevent. This rule is also the only guard against a task being deleted rather than disclosed: no static check can see a line that is gone, so this is where that case is caught.
 
+**A change directory with no deltas needs `skip_specs: true`, and that includes an opened handoff.** `openspec validate --all` runs on every pull request and fails a change carrying no specification deltas — *"Change must have at least one delta"*. Two states the workflow above prescribes hit this:
+
+- **An opened change**, which is a branch and a `handoff.md` with no proposal. Give it an `.openspec.yaml` carrying `schema:`, `created:` and `skip_specs: true` at the moment it is opened, and drop the `skip_specs` line when its deltas are written. Without it, the branch cannot pass the required check.
+- **A change genuinely declaring no deltas** — a refactor, a tooling or docs change. Four archived changes already use this; it is the established form, not a workaround.
+
+`skip_specs: true` alone in the file is not enough: dropping `schema:` makes the change fail to resolve and the error is the same one, which reads as though the setting did not work.
+
 **Work not performed is disclosed, not deleted and not ticked.** Put it under a `## Not performed` heading as a list item naming the task, with its reason on a following line introduced by a `Reason:` label. This covers work not performed for *any* reason — declined on judgment, unreachable in the authoring environment, or never captured and no longer recoverable. Ticking a box for work that was not done makes a ticked box mean either that the work happened or that it did not, which is no signal at all. The `Reason:` label is what the pipeline checks and it only checks for silence; whether the reason is a *good* one is a question for review.
 
 ### Testing

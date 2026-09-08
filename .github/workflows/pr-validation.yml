@@ -61,6 +61,58 @@ jobs:
       - name: CI configuration tests
         run: python3 -m unittest discover --start-directory .github/tests --verbose
 
+      # Validates this repository's own specification record: that the
+      # capability specifications and active deltas parse, and that no
+      # archived change's task list still claims outstanding work.
+      #
+      # Unconditional, and so is this job. A record is falsified by what
+      # merged before it, not by the diff under review -- so a pull request
+      # touching nothing under openspec/ is precisely the one that would
+      # carry an unrelated stale failure past a path filter.
+      #
+      # The two steps below hold a CLOSED FORM, and the CI-configuration
+      # suite asserts it: the script is the validating invocations and
+      # nothing else -- no shell operator joining them to anything, no
+      # redirection or capture of their status, no `shell:` override -- and
+      # neither this step nor this job declares `continue-on-error` in any
+      # form. Every other property here is satisfied by a step that runs, is
+      # pinned, is never skipped, and then swallows its result; such a step
+      # reports green forever. Suppression is excluded by asserting a shape
+      # rather than by listing evasions, because a list is complete only
+      # until someone writes the entry nobody thought of. An edit to these
+      # lines will fail that assertion until it is updated -- deliberately,
+      # for a step whose whole purpose is to be un-bypassable.
+      - name: Setup Node (specification record validation)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      # `npm ci` and not `npm install`: it installs the lockfile exactly and
+      # fails where the manifest and the lockfile disagree, which is the
+      # property `terraform init` gets from a committed .terraform.lock.hcl.
+      # The pin lives in .github/package.json so Dependabot can see it.
+      - name: Install OpenSpec (pinned)
+        working-directory: .github
+        run: npm ci
+
+      # Invoked by path, NOT as `npx openspec`. npx searches node_modules/.bin
+      # upward from the working directory, and `.github/node_modules` is a
+      # child of the repository root rather than an ancestor of it -- so from
+      # here npx never sees the pinned install. It falls back to its own cache
+      # or downloads from the registry at run time, which is exactly the
+      # freshly-resolved dependency this check is specified to forbid.
+      #
+      # Verified rather than assumed: with `.github/node_modules` moved aside
+      # and no global install on PATH, `npx openspec validate --all` still
+      # exited 0 and validated -- from the npx cache. A CI runner has no such
+      # cache, so the same line would have resolved a version off the registry,
+      # or failed. The path form can only run what `npm ci` installed.
+      - name: Validate the specification record
+        run: ./.github/node_modules/.bin/openspec validate --all
+
+      - name: Validate archived change records
+        run: ./.github/node_modules/.bin/openspec validate --archived
+
       # Validates platform/docker-compose.yml renders and parses
       # correctly. No SSH credential, no `environment:` declared anywhere
       # in this job -- see the Pull Request Validation Runs Without

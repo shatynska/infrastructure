@@ -170,11 +170,14 @@ delta says.
 |---|---|
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_validating_step_script_is_the_invocations_and_nothing_else` | SPECIFIED |
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_validating_step_declares_no_shell_override` | SPECIFIED |
+| `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_job_enclosing_the_validating_step_declares_no_shell_default` | SPECIFIED |
+| `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_workflow_declares_no_shell_default` | SPECIFIED |
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_validating_step_declares_no_continue_on_error` | SPECIFIED |
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_job_enclosing_the_validating_step_declares_no_continue_on_error` | SPECIFIED |
 | `TestTheClosedFormIsARealReadOfTheScript.test_a_suppressed_invocation_is_rejected` | SPECIFIED |
 | `TestTheClosedFormIsARealReadOfTheScript.test_a_line_that_is_not_the_validation_is_rejected` | SPECIFIED |
 | `TestTheClosedFormIsARealReadOfTheScript.test_the_permitted_invocations_are_recognised` | DERIVED — converse half |
+| `TestTheClosedFormIsARealReadOfTheScript.test_an_invocation_outside_the_pinned_install_tree_is_rejected` | SPECIFIED |
 
 The shape is asserted positively and completely by `validating_invocation_flag`:
 a script line must be an optional `npx`, then a command whose basename is
@@ -213,6 +216,7 @@ assertion is updated with it. That is the intended behaviour.
 | `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_workflow_carrying_the_validation_declares_no_path_filter` | SPECIFIED |
 | `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_validation_runs_on_every_pull_request` | SPECIFIED |
 | `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_validation_is_invoked_by_a_run_step_rather_than_delegated` | SPECIFIED |
+| `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_validating_step_runs_inside_a_registered_required_context` | SPECIFIED |
 
 `if:` is asserted absent as a key rather than falsy, for the same reason as
 `continue-on-error`. The path-filter assertion deliberately duplicates
@@ -238,6 +242,14 @@ here so its greenness is not mistaken for coverage.
 | `TestTheValidatingToolIsInstalledFromAPinnedManifest.test_the_workflow_installs_the_tool_with_a_lockfile_exact_install` | SPECIFIED, with one DERIVED element (see below) |
 | `TestTheValidatingToolIsInstalledFromAPinnedManifest.test_no_package_is_installed_by_a_resolving_command` | SPECIFIED |
 | `TestTheValidatingToolIsInstalledFromAPinnedManifest.test_the_runtime_that_executes_the_tool_is_pinned` | SPECIFIED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_manifest_matcher_finds_the_scoped_package` | SPECIFIED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_reads_a_scoped_install_path` | SPECIFIED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_reads_a_nested_install_path` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_reads_the_legacy_dependencies_block` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_ignores_another_scopes_package_of_the_same_name` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_manifest_matcher_does_not_answer_to_the_binary_name` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_does_not_answer_to_the_binary_name` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_an_npm_alias_is_not_an_exact_version` | DERIVED |
 
 The "manifest and lockfile disagree" clause is asserted twice over: statically,
 by comparing the manifest's pin against the lockfile's recorded version — so a
@@ -255,7 +267,12 @@ lands.
 
 **Covered** by
 `TestThePinIsWatchedByTheDependencyUpdateConfiguration.test_the_dependency_update_configuration_covers_the_manifests_directory`
-(SPECIFIED). The directory is computed from where the manifest actually is, so
+(SPECIFIED) and, in the reverse direction, by
+`…test_every_directory_holding_an_npm_manifest_is_watched` (DERIVED): every
+directory holding a committed `package.json` must appear in an `npm` stanza, so
+a second manifest added anywhere cannot go unwatched in silence. Both of this
+stanza's neighbours — `terraform` and the Compose ecosystem — already carry that
+converse; the `npm` one did not until the gate's review. The directory is computed from where the manifest actually is, so
 moving the manifest moves the assertion with it. Membership is asserted, not an
 exact ecosystem set, so `TestDependabotCoverage`'s existing entries are
 unaffected.
@@ -336,14 +353,66 @@ with no channel to ask on.
    `test_the_manifest_pins_the_tool_to_an_exact_version`,
    `test_the_lockfile_records_the_version_the_manifest_pins`,
    `test_the_runtime_that_executes_the_tool_is_pinned`.
-2. **How the binary is invoked after a local `npm ci` in `.github/`.** The
-   artifacts do not say. *Assumption:* both `npx openspec validate --flag` and a
-   path form (`./node_modules/.bin/openspec validate --flag`) are permitted; a
-   bare `openspec validate --flag` is permitted too. An `npx` carrying arguments
-   of its own (`--package`, `--yes`) is **not** permitted, because that is a fresh
-   resolution. *Depends on it:* every test in
-   `TestTheRecordValidationCannotReportSuccessOverAFailure` and
-   `TestTheClosedFormIsARealReadOfTheScript`.
+1a. **The tool's npm package name — assumed wrong, corrected during
+   implementation.** These tests were written assuming the npm package and the
+   binary it installs share a name, and carried one constant,
+   `VALIDATING_TOOL = "openspec"`, for both roles. They do not share a name: the
+   package is **`@fission-ai/openspec`** (1.12.0 at the time of writing) and the
+   binary it puts on `PATH` is **`openspec`**. Nothing in this change's artifacts
+   states either, and the assumption was never flagged because both assertions
+   were red for the ordinary pre-implementation reason and so looked correct.
+
+   The effect was worse than a red test: `manifest_pin(VALIDATING_TOOL, …)`
+   required the literal key `openspec` in `dependencies`, which a *correct*
+   manifest cannot carry — the assertion was unsatisfiable, and the only way to
+   turn it green would have been to bend the manifest to it. That is a test
+   dictating a fact about the world rather than reading one, and it is the same
+   shape of defect as everything else this change exists to remove.
+
+   *Fixed by splitting the constant, not renaming it:* `VALIDATING_PACKAGE` for
+   the manifest, lockfile and Dependabot assertions; `VALIDATING_TOOL` for the
+   script-shape assertion, where the binary name was right all along.
+   `lockfile_versions` was checked at the same time — npm keys `packages` by
+   install path, so the package appears as `node_modules/@fission-ai/openspec`,
+   which the existing split on the last `node_modules/` already recovered
+   correctly; it is now documented and covered rather than accidentally right.
+
+   *The reconciliation refused:* an npm alias,
+   `"openspec": "npm:@fission-ai/openspec@1.12.0"`, which would make the literal
+   key the old assertion wanted appear. It bends the manifest to fit the test,
+   and the alias string is not an exact version, so `EXACT_NPM_VERSION` fails on
+   it. `test_an_npm_alias_is_not_an_exact_version` pins that refusal so it cannot
+   be reintroduced quietly.
+
+   *Depends on it:* every test in `TestThePinMatchersReadTheScopedPackageName`,
+   plus `test_the_manifest_pins_the_tool_to_an_exact_version` and
+   `test_the_lockfile_records_the_version_the_manifest_pins`.
+2. **How the binary is invoked after a local `npm ci` in `.github/` — asked,
+   answered, and the first answer was wrong.** These tests originally
+   admitted `npx openspec validate --flag`, a bare `openspec validate --flag` off
+   `PATH`, and a path form, on the stated belief that npx "resolves the locally
+   installed binary that the lockfile-exact install places in
+   `node_modules/.bin`". **That belief is false**, and this install is exactly the
+   case where it fails: `npm ci` installs into `.github/node_modules`, npx
+   searches `node_modules/.bin` *upward* from the working directory, and
+   `.github` is a child of the repository root rather than an ancestor. Verified
+   during the gate's implementation: with the install moved aside,
+   `npx openspec validate --all` still exited 0 — from the npx cache. A runner has
+   no cache, so the same line resolves off the registry at run time, which delta
+   ¶12 forbids.
+
+   The old permission was worse than a gap: a future edit "tidying" the path form
+   back to `npx` would have kept every assertion green while CI resolved a fresh
+   version, so the test would have licensed exactly what the requirement forbids.
+
+   *Now:* the invocation must **resolve to** the binary the lockfile-exact
+   install places — `.github/node_modules/.bin/openspec` — read from whatever
+   directory the step runs in (its own `working-directory`, its job's default, or
+   the workflow's). `npx`, a bare name off `PATH`, and a path into any other
+   install tree are all rejected. *Depends on it:*
+   `test_the_validating_step_script_is_the_invocations_and_nothing_else`,
+   `test_both_the_active_and_the_archived_record_are_validated`, and both
+   fixtures in `TestTheClosedFormIsARealReadOfTheScript`.
 3. **That npm's lockfile-exact install is spelled `npm ci`.** The delta states
    the property; `design.md` Decision 7 states "a clean lockfile-exact install".
    *Assumption:* `npm ci`, with any flags after it, and it must target the
@@ -375,7 +444,20 @@ with no channel to ask on.
    *Depends on it:* `test_a_heading_with_trailing_punctuation_still_opens_the_section`,
    `test_a_heading_with_a_trailing_parenthetical_still_opens_the_section`,
    `test_a_numbered_section_merely_mentioning_the_phrase_is_not_a_disclosure`.
-7. **A standing gap in the suite, reported not fixed.** The suite's own
+7. **"Committed" is asserted as "present on disk", and the two differ.**
+   `test_the_manifest_and_its_lockfile_are_committed` reads the working tree, and
+   nothing available to this suite can tell a tracked file from an untracked one:
+   a tracked-file listing needs `git`, and the suite is specified to spawn
+   nothing outside `bash`/`sh`. *Assumption taken:* the working tree stands in
+   for the committed tree. *Consequence, in the safe direction:* an untracked
+   `.github/package.json` passes locally and fails in continuous integration,
+   where the file is simply absent — a real failure, correctly attributed, but
+   discovered a step later than it could be. This is the "local tree masks CI
+   gaps" hazard this project has recorded against itself before. *Depends on it:*
+   `test_the_manifest_and_its_lockfile_are_committed`,
+   `test_the_manifest_pins_the_tool_to_an_exact_version`,
+   `test_the_lockfile_records_the_version_the_manifest_pins`.
+8. **A standing gap in the suite, reported not fixed.** The suite's own
    constraint assertions (`test_the_suite_imports_only_the_standard_library_and_pinned_dependencies`,
    `test_the_suite_spawns_no_terraform_binary_or_container_runtime`,
    `test_the_suite_imports_no_network_capable_module`) read `Path(__file__)` and
@@ -486,7 +568,7 @@ reverted.
 
 ## What the implementation must make pass
 
-Nineteen tests are red and name exactly what is missing:
+Nineteen tests were red at derive time and named exactly what was missing:
 
 | Missing thing | Tests it turns green |
 |---|---|
@@ -494,6 +576,65 @@ Nineteen tests are red and name exactly what is missing:
 | `.github/package.json` + its lockfile, a `npm ci` step, a pinned setup-node | `TestTheValidatingToolIsInstalledFromAPinnedManifest` (5 of 6) |
 | The `npm` stanza in `.github/dependabot.yml` | `TestThePinIsWatchedByTheDependencyUpdateConfiguration` (1) |
 | The correction rule in `AGENTS.md`'s project-conventions section | `TestTheArchivedRecordCorrectionRuleIsStated` (3) |
+
+**All of them are now green.** With the gate implemented in the working tree, the
+suite runs **255 tests, all passing**, by `discover` and by a direct
+`python3 .github/tests/test_ci_configuration.py` alike. No test in this section
+was softened to reach that state: the two manifest assertions were corrected to
+read the package's real name (question 1a above) and were then confirmed to fail
+against a manifest keyed on the binary name, against an npm alias, against a
+range, and against a lockfile that disagrees with the manifest.
+
+### The gate review's findings, folded in
+
+The gate pull request's code review raised four gaps. All four made the checks
+**weaker** than the delta requires; none was a case of a test being too strict,
+and each fix was confirmed by the mutation that motivated it.
+
+1. **`npx` was admitted, and it is the unsafe form.** See question 2 above, which
+   is where the corrected assumption is recorded. Fixed by requiring the command
+   to resolve to the pinned install tree. *Mutations confirmed red:* the run line
+   tidied back to `npx openspec validate --all`, and reduced to a bare `openspec`
+   off `PATH`.
+2. **The closed form was not closed at the `defaults` levels for `shell:`.** The
+   `continue-on-error` assertion already read both step and job; the shell
+   assertion read the step alone. A `defaults: run: shell:` on the job — or at
+   workflow level — applies to both validating steps, and a custom shell is an
+   argv template with `{0}` substituted, so a wrapper of the shape
+   `bash -c 'bash "$0"; exit 0'` runs the script and discards its status. That is
+   the construction nobody listed, which is the whole reason the form is closed
+   rather than blocklisted, and delta ¶24 requires the both-levels reading in so
+   many words. *Mutations confirmed red:* that wrapper at the job level, and a
+   `defaults.run.shell` at workflow level.
+3. **Nothing bound the step to a *registered* required context.** The
+   requirement's opening SHALL is "as part of the required pull request status
+   check", and every assertion located the step by scanning all jobs and then read
+   whichever job held it. Moving the steps into a new `spec-check` job left every
+   gate assertion green while a pull request with the record validation red stayed
+   mergeable — green-because-unregistered, the same defect as
+   green-because-skipped. `REQUIRED_STATUS_CHECK_WORKFLOWS` was in the same module
+   and never consulted; it is now. *Mutation confirmed red:* a second,
+   unregistered `spec-check` job holding a validating step.
+4. **The `npm` Dependabot stanza had no reverse coverage check.** Fixed as
+   described under scenario 7. *Mutation confirmed red:* a second `package.json`
+   added in a directory no stanza names.
+
+### What the git history does and does not show
+
+`test-plan.md` says nineteen assertions were red at derive time, and that is
+true of the tree they were authored against — but **the history does not
+witness it for the gate group**. Pull request 1 shipped the shared helpers and
+constants together with the disclosure group, and the gate classes were held out
+of it deliberately (see the apportionment above), so `origin/main` carries the
+helpers and none of the six gate test classes. There is therefore no commit on
+the trunk where a gate assertion is present and red.
+
+That is a consequence of the apportionment, not a defect in it — a red gate
+assertion in pull request 1 would have blocked a pull request that cannot satisfy
+it — but it means the derive-then-implement ordering for the gate group rests on
+this document and on the review record rather than on something a reader can
+reconstruct from `git log`. Stated here so the claim is not read as more than it
+is.
 
 ## Confirmation that these tests bite
 
@@ -532,3 +673,15 @@ fails exactly the two fixtures written for it, and the unmodified suite is green
 
 A fail-open fix that was itself untested would be the same defect one level up,
 which is why each fix is listed here with the revert that reddens it.
+
+**The package-name correction was confirmed the same way.** Reverting
+`VALIDATING_PACKAGE` to the binary's name turns
+`test_the_manifest_pins_the_tool_to_an_exact_version` and
+`test_the_lockfile_records_the_version_the_manifest_pins` red against the
+committed, correct manifest — the reported defect, reproduced and then closed —
+plus the two fixtures written to hold the distinction. Re-keying
+`lockfile_versions` on the bare basename reddens the two fixtures covering scope.
+And against synthetic repositories carrying the scoped package, the following
+each turn a compliant fixture red: a manifest keyed on the binary name, a
+manifest using an npm alias, a lockfile keyed on the unscoped install path, a
+lockfile disagreeing with the manifest, and a range in place of an exact version.
