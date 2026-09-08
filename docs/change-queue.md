@@ -507,3 +507,76 @@ favourable but neither obvious:
   was information; it now blocks. They are green locally at `d5493fe`
   (`molecule test --all`, both scenarios, `failed=0`), but CI is the first run
   on a hosted runner rather than this workstation.
+
+---
+
+## 13. alert when the host prune stops working
+
+**Blocked on nothing, but only worth doing once entry 10 has shipped.**
+
+`prune-host-images` reports on every exit path and leaves a failed systemd unit
+when it abandons. Nothing scrapes either. `systemctl list-units --failed` is a
+manual read, and the outer backstop is `HostDiskPressure` at 90% full, which is
+very late — a prune that has silently done nothing for two months is invisible
+until the disk is nearly gone.
+
+Closing it needs node-exporter's textfile collector: a `--collector.textfile.directory`
+flag and a mount in `platform/docker-compose.yml`, the prune writing a `.prom`
+file, and an alert on staleness rather than on failure — a unit that stops being
+scheduled at all produces no failure to alert on. That is a `platform/` change,
+which is why entry 10 named it a non-goal rather than folding it in.
+
+## 14. report refused removals in the host prune
+
+`prune-host-images` reports `considered N, removed M`, where `considered` is
+every distinct image identity on the host rather than a candidate set. A
+shortfall between the two therefore carries no signal: a defective keep set
+prints `considered N, removed 0`, byte-identical to a healthy run over a host
+where everything is referenced.
+
+`app-deploy`'s own reclamation comment calls that shortfall "a signal worth
+reading". Here it is unreadable. Counting refusals and reporting them would make
+a defective keep set legible without changing any removal behaviour.
+
+Recorded rather than folded into entry 10 because it adds a field to a report
+the delta specifies exactly, and that is a specification change, not an
+implementation detail.
+
+## 15. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
+
+Entry 10 ships two guards that no assertion covers: local images are enumerated
+*before* the keep set is computed, and each tag is re-resolved immediately
+before removal. Both are observable only when the host's images change midway
+through a run, and a black-box Molecule scenario has no seam at which to change
+them. They are also the two that close the concurrent-deploy window against
+`app-deploy`, so the least-verified part of that design is the part facing the
+only actor competing with it.
+
+Its code review built a rig that supplies the seam — a stubbed `docker` on
+`PATH` that answers some calls and fails others — and used it to confirm both
+guards present and mutation-visible, and to reproduce the fail-open that review
+found. Its `test-plan.md` invites exactly this: "if a deterministic arrangement
+is found for either — sized rather than slept — add it to `tasks.md` 2.7 and 2.8
+together and strike it from here."
+
+Adopting it would also cover the two abandon branches added by that review's
+own fix, which are likewise unasserted.
+
+## 16. give the Molecule shared-state hazard a permanent home
+
+Molecule's instance name, `~/.ansible/tmp/molecule.*` and
+`~/.cache/molecule/<role>` are shared across working trees and stable per role.
+Two sessions running the same role's scenarios collide: a container is killed
+under a live module and it surfaces as "Module result deserialization failed" at
+`create`, `prepare` or `verify`, which reads as a module bug and is not one. A
+colliding run can pass as easily as fail.
+
+This is recorded nowhere in this repository. The queue entry that held it was
+deleted when its change archived, and it has since cost two sessions time they
+did not need to spend. It belongs in `AGENTS.md`'s Testing section, beside the
+`molecule test --all` note about reading the SCENARIO RECAP, not in a queue
+entry that will be deleted again.
+
+Entry 8 (`namespace-the-molecule-suite-per-working-tree`) would remove the
+hazard rather than document it; this entry is worth doing anyway and is much
+cheaper, and stays true until entry 8 lands.

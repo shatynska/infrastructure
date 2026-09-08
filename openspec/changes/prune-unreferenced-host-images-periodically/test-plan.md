@@ -217,7 +217,7 @@ branches; the sixth's reason is recorded below.
 | 18 | An empty keep set removes nothing | `Assert the empty-keep-set arrangement really is one, and removed nothing` | abandon-paths | 2.4.3 |
 | 19 | An old image in active use is not removed for its age | **STATIC READ ONLY** — `Assert the script consults no age criterion and never forces a removal` | default | 2.11 |
 | 20 | A completed run reports what it did | `Assert the completed run reported both counts, deduplicated by identity, and exited zero` (removed-something) **and** `Assert the installed unit runs the prune and a completed run leaves it successful` (found-nothing, through the unit) | default | 2.7 |
-| 21 | An abandoned run says why and fails | `Assert the two abandoned runs are distinguishable from each other and from a completed run` (default) **and** `Assert the three abandon branches report three distinguishable conditions` **and** `Assert an abandoned run leaves a failed unit on the host` (abandon-paths). Five of six branches; the sixth below | both | 2.7 |
+| 21 | An abandoned run says why and fails | `Assert the two abandoned runs are distinguishable from each other and from a completed run` (default) **and** `Assert the three abandon branches report three distinguishable conditions` **and** `Assert an abandoned run leaves a failed unit on the host` (abandon-paths). Five of six branches; the sixth below. The covered branch "the keep set could not be determined" gained two further implementation paths in `2c77c93` — an unresolvable reference and unreadable container images — neither of which any assertion reaches; see "Two abandon branches added after code review" | both | 2.7 |
 | 22 | A non-responding runtime does not leave the unit running indefinitely | **STATIC READ ONLY** — `Assert the schedule is the init system's and the service is a bounded oneshot` | default | 2.11 |
 | 23 | Configuring the host does not prune it | `Assert the converge armed the timer and executed no prune` | default | 2.9 |
 | 24 | A host that was down at its scheduled time still runs | **STATIC READ ONLY** — `Assert the timer carries the catch-up, UTC and randomised-delay settings` | default | 2.9 |
@@ -312,6 +312,17 @@ The same rig is what `tasks.md` 3.7 queues as a follow-up: it supplies the seam
 Molecule lacks, and adopting it would cover these two branches and the two
 guards under "Deliberate non-coverage" together.
 
+### One accepted shape that docker rejects downstream
+
+`well_formed` accepts `ghcr.io/org/../app:v1`. Docker path-normalises it to
+`ghcr.io/app:v1` and answers `No such image`, so it takes the benign
+contributes-nothing path rather than abandoning. It is not reachable from the
+class the delta names — an unset path segment yields `//`, which the early
+reject case already catches — so it is recorded rather than fixed: this
+function has been the source of a HIGH finding in two separate review rounds,
+once for accepting too much and once for rejecting too much, and a third edit
+for an unreachable shape is not worth the risk it carries.
+
 ## Assertion classification
 
 **Specified** — traces to a stated sentence of the delta requirement:
@@ -405,7 +416,7 @@ see what was invented rather than agreed:
     -p ExecMainStatus`, once on the happy path (`default`) and once on an
     abandoning host (`abandon-paths`).
 
-**Deliberately untested** — the seven entries under "Deliberate non-coverage",
+**Deliberately untested** — the seven entries under "Deliberate non-coverage" plus the two under "Two abandon branches added after code review", nine in all,
 each with its reason recorded there and in a comment block at the head of the
 scenario that would otherwise have held it.
 

@@ -24,6 +24,7 @@
     # and the timer it arms is enabled at converge time. It reads the same
     # `deploy_apps` the deploy_user role above does -- the same inventory
     # variable, not a copy: a divergence between two such lists would offer a
-    # live application's images for removal
-    # (openspec/changes/prune-unreferenced-host-images-periodically).
+    # live application's images for removal. See
+    # openspec/specs/iac-host-configuration/spec.md, "Unreferenced Host Images
+    # Are Pruned on a Schedule".
     - role: image_prune

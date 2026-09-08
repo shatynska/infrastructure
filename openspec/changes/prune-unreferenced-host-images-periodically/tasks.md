@@ -487,7 +487,7 @@ commands are in scope; the Terraform row is not.
   keeps every image the eleven running containers hold together with
   `postgres:16-alpine` and `postgres:16.15`. Confirm with `docker system df` and
   by checking each of those eleven containers is still up.
-- [ ] 3.7 Record four follow-ups in `docs/change-queue.md`, none of which
+- [x] 3.7 Record four follow-ups in `docs/change-queue.md`, none of which
   belongs in this change. First, the one this change names as a non-goal:
   node-exporter's textfile collector plus a staleness alert, so a prune that has
   silently stopped working is alertable rather than only journalled — a

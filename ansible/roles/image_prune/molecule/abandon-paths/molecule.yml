@@ -1,9 +1,9 @@
 ---
-# Molecule scenario for the three abandon branches of the ADDED requirement
-# "Unreferenced Host Images Are Pruned on a Schedule"
-# (openspec/changes/prune-unreferenced-host-images-periodically/specs/
-# iac-host-configuration/spec.md) that the sibling `default` scenario cannot
-# host (tasks.md 2.4):
+# Molecule scenario for the three abandon branches of the requirement
+# "Unreferenced Host Images Are Pruned on a Schedule" in
+# openspec/specs/iac-host-configuration/spec.md, which the sibling `default`
+# scenario cannot host (the prune-unreferenced-host-images-periodically change,
+# tasks.md 2.4):
 #
 #   1. the enumeration is present and names no application;
 #   2. the host carries no enumeration at all, reported DISTINGUISHABLY from 1;

@@ -267,7 +267,11 @@
           # image has no tag to re-check before removal, so nothing downstream
           # catches it and the runtime refusal never engages, because the image
           # genuinely is held by no container.
-          if resolved=$(docker image inspect -f '{{.Id}}' "$ref" 2>"$inspect_err"); then
+          # `--`: a reference rendered from an unset prefix can begin with a
+          # dash (`${PREFIX}-app:v1`), which the CLI would parse as a flag and
+          # report as an unknown shorthand flag rather than as the malformed
+          # reference it is. The run abandons either way; this makes it say so.
+          if resolved=$(docker image inspect -f '{{.Id}}' -- "$ref" 2>"$inspect_err"); then
             keep["$resolved"]=1
           elif ! grep -qi 'no such image' "$inspect_err"; then
             abandon "the reference ${ref} from ${app} could not be resolved: $(tr -d '\n' < "$inspect_err")"

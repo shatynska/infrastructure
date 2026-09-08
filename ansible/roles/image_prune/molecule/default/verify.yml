@@ -1,7 +1,6 @@
 ---
-# Verifies the ADDED requirement "Unreferenced Host Images Are Pruned on a
-# Schedule" (openspec/changes/prune-unreferenced-host-images-periodically/
-# specs/iac-host-configuration/spec.md).
+# Verifies the requirement "Unreferenced Host Images Are Pruned on a Schedule"
+# in openspec/specs/iac-host-configuration/spec.md.
 #
 # Derived from that delta spec ahead of any implementation, per tasks.md
 # section 2, and WITHOUT reading any implementation of the prune script -- none
