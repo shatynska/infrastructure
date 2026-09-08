@@ -31,3 +31,9 @@ ansible/roles/geerlingguy.docker/
 
 # Python bytecode from the CI-configuration test suite (.github/tests/).
 __pycache__/
+
+# npm's install tree for .github/package.json, which pins the OpenSpec CLI that
+# pr-validation.yml validates the specification record with. The manifest and
+# its lockfile ARE committed -- they are the pin; what is installed from them
+# is not. `npm ci` recreates this from the lockfile exactly.
+node_modules/

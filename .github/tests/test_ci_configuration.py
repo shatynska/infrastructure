@@ -6924,6 +6924,23 @@ OPENSPEC_LOCKFILE = ROOT / ".github" / "package-lock.json"
 AGENTS_FILE = ROOT / "AGENTS.md"
 CHANGES_DIRECTORY_NAME = "changes"
 
+# The npm PACKAGE and the BINARY it installs carry different names, and both
+# are load-bearing here. The package is scoped -- `@fission-ai/openspec` -- and
+# is what the manifest, the lockfile and Dependabot key on. The executable it
+# puts on PATH is plain `openspec`, and is what the workflow's script names.
+#
+# One constant covering both roles was this author's wrong assumption, found
+# while the gate was being implemented: it made the manifest assertions
+# unsatisfiable by a CORRECT manifest, whose dependency key must be the scoped
+# name -- a test dictating a fact about the world rather than reading one.
+#
+# The reconciliation deliberately NOT taken is an npm alias
+# (`"openspec": "npm:@fission-ai/openspec@1.12.0"`). It would make the literal
+# key the old assertion wanted appear, at the cost of bending the manifest to
+# fit the test; and the alias string is not an exact version, so
+# `EXACT_NPM_VERSION` would then fail on it. `TestThePinMatchersReadTheScoped
+# PackageName` pins that refusal so it cannot be quietly reintroduced.
+VALIDATING_PACKAGE = "@fission-ai/openspec"
 VALIDATING_TOOL = "openspec"
 VALIDATING_SUBCOMMAND = "validate"
 VALIDATING_FLAGS = ("--all", "--archived")
@@ -7132,6 +7149,15 @@ def manifest_pin(name: str, manifest: dict) -> str | None:
 
 
 def lockfile_versions(name: str, path: Path | None = None) -> set[str]:
+    """Every version an npm lockfile records for `name`.
+
+    `name` is the PACKAGE name, scope included. npm keys `packages` by install
+    path, so a scoped package appears as `node_modules/@scope/name` and a nested
+    one as `node_modules/other/node_modules/@scope/name`; splitting on the last
+    `node_modules/` recovers the package name from both. Matching on the bare
+    basename instead would both miss the scoped entry and match a different
+    scope's package of the same name.
+    """
     path = OPENSPEC_LOCKFILE if path is None else path
     if not path.is_file():
         raise AssertionError(f"{path.relative_to(ROOT).as_posix()} does not exist")
@@ -7340,6 +7366,582 @@ def flattened(text: str) -> str:
     """Collapse whitespace, so a rule wrapped across lines still reads as one
     sentence."""
     return " ".join(text.split())
+
+
+class TestTheSpecificationRecordIsValidatedByTheRequiredCheck(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration."""
+
+    def setUp(self) -> None:
+        self.workflow = load_yaml(PR_VALIDATION)
+        self.validating = record_validation_steps(self.workflow)
+
+    def _require_located(self) -> None:
+        self.assertTrue(
+            self.validating,
+            "no step in pr-validation.yml runs "
+            f"`{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND}`, so the specification "
+            "record is not validated by the required status check at all -- and "
+            "every shape assertion over that step would pass having read nothing",
+        )
+
+    def test_the_required_check_validates_the_specification_record(self) -> None:
+        """SPECIFIED -- the requirement's opening SHALL: the record "SHALL be
+        validated by its authoring tool as part of the required pull request
+        status check, unconditionally".
+
+        This is also the guard that keeps every other assertion in this section
+        from passing vacuously, and the assertion that forecloses relocating the
+        invocations into a called workflow or composite action: a relocated
+        invocation is not a `run:` step of this workflow and is not found here.
+        """
+        self._require_located()
+
+    def test_both_the_active_and_the_archived_record_are_validated(self) -> None:
+        """SPECIFIED -- "Validation SHALL cover both the active record and the
+        archived one. These are distinct properties reached by distinct
+        invocations, and neither implies the other"."""
+        self._require_located()
+        flags: list[str] = []
+        for _, _, step in self.validating:
+            for line in significant_lines(step.get("run", "")):
+                flag = validating_invocation_flag(line)
+                if flag:
+                    flags.append(flag)
+        self.assertEqual(
+            sorted(VALIDATING_FLAGS),
+            sorted(flags),
+            "the required check does not run exactly one validation of the active "
+            "record and one of the archived record; the invocations it runs are "
+            f"{sorted(flags)}",
+        )
+
+    def test_the_validation_is_invoked_by_a_run_step_rather_than_delegated(self) -> None:
+        """SPECIFIED -- "Relocating the invocations into a called workflow or
+        composite action SHALL NOT be used to escape that shape"."""
+        delegating = [
+            step_label(job, index, step)
+            for job, index, step in steps_delegating_the_validation(self.workflow)
+        ]
+        self.assertEqual(
+            [],
+            delegating,
+            "these steps reach the validating tool through `uses:`, which moves its "
+            f"script somewhere this suite cannot read the shape of: {delegating}",
+        )
+
+    def test_the_validating_step_is_unconditional(self) -> None:
+        """SPECIFIED -- scenario "The validation runs regardless of what a pull
+        request touched", and "The check SHALL run on every pull request rather
+        than only on those that change a file under the specification
+        directory". Asserts the key is absent: `if: true` is still a condition
+        declared where the requirement says there is none."""
+        self._require_located()
+        offenders = [
+            step_label(job, index, step) for job, index, step in self.validating if "if" in step
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            f"these steps gate the record validation behind an `if:`: {offenders}",
+        )
+
+    def test_the_job_enclosing_the_validating_step_is_unconditional(self) -> None:
+        """SPECIFIED -- "The job enclosing the check SHALL itself be
+        unconditional ... a step that cannot be skipped inside a job that can is
+        skippable"."""
+        self._require_located()
+        offenders = sorted(
+            {job for job, _, _ in self.validating if "if" in (jobs(self.workflow)[job] or {})}
+        )
+        self.assertEqual(
+            [],
+            offenders,
+            f"these jobs gate the record validation behind an `if:`: {offenders}",
+        )
+
+    def test_the_workflow_carrying_the_validation_declares_no_path_filter(self) -> None:
+        """SPECIFIED -- "the workflow SHALL NOT reach it through a
+        workflow-level path filter".
+
+        `TestRequiredCheckIsNotPathFiltered` asserts the same property of the
+        same file for a different requirement. The duplication is deliberate, in
+        the pattern that class already documents: this requirement's own
+        obligation must not rest on a test that a change to another requirement
+        could legitimately retire.
+        """
+        self._require_located()
+        on = triggers(self.workflow)
+        self.assertTrue(on, "pr-validation.yml declares no triggers at all")
+        for event, config in on.items():
+            if not isinstance(config, dict):
+                continue
+            for key in ("paths", "paths-ignore"):
+                self.assertNotIn(
+                    key,
+                    config,
+                    f"pr-validation.yml's `{event}` trigger declares `{key}:`, so a "
+                    "pull request touching no specification file would carry a stale "
+                    "record past the gate",
+                )
+
+    def test_the_validation_runs_on_every_pull_request(self) -> None:
+        """SPECIFIED -- "The check SHALL run on every pull request"."""
+        self._require_located()
+        self.assertIn(
+            "pull_request",
+            triggers(self.workflow),
+            "pr-validation.yml does not trigger on `pull_request`, so the record "
+            "validation does not run on pull requests at all",
+        )
+
+
+class TestTheRecordValidationCannotReportSuccessOverAFailure(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration.
+
+    Scenario "The check cannot report success over a failed validation". Every
+    other obligation on this step is satisfied by a step that runs
+    unconditionally, installs from the pinned manifest, and then throws its
+    result away: such a step exists, is not skipped, is exactly pinned, and
+    reports green forever.
+
+    Asserted as a CLOSED POSITIVE SHAPE, never as a blocklist of evasions -- the
+    delta requires this in those words, and that change's design.md Decision 9
+    records that a blocklist written against `|| true` is defeated by `|| :`,
+    and that a step-level reading is defeated by a job-level setting. Both are
+    asserted here.
+    """
+
+    def setUp(self) -> None:
+        self.workflow = load_yaml(PR_VALIDATION)
+        self.validating = record_validation_steps(self.workflow)
+        self.assertTrue(
+            self.validating,
+            "no step in pr-validation.yml runs "
+            f"`{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND}`, so these shape "
+            "assertions would pass having read nothing",
+        )
+
+    def test_the_validating_step_script_is_the_invocations_and_nothing_else(self) -> None:
+        """SPECIFIED -- "its script SHALL consist of the validating invocations
+        and nothing else -- no shell operator joining them to anything, no
+        redirection or capture of their status"."""
+        offenders = []
+        for job, index, step in self.validating:
+            for line in significant_lines(step.get("run", "")):
+                if validating_invocation_flag(line) is None:
+                    offenders.append(f"{step_label(job, index, step)}: {line}")
+        self.assertEqual(
+            [],
+            offenders,
+            "these script lines are not one of the permitted validating "
+            f"invocations, so the step's script is not the closed form the "
+            f"requirement specifies: {offenders}. The permitted form is an "
+            f"optional `npx`, then `{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND}`, "
+            f"then exactly one of {list(VALIDATING_FLAGS)}, and no other token. A "
+            "legitimate edit to this step is meant to fail this assertion until "
+            "the assertion is updated with it",
+        )
+
+    def test_the_validating_step_declares_no_shell_override(self) -> None:
+        """SPECIFIED -- "no shell override". A `shell:` key can reintroduce every
+        construction the closed form excludes -- a shell without exit-on-error,
+        or an interpreter that reads the script as something other than a list of
+        commands."""
+        offenders = [
+            f"{step_label(job, index, step)}: shell: {step['shell']}"
+            for job, index, step in self.validating
+            if "shell" in step
+        ]
+        self.assertEqual([], offenders, f"steps overriding `shell:`: {offenders}")
+
+    def test_the_validating_step_declares_no_continue_on_error(self) -> None:
+        """SPECIFIED -- "neither the step nor its enclosing job SHALL declare a
+        continue-on-error setting in any form, including one whose value is an
+        expression".
+
+        Asserts the KEY IS ABSENT rather than that its value is falsy: an
+        expression-valued setting reads as a harmless string here and is true on
+        the runner.
+        """
+        offenders = [
+            f"{step_label(job, index, step)}: continue-on-error: {step['continue-on-error']}"
+            for job, index, step in self.validating
+            if "continue-on-error" in step
+        ]
+        self.assertEqual([], offenders, f"steps declaring continue-on-error: {offenders}")
+
+    def test_the_job_enclosing_the_validating_step_declares_no_continue_on_error(self) -> None:
+        """SPECIFIED -- the same clause read at the job level. A step that cannot
+        suppress its failure inside a job that can is suppressible, and a
+        step-level-only assertion is satisfied by one `continue-on-error` on the
+        job."""
+        offenders = sorted(
+            {
+                f"{job}: continue-on-error: "
+                f"{(jobs(self.workflow)[job] or {})['continue-on-error']}"
+                for job, _, _ in self.validating
+                if "continue-on-error" in (jobs(self.workflow)[job] or {})
+            }
+        )
+        self.assertEqual([], offenders, f"jobs declaring continue-on-error: {offenders}")
+
+
+class TestTheClosedFormIsARealReadOfTheScript(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration.
+
+    A shape assertion that accepted everything would pass over the workflow
+    above while establishing nothing. These exercise the matcher directly
+    against the constructions the delta and design.md Decision 9 name -- and, as
+    importantly, against ones they do not name, which is the property a
+    blocklist cannot have.
+    """
+
+    def test_the_permitted_invocations_are_recognised(self) -> None:
+        """DERIVED -- no scenario states it. The converse half: a matcher that
+        rejected everything would satisfy every rejection below while failing
+        any correct workflow."""
+        for line, expected in (
+            ("openspec validate --all", "--all"),
+            ("openspec validate --archived", "--archived"),
+            ("npx openspec validate --all", "--all"),
+            ("./node_modules/.bin/openspec validate --archived", "--archived"),
+        ):
+            self.assertEqual(expected, validating_invocation_flag(line), line)
+
+    def test_a_suppressed_invocation_is_rejected(self) -> None:
+        """SPECIFIED -- scenario "The check cannot report success over a failed
+        validation". `|| :` and `; true` are here because they are what a
+        blocklist written against `|| true` lets through."""
+        for line in (
+            "openspec validate --all || true",
+            "openspec validate --all || :",
+            "openspec validate --all ; true",
+            "openspec validate --all && echo ok",
+            "openspec validate --all | tee log.txt",
+            "openspec validate --all > /dev/null 2>&1",
+            "set +e",
+            "if ! openspec validate --all; then echo soft; fi",
+            "status=$(openspec validate --all)",
+            "openspec validate --all &",
+            "bash -c 'openspec validate --all || true'",
+        ):
+            self.assertIsNone(validating_invocation_flag(line), line)
+
+    def test_a_line_that_is_not_the_validation_is_rejected(self) -> None:
+        """SPECIFIED -- "its script SHALL consist of the validating invocations
+        and nothing else"."""
+        for line in (
+            "npm ci",
+            "echo validating",
+            "openspec validate",
+            "openspec validate --all --quiet",
+            "openspec list",
+            "cd .github",
+        ):
+            self.assertIsNone(validating_invocation_flag(line), line)
+
+
+class TestTheValidatingToolIsInstalledFromAPinnedManifest(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration. Scenario "The validating tool is not resolved freshly at run
+    time"."""
+
+    def setUp(self) -> None:
+        self.workflow = load_yaml(PR_VALIDATION)
+        self.validating = record_validation_steps(self.workflow)
+        self.manifest_directory = OPENSPEC_MANIFEST.parent.relative_to(ROOT).as_posix()
+
+    def _validating_jobs(self) -> list[str]:
+        self.assertTrue(
+            self.validating,
+            "no step in pr-validation.yml runs the validating tool, so these "
+            "install assertions would pass having read nothing",
+        )
+        return sorted({job for job, _, _ in self.validating})
+
+    def test_the_manifest_and_its_lockfile_are_committed(self) -> None:
+        """SPECIFIED -- "installed from a manifest that pins it to an exact
+        version and is committed to this repository", and "SHALL fail rather than
+        proceed where the manifest and its lockfile disagree", which presupposes
+        a committed lockfile."""
+        for path in (OPENSPEC_MANIFEST, OPENSPEC_LOCKFILE):
+            self.assertTrue(
+                path.is_file(),
+                f"{path.relative_to(ROOT).as_posix()} is not committed, so the "
+                "validating tool's version is not pinned by anything this "
+                "repository holds",
+            )
+
+    def test_the_manifest_pins_the_tool_to_an_exact_version(self) -> None:
+        """SPECIFIED -- "pins it to an exact version ... and SHALL NOT be
+        resolved freshly at run time". A range, a channel tag or a URL is a fresh
+        resolution wearing a manifest."""
+        pin = manifest_pin(VALIDATING_PACKAGE, npm_manifest())
+        self.assertIsNotNone(
+            pin,
+            f"{OPENSPEC_MANIFEST.relative_to(ROOT).as_posix()} names no "
+            f"`{VALIDATING_PACKAGE}` dependency. The npm package is scoped; the "
+            f"binary it installs is `{VALIDATING_TOOL}`, and the manifest keys on "
+            "the package",
+        )
+        self.assertRegex(
+            pin,
+            EXACT_NPM_VERSION,
+            f"`{VALIDATING_PACKAGE}` is pinned as {pin!r}, which is not an exact "
+            "version: two installs at different times could resolve differently and "
+            "silently change what the gate checks. An npm alias "
+            f'(`"{VALIDATING_TOOL}": "npm:{VALIDATING_PACKAGE}@<version>"`) fails '
+            "here for that reason, and is refused on purpose",
+        )
+
+    def test_the_lockfile_records_the_version_the_manifest_pins(self) -> None:
+        """SPECIFIED -- "SHALL fail rather than proceed where the manifest and
+        its lockfile disagree". The workflow's install enforces this at run time;
+        this is the same property read statically, so a disagreement is a red
+        test rather than a red pipeline."""
+        pin = manifest_pin(VALIDATING_PACKAGE, npm_manifest())
+        self.assertIsNotNone(pin, "the manifest names no validating tool to compare against")
+        versions = lockfile_versions(VALIDATING_PACKAGE)
+        self.assertTrue(
+            versions,
+            f"the lockfile records no version of `{VALIDATING_PACKAGE}` at all, so "
+            "the install would have nothing exact to install",
+        )
+        self.assertEqual(
+            {pin},
+            versions,
+            f"the manifest pins `{VALIDATING_PACKAGE}` {pin} and the lockfile records "
+            f"{sorted(versions)}",
+        )
+
+    def test_the_workflow_installs_the_tool_with_a_lockfile_exact_install(self) -> None:
+        """SPECIFIED -- "SHALL install the exact version the committed manifest
+        pins ... and SHALL fail rather than proceed where the manifest and its
+        lockfile disagree".
+
+        DERIVED in one respect, recorded in the test plan: that npm's
+        lockfile-exact install is spelled `npm ci` -- and that a resolving
+        `npm install` is not it -- comes from that change's design.md Decision 7,
+        not from the delta, which states the property rather than the command.
+        """
+        validating_jobs = self._validating_jobs()
+        installing = []
+        for job, index, step in steps(self.workflow):
+            if job not in validating_jobs:
+                continue
+            for line in significant_lines(step.get("run", "")):
+                if tuple(line.split()[:2]) != LOCKFILE_EXACT_INSTALL:
+                    continue
+                if self.manifest_directory in install_targets(jobs(self.workflow)[job] or {}, step):
+                    installing.append(step_label(job, index, step))
+        self.assertTrue(
+            installing,
+            "no step in the job that validates the record runs "
+            f"`{' '.join(LOCKFILE_EXACT_INSTALL)}` against {self.manifest_directory}/, "
+            "so the tool the step runs is not the one the committed manifest and "
+            "lockfile pin",
+        )
+
+    def test_the_install_target_helper_takes_the_jobs_mapping_not_its_name(self) -> None:
+        """DERIVED -- no scenario states it. `steps()` yields the job NAME, and
+        the assertion above resolves the job's mapping with
+        `jobs(self.workflow)[job]` before calling `install_targets`. A future
+        call site copying the iterator's idiom would hand it a `str` instead;
+        this pins both halves -- that a job-level `defaults.run.working-directory`
+        IS read when the mapping is passed, which is the path a reviewer flagged
+        as unreachable, and that passing the name is refused by name rather than
+        raising a bare `AttributeError` from somewhere inside.
+        """
+        job = {"defaults": {"run": {"working-directory": ".github"}}}
+        step = {"run": " ".join(LOCKFILE_EXACT_INSTALL)}
+        self.assertEqual({".github"}, install_targets(job, step))
+        with self.assertRaises(AssertionError):
+            install_targets("validate", step)
+
+    def test_no_package_is_installed_by_a_resolving_command(self) -> None:
+        """SPECIFIED -- "SHALL NOT be resolved freshly at run time".
+
+        Stated as a closed shape rather than as a list of resolving commands:
+        every package-manager line in the required check must be the
+        lockfile-exact install. `npm install`, `npm i`, `yarn add`, a global
+        install pinned inline in the workflow, and anything else are rejected
+        together, by not being it.
+        """
+        offenders = [
+            f"{label}: {line}"
+            for label, line in package_manager_lines(self.workflow)
+            if tuple(line.split()[:2]) != LOCKFILE_EXACT_INSTALL
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            "these package-manager invocations are not the lockfile-exact install "
+            f"`{' '.join(LOCKFILE_EXACT_INSTALL)}`, so they resolve a version at run "
+            f"time: {offenders}",
+        )
+
+    def test_the_runtime_that_executes_the_tool_is_pinned(self) -> None:
+        """SPECIFIED -- "The runtime that executes it SHALL be pinned in the same
+        sense: a freshly resolved interpreter beneath an exactly pinned tool
+        leaves the pin describing less than it appears to"."""
+        validating_jobs = self._validating_jobs()
+        setups = [
+            (job, index, step)
+            for job, index, step in steps(self.workflow)
+            if job in validating_jobs and SETUP_NODE in str(step.get("uses", ""))
+        ]
+        self.assertTrue(
+            setups,
+            "the job that validates the record sets up no Node runtime, so the "
+            "interpreter beneath the exactly pinned tool is whatever the runner "
+            "image happens to carry",
+        )
+        offenders = []
+        for job, index, step in setups:
+            label = step_label(job, index, step)
+            reference = str(step["uses"])
+            ref = reference.rsplit("@", 1)[-1] if "@" in reference else ""
+            if ref.strip().lower() in MUTABLE_ACTION_REFS:
+                offenders.append(f"{label}: action reference {reference!r} is not pinned")
+            with_block = step.get("with") or {}
+            version = str(with_block.get("node-version", "")).strip()
+            version_file = str(with_block.get("node-version-file", "")).strip()
+            if version:
+                if not version[0].isdigit():
+                    offenders.append(f"{label}: node-version {version!r} names no explicit version")
+            elif version_file:
+                referenced = ROOT / relative_directory(version_file)
+                if not referenced.is_file():
+                    offenders.append(f"{label}: node-version-file {version_file!r} is not committed")
+            else:
+                offenders.append(f"{label}: declares neither node-version nor node-version-file")
+        self.assertEqual([], offenders, f"the Node runtime is not pinned: {offenders}")
+
+
+class TestThePinMatchersReadTheScopedPackageName(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration.
+
+    The manifest assertions above rest on two matchers and on one fact about the
+    world: the npm package is `@fission-ai/openspec` and the binary it installs
+    is `openspec`. An earlier revision of these tests assumed the two names were
+    one, which made the assertions unsatisfiable by a correct manifest -- the
+    test asserting a fact rather than reading one. These fixtures pin the
+    distinction so it cannot be lost again, and they read no repository file, so
+    they discriminate whether or not the manifest is committed yet.
+    """
+
+    SCOPED_LOCKFILE = {
+        "lockfileVersion": 3,
+        "packages": {
+            "": {"dependencies": {VALIDATING_PACKAGE: "1.12.0"}},
+            f"node_modules/{VALIDATING_PACKAGE}": {"version": "1.12.0"},
+        },
+    }
+
+    def _lockfile(self, document: dict) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="lockfile-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        path = root / "package-lock.json"
+        path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+        return path
+
+    def test_the_manifest_matcher_finds_the_scoped_package(self) -> None:
+        """SPECIFIED -- "installed from a manifest that pins it to an exact
+        version", read against the name the manifest actually carries."""
+        for section in ("dependencies", "devDependencies"):
+            manifest = {section: {VALIDATING_PACKAGE: "1.12.0"}}
+            self.assertEqual("1.12.0", manifest_pin(VALIDATING_PACKAGE, manifest), section)
+
+    def test_the_manifest_matcher_does_not_answer_to_the_binary_name(self) -> None:
+        """DERIVED -- no scenario states it. This is the wrong assumption itself,
+        written down: a manifest keyed on the package must not be readable under
+        the binary's name, or the two roles collapse back into one and the next
+        author cannot tell which is which."""
+        manifest = {"dependencies": {VALIDATING_PACKAGE: "1.12.0"}}
+        self.assertIsNone(manifest_pin(VALIDATING_TOOL, manifest))
+
+    def test_the_lockfile_matcher_reads_a_scoped_install_path(self) -> None:
+        """SPECIFIED -- "SHALL fail rather than proceed where the manifest and
+        its lockfile disagree". npm keys `packages` by install path, so the
+        scoped package appears as `node_modules/@scope/name`."""
+        path = self._lockfile(self.SCOPED_LOCKFILE)
+        self.assertEqual({"1.12.0"}, lockfile_versions(VALIDATING_PACKAGE, path))
+
+    def test_the_lockfile_matcher_reads_a_nested_install_path(self) -> None:
+        """DERIVED -- no scenario states it. A transitively installed copy sits
+        under a second `node_modules/`, and a matcher that missed it would report
+        agreement it had not checked."""
+        path = self._lockfile(
+            {
+                "packages": {
+                    "": {},
+                    f"node_modules/other/node_modules/{VALIDATING_PACKAGE}": {
+                        "version": "1.12.0"
+                    },
+                }
+            }
+        )
+        self.assertEqual({"1.12.0"}, lockfile_versions(VALIDATING_PACKAGE, path))
+
+    def test_the_lockfile_matcher_reads_the_legacy_dependencies_block(self) -> None:
+        """DERIVED -- no scenario states it. Lockfile version 1 records versions
+        under `dependencies` rather than `packages`, and the assertion must not
+        silently read nothing if npm writes one."""
+        path = self._lockfile({"dependencies": {VALIDATING_PACKAGE: {"version": "1.12.0"}}})
+        self.assertEqual({"1.12.0"}, lockfile_versions(VALIDATING_PACKAGE, path))
+
+    def test_the_lockfile_matcher_ignores_another_scopes_package_of_the_same_name(self) -> None:
+        """DERIVED -- no scenario states it. Matching on the bare basename would
+        read `@someone-else/openspec` as this pin and report an agreement between
+        a manifest and a lockfile that describe different packages."""
+        path = self._lockfile(
+            {"packages": {"": {}, "node_modules/@someone-else/openspec": {"version": "9.9.9"}}}
+        )
+        self.assertEqual(set(), lockfile_versions(VALIDATING_PACKAGE, path))
+
+    def test_the_lockfile_matcher_does_not_answer_to_the_binary_name(self) -> None:
+        """DERIVED -- no scenario states it. The converse of the manifest case,
+        for the same reason."""
+        path = self._lockfile(self.SCOPED_LOCKFILE)
+        self.assertEqual(set(), lockfile_versions(VALIDATING_TOOL, path))
+
+    def test_an_npm_alias_is_not_an_exact_version(self) -> None:
+        """DERIVED -- no scenario states it. An alias
+        (`"openspec": "npm:@fission-ai/openspec@1.12.0"`) would make the literal
+        key the old, wrong assertion wanted appear in the manifest. It is refused
+        because it bends the manifest to fit a test; this asserts that the pin
+        check refuses it too, rather than leaving the refusal to a comment."""
+        alias = f"npm:{VALIDATING_PACKAGE}@1.12.0"
+        self.assertNotRegex(alias, EXACT_NPM_VERSION)
+        self.assertRegex("1.12.0", EXACT_NPM_VERSION)
+
+
+class TestThePinIsWatchedByTheDependencyUpdateConfiguration(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration. Scenario "The pin is watched by the dependency-update
+    configuration"."""
+
+    def test_the_dependency_update_configuration_covers_the_manifests_directory(self) -> None:
+        """SPECIFIED -- "That manifest SHALL be covered by the repository's
+        dependency-update configuration, so that the pin is maintained rather
+        than left to rot -- a pinned dependency nothing watches is the failure
+        this repository has recorded against itself four times over"."""
+        directory = "/" + OPENSPEC_MANIFEST.parent.relative_to(ROOT).as_posix()
+        configured = dependabot_directories("npm")
+        self.assertTrue(
+            configured,
+            ".github/dependabot.yml has no `npm` entry, so nothing raises a new "
+            "version of the validating tool as a reviewable pull request",
+        )
+        self.assertTrue(
+            any(gh_glob_matches(pattern, directory) for pattern in configured),
+            f"no Dependabot `npm` entry names {directory}, where the validating "
+            f"tool's manifest lives; configured: {sorted(configured)}",
+        )
 
 
 class TestUnperformedWorkIsDisclosedWithAReason(unittest.TestCase):

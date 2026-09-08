@@ -238,6 +238,14 @@ here so its greenness is not mistaken for coverage.
 | `TestTheValidatingToolIsInstalledFromAPinnedManifest.test_the_workflow_installs_the_tool_with_a_lockfile_exact_install` | SPECIFIED, with one DERIVED element (see below) |
 | `TestTheValidatingToolIsInstalledFromAPinnedManifest.test_no_package_is_installed_by_a_resolving_command` | SPECIFIED |
 | `TestTheValidatingToolIsInstalledFromAPinnedManifest.test_the_runtime_that_executes_the_tool_is_pinned` | SPECIFIED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_manifest_matcher_finds_the_scoped_package` | SPECIFIED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_reads_a_scoped_install_path` | SPECIFIED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_reads_a_nested_install_path` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_reads_the_legacy_dependencies_block` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_ignores_another_scopes_package_of_the_same_name` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_manifest_matcher_does_not_answer_to_the_binary_name` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_the_lockfile_matcher_does_not_answer_to_the_binary_name` | DERIVED |
+| `TestThePinMatchersReadTheScopedPackageName.test_an_npm_alias_is_not_an_exact_version` | DERIVED |
 
 The "manifest and lockfile disagree" clause is asserted twice over: statically,
 by comparing the manifest's pin against the lockfile's recorded version — so a
@@ -336,6 +344,40 @@ with no channel to ask on.
    `test_the_manifest_pins_the_tool_to_an_exact_version`,
    `test_the_lockfile_records_the_version_the_manifest_pins`,
    `test_the_runtime_that_executes_the_tool_is_pinned`.
+1a. **The tool's npm package name — assumed wrong, corrected during
+   implementation.** These tests were written assuming the npm package and the
+   binary it installs share a name, and carried one constant,
+   `VALIDATING_TOOL = "openspec"`, for both roles. They do not share a name: the
+   package is **`@fission-ai/openspec`** (1.12.0 at the time of writing) and the
+   binary it puts on `PATH` is **`openspec`**. Nothing in this change's artifacts
+   states either, and the assumption was never flagged because both assertions
+   were red for the ordinary pre-implementation reason and so looked correct.
+
+   The effect was worse than a red test: `manifest_pin(VALIDATING_TOOL, …)`
+   required the literal key `openspec` in `dependencies`, which a *correct*
+   manifest cannot carry — the assertion was unsatisfiable, and the only way to
+   turn it green would have been to bend the manifest to it. That is a test
+   dictating a fact about the world rather than reading one, and it is the same
+   shape of defect as everything else this change exists to remove.
+
+   *Fixed by splitting the constant, not renaming it:* `VALIDATING_PACKAGE` for
+   the manifest, lockfile and Dependabot assertions; `VALIDATING_TOOL` for the
+   script-shape assertion, where the binary name was right all along.
+   `lockfile_versions` was checked at the same time — npm keys `packages` by
+   install path, so the package appears as `node_modules/@fission-ai/openspec`,
+   which the existing split on the last `node_modules/` already recovered
+   correctly; it is now documented and covered rather than accidentally right.
+
+   *The reconciliation refused:* an npm alias,
+   `"openspec": "npm:@fission-ai/openspec@1.12.0"`, which would make the literal
+   key the old assertion wanted appear. It bends the manifest to fit the test,
+   and the alias string is not an exact version, so `EXACT_NPM_VERSION` fails on
+   it. `test_an_npm_alias_is_not_an_exact_version` pins that refusal so it cannot
+   be reintroduced quietly.
+
+   *Depends on it:* every test in `TestThePinMatchersReadTheScopedPackageName`,
+   plus `test_the_manifest_pins_the_tool_to_an_exact_version` and
+   `test_the_lockfile_records_the_version_the_manifest_pins`.
 2. **How the binary is invoked after a local `npm ci` in `.github/`.** The
    artifacts do not say. *Assumption:* both `npx openspec validate --flag` and a
    path form (`./node_modules/.bin/openspec validate --flag`) are permitted; a
@@ -375,7 +417,20 @@ with no channel to ask on.
    *Depends on it:* `test_a_heading_with_trailing_punctuation_still_opens_the_section`,
    `test_a_heading_with_a_trailing_parenthetical_still_opens_the_section`,
    `test_a_numbered_section_merely_mentioning_the_phrase_is_not_a_disclosure`.
-7. **A standing gap in the suite, reported not fixed.** The suite's own
+7. **"Committed" is asserted as "present on disk", and the two differ.**
+   `test_the_manifest_and_its_lockfile_are_committed` reads the working tree, and
+   nothing available to this suite can tell a tracked file from an untracked one:
+   a tracked-file listing needs `git`, and the suite is specified to spawn
+   nothing outside `bash`/`sh`. *Assumption taken:* the working tree stands in
+   for the committed tree. *Consequence, in the safe direction:* an untracked
+   `.github/package.json` passes locally and fails in continuous integration,
+   where the file is simply absent — a real failure, correctly attributed, but
+   discovered a step later than it could be. This is the "local tree masks CI
+   gaps" hazard this project has recorded against itself before. *Depends on it:*
+   `test_the_manifest_and_its_lockfile_are_committed`,
+   `test_the_manifest_pins_the_tool_to_an_exact_version`,
+   `test_the_lockfile_records_the_version_the_manifest_pins`.
+8. **A standing gap in the suite, reported not fixed.** The suite's own
    constraint assertions (`test_the_suite_imports_only_the_standard_library_and_pinned_dependencies`,
    `test_the_suite_spawns_no_terraform_binary_or_container_runtime`,
    `test_the_suite_imports_no_network_capable_module`) read `Path(__file__)` and
@@ -486,7 +541,7 @@ reverted.
 
 ## What the implementation must make pass
 
-Nineteen tests are red and name exactly what is missing:
+Nineteen tests were red at derive time and named exactly what was missing:
 
 | Missing thing | Tests it turns green |
 |---|---|
@@ -494,6 +549,14 @@ Nineteen tests are red and name exactly what is missing:
 | `.github/package.json` + its lockfile, a `npm ci` step, a pinned setup-node | `TestTheValidatingToolIsInstalledFromAPinnedManifest` (5 of 6) |
 | The `npm` stanza in `.github/dependabot.yml` | `TestThePinIsWatchedByTheDependencyUpdateConfiguration` (1) |
 | The correction rule in `AGENTS.md`'s project-conventions section | `TestTheArchivedRecordCorrectionRuleIsStated` (3) |
+
+**All of them are now green.** With the gate implemented in the working tree, the
+suite runs **250 tests, all passing**, by `discover` and by a direct
+`python3 .github/tests/test_ci_configuration.py` alike. No test in this section
+was softened to reach that state: the two manifest assertions were corrected to
+read the package's real name (question 1a above) and were then confirmed to fail
+against a manifest keyed on the binary name, against an npm alias, against a
+range, and against a lockfile that disagrees with the manifest.
 
 ## Confirmation that these tests bite
 
@@ -532,3 +595,15 @@ fails exactly the two fixtures written for it, and the unmodified suite is green
 
 A fail-open fix that was itself untested would be the same defect one level up,
 which is why each fix is listed here with the revert that reddens it.
+
+**The package-name correction was confirmed the same way.** Reverting
+`VALIDATING_PACKAGE` to the binary's name turns
+`test_the_manifest_pins_the_tool_to_an_exact_version` and
+`test_the_lockfile_records_the_version_the_manifest_pins` red against the
+committed, correct manifest — the reported defect, reproduced and then closed —
+plus the two fixtures written to hold the distinction. Re-keying
+`lockfile_versions` on the bare basename reddens the two fixtures covering scope.
+And against synthetic repositories carrying the scoped package, the following
+each turn a compliant fixture red: a manifest keyed on the binary name, a
+manifest using an npm alias, a lockfile keyed on the unscoped install path, a
+lockfile disagreeing with the manifest, and a range in place of an exact version.
