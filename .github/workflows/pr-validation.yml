@@ -241,7 +241,7 @@ jobs:
 
       - name: Cache pre-commit environments
         if: steps.changes.outputs.ansible == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit
           # Keyed on the runner image and Python version as well as the config:
