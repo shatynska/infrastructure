@@ -162,7 +162,7 @@ services:
       start_period: 15s
 
   postgres-exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
     restart: unless-stopped
     environment:
       # `pgexporter` is a fixed, non-secret role name (documented in
