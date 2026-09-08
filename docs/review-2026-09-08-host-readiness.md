@@ -49,7 +49,7 @@ Ordered by consequence for a business host. The last column says whether the fin
 | 10 | Logs are per container, over SSH, lost on redeploy | No Loki or equivalent in the stack | Both, later | Queue 28 |
 | 11 | Traefik has no global HTTPS redirect or default resolver | Each app must repeat two labels per router; a forgotten one serves plain HTTP silently | Both | Queue 29 |
 | 12 | Rebuilding the host has never been done in sequence | Steps span four repositories and two READMEs, in no stated order | Both | Queue 30 |
-| 13 | Platform image pins are not watched by Dependabot | `dependabot.yml` covers `terraform` and `github-actions` only | Both | Queue 31 |
+| 13 | ~~Platform image pins are not watched by Dependabot~~ | ~~`dependabot.yml` covers `terraform` and `github-actions` only~~ | Both | **Closed** by `cover-platform-images-with-dependabot`: a third ecosystem, `docker-compose` over `/platform` |
 | 14 | The repository is public and commits the operator's CIDR and tailnet hostnames | `gh api repos/.../infrastructure` reports `visibility: public` | Company host only | Not recorded; a choice for this host |
 | 15 | One person authors, reviews and approves | Branch protection requires 0 reviews; the `production` Environment has one reviewer | Company host only | Not recorded; a team setting, not a repository one |
 | 16 | The workflow ceremony assumes an agent operator and one approver | OpenSpec gates, six-round review loops, comment density | Company host, if human engineers join | Not recorded; a process decision |
@@ -61,7 +61,7 @@ The order to work in, if the goal is a company host that can be trusted with com
 1. ~~Entries 19 and 20 together: decide the database model, then back it up. Nothing else on this list protects data.~~ Done, and not the way this line assumed: reading the host showed the instance those entries argued over holds no application data, so the answer was a stated boundary — durable data lives in an external managed service, and no platform-stack store needs a backup — rather than a pipeline. One divergence outlives it, recorded as such in the requirement and tracked as queue entry 33: `commerce-ops`'s own database.
 2. Entries 21 and 22: log rotation and swap. Cheap, and they turn two classes of outage into alerts.
 3. Entry 24, then 23: make the pipeline environment-aware, then move the host converge into it. Staging is where the rest gets rehearsed.
-4. Entries 25, 26, 29, 31: hardening, DNS as code, Traefik defaults, Dependabot for images. Each is small on its own.
+4. Entries 25, 26, 29: hardening, DNS as code, Traefik defaults. Each is small on its own. Entry 31, Dependabot for images, was the fourth and is done — and turned out not to be the one-stanza edit it was queued as: the requirement it lands in enumerates its ecosystems by name, and a test reads that enumeration back.
 5. Entries 27 and 30: external checks and the rebuild runbook. These are what turn "the host can be rebuilt" into "we know it can, and how long it takes" — no backup is restored in that sequence, and entry 30 was rewritten to say so.
 6. Entry 28 when the second or third service lands.
 

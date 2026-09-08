@@ -40,6 +40,7 @@ set.
 from __future__ import annotations
 
 import ast
+import functools
 import os
 import re
 import shutil
@@ -233,14 +234,14 @@ class TestDependabotCoverage(unittest.TestCase):
             f"`terraform` entry names them: {sorted(uncovered)}; configured: {sorted(configured)}",
         )
 
-    def test_dependabot_configures_both_required_ecosystems(self) -> None:
-        """SPECIFIED -- the requirement's opening sentence, which is the enabling
-        condition for the "Provider version update" and "Action version update"
-        scenarios. It does not establish either scenario's outcome; see the
-        test plan."""
-        ecosystems = {entry.get("package-ecosystem") for entry in self.updates}
-        for required in ("terraform", "github-actions"):
-            self.assertIn(required, ecosystems, f"no Dependabot entry for the {required} ecosystem")
+    # `test_dependabot_configures_both_required_ecosystems` was removed by
+    # `cover-platform-images-with-dependabot`, not renamed. Its body iterated
+    # the literal pair ("terraform", "github-actions") and its name asserted
+    # "both" -- the enumeration that change widens to three. Its replacement is
+    # `TestDependabotWatchesEveryRequiredEcosystem
+    # .test_dependabot_configures_every_required_ecosystem`, which reads the
+    # requirement's full set. The lockfile-directory assertion above is
+    # untouched and stays here.
 
 
 class TestScheduledHookRefresh(unittest.TestCase):
@@ -5959,5 +5960,816 @@ class TestTheStatedReasonChecksAreARealReadOfTheFile(unittest.TestCase):
         self.assertEqual([], grafana_provisioning_offences(fixture))
 
 
+# --------------------------------------------------------------------------
+# iac-safety-hardening / Automated Dependency Updates -- the `docker-compose`
+# ecosystem
+#
+# Derived from the delta specs of the OpenSpec change
+# `cover-platform-images-with-dependabot`, before any implementation of that
+# change existed. The requirement is held in
+# `openspec/specs/iac-safety-hardening/spec.md`; the requirement its bumps stay
+# subject to, *Shared-Stack Service Images Are Pinned to an Exact Release*, is
+# held in `openspec/specs/iac-platform-services/spec.md`. See that change's
+# test-plan.md for the scenario-to-test mapping, the baseline, and the
+# scenarios deliberately left uncovered.
+#
+# These assertions live in THIS suite rather than in `terraform test` or in a
+# Molecule scenario because every one of them is a static read of a committed
+# file: `.github/dependabot.yml` compared against the Compose files the tree
+# holds (AGENTS.md, "Testing"). None needs a network call, a credential, a
+# container runtime or a Terraform binary, and none adds an import: the
+# wildcard matcher below is written with `re`, which this suite already uses.
+#
+# WHAT THIS SECTION CANNOT SEE
+# ----------------------------
+# That Dependabot in fact opens a pull request. That is the behaviour of a
+# service outside this repository, and no static read reaches it -- the same
+# boundary the `terraform` and `github-actions` assertions above already
+# accept. And whether a proposed image declares a persistent store the current
+# one does not: that is declared by the image rather than by the stack
+# definition, so establishing it means a registry call, which this suite
+# forbids itself and asserts that it forbids. The delta spec names that half as
+# belonging to review of the pull request; the two README assertions at the end
+# of this section are the only static trace of it there can be.
+# --------------------------------------------------------------------------
+
+COMPOSE_ECOSYSTEM = "docker-compose"
+
+# The requirement's opening sentence, as the delta widens it: three ecosystems,
+# not two.
+REQUIRED_ECOSYSTEMS = ("terraform", "github-actions", COMPOSE_ECOSYSTEM)
+
+PLATFORM_DEPLOY = WORKFLOWS / "platform-deploy.yml"
+GATED_DEPLOY_ENVIRONMENT = "production"
+
+# Dependabot's Docker Compose file fetcher selects by filename, transcribed
+# from `dependabot-core`'s `docker/lib/dependabot/docker_compose/file_fetcher.rb`
+# as read on 2026-09-08 and quoted in this change's design.md:
+#
+#     FILENAME_REGEX = /(docker-)?compose(-[\w]+)?(?>\.[\w-]+)?\.ya?ml/i
+#
+# Two deliberate transcription differences, neither of which changes what this
+# pattern accepts or rejects for any filename a repository would carry:
+#
+#   * the atomic group `(?>...)` is written `(?:...)`. Python's `re` gained
+#     atomic grouping only in 3.11 and this suite states 3.9+ as its floor. The
+#     `?` quantifier sits OUTSIDE the group in both spellings, so "skip the
+#     group entirely" is reachable either way; atomicity would only forbid
+#     `[\w-]+` giving characters back, and giving them back never produces a
+#     match here because what follows is a literal `.`.
+#   * Ruby's `match?` is unanchored, so `re.search` is used rather than
+#     `re.fullmatch` -- the pattern matches any name CONTAINING it, which is
+#     why `docker-compose.yml.bak` matches and a check anchoring the pattern
+#     would be narrower than the fetcher it models.
+COMPOSE_FILENAME_PATTERN = re.compile(
+    r"(docker-)?compose(-[\w]+)?(?:\.[\w-]+)?\.ya?ml", re.IGNORECASE
+)
+
+# The two services deliberately left out of the monitoring group: the reverse
+# proxy that terminates TLS for every public hostname, and the one stateful
+# service (design.md Decision 4, "the split is by blast radius"). Written as
+# Dependabot dependency names -- an image reference with its tag stripped --
+# because that, not the Compose service key, is what a group's patterns are
+# matched against.
+UNGROUPED_DEPENDENCIES = ("traefik", "postgres")
+
+# The vocabulary the README passage required by this change is matched on. As
+# with the credential-runbook assertions above, the OBLIGATION is specified and
+# the WORDS are derived: a prose sentence has no other static form, and this
+# check may read nothing but the committed file.
+STACK_REFRESH_VOCABULARY = ("dependabot", COMPOSE_ECOSYSTEM, "image")
+STORE_REVIEW_VOCABULARY = ("volume", "persistent store", "backup")
+
+
+def fetcher_matches_filename(name: str) -> bool:
+    """Whether Dependabot's Compose file fetcher would select this filename."""
+    return COMPOSE_FILENAME_PATTERN.search(name) is not None
+
+
+def declares_a_service_image(document: object) -> bool:
+    """The SHAPE rule that decides whether a file is a stack definition owing
+    coverage: a top-level `services:` mapping at least one of whose entries
+    declares an `image:`.
+
+    Content decides this, never the filename. Dependabot's own filename pattern
+    matches `ansible/roles/geerlingguy.docker/tasks/docker-compose.yml`, which
+    is an Ansible task list -- a YAML sequence -- and a stack definition is not
+    what it is. Excluding it by path would make this the third rule in this
+    suite deciding which content under `ansible/roles/` is this repository's
+    own; the shape rule adds none (design.md Decision 2).
+    """
+    if not isinstance(document, dict):
+        return False
+    services = document.get("services")
+    if not isinstance(services, dict):
+        return False
+    return any(
+        isinstance(definition, dict)
+        and isinstance(definition.get("image"), str)
+        and definition["image"].strip()
+        for definition in services.values()
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def compose_shaped_files(root: Path | None = None) -> tuple[Path, ...]:
+    """Every file in the tree whose content is a stack definition.
+
+    Walks with this suite's existing `walked_files()` rather than a fresh
+    `rglob`: it is the only walk here that prunes `.claude/worktrees`, and
+    AGENTS.md requires every change to take a working tree there. A naive walk
+    finds a phantom `<worktree>/platform` and reports it uncovered from the main
+    working tree -- `docs/change-queue.md` entry 34 records the `terraform`
+    assertion above already failing that way and owns the general fix
+    (design.md Decision 2, "Which walker").
+
+    Two consequences of that walker are accepted rather than discovered later:
+    it also prunes `openspec/` and `ansible/roles/geerlingguy.docker`, so a
+    stack-shaped file under either is outside this assertion's reach. Planning
+    artifacts are not deployed, and the Galaxy role drops out on shape anyway.
+
+    Every file is offered to the YAML parser rather than only those with a
+    `.yml`/`.yaml` suffix, because it is the shape that decides. A file that
+    cannot be decoded or parsed is not a stack definition and is passed over.
+
+    The walk reads untracked files too -- deliberately, since that is the safe
+    direction for a coverage obligation, and the same trade `walked_files()`
+    already documents. The local-only consequence: an untracked stack-shaped
+    scratch file under a name the fetcher does not match (`platform/local.yml`)
+    turns this assertion red on a workstation while continuous integration,
+    which checks out tracked files only, stays green.
+
+    Cached because the walk parses every file in the tree and several
+    assertions call this; the cache is keyed on `root`, so a fixture tree is
+    still read on its own.
+    """
+    found: list[Path] = []
+    for path in walked_files(root):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        try:
+            document = yaml.safe_load(text)
+        except yaml.YAMLError:
+            continue
+        if declares_a_service_image(document):
+            found.append(path)
+    return tuple(found)
+
+
+def dependabot_config(config: dict | None = None) -> dict:
+    return load_yaml(DEPENDABOT) if config is None else config
+
+
+def dependabot_updates(config: dict | None = None) -> list:
+    return dependabot_config(config).get("updates") or []
+
+
+def dependabot_ecosystems(config: dict | None = None) -> set:
+    return {entry.get("package-ecosystem") for entry in dependabot_updates(config)}
+
+
+def missing_required_ecosystems(config: dict | None = None) -> list[str]:
+    configured = dependabot_ecosystems(config)
+    return [name for name in REQUIRED_ECOSYSTEMS if name not in configured]
+
+
+def configured_directories(ecosystem: str, config: dict | None = None) -> list[str]:
+    """Every directory an ecosystem's entries name, by either spelling."""
+    directories: list[str] = []
+    for entry in dependabot_updates(config):
+        if entry.get("package-ecosystem") != ecosystem:
+            continue
+        if entry.get("directory"):
+            directories.append(entry["directory"])
+        directories.extend(entry.get("directories") or [])
+    return directories
+
+
+def repository_directory_of(path: Path, root: Path | None = None) -> str:
+    base = ROOT if root is None else root
+    relative = path.parent.relative_to(base).as_posix()
+    return "/" if relative == "." else "/" + relative
+
+
+def compose_coverage_offences(
+    root: Path | None = None, config: dict | None = None
+) -> list[str]:
+    """Every stack definition in the tree the committed configuration cannot
+    reach, on either of the two conditions the fetcher applies.
+
+    Both conditions are necessary because the fetcher applies both: it lists
+    the configured directory and selects entries whose NAME matches its
+    filename pattern, and it does not recurse. A file failing either is not
+    partially covered -- it is uncovered, while every configured entry goes on
+    reporting success. The two failures are reported distinguishably, because
+    the filename one is the harder to notice: the directory holding it is named
+    and green.
+    """
+    directories = configured_directories(COMPOSE_ECOSYSTEM, config)
+    base = ROOT if root is None else root
+    offences = []
+    for path in compose_shaped_files(root):
+        relative = path.relative_to(base).as_posix()
+        directory = repository_directory_of(path, root)
+        if not any(gh_glob_matches(pattern, directory) for pattern in directories):
+            offences.append(
+                f"{relative}: sits in {directory}, which no `{COMPOSE_ECOSYSTEM}` "
+                f"entry names (configured: {sorted(directories)})"
+            )
+        elif not fetcher_matches_filename(path.name):
+            offences.append(
+                f"{relative}: sits in a configured directory under a name the "
+                f"fetcher's filename pattern does not match, so it is never "
+                f"fetched and the directory's own success says nothing about it"
+            )
+    return offences
+
+
+def dependency_name(image: str) -> str:
+    """The name Dependabot matches a group's patterns against: the image
+    reference with its tag and digest stripped.
+
+    NOT the Compose service key. The two differ for all six monitoring images
+    (design.md Decision 4's table), which is why a group written in service
+    names would match nothing at all rather than merely under-match, leaving
+    the grouping inert with nothing red to say so.
+    """
+    return parse_image_reference(image)[0]
+
+
+def pattern_matches_dependency(pattern: str, name: str) -> bool:
+    """A Dependabot group pattern against a dependency name.
+
+    The semantics Dependabot documents for these patterns: `*` matches any run
+    of characters INCLUDING `/`, `?` matches one, and matching is
+    case-insensitive. Distinct from `gh_glob_matches` above, whose `*` stops at
+    a `/` because a GitHub Actions path filter says so -- a difference that
+    matters here, since every dependency name but two carries a `/`.
+
+    That this repository's committed patterns select what they are meant to
+    under those semantics is what the assertions below establish; that
+    Dependabot applies them is behaviour of a service outside this repository
+    and is not established here.
+    """
+    regex = ""
+    for char in pattern:
+        if char == "*":
+            regex += ".*"
+        elif char == "?":
+            regex += "."
+        else:
+            regex += re.escape(char)
+    return re.fullmatch(regex, name, re.IGNORECASE) is not None
+
+
+def group_patterns(ecosystem: str, config: dict | None = None) -> list[str]:
+    """Every pattern under every `groups:` entry for an ecosystem, whatever the
+    groups are named -- the assertions are about which dependencies the
+    committed patterns select, not about a group's name."""
+    patterns: list[str] = []
+    for entry in dependabot_updates(config):
+        if entry.get("package-ecosystem") != ecosystem:
+            continue
+        for group in (entry.get("groups") or {}).values():
+            if isinstance(group, dict):
+                patterns.extend(group.get("patterns") or [])
+    return patterns
+
+
+def stack_dependency_names(path: Path | None = None) -> dict:
+    """service -> dependency name, over the shared stack's declared images."""
+    return {
+        service: dependency_name(image)
+        for service, image in compose_service_images(path)
+        if image is not None
+    }
+
+
+def dependencies_matched_by(patterns, names) -> set:
+    return {
+        name
+        for name in names
+        if any(pattern_matches_dependency(pattern, name) for pattern in patterns)
+    }
+
+
+class ComposeTreeFixtureMixin:
+    """Builds throwaway trees the coverage check is run over, and throwaway
+    Dependabot configurations to run it against.
+
+    The committed tree holds exactly one stack definition, in the one directory
+    the configuration will name, so the assertion over the tree passes
+    identically whether the check reads both of the fetcher's conditions or only
+    the directory -- which is the precise silent uncoverage this change exists
+    to prevent, reproduced inside the check meant to prevent it. These fixtures
+    are what make the check's verdict depend on the file.
+    """
+
+    TASK_LIST = (
+        "---\n"
+        "- name: Install docker-compose\n"
+        "  ansible.builtin.package:\n"
+        "    name: docker-compose\n"
+    )
+    STACK = "---\nservices:\n  traefik:\n    image: traefik:v3.7.10\n"
+
+    def compose_tree(self, files: dict) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="compose-coverage-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for relative, body in files.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        return root
+
+    def config_naming(self, *directories: str) -> dict:
+        return {
+            "version": 2,
+            "updates": [
+                {
+                    "package-ecosystem": COMPOSE_ECOSYSTEM,
+                    "directories": list(directories),
+                    "schedule": {"interval": "weekly"},
+                }
+            ],
+        }
+
+    def discovered_in(self, files: dict) -> list[str]:
+        root = self.compose_tree(files)
+        return sorted(
+            path.relative_to(root).as_posix() for path in compose_shaped_files(root)
+        )
+
+    def offences_over(self, files: dict, *directories: str) -> list[str]:
+        root = self.compose_tree(files)
+        return compose_coverage_offences(root, self.config_naming(*directories))
+
+
+class TestDependabotWatchesEveryRequiredEcosystem(unittest.TestCase):
+    """MODIFIED requirement: Automated Dependency Updates."""
+
+    def test_dependabot_configures_every_required_ecosystem(self) -> None:
+        """SPECIFIED -- the requirement's opening sentence as this change
+        amends it: `terraform`, `github-actions` AND `docker-compose`. It is
+        the enabling condition for the "Provider version update", "Action
+        version update" and "Platform image update" scenarios, and establishes
+        none of their outcomes -- see the test plan.
+
+        This superseded `TestDependabotCoverage
+        .test_dependabot_configures_both_required_ecosystems`, whose name
+        asserted "both" and whose body iterated that literal pair -- false of
+        three. That method was removed by this change's implementation
+        commit; a note stands in its place. This assertion is a strict
+        superset of it, and is paired with a discrimination test below.
+        """
+        missing = missing_required_ecosystems()
+        self.assertEqual(
+            [],
+            missing,
+            f"no Dependabot entry for these required ecosystems: {missing}",
+        )
+
+    def test_the_ecosystem_check_reads_the_configuration(self) -> None:
+        """DERIVED -- no scenario states it. Without it the test above passes
+        identically whether it reads the file or enumerates nothing, and it
+        will keep passing once the stanza lands. Runs the same check over a
+        configuration that omits the new ecosystem."""
+        without = {
+            "version": 2,
+            "updates": [
+                {"package-ecosystem": "terraform", "directory": "/terraform"},
+                {"package-ecosystem": "github-actions", "directory": "/"},
+            ],
+        }
+        self.assertEqual([COMPOSE_ECOSYSTEM], missing_required_ecosystems(without))
+
+
+class TestEveryComposeFileDeclaringAServiceImageIsCovered(unittest.TestCase):
+    """MODIFIED requirement: Automated Dependency Updates."""
+
+    def test_the_tree_holds_a_stack_definition_at_all(self) -> None:
+        """SPECIFIED -- the non-vacuity guard the requirement's own reasoning
+        demands, mirroring the `terraform` lockfile assertion's. A comparison
+        over an empty discovery would report full coverage of nothing."""
+        discovered = compose_shaped_files()
+        self.assertTrue(
+            discovered,
+            "no file in the tree declares a top-level `services:` mapping with an "
+            "`image:`, so the coverage comparison below would pass having read "
+            "nothing",
+        )
+
+    def test_the_shared_platform_stack_is_among_the_files_discovered(self) -> None:
+        """SPECIFIED -- the requirement covers "every Compose file in the
+        repository that declares a service image", and `platform/` holds the
+        stack whose staleness this change exists to signal. Discovery that
+        missed it would leave every assertion below vacuous."""
+        discovered = {path.resolve() for path in compose_shaped_files()}
+        self.assertIn(
+            PLATFORM_COMPOSE.resolve(),
+            discovered,
+            "the shared platform stack was not discovered as a stack definition, so "
+            "the coverage assertion below says nothing about the eight images it pins",
+        )
+
+    def test_every_compose_file_declaring_a_service_image_is_covered(self) -> None:
+        """SPECIFIED -- scenario "Every Compose file declaring a service image
+        is covered": every such file "SHALL sit in a directory that
+        configuration names, AND SHALL carry a name the fetcher matches", and
+        one failing either condition "SHALL be reported as uncovered, rather
+        than the configured entries' own success being read as coverage of the
+        repository"."""
+        self.test_the_tree_holds_a_stack_definition_at_all()
+        offences = compose_coverage_offences()
+        self.assertEqual(
+            [],
+            offences,
+            "these stack definitions are not reachable by the committed "
+            f"`{COMPOSE_ECOSYSTEM}` configuration: {offences}",
+        )
+
+    def test_every_configured_directory_holds_a_file_the_fetcher_selects(self) -> None:
+        """DERIVED -- the converse of the assertion above, and the one failure
+        the delta's scenarios do not name.
+
+        The assertion above walks tree -> configuration: every stack definition
+        must be reachable. Nothing there walks configuration -> tree, and the
+        fetcher makes that direction fail hard rather than silently: it
+        `raise_appropriate_error`s when the configured directory holds no file
+        matching its filename pattern ("Repo must contain a docker-compose.yaml
+        file."). A directory named here that holds none -- a stanza added for a
+        path that does not exist yet, a `directories:` entry left behind after a
+        stack moved -- errors on every Dependabot run, opens no pull request,
+        and leaves this suite entirely green.
+
+        That is the mechanism design.md Decision 1 rests on when it argues
+        `directory: "/"` would fail rather than scan, so it is asserted here
+        rather than only reasoned about. Matching the fetcher, the listing is
+        of the directory itself and does not descend.
+        """
+        empty = []
+        for directory in configured_directories(COMPOSE_ECOSYSTEM):
+            resolved = ROOT / directory.lstrip("/")
+            if not resolved.is_dir():
+                empty.append(f"{directory} (no such directory)")
+                continue
+            if not any(
+                entry.is_file() and fetcher_matches_filename(entry.name)
+                for entry in resolved.iterdir()
+            ):
+                empty.append(f"{directory} (no file the fetcher would select)")
+        self.assertEqual(
+            [],
+            empty,
+            f"the `{COMPOSE_ECOSYSTEM}` ecosystem names directories the fetcher would "
+            f"error on rather than read, so it opens no pull request at all: {empty}",
+        )
+
+
+class TestTheComposeCoverageCheckIsARealReadOfTheTree(
+    ComposeTreeFixtureMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Automated Dependency Updates.
+
+    The assertion over the committed tree has one file to read, in the one
+    directory the configuration names. These tests run the same check over
+    throwaway trees differing in exactly one property, so its verdict is shown
+    to depend on what a file is and where it sits.
+    """
+
+    def test_a_task_list_under_a_matching_name_is_not_a_stack_definition(self) -> None:
+        """SPECIFIED -- "What decides that a file is a stack definition owing
+        coverage is its content -- a top-level service mapping declaring an
+        image". `ansible/roles/geerlingguy.docker/tasks/docker-compose.yml` is
+        an Ansible task list whose name Dependabot's own pattern matches; the
+        shape rule is what excludes it, and no path exclusion is added.
+
+        The committed tree cannot demonstrate this: the walker prunes that role
+        by path before the shape rule is consulted, so an assertion made over
+        the tree alone could not fail.
+        """
+        self.assertEqual(
+            [], self.discovered_in({"tasks/docker-compose.yml": self.TASK_LIST})
+        )
+
+    def test_a_services_mapping_declaring_no_image_is_not_a_stack_definition(self) -> None:
+        """DERIVED -- the shape rule's second limb ("declaring an image") has no
+        instance in the committed tree either. A file Dependabot would find
+        nothing to update in owes no coverage."""
+        imageless = "---\nservices:\n  built:\n    build: .\n"
+        self.assertEqual(
+            [], self.discovered_in({"platform/docker-compose.yml": imageless})
+        )
+
+    def test_a_stack_definition_is_discovered_whatever_it_is_named(self) -> None:
+        """SPECIFIED -- "the fetcher's filename pattern SHALL be used only to
+        decide whether a file so identified can be reached, never to decide
+        whether a file is a stack definition at all". A discovery that filtered
+        by name first could never report scenario "A stack file the fetcher's
+        name pattern does not match is reported"."""
+        self.assertEqual(
+            ["platform/stack.yml"],
+            self.discovered_in({"platform/stack.yml": self.STACK}),
+        )
+
+    def test_a_stack_file_the_filename_pattern_does_not_match_is_reported(self) -> None:
+        """SPECIFIED -- scenario "A stack file the fetcher's name pattern does
+        not match is reported": a stack definition in a directory the ecosystem
+        names, under a name the pattern does not match, "SHALL be reported as
+        uncovered, because the configured directory's own success says nothing
+        about a file within it that is never fetched"."""
+        offences = self.offences_over({"platform/stack.yml": self.STACK}, "/platform")
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+        self.assertIn("platform/stack.yml", offences[0])
+        self.assertIn("filename pattern", offences[0])
+
+    def test_a_stack_file_in_a_directory_the_configuration_omits_is_reported(self) -> None:
+        """SPECIFIED -- the first of the scenario's two conditions. The fetcher
+        lists the configured directory only and does not descend, so a second
+        stack at `platform/monitoring/docker-compose.yml` is not partially
+        covered by the `/platform` entry: it is uncovered, silently, with that
+        entry still green."""
+        offences = self.offences_over(
+            {
+                "platform/docker-compose.yml": self.STACK,
+                "platform/monitoring/docker-compose.yml": self.STACK,
+            },
+            "/platform",
+        )
+        self.assertEqual(1, len(offences), f"expected one offence, got {offences}")
+        self.assertIn("platform/monitoring/docker-compose.yml", offences[0])
+        self.assertIn("entry names", offences[0])
+
+    def test_a_stack_file_meeting_both_conditions_is_accepted(self) -> None:
+        """DERIVED -- the converse half. Without it a check reporting every file
+        it found would satisfy both tests above while failing any change to the
+        tree regardless of what it changed."""
+        self.assertEqual(
+            [],
+            self.offences_over({"platform/docker-compose.yml": self.STACK}, "/platform"),
+        )
+
+    def test_a_directory_pattern_is_read_as_a_glob(self) -> None:
+        """DERIVED -- from Dependabot's `directories:` accepting globs, which
+        design.md Decision 1 declines to use but the committed configuration
+        may later. A check treating a pattern as a literal would report a file
+        a glob entry does cover."""
+        self.assertEqual(
+            [],
+            self.offences_over(
+                {"platform/docker-compose.yml": self.STACK}, "/platform*"
+            ),
+        )
+
+
+class TestTheFetcherFilenamePatternIsTranscribedFaithfully(unittest.TestCase):
+    """MODIFIED requirement: Automated Dependency Updates.
+
+    DERIVED throughout -- no scenario states these names. The whole force of
+    the filename condition rests on this transcription of a regular expression
+    read out of `dependabot-core` on a particular day (design.md, "Context"),
+    and a transcription error would silently move the boundary the two
+    scenarios above are written about: too narrow reports a covered file as
+    uncovered, too wide passes a file that is never fetched.
+    """
+
+    MATCHED = (
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+        "compose-prod.yml",
+        "docker-compose.override.yml",
+    )
+    UNMATCHED = (
+        "stack.yml",
+        "monitoring.yml",
+        "platform.yaml",
+        "docker-compose.json",
+        "values.yaml",
+    )
+
+    def test_the_names_the_fetcher_selects_are_matched(self) -> None:
+        rejected = [name for name in self.MATCHED if not fetcher_matches_filename(name)]
+        self.assertEqual(
+            [],
+            rejected,
+            f"the fetcher would fetch these; the pattern rejects them: {rejected}",
+        )
+
+    def test_the_names_the_fetcher_passes_over_are_not_matched(self) -> None:
+        accepted = [name for name in self.UNMATCHED if fetcher_matches_filename(name)]
+        self.assertEqual(
+            [],
+            accepted,
+            "the pattern accepts these names, so a stack definition under one of them "
+            f"would be reported covered while never being fetched: {accepted}",
+        )
+
+
+class TestTheImageGroupSplitsByBlastRadius(unittest.TestCase):
+    """MODIFIED requirement: Automated Dependency Updates.
+
+    DERIVED throughout -- the grouping is design.md Decision 4, and no scenario
+    states it. It is asserted rather than left to inspection because both of
+    its failure modes are silent: a group written in Compose service names
+    matches no dependency at all and is simply inert, and an over-broad
+    `postgres*` pulls the shared database into a group whose whole purpose is
+    to keep it out. Neither is visible in a diff that reads plausibly.
+    """
+
+    def setUp(self) -> None:
+        self.names = stack_dependency_names()
+        self.patterns = group_patterns(COMPOSE_ECOSYSTEM)
+
+    def test_the_stack_declares_the_two_dependencies_left_ungrouped(self) -> None:
+        """DERIVED -- the non-vacuity guard. With neither name present, the
+        assertion that no pattern matches them passes over an empty set."""
+        missing = [
+            name for name in UNGROUPED_DEPENDENCIES if name not in self.names.values()
+        ]
+        self.assertEqual(
+            [],
+            missing,
+            f"the shared stack declares no image whose dependency name is {missing}, so "
+            "the blast-radius split below is asserted over a service that is not there",
+        )
+
+    def test_the_ecosystem_declares_a_group_at_all(self) -> None:
+        """DERIVED -- second non-vacuity guard: with no patterns configured,
+        every assertion below is true of the empty set."""
+        self.assertTrue(
+            self.patterns,
+            f"the `{COMPOSE_ECOSYSTEM}` ecosystem declares no `groups:` patterns, so a "
+            "routine week opens one pull request per image and each merge runs its own "
+            "gated production deploy",
+        )
+
+    def test_no_group_pattern_matches_the_database_or_the_reverse_proxy(self) -> None:
+        """DERIVED -- design.md Decision 4: "No pattern may match `postgres` or
+        `traefik`". Traefik terminates TLS for every public hostname and
+        PostgreSQL is the one stateful service; each is meant to reach the
+        deploy approver as its own diff. `postgres*` -- the decision's own
+        rejected alternative arrived at by a typo -- is caught here."""
+        self.test_the_ecosystem_declares_a_group_at_all()
+        caught = sorted(dependencies_matched_by(self.patterns, UNGROUPED_DEPENDENCIES))
+        self.assertEqual(
+            [],
+            caught,
+            f"these are grouped with the monitoring images: {caught}; patterns: "
+            f"{sorted(self.patterns)}",
+        )
+
+    def test_the_patterns_select_every_other_image_the_stack_declares(self) -> None:
+        """DERIVED -- the converse half, and the one that catches an inert
+        group: patterns written as Compose service names match nothing, which
+        the test above would accept. Expected membership is computed from the
+        stack rather than enumerated here, so a monitoring service added later
+        must be grouped or must be argued about."""
+        self.test_the_ecosystem_declares_a_group_at_all()
+        expected = {
+            name for name in self.names.values() if name not in UNGROUPED_DEPENDENCIES
+        }
+        matched = dependencies_matched_by(self.patterns, set(self.names.values()))
+        self.assertEqual(
+            expected,
+            matched,
+            "the committed group patterns do not select exactly the stack's images "
+            f"other than {list(UNGROUPED_DEPENDENCIES)}; patterns: {sorted(self.patterns)}",
+        )
+
+    def test_the_group_check_reads_the_patterns(self) -> None:
+        """DERIVED -- discrimination. Runs the same matcher over the rejected
+        alternative, so the assertion above is shown to depend on what is
+        written rather than on the check knowing the answer."""
+        self.assertEqual(
+            {"postgres"},
+            dependencies_matched_by(["postgres*"], UNGROUPED_DEPENDENCIES),
+            "`postgres*` no longer reads as matching the shared database, so the "
+            "assertion above would not catch the typo it exists for",
+        )
+        self.assertEqual(
+            set(),
+            dependencies_matched_by(
+                ["prometheus", "grafana"], {"prom/prometheus", "grafana/grafana"}
+            ),
+            "patterns written as Compose service names read as matching dependency "
+            "names, so an inert group would pass the assertion above",
+        )
+
+
+class TestAProposedImageUpdateIsNotExemptFromTheStacksObligations(unittest.TestCase):
+    """MODIFIED requirement: Automated Dependency Updates.
+
+    Scenario "A proposed image update is not exempt from the stack's own
+    obligations". Its first limb is decidable statically only as an enabling
+    condition -- that the file this ecosystem proposes changes to is the file
+    the pinning floor check reads, and that a merge of such a change still
+    passes the deploy gate. Its second limb, whether a bumped image declares a
+    persistent store the current one does not, is decidable by no static read
+    of a committed file at all: the store is declared by the image, and reading
+    it is a registry call this suite forbids itself.
+    """
+
+    def test_the_file_the_pinning_floor_check_reads_is_one_this_ecosystem_covers(self) -> None:
+        """SPECIFIED -- "that pull request SHALL pass the pinning requirement's
+        automated floor check". The floor check reads
+        `platform/docker-compose.yml`; unless that file is one the ecosystem
+        can reach, no pull request it opens is subject to it."""
+        relative = PLATFORM_COMPOSE.relative_to(ROOT).as_posix()
+        offences = [
+            offence
+            for offence in compose_coverage_offences()
+            if offence.startswith(relative)
+        ]
+        self.assertEqual(
+            [],
+            offences,
+            "the stack the pinning requirement governs is not reachable by the "
+            f"`{COMPOSE_ECOSYSTEM}` configuration: {offences}",
+        )
+
+    def test_the_stack_deploy_stays_gated_on_the_production_environment(self) -> None:
+        """SPECIFIED -- scenario "Platform image update is proposed
+        automatically": such a pull request is "subject to ... the same gated
+        deploy approval as any other change to the stack definition". This
+        change alters no pipeline behaviour; the assertion exists because the
+        gate is what makes an automatically proposed bump acceptable, and its
+        removal would be invisible to every other test in this suite."""
+        workflow = load_yaml(PLATFORM_DEPLOY)
+        gated = [
+            name
+            for name, job in jobs(workflow).items()
+            if str(job.get("environment", "")) == GATED_DEPLOY_ENVIRONMENT
+            or (
+                isinstance(job.get("environment"), dict)
+                and job["environment"].get("name") == GATED_DEPLOY_ENVIRONMENT
+            )
+        ]
+        self.assertEqual(
+            1,
+            len(gated),
+            "expected exactly one job in platform-deploy.yml to declare "
+            f"`environment: {GATED_DEPLOY_ENVIRONMENT}`, found {gated}",
+        )
+
+    def _refresh_sections(self) -> list[str]:
+        sections = [
+            section
+            for section in readme_sections(read_text(README))
+            if all(word in section.lower() for word in STACK_REFRESH_VOCABULARY)
+        ]
+        self.assertTrue(
+            sections,
+            "no single README section says that the shared stack's image pins are "
+            f"refreshed by Dependabot's `{COMPOSE_ECOSYSTEM}` ecosystem, so the one "
+            "place a reader learns how each kind of pin stays fresh is silent about "
+            "the eight images the host actually runs",
+        )
+        return sections
+
+    def test_the_readme_says_the_stack_images_are_refreshed_by_this_ecosystem(self) -> None:
+        """DERIVED -- from design.md's first risk and this change's tasks, not
+        from a scenario. The README's CI/CD section already explains why
+        `pre-commit` revisions are refreshed by a workflow rather than by
+        Dependabot; leaving image pins unstated there is what makes the next
+        reader's model of this repository wrong."""
+        self._refresh_sections()
+
+    def test_the_readme_passage_names_the_question_no_check_can_answer(self) -> None:
+        """DERIVED for the vocabulary, SPECIFIED for the obligation -- "whether
+        the proposed image declares a persistent store the current one does not
+        ... SHALL be established by that review".
+
+        Stating it in the specification is necessary and not sufficient: a
+        reviewer of a routine version bump does not open `openspec/specs/`
+        unprompted. This is the same reasoning the requirement already applies
+        to a credential's rotation procedure -- a fact whose only home is the
+        change that introduced it becomes undocumented at archive.
+        """
+        sections = self._refresh_sections()
+        self.assertTrue(
+            any(
+                word in section.lower()
+                for section in sections
+                for word in STORE_REVIEW_VOCABULARY
+            ),
+            "the README passage on automatically refreshed image pins does not tell a "
+            "reviewer they owe the one question no check in this repository can answer: "
+            "whether the proposed image declares a persistent store the current one does "
+            "not, per *No Store on This Host Holds Data Requiring Backup*",
+        )
+
+
+# `unittest.main()` stays at the END of this file, not in the middle of it.
+# `cover-platform-images-with-dependabot` appended a section after the block's
+# previous position and a direct `python3 .github/tests/test_ci_configuration.py`
+# then ran 169 tests and reported OK while 23 were never defined -- a check
+# reporting success having verified nothing, which is what this suite exists to
+# refuse. Continuous integration was unaffected (it uses `unittest discover`),
+# which is exactly why nothing caught it. Append below this comment, never
+# above it.
 if __name__ == "__main__":
     unittest.main()
