@@ -13,7 +13,9 @@ of queued — they had branches and handoffs, not entries here:
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift.
   **Archived 2026-09-07** (PR #66). Entries 3a, 3b, 3c and 3d below were opened
   by it.
-- `refresh-readme-accuracy` — README statements that are no longer true
+- `refresh-readme-accuracy` — README statements that are no longer true.
+  **Archived 2026-09-08** (PR #76). It delivered the former entry 9, which is
+  gone with it; entries 13 and 14 below were recorded by it.
 
 `decide-archived-change-reference-policy` — the citation form live source uses
 for this repository's own change records, and a check that enforces it.
@@ -285,28 +287,6 @@ Both noticed during `close-ci-verification-gaps`, neither a verification gap:
   by fixing or ignoring them. That is the same trap this change refused to lay
   for the next person when `ansible-lint` failed on pre-existing violations,
   and it wants its own decision rather than being folded in.
-
-## 9. README's Galaxy install step does not provision a working local suite
-
-**Belongs to the already-opened `refresh-readme-accuracy`**, not to a new
-change; recorded here so it is not lost, since that branch has a handoff rather
-than a proposal.
-
-`README.md`'s local-setup step 5 says `ansible-galaxy install -r
-ansible/requirements.yml`, which installs the role to `~/.ansible/roles`.
-`ansible-verify.yml:105-112` documents at length why that location is never
-found: every scenario overrides `ANSIBLE_ROLES_PATH` to `ansible/roles/`, so
-Molecule's own galaxy dependency step resolves nothing and converge fails on
-the dependency rather than on anything the scenario asserts. CI therefore uses
-`ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`, and
-`.gitignore:30` ignores `ansible/roles/geerlingguy.docker/` — both consistent
-with the install landing *inside* the repository, which the README's command
-does not do.
-
-Found while provisioning a fresh worktree for `pin-and-fix-molecule-suite`, and
-not folded into it: that change's subject is the suite's pins and one broken
-assertion, and this is a documentation defect in a file it otherwise does not
-touch.
 
 ## 8. namespace-the-molecule-suite-per-working-tree
 
