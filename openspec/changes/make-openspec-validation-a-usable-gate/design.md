@@ -381,6 +381,48 @@ workflow, including the edit six months from now that adds
 Molecule tier uses for its image digests: the property is about what the
 committed file says, so it is checked where committed files are checked.
 
+### Decision 10 — The gate rejects two states this workflow prescribes, and the fix is a written rule
+
+Found by code review of the gate, not by the plan. `openspec validate --all`
+fails a change directory carrying no specification deltas:
+
+```
+✗ change/zz-probe-handoff
+  ✗ [ERROR] Change must have at least one delta. No deltas found.
+```
+
+`AGENTS.md` prescribes exactly that state. *"Opening"* a change means a branch of
+its own and a `handoff.md`, **with no proposal** — so the moment such a branch
+carries a pull request, the unconditional, un-suppressible gate this change
+installs refuses it. The same applies mid-`plan:drafting`, where a proposal
+exists and deltas do not yet.
+
+This is the gate colliding with the workflow that asked for it, and neither
+`proposal.md` nor the delta anticipated it.
+
+**The mitigation already exists and is already used here.** `skip_specs: true` in
+the change's `.openspec.yaml` declares zero deltas acceptable; four archived
+changes use it. Verified on a copy of `openspec/`: with `schema:`, `created:` and
+`skip_specs: true`, a handoff-only directory passes — with or without a proposal
+beside it.
+
+One trap worth recording, because the first probe hit it: `skip_specs: true`
+**alone** in the file does not work. Dropping `schema:` makes the change fail to
+resolve, and the error is the identical "must have at least one delta" message —
+so the setting reads as ineffective when the real fault is the missing key. An
+author debugging that would reasonably conclude the escape does not exist.
+
+So the rule goes into `AGENTS.md`'s project conventions: an opened change gets
+that file at the moment it is opened, and the `skip_specs` line is dropped when
+its deltas are written.
+
+**Considered and rejected: exempting delta-less changes in the check itself.**
+The gate would then pass a change that *should* have deltas and has none, which
+is a real defect — a specification-driven workflow whose specification step was
+skipped. `skip_specs` is a per-change declaration a human writes and a reviewer
+sees in the diff; an exemption computed by the checker is invisible. The
+declaration is the better mechanism, and it already exists.
+
 ## Risks / Trade-offs
 
 - **One stale archived record blocks every pull request in the repository.** This

@@ -178,7 +178,7 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
 - [x] 7.2 `pre-commit run --all-files`. Provision it first if the working tree has
   not been provisioned; report it as **not run, and why** rather than as passing
   if it cannot be reached.
-- [ ] 7.3 Dispatch `ai-toolkit:change-code-reviewer` over the records diff. It is
+- [x] 7.3 Dispatch `ai-toolkit:change-code-reviewer` over the records diff. It is
   a diff and it is reviewable; that it contains no code is not an exemption, and
   retroactive ticks are exactly the kind of claim an independent reader should
   check against the evidence cited. **Scope the dispatch**, or the review will
@@ -198,25 +198,25 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
 
 ## 8. Pull request 1 — the settled records
 
-- [ ] 8.1 Open the pull request carrying sections 1–5 and nothing else. Its
+- [x] 8.1 Open the pull request carrying sections 1–5 and nothing else. Its
   subject is the historical record; the workflow is not in it. Let continuous
   integration run and wait for the operator's confirmation that it merged.
 
 ## 9. Wire the gate
 
-- [ ] 9.1 Add `.github/package.json` pinning `openspec` to an exact version, and
+- [x] 9.1 Add `.github/package.json` pinning `openspec` to an exact version, and
   commit its lockfile beside it. Pin the version this change was verified against;
   do not use a range. Declare the Node major version in `engines`.
-- [ ] 9.2 Add an `npm` stanza to `.github/dependabot.yml` naming `/.github`,
+- [x] 9.2 Add an `npm` stanza to `.github/dependabot.yml` naming `/.github`,
   weekly, matching the shape of the existing entries. The comment should say why a
   repository with no JavaScript carries an npm manifest.
-- [ ] 9.3 Add an unconditional step to `pr-validation.yml`'s `validate` job: set up
+- [x] 9.3 Add an unconditional step to `pr-validation.yml`'s `validate` job: set up
   Node at the pinned major version with a version-pinned setup action, install
   from the lockfile exactly (failing if manifest and lockfile disagree), then run
   `openspec validate --all` and `openspec validate --archived`. No `if:` guard and
   no path filter — Decision 5 gives the reason and the step should carry it in a
   comment.
-- [ ] 9.4 Give the step the closed form the delta specifies, so that suppression
+- [x] 9.4 Give the step the closed form the delta specifies, so that suppression
   is excluded by shape rather than by blocklist: its script is the two validating
   invocations and nothing else — no shell operator joining them to anything, no
   redirection or capture of their status, no `shell:` override — and **neither the
@@ -227,19 +227,19 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
   result away; such a step reports green forever, which is the thing this change
   exists to remove. The derived test asserts the shape; this task is giving it
   something true to assert.
-- [ ] 9.5 Confirm the unconditionality reaches further than the step: the
+- [x] 9.5 Confirm the unconditionality reaches further than the step: the
   enclosing `validate` job carries no `if:`, and `pr-validation.yml` has no
   workflow-level `paths`/`paths-ignore` filter. A step that cannot be skipped
   inside a job that can is skippable, and that is the green-because-skipped
   failure this pipeline forbids elsewhere.
-- [ ] 9.6 Place the step so it does not sit behind the Terraform-conditional
+- [x] 9.6 Place the step so it does not sit behind the Terraform-conditional
   steps, and confirm it requires no credential and no deployment `environment:`.
 
 ## 10. Verification
 
-- [ ] 10.1 `python3 -m unittest discover --start-directory .github/tests` from the
+- [x] 10.1 `python3 -m unittest discover --start-directory .github/tests` from the
   repository root.
-- [ ] 10.2 Confirm the derived tests actually bite, rather than passing over
+- [x] 10.2 Confirm the derived tests actually bite, rather than passing over
   absent structure. For each: temporarily break what it asserts — remove the step,
   add an `if:` to it, add `continue-on-error: true` to the **step**, add it to the
   **job**, give it an expression value, append `|| true` to the script, append
@@ -250,7 +250,7 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
   are the ones a blocklist-shaped test passes and a shape-shaped test catches,
   which is the difference this change is relying on. A test that passes against a repository
   missing the thing it asserts is the vacuous-success defect this change is about.
-- [ ] 10.3 `openspec validate --all` and `openspec validate --archived`, both
+- [x] 10.3 `openspec validate --all` and `openspec validate --archived`, both
   green — now including this change's own delta. **If a record has gone red since
   6.1** — another change archived in the meantime — settle it in its own pull
   request before the gate's opens. It does not ride in with the workflow change;
@@ -258,15 +258,15 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
   direction. Note that the gate cannot land green over a red record even if this
   is missed: pull request 2's own continuous integration runs the step pull
   request 2 adds.
-- [ ] 10.4 `pre-commit run --all-files`, with the same provisioning caveat as 7.2.
-- [ ] 10.5 Confirm the new workflow step parses as YAML and that `actionlint`, if
+- [x] 10.4 `pre-commit run --all-files`, with the same provisioning caveat as 7.2.
+- [x] 10.5 Confirm the new workflow step parses as YAML and that `actionlint`, if
   available, reports nothing new about it. `actionlint` is not installed by this
   repository — `docs/change-queue.md` entry 6 records why — so a clean run is a
   bonus, not the gate.
 
 ## 11. Review
 
-- [ ] 11.1 Dispatch `ai-toolkit:change-code-reviewer` over the gate diff, against
+- [x] 11.1 Dispatch `ai-toolkit:change-code-reviewer` over the gate diff, against
   a diff that already passes section 10.
 
 ## 12. Pull request 2 — the gate, and confirming it
@@ -401,6 +401,39 @@ a disclosure written as prose, each producing zero offences) and a latent
 `AttributeError` that would have broken pull request 2. Fixing a test to make it
 stricter is legitimate, but the derived tests have an independent author and the
 correction belongs with them.
+
+**9.x / 10.2 — what the gate implementation turned up.**
+
+- **`npx openspec` would have been broken in CI, and broken green.** `npm ci`
+  installs to `.github/node_modules`; npx searches `node_modules/.bin` *upward*
+  from the working directory, and `.github` is a child of the repository root,
+  not an ancestor — so npx never sees the pinned install. Proved by moving the
+  install aside: `npx openspec validate --all` still exited 0, validating from
+  the npx cache. A runner has no cache, so that line would have resolved a
+  version off the registry at run time — the freshly-resolved dependency the
+  delta forbids — or failed. The step invokes `./.github/node_modules/.bin/openspec`,
+  which can run only what `npm ci` installed. An earlier probe of mine was itself
+  wrong in the other direction: it put `/usr/bin` ahead of the pinned Node and so
+  measured Node 18, failing on import attributes.
+- **10.2 ran clean.** Twelve mutations, each caught, none missed, baseline
+  restored green each time. Six suppression forms were then re-tested as
+  *valid YAML*, so the shape assertion had to be what caught them rather than a
+  parse error: quoted `|| :`, block-scalar `|| :`, `; true`, `if ! …; then`, a
+  pipe to `tee`, and `set +e` before the invocation. All caught. The first two
+  are the cases a blocklist-shaped check passes.
+- **The manifest pair was untracked and `node_modules/` was not ignored.** The
+  derived tests read the working tree and cannot tell tracked from untracked —
+  the suite may not spawn `git` — so both passed locally and the manifest would
+  have been *absent* in CI. Caught by the tests' author, not by the tests.
+
+**11.1 — what the gate review found.** The gate itself held: path invocation,
+unconditionality at all three levels, the pin, the watcher, `.gitignore`, and
+test honesty all verified. Four gaps went back to the tests' author — `npx` still
+admitted by `RUNNER_PREFIXES` (the exact form proved unsafe above), the `shell:`
+check not read at job or workflow level, no binding of the step to a *registered*
+required context, and no reverse coverage check on the npm stanza. Two findings
+were mine to fix and are recorded as Decision 10 and in the delta's runtime
+clause.
 
 **The derived tests were committed wrongly at first.** All 37 landed in one
 commit, which would have put 21 red gate assertions into pull request 1 — a pull

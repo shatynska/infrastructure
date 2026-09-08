@@ -6945,11 +6945,32 @@ VALIDATING_TOOL = "openspec"
 VALIDATING_SUBCOMMAND = "validate"
 VALIDATING_FLAGS = ("--all", "--archived")
 
-# `npx` resolves the locally installed binary that the lockfile-exact install
-# places in `node_modules/.bin`; it is the only prefix the closed form below
-# admits, and it may carry no arguments of its own (a `--package`/`--yes` form
-# would be a fresh resolution, and is rejected as an extra token).
-RUNNER_PREFIXES = ("npx",)
+# The command the step runs must BE the binary the lockfile-exact install
+# places, named by a path into that install tree. Not `npx`, and not a bare
+# `openspec` resolved off PATH.
+#
+# `npx` was admitted here on the belief that it resolves the locally installed
+# binary. It does not, and this workflow's install is precisely the case where
+# it cannot: `npm ci` installs into `.github/node_modules`, and npx searches
+# `node_modules/.bin` UPWARD from the working directory, so a `.github` that is
+# a child of the repository root is never on that search path. Verified rather
+# than reasoned: with the install moved aside, `npx openspec validate --all`
+# still exited 0, having resolved from the npx cache. A runner has no cache, so
+# the same line resolves off the registry at run time -- the freshly resolved
+# dependency the requirement forbids, reached by a line that looks pinned.
+#
+# A bare `openspec` is refused for the same reason: whatever PATH offers is not
+# established to be what the manifest pins.
+#
+# This is a fact about npx's search, not a preference. The comment it replaces
+# asserted the opposite and was wrong; the workflow's own comment records the
+# same verification.
+NODE_BIN_SEGMENT = "node_modules/.bin"
+MANIFEST_DIRECTORY = OPENSPEC_MANIFEST.parent.relative_to(ROOT).as_posix()
+INSTALLED_BINARY = f"{MANIFEST_DIRECTORY}/{NODE_BIN_SEGMENT}/{VALIDATING_TOOL}"
+
+NPM_ECOSYSTEM = "npm"
+NPM_MANIFEST_NAME = "package.json"
 
 PACKAGE_MANAGERS = frozenset({"npm", "yarn", "pnpm"})
 LOCKFILE_EXACT_INSTALL = ("npm", "ci")
@@ -7026,23 +7047,37 @@ def significant_lines(script: object) -> list[str]:
     ]
 
 
-def validating_invocation_flag(line: str) -> str | None:
+def resolved_command(base: str, command: str) -> str:
+    """`command` as a repository-relative path, read from the directory `base`
+    the step runs in."""
+    prefix = relative_directory(base)
+    joined = f"{prefix}/{command}" if prefix else command
+    return os.path.normpath(joined).lstrip("/")
+
+
+def validating_invocation_flag(line: str, base: str = "") -> str | None:
     """The flag `line` invokes the validating tool with, or None where the line
-    is not exactly one permitted invocation.
+    is not exactly one permitted invocation, run from `base`.
 
     This is the positive half of the closed form the delta specifies. Nothing
     is blocklisted: a line either is an invocation or it is not, so `|| true`,
     `|| :`, `; true`, a pipe, a redirection, a command substitution, a captured
     status and every construction nobody has thought of yet all fail the same
     way -- by contributing a token the permitted shape has no place for.
+
+    The command is required to RESOLVE to the binary the lockfile-exact install
+    places, not merely to end in its name: `npx openspec`, a bare `openspec` off
+    PATH, and a path into some other install tree each run something the
+    committed manifest and lockfile do not describe. `base` is the directory the
+    step actually runs in -- its own `working-directory`, or its job's, or the
+    workflow's -- because the same script line means different things under
+    each.
     """
     tokens = line.split()
-    if tokens and tokens[0] in RUNNER_PREFIXES:
-        tokens = tokens[1:]
     if len(tokens) != 3:
         return None
     command, subcommand, flag = tokens
-    if command.rsplit("/", 1)[-1] != VALIDATING_TOOL:
+    if resolved_command(base, command) != INSTALLED_BINARY:
         return None
     if subcommand != VALIDATING_SUBCOMMAND:
         return None
@@ -7077,6 +7112,37 @@ def steps_delegating_the_validation(workflow: dict | None = None):
         for job, index, step in steps(workflow)
         if VALIDATING_TOOL in str(step.get("uses", ""))
     ]
+
+
+def run_defaults(container: object) -> dict:
+    """A workflow's or a job's `defaults.run` mapping, or an empty one.
+
+    Both levels are read, at both call sites: a setting placed at either applies
+    to every `run:` step below it, so an assertion reading only the step is
+    satisfied while the setting does its work one level up.
+    """
+    if not isinstance(container, dict):
+        return {}
+    defaults = container.get("defaults") or {}
+    if not isinstance(defaults, dict):
+        return {}
+    run = defaults.get("run") or {}
+    return run if isinstance(run, dict) else {}
+
+
+def effective_working_directory(workflow: dict, job_name: str, step: dict) -> str:
+    """The directory a step's script runs in: its own `working-directory`, else
+    its job's default, else the workflow's."""
+    job = jobs(workflow).get(job_name) or {}
+    for candidate in (
+        step.get("working-directory"),
+        job_defaults_working_directory(job),
+        run_defaults(workflow).get("working-directory"),
+    ):
+        normalised = relative_directory(candidate or "")
+        if normalised:
+            return normalised
+    return ""
 
 
 def job_defaults_working_directory(job: dict) -> str:
@@ -7180,16 +7246,19 @@ def lockfile_versions(name: str, path: Path | None = None) -> set[str]:
     return versions
 
 
-def dependabot_directories(ecosystem: str, path: Path | None = None) -> list[str]:
-    config = load_yaml(DEPENDABOT if path is None else path)
-    configured: list[str] = []
-    for entry in config.get("updates") or []:
-        if not isinstance(entry, dict) or entry.get("package-ecosystem") != ecosystem:
-            continue
-        if entry.get("directory"):
-            configured.append(str(entry["directory"]))
-        configured.extend(str(directory) for directory in (entry.get("directories") or []))
-    return configured
+def npm_manifest_directories(root: Path | None = None) -> set[str]:
+    """Every repository directory holding a committed `package.json`, as `/a/b`.
+
+    Walks with `walked_files()`, which prunes `node_modules` -- so an installed
+    dependency's own manifest is not mistaken for one this repository owns -- as
+    well as `.claude/worktrees`, without which every change's working tree would
+    report a phantom copy of this one.
+    """
+    return {
+        repository_directory_of(path, root)
+        for path in walked_files(root)
+        if path.name == NPM_MANIFEST_NAME
+    }
 
 
 def reason_text(line: str) -> str | None:
@@ -7403,9 +7472,10 @@ class TestTheSpecificationRecordIsValidatedByTheRequiredCheck(unittest.TestCase)
         invocations, and neither implies the other"."""
         self._require_located()
         flags: list[str] = []
-        for _, _, step in self.validating:
+        for job, _, step in self.validating:
+            base = effective_working_directory(self.workflow, job, step)
             for line in significant_lines(step.get("run", "")):
-                flag = validating_invocation_flag(line)
+                flag = validating_invocation_flag(line, base)
                 if flag:
                     flags.append(flag)
         self.assertEqual(
@@ -7458,6 +7528,44 @@ class TestTheSpecificationRecordIsValidatedByTheRequiredCheck(unittest.TestCase)
             [],
             offenders,
             f"these jobs gate the record validation behind an `if:`: {offenders}",
+        )
+
+    def test_the_validating_step_runs_inside_a_registered_required_context(self) -> None:
+        """SPECIFIED -- the requirement's opening SHALL: validated "as part of
+        the required pull request status check".
+
+        Every other assertion here locates the step by scanning all jobs and then
+        reads whichever job holds it, which is satisfied by a job that is not
+        registered in branch protection at all. Moving the steps into a new
+        `spec-check` job would leave those assertions green while a pull request
+        with the record validation red stayed mergeable -- green-because-
+        unregistered, which is the same defect as green-because-skipped.
+
+        `REQUIRED_STATUS_CHECK_WORKFLOWS` is this suite's existing record of
+        which contexts are registered; this is the assertion that finally
+        consults it for these steps.
+        """
+        self._require_located()
+        registered = {
+            context
+            for context, workflow_path in REQUIRED_STATUS_CHECK_WORKFLOWS.items()
+            if workflow_path == PR_VALIDATION
+        }
+        self.assertTrue(
+            registered,
+            "REQUIRED_STATUS_CHECK_WORKFLOWS names no context for pr-validation.yml, "
+            "so this assertion would pass having compared against nothing",
+        )
+        holding = {
+            job_context_name(job, jobs(self.workflow)[job] or {}) for job, _, _ in self.validating
+        }
+        offenders = sorted(holding - registered)
+        self.assertEqual(
+            [],
+            offenders,
+            f"these jobs hold the record validation but produce no registered "
+            f"required context: {offenders}; registered: {sorted(registered)}. A "
+            "check that is not a required context does not gate the merge",
         )
 
     def test_the_workflow_carrying_the_validation_declares_no_path_filter(self) -> None:
@@ -7529,17 +7637,20 @@ class TestTheRecordValidationCannotReportSuccessOverAFailure(unittest.TestCase):
         redirection or capture of their status"."""
         offenders = []
         for job, index, step in self.validating:
+            base = effective_working_directory(self.workflow, job, step)
             for line in significant_lines(step.get("run", "")):
-                if validating_invocation_flag(line) is None:
+                if validating_invocation_flag(line, base) is None:
                     offenders.append(f"{step_label(job, index, step)}: {line}")
         self.assertEqual(
             [],
             offenders,
             "these script lines are not one of the permitted validating "
             f"invocations, so the step's script is not the closed form the "
-            f"requirement specifies: {offenders}. The permitted form is an "
-            f"optional `npx`, then `{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND}`, "
-            f"then exactly one of {list(VALIDATING_FLAGS)}, and no other token. A "
+            f"requirement specifies: {offenders}. The permitted form is a path "
+            f"resolving to `{INSTALLED_BINARY}` from the directory the step runs "
+            f"in, then `{VALIDATING_SUBCOMMAND}`, then exactly one of "
+            f"{list(VALIDATING_FLAGS)}, and no other token -- not `npx`, which "
+            "does not find this install, and not a bare name off PATH. A "
             "legitimate edit to this step is meant to fail this assertion until "
             "the assertion is updated with it",
         )
@@ -7555,6 +7666,38 @@ class TestTheRecordValidationCannotReportSuccessOverAFailure(unittest.TestCase):
             if "shell" in step
         ]
         self.assertEqual([], offenders, f"steps overriding `shell:`: {offenders}")
+
+    def test_the_job_enclosing_the_validating_step_declares_no_shell_default(self) -> None:
+        """SPECIFIED -- "no shell override", read at the job level, and delta
+        ¶24's requirement that suppression be read at both levels.
+
+        A `defaults: run: shell:` on the job applies to every `run:` step in it,
+        so a step-level assertion passes over it entirely. A custom shell is an
+        argv template with `{0}` substituted for the script path, so a wrapper of
+        the shape `bash -c 'bash "$0"; exit 0'` runs the script and throws its
+        status away -- the construction nobody listed, which is the whole reason
+        the form is closed rather than blocklisted.
+        """
+        offenders = sorted(
+            {
+                f"{job}: defaults.run.shell: {run_defaults(jobs(self.workflow)[job])['shell']}"
+                for job, _, _ in self.validating
+                if "shell" in run_defaults(jobs(self.workflow)[job])
+            }
+        )
+        self.assertEqual([], offenders, f"jobs defaulting `shell:`: {offenders}")
+
+    def test_the_workflow_declares_no_shell_default(self) -> None:
+        """SPECIFIED -- the same clause read one level higher again. A
+        workflow-level `defaults: run: shell:` reaches every job, so a reading
+        that stopped at the job would be satisfied by moving it up one line."""
+        declared = run_defaults(self.workflow)
+        self.assertNotIn(
+            "shell",
+            declared,
+            "pr-validation.yml declares a workflow-level `defaults.run.shell`, "
+            f"which applies to the validating steps: {declared.get('shell')!r}",
+        )
 
     def test_the_validating_step_declares_no_continue_on_error(self) -> None:
         """SPECIFIED -- "neither the step nor its enclosing job SHALL declare a
@@ -7602,43 +7745,75 @@ class TestTheClosedFormIsARealReadOfTheScript(unittest.TestCase):
     def test_the_permitted_invocations_are_recognised(self) -> None:
         """DERIVED -- no scenario states it. The converse half: a matcher that
         rejected everything would satisfy every rejection below while failing
-        any correct workflow."""
-        for line, expected in (
-            ("openspec validate --all", "--all"),
-            ("openspec validate --archived", "--archived"),
-            ("npx openspec validate --all", "--all"),
-            ("./node_modules/.bin/openspec validate --archived", "--archived"),
+        any correct workflow.
+
+        Every permitted form names a path into the install tree the committed
+        manifest and lockfile describe, read from wherever the step runs.
+        """
+        for line, base, expected in (
+            (f"./{INSTALLED_BINARY} {VALIDATING_SUBCOMMAND} --all", "", "--all"),
+            (f"{INSTALLED_BINARY} {VALIDATING_SUBCOMMAND} --archived", "", "--archived"),
+            (f"./{NODE_BIN_SEGMENT}/{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --all",
+             MANIFEST_DIRECTORY, "--all"),
+            (f"{NODE_BIN_SEGMENT}/{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --archived",
+             f"./{MANIFEST_DIRECTORY}", "--archived"),
         ):
-            self.assertEqual(expected, validating_invocation_flag(line), line)
+            self.assertEqual(expected, validating_invocation_flag(line, base), line)
+
+    def test_an_invocation_outside_the_pinned_install_tree_is_rejected(self) -> None:
+        """SPECIFIED -- "SHALL install the exact version the committed manifest
+        pins ... and SHALL NOT be resolved freshly at run time", read on the line
+        that runs the tool rather than on the line that installs it.
+
+        `npx` is here because it was previously ADMITTED, on the false belief
+        that it finds the local install. It does not: `npm ci` installs into
+        `.github/node_modules`, npx searches upward from the working directory,
+        and `.github` is a child of the root rather than an ancestor. With the
+        install moved aside it still exits 0, resolving from a cache no runner
+        has. A bare name off PATH fails for the same reason, and so does a path
+        into an install tree nothing here pins.
+        """
+        for line, base in (
+            (f"npx {VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --all", ""),
+            (f"npx --yes {VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --all", ""),
+            (f"{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --all", ""),
+            (f"{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --archived", MANIFEST_DIRECTORY),
+            (f"/usr/local/bin/{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --all", ""),
+            (f"./{NODE_BIN_SEGMENT}/{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --all", ""),
+            (f"elsewhere/{NODE_BIN_SEGMENT}/{VALIDATING_TOOL} {VALIDATING_SUBCOMMAND} --all", ""),
+        ):
+            self.assertIsNone(validating_invocation_flag(line, base), f"{line!r} from {base!r}")
 
     def test_a_suppressed_invocation_is_rejected(self) -> None:
         """SPECIFIED -- scenario "The check cannot report success over a failed
         validation". `|| :` and `; true` are here because they are what a
         blocklist written against `|| true` lets through."""
+        binary = f"./{INSTALLED_BINARY}"
         for line in (
-            "openspec validate --all || true",
-            "openspec validate --all || :",
-            "openspec validate --all ; true",
-            "openspec validate --all && echo ok",
-            "openspec validate --all | tee log.txt",
-            "openspec validate --all > /dev/null 2>&1",
+            f"{binary} validate --all || true",
+            f"{binary} validate --all || :",
+            f"{binary} validate --all ; true",
+            f"{binary} validate --all && echo ok",
+            f"{binary} validate --all | tee log.txt",
+            f"{binary} validate --all > /dev/null 2>&1",
             "set +e",
-            "if ! openspec validate --all; then echo soft; fi",
-            "status=$(openspec validate --all)",
-            "openspec validate --all &",
-            "bash -c 'openspec validate --all || true'",
+            f"if ! {binary} validate --all; then echo soft; fi",
+            f"status=$({binary} validate --all)",
+            f"{binary} validate --all &",
+            f"bash -c '{binary} validate --all || true'",
         ):
             self.assertIsNone(validating_invocation_flag(line), line)
 
     def test_a_line_that_is_not_the_validation_is_rejected(self) -> None:
         """SPECIFIED -- "its script SHALL consist of the validating invocations
         and nothing else"."""
+        binary = f"./{INSTALLED_BINARY}"
         for line in (
             "npm ci",
             "echo validating",
-            "openspec validate",
-            "openspec validate --all --quiet",
-            "openspec list",
+            f"{binary} validate",
+            f"{binary} validate --all --quiet",
+            f"{binary} list",
             "cd .github",
         ):
             self.assertIsNone(validating_invocation_flag(line), line)
@@ -7930,8 +8105,8 @@ class TestThePinIsWatchedByTheDependencyUpdateConfiguration(unittest.TestCase):
         dependency-update configuration, so that the pin is maintained rather
         than left to rot -- a pinned dependency nothing watches is the failure
         this repository has recorded against itself four times over"."""
-        directory = "/" + OPENSPEC_MANIFEST.parent.relative_to(ROOT).as_posix()
-        configured = dependabot_directories("npm")
+        directory = "/" + MANIFEST_DIRECTORY
+        configured = configured_directories(NPM_ECOSYSTEM)
         self.assertTrue(
             configured,
             ".github/dependabot.yml has no `npm` entry, so nothing raises a new "
@@ -7941,6 +8116,39 @@ class TestThePinIsWatchedByTheDependencyUpdateConfiguration(unittest.TestCase):
             any(gh_glob_matches(pattern, directory) for pattern in configured),
             f"no Dependabot `npm` entry names {directory}, where the validating "
             f"tool's manifest lives; configured: {sorted(configured)}",
+        )
+
+    def test_every_directory_holding_an_npm_manifest_is_watched(self) -> None:
+        """DERIVED -- the converse of the assertion above, and the one this
+        stanza was missing while both its neighbours carry it: the `terraform`
+        ecosystem asserts that every lockfile-bearing directory is named, and the
+        Compose one that every stack-shaped file is reachable.
+
+        Asserting only the forward direction leaves a second `package.json`
+        added anywhere in the tree unwatched, with nothing red to say so -- which
+        is the failure this repository has recorded against itself four times
+        over, and the failure the npm stanza exists to stop repeating. A set
+        comparison is the whole check, because Dependabot's npm ecosystem has no
+        discovery of its own.
+        """
+        found = npm_manifest_directories()
+        self.assertTrue(
+            found,
+            "no package.json was found anywhere in the tree, so this comparison "
+            "would pass having read nothing",
+        )
+        configured = configured_directories(NPM_ECOSYSTEM)
+        uncovered = sorted(
+            directory
+            for directory in found
+            if not any(gh_glob_matches(pattern, directory) for pattern in configured)
+        )
+        self.assertEqual(
+            [],
+            uncovered,
+            f"these directories hold a package.json that no Dependabot "
+            f"`{NPM_ECOSYSTEM}` entry names, so their pins are watched by nobody: "
+            f"{uncovered}; configured: {sorted(configured)}",
         )
 
 

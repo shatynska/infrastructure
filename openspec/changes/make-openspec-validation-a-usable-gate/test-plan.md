@@ -170,11 +170,14 @@ delta says.
 |---|---|
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_validating_step_script_is_the_invocations_and_nothing_else` | SPECIFIED |
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_validating_step_declares_no_shell_override` | SPECIFIED |
+| `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_job_enclosing_the_validating_step_declares_no_shell_default` | SPECIFIED |
+| `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_workflow_declares_no_shell_default` | SPECIFIED |
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_validating_step_declares_no_continue_on_error` | SPECIFIED |
 | `TestTheRecordValidationCannotReportSuccessOverAFailure.test_the_job_enclosing_the_validating_step_declares_no_continue_on_error` | SPECIFIED |
 | `TestTheClosedFormIsARealReadOfTheScript.test_a_suppressed_invocation_is_rejected` | SPECIFIED |
 | `TestTheClosedFormIsARealReadOfTheScript.test_a_line_that_is_not_the_validation_is_rejected` | SPECIFIED |
 | `TestTheClosedFormIsARealReadOfTheScript.test_the_permitted_invocations_are_recognised` | DERIVED — converse half |
+| `TestTheClosedFormIsARealReadOfTheScript.test_an_invocation_outside_the_pinned_install_tree_is_rejected` | SPECIFIED |
 
 The shape is asserted positively and completely by `validating_invocation_flag`:
 a script line must be an optional `npx`, then a command whose basename is
@@ -213,6 +216,7 @@ assertion is updated with it. That is the intended behaviour.
 | `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_workflow_carrying_the_validation_declares_no_path_filter` | SPECIFIED |
 | `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_validation_runs_on_every_pull_request` | SPECIFIED |
 | `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_validation_is_invoked_by_a_run_step_rather_than_delegated` | SPECIFIED |
+| `TestTheSpecificationRecordIsValidatedByTheRequiredCheck.test_the_validating_step_runs_inside_a_registered_required_context` | SPECIFIED |
 
 `if:` is asserted absent as a key rather than falsy, for the same reason as
 `continue-on-error`. The path-filter assertion deliberately duplicates
@@ -263,7 +267,12 @@ lands.
 
 **Covered** by
 `TestThePinIsWatchedByTheDependencyUpdateConfiguration.test_the_dependency_update_configuration_covers_the_manifests_directory`
-(SPECIFIED). The directory is computed from where the manifest actually is, so
+(SPECIFIED) and, in the reverse direction, by
+`…test_every_directory_holding_an_npm_manifest_is_watched` (DERIVED): every
+directory holding a committed `package.json` must appear in an `npm` stanza, so
+a second manifest added anywhere cannot go unwatched in silence. Both of this
+stanza's neighbours — `terraform` and the Compose ecosystem — already carry that
+converse; the `npm` one did not until the gate's review. The directory is computed from where the manifest actually is, so
 moving the manifest moves the assertion with it. Membership is asserted, not an
 exact ecosystem set, so `TestDependabotCoverage`'s existing entries are
 unaffected.
@@ -378,14 +387,32 @@ with no channel to ask on.
    *Depends on it:* every test in `TestThePinMatchersReadTheScopedPackageName`,
    plus `test_the_manifest_pins_the_tool_to_an_exact_version` and
    `test_the_lockfile_records_the_version_the_manifest_pins`.
-2. **How the binary is invoked after a local `npm ci` in `.github/`.** The
-   artifacts do not say. *Assumption:* both `npx openspec validate --flag` and a
-   path form (`./node_modules/.bin/openspec validate --flag`) are permitted; a
-   bare `openspec validate --flag` is permitted too. An `npx` carrying arguments
-   of its own (`--package`, `--yes`) is **not** permitted, because that is a fresh
-   resolution. *Depends on it:* every test in
-   `TestTheRecordValidationCannotReportSuccessOverAFailure` and
-   `TestTheClosedFormIsARealReadOfTheScript`.
+2. **How the binary is invoked after a local `npm ci` in `.github/` — asked,
+   answered, and the first answer was wrong.** These tests originally
+   admitted `npx openspec validate --flag`, a bare `openspec validate --flag` off
+   `PATH`, and a path form, on the stated belief that npx "resolves the locally
+   installed binary that the lockfile-exact install places in
+   `node_modules/.bin`". **That belief is false**, and this install is exactly the
+   case where it fails: `npm ci` installs into `.github/node_modules`, npx
+   searches `node_modules/.bin` *upward* from the working directory, and
+   `.github` is a child of the repository root rather than an ancestor. Verified
+   during the gate's implementation: with the install moved aside,
+   `npx openspec validate --all` still exited 0 — from the npx cache. A runner has
+   no cache, so the same line resolves off the registry at run time, which delta
+   ¶12 forbids.
+
+   The old permission was worse than a gap: a future edit "tidying" the path form
+   back to `npx` would have kept every assertion green while CI resolved a fresh
+   version, so the test would have licensed exactly what the requirement forbids.
+
+   *Now:* the invocation must **resolve to** the binary the lockfile-exact
+   install places — `.github/node_modules/.bin/openspec` — read from whatever
+   directory the step runs in (its own `working-directory`, its job's default, or
+   the workflow's). `npx`, a bare name off `PATH`, and a path into any other
+   install tree are all rejected. *Depends on it:*
+   `test_the_validating_step_script_is_the_invocations_and_nothing_else`,
+   `test_both_the_active_and_the_archived_record_are_validated`, and both
+   fixtures in `TestTheClosedFormIsARealReadOfTheScript`.
 3. **That npm's lockfile-exact install is spelled `npm ci`.** The delta states
    the property; `design.md` Decision 7 states "a clean lockfile-exact install".
    *Assumption:* `npm ci`, with any flags after it, and it must target the
@@ -551,12 +578,63 @@ Nineteen tests were red at derive time and named exactly what was missing:
 | The correction rule in `AGENTS.md`'s project-conventions section | `TestTheArchivedRecordCorrectionRuleIsStated` (3) |
 
 **All of them are now green.** With the gate implemented in the working tree, the
-suite runs **250 tests, all passing**, by `discover` and by a direct
+suite runs **255 tests, all passing**, by `discover` and by a direct
 `python3 .github/tests/test_ci_configuration.py` alike. No test in this section
 was softened to reach that state: the two manifest assertions were corrected to
 read the package's real name (question 1a above) and were then confirmed to fail
 against a manifest keyed on the binary name, against an npm alias, against a
 range, and against a lockfile that disagrees with the manifest.
+
+### The gate review's findings, folded in
+
+The gate pull request's code review raised four gaps. All four made the checks
+**weaker** than the delta requires; none was a case of a test being too strict,
+and each fix was confirmed by the mutation that motivated it.
+
+1. **`npx` was admitted, and it is the unsafe form.** See question 2 above, which
+   is where the corrected assumption is recorded. Fixed by requiring the command
+   to resolve to the pinned install tree. *Mutations confirmed red:* the run line
+   tidied back to `npx openspec validate --all`, and reduced to a bare `openspec`
+   off `PATH`.
+2. **The closed form was not closed at the `defaults` levels for `shell:`.** The
+   `continue-on-error` assertion already read both step and job; the shell
+   assertion read the step alone. A `defaults: run: shell:` on the job — or at
+   workflow level — applies to both validating steps, and a custom shell is an
+   argv template with `{0}` substituted, so a wrapper of the shape
+   `bash -c 'bash "$0"; exit 0'` runs the script and discards its status. That is
+   the construction nobody listed, which is the whole reason the form is closed
+   rather than blocklisted, and delta ¶24 requires the both-levels reading in so
+   many words. *Mutations confirmed red:* that wrapper at the job level, and a
+   `defaults.run.shell` at workflow level.
+3. **Nothing bound the step to a *registered* required context.** The
+   requirement's opening SHALL is "as part of the required pull request status
+   check", and every assertion located the step by scanning all jobs and then read
+   whichever job held it. Moving the steps into a new `spec-check` job left every
+   gate assertion green while a pull request with the record validation red stayed
+   mergeable — green-because-unregistered, the same defect as
+   green-because-skipped. `REQUIRED_STATUS_CHECK_WORKFLOWS` was in the same module
+   and never consulted; it is now. *Mutation confirmed red:* a second,
+   unregistered `spec-check` job holding a validating step.
+4. **The `npm` Dependabot stanza had no reverse coverage check.** Fixed as
+   described under scenario 7. *Mutation confirmed red:* a second `package.json`
+   added in a directory no stanza names.
+
+### What the git history does and does not show
+
+`test-plan.md` says nineteen assertions were red at derive time, and that is
+true of the tree they were authored against — but **the history does not
+witness it for the gate group**. Pull request 1 shipped the shared helpers and
+constants together with the disclosure group, and the gate classes were held out
+of it deliberately (see the apportionment above), so `origin/main` carries the
+helpers and none of the six gate test classes. There is therefore no commit on
+the trunk where a gate assertion is present and red.
+
+That is a consequence of the apportionment, not a defect in it — a red gate
+assertion in pull request 1 would have blocked a pull request that cannot satisfy
+it — but it means the derive-then-implement ordering for the gate group rests on
+this document and on the review record rather than on something a reader can
+reconstruct from `git log`. Stated here so the claim is not read as more than it
+is.
 
 ## Confirmation that these tests bite
 
