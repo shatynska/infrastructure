@@ -462,7 +462,7 @@ commands are in scope; the Terraform row is not.
   `test-plan.md`'s mapping. A guard whose assertion stays green is not a
   passing test — it is an assertion that cannot fail, over a destructive
   operation. Section 2 is not complete until this is done.
-- [ ] 3.3 Run `pre-commit run --all-files` (`ansible-lint`,
+- [x] 3.3 Run `pre-commit run --all-files` (`ansible-lint`,
   `ansible-playbook --syntax-check`, `gitleaks`) and the `.github/tests` suite.
 - [ ] 3.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
   diff that already passes 3.1, 3.2 and 3.3. Ask it to read the installed
@@ -487,7 +487,7 @@ commands are in scope; the Terraform row is not.
   keeps every image the eleven running containers hold together with
   `postgres:16-alpine` and `postgres:16.15`. Confirm with `docker system df` and
   by checking each of those eleven containers is still up.
-- [ ] 3.7 Record two follow-ups in `docs/change-queue.md`, neither of which
+- [ ] 3.7 Record four follow-ups in `docs/change-queue.md`, none of which
   belongs in this change. First, the one this change names as a non-goal:
   node-exporter's textfile collector plus a staleness alert, so a prune that has
   silently stopped working is alertable rather than only journalled — a
@@ -495,3 +495,20 @@ commands are in scope; the Terraform row is not.
   2.1 a permanent home in `AGENTS.md`: it is recorded nowhere in this repository
   today, the queue entry that held it was deleted when its change archived, and
   it has now cost two sessions time it did not need to.
+
+  Third, **report refused removals**. `considered` counts the whole host rather
+  than a candidate set, so a shortfall against `removed` carries no signal — a
+  defective keep set prints `considered N, removed 0`, byte-identical to a
+  healthy run over a fully-referenced host. `app-deploy`'s own comment calls
+  that shortfall "a signal worth reading"; here it is unreadable. Counting
+  refusals would make it legible without changing any removal behaviour, but it
+  adds a field the delta does not specify, so it is a change of its own.
+
+  Fourth, **the stubbed-runtime rig**. The code review built one that supplies
+  the mid-run seam Molecule lacks, and used it to exercise both guards
+  `test-plan.md` records as unverifiable — a tag re-pointed between enumeration
+  and removal, and an image pulled during keep-set computation — confirming each
+  is present and mutation-visible. `test-plan.md` invites exactly this ("if a
+  deterministic arrangement is found for either ... add it to 2.7 and 2.8
+  together and strike it from here"). Adopting it would close the change's only
+  two untested guards.

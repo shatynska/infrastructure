@@ -422,13 +422,20 @@ deploys*, which by construction cannot reach three classes of image.
 - **Images of an application that no longer deploys** are never revisited,
   because reclamation is driven by a deploy that will not happen again.
 
-All three want the opposite trigger — a host-level timer rather than a deploy — and
-a blunter filter (`docker image prune -af --filter until=<age>`), whose
-untargeted nature is acceptable on a timer and was not acceptable inside a
-deploy path. That difference in mechanism, not merely in scope, is why it is a
-separate change.
+All three want the opposite trigger — a host-level timer rather than a deploy.
+
+**This entry originally specified `docker image prune -af --filter until=<age>`,
+and the change in flight does not use it.** That filter selects on an image's
+*creation* timestamp, which for a pulled image is its upstream build date, so it
+excludes essentially nothing: the running `prom/alertmanager:v0.28.1` was built
+in March 2025. `-af` therefore reduces to "remove every image no container
+currently holds", which loses the image of any service that is defined and never
+started. The change's delta says so normatively — **age SHALL NOT be a
+criterion**, and no prune may select images by absence of a tag — so there is no
+retention window to choose. What replaced it is a keep set built from the union
+of every enumerated application's Compose references and every container's
+image, compared by image identity. See the change's `design.md`.
 
 Worth doing only after `reclaim-superseded-app-images` has been observed
-working: if the per-deploy reclamation is doing its job, this becomes a small
-safety net rather than the primary mechanism, and its retention window can be
-chosen accordingly.
+working: if the per-deploy reclamation is doing its job, this is a safety net
+rather than the primary mechanism.
