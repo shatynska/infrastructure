@@ -217,6 +217,46 @@ checkout and toolchain install, which the current per-role jobs amortise across
 a role's scenarios. Whether that is cheaper overall is an empirical question
 this entry does not answer.
 
+## 12. make-openspec-validation-a-usable-gate
+
+**Not blocked; recorded because a check that is already red cannot tell anyone
+when something new goes wrong.** Found 2026-09-08 while closing
+`promote-molecule-to-a-required-check`, whose own archived tasks pass — the
+three below predate it.
+
+`openspec validate --archived` reports three archived changes with unticked
+tasks:
+
+| Change | Tasks |
+|---|---|
+| `2026-08-19-add-prod-data-volume` | 16/19 |
+| `2026-09-04-fix-cadvisor-containerd-snapshotter` | 10/11 |
+| `2026-09-07-reclaim-superseded-app-images` | 24/29 |
+
+Every one of them is a **verification** task — a live `terraform plan` against
+prod, a destroy-plan check, a full `pre-commit` run — and each was left unticked
+rather than recorded as not done. So the archived record cannot distinguish
+"this was verified" from "nobody said". That is the same ambiguity this
+repository refuses everywhere else: a check that cannot tell you which of the
+two it is has told you nothing.
+
+Deciding it means reading each one and either ticking it with the evidence, or
+replacing it with a line saying it was not performed and why. Both are honest;
+leaving it unticked is the only option that is not.
+
+**The second half is why none of this was noticed.** `openspec validate` runs
+**nowhere**: not in `.pre-commit-config.yaml`, not in any workflow. Nothing
+checks that the specifications parse, that a change's deltas are well-formed, or
+that an archived change's tasks are complete. The pipeline verifies its own
+configuration thoroughly and does not verify the specifications that describe
+what it is for.
+
+Wiring it in is cheap — it needs no network, no credential and no container, so
+it fits the `.github/tests` row's constraints, though as a subprocess rather
+than as a Python assertion. But it should not be wired in while it is red,
+because a gate that fails on arrival gets disabled rather than fixed. Hence one
+change: settle the three, then add the check.
+
 ## 6. two-deferred-ci-items
 
 Both noticed during `close-ci-verification-gaps`, neither a verification gap:
@@ -443,3 +483,19 @@ Worth doing only after `reclaim-superseded-app-images` has been observed
 working: if the per-deploy reclamation is doing its job, this becomes a small
 safety net rather than the primary mechanism, and its retention window can be
 chosen accordingly.
+
+**It is already opened and in progress** — a branch, a proposal and derived
+tests for a new `image_prune` role, at `plan:tests-derived` as of 2026-09-08.
+The session that resumes it should know that the ground moved underneath it:
+`ansible-verify` became a **required** status check on `main` that day
+(`promote-molecule-to-a-required-check`, PR #72). Two consequences, both
+favourable but neither obvious:
+
+- Role discovery enumerates `ansible/roles/*/molecule/`, so `image_prune`'s
+  scenarios are picked up with **no workflow edit** — the property that change
+  claimed and did not get to demonstrate, since its own pull requests touched
+  nothing under `ansible/`. This will be the first pull request to exercise it.
+- Those scenarios must be **green to merge**. Under the advisory tier a red run
+  was information; it now blocks. Budget for that rather than discovering it at
+  the pull request.
+
