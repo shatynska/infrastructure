@@ -145,11 +145,17 @@ These are specific to this repository, not part of the generated workflow block 
 
 ### Task lists, archived records, and disclosing what was not done
 
-`openspec validate --archived` runs on every pull request and fails on an archived change whose task list still records outstanding work. Three rules keep that gate honest; all three are asserted by `.github/tests/`, so a violation fails the pipeline rather than waiting for a reviewer to notice.
+This repository is wiring `openspec validate --archived` into the required pull-request check, so that an archived change whose task list still records outstanding work fails the pipeline. Three rules keep that gate honest, and **how much of each is machine-checked differs** — stated here because a rule that reads as enforced when it is not is worse than one that reads as a convention:
+
+- The third rule's `Reason:` label is checked by `.github/tests/`: a disclosure carrying no label, or an empty one, fails.
+- The second rule is asserted there only to be **stated** — that this text still says it. Whether an edit obeys it is not checkable, and a task deleted rather than disclosed is invisible to every check in this repository.
+- The first rule is not machine-checked at all.
+
+So two of the three end at a reviewer, and the wording below is what they review against.
 
 **A change's `tasks.md` ends at the archive commit.** Branch and working-tree removal happen after the record's own pull request merges, which is after the commit that writes `tasks.md` — so a task for them can never be ticked in the file that contains them, and is unticked by construction forever. Record them in prose instead. This is narrow: the archive step itself belongs in `tasks.md` and is unaffected.
 
-**An archived change's record may be corrected only to make it say what actually happened, with the evidence cited, and never to change what was decided or built.** Retroactive edits to an archived `tasks.md` are legitimate — a task performed but never ticked should be ticked — but only against evidence named on the line, and a retroactive tick says so rather than presenting itself as contemporaneous. This rule is the only guard against a task being deleted rather than disclosed: no static check can see a line that is gone, so this is where that case is caught.
+**An archived change's record may be corrected only to make it say what actually happened, with the evidence cited, and never to change what was decided or built.** Retroactive edits to an archived `tasks.md` are legitimate — a task performed but never ticked should be ticked — but only against evidence named in the record, and the tick itself SHALL be marked retroactive so it cannot be read as contemporaneous. Cite evidence that can still be checked: a figure another committed file records, a file's presence and date, an image digest or timestamp. Evidence that has already expired when it is written down is the thing this rule exists to prevent. This rule is also the only guard against a task being deleted rather than disclosed: no static check can see a line that is gone, so this is where that case is caught.
 
 **Work not performed is disclosed, not deleted and not ticked.** Put it under a `## Not performed` heading as a list item naming the task, with its reason on a following line introduced by a `Reason:` label. This covers work not performed for *any* reason — declined on judgment, unreachable in the authoring environment, or never captured and no longer recoverable. Ticking a box for work that was not done makes a ticked box mean either that the work happened or that it did not, which is no signal at all. The `Reason:` label is what the pipeline checks and it only checks for silence; whether the reason is a *good* one is a question for review.
 

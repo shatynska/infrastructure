@@ -17,7 +17,9 @@ Work that was not performed SHALL be disclosed in prose rather than marked compl
 
 That disclosure SHALL itself be machine-checked. A prose escape from a gate, guarded only by review, is the *"guaranteed only until someone does not notice"* condition that the requirement *The Continuous-Integration Configuration Is Itself Verified* exists to refuse; an unguarded one would let this check be satisfied by relabelling an inconvenient task rather than by disclosing anything. A disclosed item that states no reason SHALL fail the check exactly as an unticked task does.
 
-So that the reason is checkable without judging prose, a disclosure SHALL take a fixed form: a list item naming the task it replaces, carrying its reason on a following line introduced by a `Reason:` label. The label is what makes silence detectable; the check SHALL assert that the label is present and its text non-empty, and SHALL NOT attempt to assess whether the reason is a good one.
+So that the reason is checkable without judging prose, a disclosure SHALL take a fixed form: under a `## Not performed` heading, a list item naming the task it replaces, carrying its reason on a following line introduced by a `Reason:` label. The heading is part of the form and not merely conventional — it is what the check scans for, so a disclosure written outside one is a disclosure the check never sees. The label is what makes silence detectable; the check SHALL assert that the label is present and its text non-empty, and SHALL NOT attempt to assess whether the reason is a good one.
+
+A section that presents itself as such a heading SHALL NOT pass by yielding nothing. A heading the check does not recognise, or one under which no disclosure is found, SHALL fail rather than scan an empty set successfully: a disclosure section that discloses nothing is indistinguishable from a section the scanner could not read, and the second is how this check would fail open.
 
 The check therefore reaches silence, not sufficiency, and it does not reach a task deleted outright rather than disclosed. Deletion is governed instead by the repository's own convention that an archived record may be corrected only to say what actually happened. That convention SHALL be stated in the repository-root `AGENTS.md`, and that it is stated there SHALL itself be asserted by the suite — a delegation to a rule nothing checks for is a delegation to nothing, and this is the one blind spot the check above openly concedes. That assertion establishes only that the rule is **stated**, never that it is followed; the deletion case still ends at a reviewer, and this obligation makes the rule they are reviewing against durable rather than replacing them. The assertion SHALL be written so that rephrasing the rule fails it, rather than so that a rephrasing which inverts the rule passes: this rule's wording is precisely what a reviewer relies on, and a change to it is a reviewed event rather than an editorial one.
 
@@ -42,6 +44,10 @@ This validation SHALL NOT be performed by the executable suite that verifies the
 #### Scenario: Unperformed work disclosed without a reason fails the check
 - **WHEN** an archived change discloses work as not performed and carries no `Reason:` label, or carries one whose text is empty
 - **THEN** the required status check SHALL fail on that pull request, as it would for an unticked task
+
+#### Scenario: A disclosure section the check cannot read fails rather than passing
+- **WHEN** an archived change carries a section that presents itself as disclosing unperformed work, and the check recognises no disclosure within it
+- **THEN** the required status check SHALL fail, rather than reporting success over a section it could not read
 
 #### Scenario: The check cannot report success over a failed validation
 - **WHEN** the validating command exits non-zero

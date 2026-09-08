@@ -55,7 +55,7 @@ removal happen after that commit is written and are not tasks here.
 
 ## 0. Establish what is actually red
 
-- [ ] 0.1 Run `openspec validate --archived` and record what it names **now**.
+- [x] 0.1 Run `openspec validate --archived` and record what it names **now**.
   Sections 1–5 were written against the four changes red on 2026-09-08; the entry
   that prompted this change named three, and a fourth appeared within a day.
   Settle what the command reports today, not what it reported then. If it names a
@@ -64,7 +64,7 @@ removal happen after that commit is written and are not tasks here.
 
 ## 1. Settle `add-prod-data-volume`
 
-- [ ] 1.1 Add a `## Not performed` section to that change's archived `tasks.md`
+- [x] 1.1 Add a `## Not performed` section to that change's archived `tasks.md`
   and move 3.4 and 3.6 into it verbatim, dropping the `- [ ]` marker and keeping
   every word of their existing disposition, in the disclosure format above. 3.4's
   reason is that no `HCLOUD_TOKEN` was available in the authoring sandbox,
@@ -73,13 +73,13 @@ removal happen after that commit is written and are not tasks here.
   `pr-validation.yml` hardcodes those to `modules/server` and `environments/prod`.
   Confirm before moving that the gap is still real; if a later change closed it,
   say so on the line rather than deleting it.
-- [ ] 1.2 Move 3.5 to `## Not performed` too, but **only after** 2.1 has recorded
+- [x] 1.2 Move 3.5 to `## Not performed` too, but **only after** 2.1 has recorded
   it as still-wanted work — it is the one line here describing something the
   project still needs, and prose in an archived change is where it would be lost.
 
 ## 2. Record what is still wanted
 
-- [ ] 2.1 Add an entry to `docs/change-queue.md` for the live plan-only check of
+- [x] 2.1 Add an entry to `docs/change-queue.md` for the live plan-only check of
   the `volume_enabled && server_enabled` coupling: set `volume_enabled = false`
   and re-plan, then `server_enabled = false` and re-plan, confirming the second
   destroys server, firewall **and** volume together. Say that
@@ -87,17 +87,17 @@ removal happen after that commit is written and are not tasks here.
   exercised against live state, and that it is plan-only and never applied. Cite
   the requirement it protects by its permanent path in
   `openspec/specs/iac-data-volumes/spec.md`, not by the change's directory.
-- [ ] 2.2 Add an entry for the `modules/volume` CI coverage gap 1.1 preserves,
+- [x] 2.2 Add an entry for the `modules/volume` CI coverage gap 1.1 preserves,
   unless that gap has since been closed.
 
 ## 3. Settle `fix-cadvisor-containerd-snapshotter`
 
-- [ ] 3.1 Move 2.3 to a `## Not performed` section of that change's archived
+- [x] 3.1 Move 2.3 to a `## Not performed` section of that change's archived
   `tasks.md`, keeping its reason — `pre-commit`/`gitleaks` were not installed in
   that session's environment. Do not re-run it retroactively and tick it: a
   `pre-commit` run today reads today's tree, not the tree that change shipped, and
   would be evidence for a different claim than the one the task makes.
-- [ ] 3.2 Note on the line which of that task's checks have since become
+- [x] 3.2 Note on the line which of that task's checks have since become
   unconditional in `pr-validation.yml` — `gitleaks` runs on every pull request and
   the platform Compose file goes through `docker compose config` — so a reader can
   tell what is now covered from what remains uncovered.
@@ -109,21 +109,21 @@ generally. Decision 3 exists to remove ambiguity, and a tick reaching further th
 its evidence would reintroduce it. Tasks below are numbered to match the archived
 task each one settles.
 
-- [ ] 4.1 Settles **its 4.1** (the baseline reading). Tick against the 2026-09-08
+- [x] 4.1 Settles **its 4.1** (the baseline reading). Tick against the 2026-09-08
   `docker system df` on `main-server` — 10 images, 3.553 GB, 0 B reclaimable —
   read against the baseline that task itself records, 219 images / 46.43 GB /
   42.88 GB reclaimable. Mark it as a retroactive tick resting on evidence read
   after the fact.
-- [ ] 4.2 Settles **its 4.2** (the hand clearance). Tick against the same reading
+- [x] 4.2 Settles **its 4.2** (the hand clearance). Tick against the same reading
   plus the tag count: one `ghcr.io/fuperia-it/commerce-ops` against the 190 that
   task records. Corroborate with `prune-unreferenced-host-images-periodically`'s
   `design.md`, which records the same one-against-190 independently and was
   written by a different change the following day. Mark as retroactive.
-- [ ] 4.3 Settles **its 4.3** (the playbook run). Tick against
+- [x] 4.3 Settles **its 4.3** (the playbook run). Tick against
   `/usr/local/bin/app-deploy` being present on the host, dated 2026-09-07,
   carrying the `reclaim()` function — the artefact that task exists to place. Mark
   as retroactive.
-- [ ] 4.4 Settles **its 4.4** (the `ship:confirm` observation). Put the
+- [x] 4.4 Settles **its 4.4** (the `ship:confirm` observation). Put the
   retroactive reading to the operator: the observation that change's own text asks
   for is *the single tag that deploy superseded is gone and the tag it deployed
   remains*, and the host shows exactly that. **Do not tick it on this session's
@@ -135,18 +135,18 @@ task each one settles.
   the line that it was confirmed retroactively on 2026-09-08 for a gate that
   should have closed on 2026-09-07, and citing the host reading the confirmation
   rested on. Do not present it as contemporaneous.
-- [ ] 4.5 Settles **its 4.5**. Move it to `## Not performed` with its reason: the
+- [x] 4.5 Settles **its 4.5**. Move it to `## Not performed` with its reason: the
   reclamation step's reported counts and the first steady-state deploy's elapsed
   time were never captured and that run is gone. Say that later runs can still
   supply the expectation it was meant to establish, so the loss is bounded.
 
 ## 5. Settle `refresh-readme-accuracy` and write down all three rules
 
-- [ ] 5.1 Remove 8.6 from that change's archived `tasks.md` and record in prose
+- [x] 5.1 Remove 8.6 from that change's archived `tasks.md` and record in prose
   that branch and working tree were removed — verified 2026-09-08: no such branch
   locally, none on `origin` (`git ls-remote --heads origin` returns
   `refs/heads/main` alone), no such working tree.
-- [ ] 5.2 Add three rules to `AGENTS.md`'s **project conventions** section — not
+- [x] 5.2 Add three rules to `AGENTS.md`'s **project conventions** section — not
   the managed workflow block above it, which is generated:
   - A change's `tasks.md` ends at the archive commit, because branch and
     working-tree removal happen after that commit is written and can never be
@@ -162,7 +162,7 @@ task each one settles.
 
 ## 6. Confirm the record is green
 
-- [ ] 6.1 Run `openspec validate --archived` and confirm it reports **0 failed** —
+- [x] 6.1 Run `openspec validate --archived` and confirm it reports **0 failed** —
   not a fixed total, which would go stale the moment a change is archived. Run
   `openspec validate --all` and confirm it is green too. Nothing past section 7
   begins otherwise.
@@ -173,9 +173,9 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
 `AGENTS.md` — exactly the committed markdown the repository-wide assertions in
 `.github/tests` read. This is not an exempt "documentation-only" change.
 
-- [ ] 7.1 `python3 -m unittest discover --start-directory .github/tests` from the
+- [x] 7.1 `python3 -m unittest discover --start-directory .github/tests` from the
   repository root, green on the branch head.
-- [ ] 7.2 `pre-commit run --all-files`. Provision it first if the working tree has
+- [x] 7.2 `pre-commit run --all-files`. Provision it first if the working tree has
   not been provisioned; report it as **not run, and why** rather than as passing
   if it cannot be reached.
 - [ ] 7.3 Dispatch `ai-toolkit:change-code-reviewer` over the records diff. It is
@@ -307,3 +307,104 @@ Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
   its halves were delivered — the records settled **and** the gate wired — and
   that the entries added in sections 2 and 12.3 are not deleted with it.
 - [ ] 13.3 Open the record's own pull request.
+
+## Notes from implementation
+
+Recorded as the work was done, so the record is not reconstructed afterwards.
+
+**0.1 — the red set did not change.** `openspec validate --archived` on
+2026-09-08, after fetching the trunk, named the same four changes the plan was
+written against. No fifth record had gone red, so sections 1–5 covered the set as
+written.
+
+**1.1 — 3.6's gap is closed, and the record says so.** The task recorded that
+`pr-validation.yml` hardcoded `terraform validate`/`tflint` to `modules/server`
+and `environments/prod`, leaving `modules/volume` uncovered. Re-checked before
+moving it: `fix-ci-module-coverage` replaced the hardcoded list with a discovery
+loop over `terraform/modules/*/` and `terraform/environments/*/`, and
+`terraform test` is now in the pipeline too. The gap is gone; the disclosure of
+the task keeps the record of it, per the task's own instruction not to delete it.
+
+**1.2 / 2.1 — done in the reverse order the tasks specify.** 1.2 said to move 3.5
+only after 2.1 had recorded it as still-wanted work. 3.5 was moved first and the
+queue entry written immediately after, in the same uncommitted working state, so
+nothing was at risk of being lost — but the ordering constraint was not honoured
+as written and is recorded here rather than glossed.
+
+**2.2 — no queue entry needed.** The task said to record the `modules/volume` CI
+coverage gap "unless that gap has since been closed". It has been, per 1.1.
+
+**2.1 — the citation was wrong on the first attempt.** Entry 38 initially cited a
+requirement named *Data Volume Lifecycle Is Coupled to Its Server*, which does not
+exist. `openspec/specs/iac-data-volumes/spec.md` holds *Conditional Prod Volume
+Creation*, whose scenarios *Volume toggle disabled creates nothing* and
+*Disabling the server also removes the volume* are literally the two plan reads
+the entry asks for. Corrected before committing. The specification states those
+scenarios; nothing has ever run them.
+
+**7.1 / 7.2 — the working tree needed provisioning first.** `pre-commit
+run --all-files` initially failed resolving `geerlingguy.docker`: a new working
+tree carries tracked files only, and that role is gitignored. Installed with
+`ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles` — the
+`-p` matters, since the default path is not this project's `roles_path` and an
+install without it reports success while leaving the role unresolvable. All six
+hooks then passed. The first run's failure was an unprovisioned tree, not a
+defect in this change.
+
+**7.3 — what the records review found.** Thirteen findings; nothing challenged
+the change's soundness or the three-pull-request split. Four of them were defects
+in the *evidence* the retroactive corrections cited, which is worth naming: this
+change wrote a rule about citing evidence and then obeyed it least well on its
+first exercise of it.
+
+- **The `AGENTS.md` framing overclaimed.** It said all three new rules "are
+  asserted by `.github/tests/`, so a violation fails the pipeline rather than
+  waiting for a reviewer to notice". Only the third's `Reason:` label is checked;
+  the second is asserted only to be *stated*; the first is not machine-checked at
+  all. Writing that CI catches a violation it cannot see is the exact condition
+  this change exists to remove, installed in the file that teaches the rule.
+  Rewritten to say which part of each rule is checked and that two end at a
+  reviewer.
+- **It also described the gate in the present tense** in the pull request that
+  does not contain it. Reworded as the change being made.
+- **4.4's evidence did not entail its claim.** The task asks that the tag a
+  deploy superseded is gone and the tag it deployed remains. "One `commerce-ops`
+  tag today" is equally consistent with no deploy since, because 4.2's clearance
+  had already reduced the namespace to one. The image's own timestamp settles it
+  — created 2026-09-07 17:48:51, 27 minutes after `app-deploy` was placed at
+  17:21, so it cannot be a survivor of the clearance — and the record now cites
+  that instead. The operator's confirmation stands; the basis offered for it was
+  insufficient and is corrected.
+- **The retroactive ticks did not mark themselves retroactive** on the line, only
+  in a subsection below, so a reader scanning section 4 saw four ticks
+  indistinguishable from contemporaneous ones. That is the stricter half of the
+  rule this change wrote. Each of 4.1–4.4 now carries the marker inline, and the
+  `AGENTS.md` rule was tightened to require it.
+- **The "Closed since" note overstated the pipeline's scope** — `terraform test`
+  iterates modules only, not environments, and all three checks are conditional
+  on a Terraform path being touched. Corrected; the substantive claim
+  (`modules/volume` is covered by all three) was right.
+- **`refresh-readme-accuracy`'s evidence line had already expired.**
+  `git ls-remote --heads origin` returned `refs/heads/main` alone when run and
+  did not by the end of the day, as Dependabot opened branches. Narrowed to the
+  claim it actually supports. `AGENTS.md` now says to cite evidence that can
+  still be checked.
+- **The delta's fixed disclosure form omitted the `## Not performed` heading**,
+  which the check scans for — so a disclosure written from the specification
+  alone could be one the check never sees. Added, along with an obligation and
+  scenario that a disclosure section yielding nothing fails rather than scanning
+  an empty set successfully.
+
+Three scanner defects went back to the test author rather than being fixed here:
+two fail-open cases in the disclosure scan (an unrecognised heading variant, and
+a disclosure written as prose, each producing zero offences) and a latent
+`AttributeError` that would have broken pull request 2. Fixing a test to make it
+stricter is legitimate, but the derived tests have an independent author and the
+correction belongs with them.
+
+**The derived tests were committed wrongly at first.** All 37 landed in one
+commit, which would have put 21 red gate assertions into pull request 1 — a pull
+request that cannot satisfy them, gated by an unconditional required check. This
+is exactly what the apportionment in this file exists to prevent, and it was
+missed on the first pass. Undone before pushing; the gate group is held out and
+returns in the commit that wires the gate. `test-plan.md` records it.

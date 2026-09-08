@@ -110,16 +110,47 @@ covered is that the `--archived` invocation runs at all
 | `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_reason_stated_outside_the_section_does_not_satisfy_a_disclosure` | DERIVED |
 | `TestTheDisclosureCheckIsARealReadOfTheFile.test_each_silent_disclosure_is_reported_separately` | DERIVED |
 | `TestTheDisclosureCheckIsARealReadOfTheFile.test_the_section_ends_at_the_next_heading` | DERIVED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_heading_with_trailing_punctuation_still_opens_the_section` | SPECIFIED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_heading_with_a_trailing_parenthetical_still_opens_the_section` | SPECIFIED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_disclosure_written_as_prose_is_rejected` | SPECIFIED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_prose_introducing_the_entries_is_accepted` | SPECIFIED — converse half |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_section_that_discloses_nothing_is_rejected` | DERIVED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_numbered_section_merely_mentioning_the_phrase_is_not_a_disclosure` | DERIVED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_heading_quoted_inside_a_code_fence_opens_no_section` | DERIVED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_a_fenced_block_inside_a_real_section_does_not_end_it` | DERIVED |
+| `TestTheDisclosureCheckIsARealReadOfTheFile.test_an_unterminated_fence_over_a_disclosure_heading_is_rejected` | DERIVED |
 
 **Read this one carefully.** The repository-scoped test
-(`test_every_disclosure_carries_a_reason_with_text`) is **green today over an
-empty scan** — no `## Not performed` section exists yet, because this change
-writes the first ones. A test that passes before its target exists is an alarm,
-not coverage, so the eleven fixture tests in
-`TestTheDisclosureCheckIsARealReadOfTheFile` are what actually establish the
-scenario: each builds a synthetic changes tree in a temporary directory and
-asserts the scanner's verdict. They were confirmed to discriminate — a stripped
-label and an emptied label each turn the repository-scoped test red.
+(`test_every_disclosure_carries_a_reason_with_text`) is green, and greenness
+alone does not say why: it reads identically whether the scan judged four
+well-formed disclosures or found nothing at all. It was written when the second
+was true — this change writes the repository's first `## Not performed` sections
+— and the twenty fixture tests in `TestTheDisclosureCheckIsARealReadOfTheFile`
+are what carry the discrimination either way. Each builds a synthetic changes
+tree in a temporary directory and asserts the scanner's verdict.
+
+**The check refuses three kinds of silence**, not one:
+
+- an entry with no `Reason:` label, or one whose text is empty — the scenario's
+  own case;
+- a section that discloses **nothing**: a heading followed by prose alone, or by
+  nothing at all. Prose is not a disclosure this check can read, so a section
+  shaped that way would report zero offences while carrying exactly the silence
+  the label exists to expose — and `openspec validate --archived` is green over
+  it too, there being no checkbox left. Prose *introducing* the entries is fine
+  and is the shape the settled archived records use;
+- a file leaving a code fence open while naming the heading, where the scan
+  cannot tell a quoted heading from a real one and says so rather than guessing
+  in the direction that reports nothing.
+
+The heading is matched **loosely** — any heading whose text *begins with* "not
+performed", so `## Not performed:` and `## Not performed (two tasks)` open the
+section. An exact match fails open on both. It must begin with the phrase rather
+than merely contain it, so an ordinary numbered section like `## 4. Settle the
+work not performed` is not read as a disclosure and its outstanding tasks are not
+read as silent ones. Fenced blocks are skipped, so a `tasks.md` quoting the
+heading as documentation does not open a section that swallows the rest of the
+file.
 
 The delta's own scoping is honoured: the check asserts that the `Reason:` label
 is present and its text non-empty, and does **not** judge whether the reason is a
@@ -331,7 +362,20 @@ with no channel to ask on.
    *Assumption:* the setup-node action must carry a reference that is not a
    mutable branch name; `@v6` passes, `@main` fails. *Depends on it:*
    `test_the_runtime_that_executes_the_tool_is_pinned`.
-6. **A standing gap in the suite, reported not fixed.** The suite's own
+6. **How loosely the disclosure heading should be matched.** Neither the delta
+   nor `tasks.md` says what happens to `## Not performed:` or
+   `## Work not performed`. *Assumption taken:* a heading whose text **begins
+   with** "not performed" opens the section; one that merely contains the phrase
+   does not. The two failure directions are not symmetric — too strict fails
+   open and silently, too loose fails a change that did nothing wrong and blocks
+   every pull request until an archived record is edited — so the boundary was
+   drawn where every heading in this repository's task lists is either an
+   unnumbered `## Not performed…` or a numbered `## N. Title`. A project that
+   later writes `## Work not performed` gets no offence and no coverage.
+   *Depends on it:* `test_a_heading_with_trailing_punctuation_still_opens_the_section`,
+   `test_a_heading_with_a_trailing_parenthetical_still_opens_the_section`,
+   `test_a_numbered_section_merely_mentioning_the_phrase_is_not_a_disclosure`.
+7. **A standing gap in the suite, reported not fixed.** The suite's own
    constraint assertions (`test_the_suite_imports_only_the_standard_library_and_pinned_dependencies`,
    `test_the_suite_spawns_no_terraform_binary_or_container_runtime`,
    `test_the_suite_imports_no_network_capable_module`) read `Path(__file__)` and
@@ -393,6 +437,53 @@ and a direct `python3 .github/tests/test_ci_configuration.py` report the same
 count, so the reachability property `cover-platform-images-with-dependabot`
 established still holds after this append.
 
+**Verified after the review fixes below:** **218** tests, all passing, by both
+`discover` and a direct run — 193 pre-existing plus 25 disclosure-group tests.
+The held-back gate block gains one test, taking the gate group to 22 and the
+restored total to 240.
+
+### Review findings folded in
+
+The records pull request's code review raised four findings against the
+disclosure scanner. Three were real and are fixed; all three fixes make the check
+**stricter**, and each is now covered by fixtures that fail if the fix is
+reverted.
+
+1. **The heading matcher failed open.** An exact `## Not performed` match made
+   `## Not performed:` and `## Not performed (two tasks)` invisible, and an exact
+   heading with a prose disclosure yielded no entries — zero offences in both
+   cases, with no checkbox left for `openspec validate --archived` either. Fixed
+   by the loose begins-with match and by treating a section with no entries as an
+   offence in its own right. Six fixtures, including two converse-half tests that
+   keep the new rules from over-firing on the shape the settled records use.
+2. **No fence awareness.** A `tasks.md` quoting the heading inside a fenced block
+   opened the section for the rest of the file, turning every later top-level task
+   into an entry owing a `Reason:` — an unsatisfiable red on a change that did
+   nothing wrong. Fixed with a fence-state toggle in the line walk, plus a refusal
+   where a fence is left open in a file that names the heading, which is the same
+   fail-open reached from the other side. Three fixtures.
+3. **`install_targets` passing a job name where a mapping is expected — not
+   reproducible.** The finding reads `install_targets`' signature against
+   `steps()`, which does yield the job *name*, but the helper's one call site
+   resolves the mapping first: `install_targets(jobs(self.workflow)[job] or {},
+   step)`. Verified by restoring the held-back gate block into a scratch copy and
+   running `test_the_workflow_installs_the_tool_with_a_lockfile_exact_install`
+   against three fixtures — a compliant one, a perturbed one, and one where the
+   manifest directory is reachable **only** through the job-level
+   `defaults.run.working-directory`, which is precisely the
+   `job_defaults_working_directory(job)` path the finding says raises. Green, red,
+   green; no `AttributeError` on any of them. The underlying asymmetry it points
+   at is real, though — every other helper here takes the job name — so
+   `job_defaults_working_directory` now refuses a non-mapping by name instead of
+   raising a bare `AttributeError` from inside, and the held-back block gains
+   `test_the_install_target_helper_takes_the_jobs_mapping_not_its_name`, pinning
+   both halves. **The guard therefore travels untested in pull request 1 and
+   tested in pull request 2**, because its only caller does.
+4. **Stale docstring** on `TestTheDisclosureCheckIsARealReadOfTheFile`, fixed. The
+   reasoning it records still holds and is now stated in a tense that survives:
+   the repository-scoped test is green either way, and these fixtures are what
+   separate "judged four well-formed disclosures" from "found nothing to judge".
+
 ## What the implementation must make pass
 
 Nineteen tests are red and name exactly what is missing:
@@ -428,3 +519,16 @@ and moved inside the generated block.
 
 The `|| :` and job-level `continue-on-error` probes are the ones a
 blocklist-shaped test passes and a shape-shaped test catches. Both are red.
+
+**The three review fixes were confirmed the same way**, by reverting each on a
+scratch copy of the suite and running the fixture class against it. Each revert
+fails exactly the two fixtures written for it, and the unmodified suite is green:
+
+| Reverted | Fixtures that fail |
+|---|---|
+| the loose heading match | `test_a_heading_with_trailing_punctuation_still_opens_the_section`, `test_a_heading_with_a_trailing_parenthetical_still_opens_the_section` |
+| the empty-section offence | `test_a_disclosure_written_as_prose_is_rejected`, `test_a_section_that_discloses_nothing_is_rejected` |
+| fence awareness | `test_a_heading_quoted_inside_a_code_fence_opens_no_section`, `test_an_unterminated_fence_over_a_disclosure_heading_is_rejected` |
+
+A fail-open fix that was itself untested would be the same defect one level up,
+which is why each fix is listed here with the revert that reddens it.

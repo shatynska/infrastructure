@@ -44,9 +44,13 @@ specified is altered.
   Reason: **Partially covered, not by this task**: CI's `validate` job ran `terraform fmt -check -recursive` (repo-wide, covers `modules/volume`), Trivy, and `gitleaks` (both scan the whole repo) — all passed. However `.github/workflows/pr-validation.yml` hardcodes `terraform validate`/`tflint` to only `modules/server` and `environments/prod` (lines 58–83) — **`modules/volume` was never `terraform validate`'d or `tflint`'d by CI**, and `terraform test` isn't wired into the pipeline at all (only run locally, by hand, in this session). This is a real gap this change exposed, not one it was scoped to fix — flagged to the user as a separate follow-up rather than folded in here.
 
   **Closed since.** Re-checked 2026-09-08: `fix-ci-module-coverage` replaced the
-  hardcoded directory list with a discovery loop, so `pr-validation.yml` now runs
-  `terraform validate`, `tflint` **and** `terraform test` over every
-  `terraform/modules/*/` and `terraform/environments/*/` holding `.tf` files.
-  `modules/volume` is covered by all three, and `terraform test` is in the
-  pipeline. The gap this task recorded is gone; the record of it stays, because
-  the task genuinely was not performed at the time.
+  hardcoded directory list with a discovery loop, so `pr-validation.yml` no longer
+  names module directories at all. `terraform validate` and `tflint` iterate both
+  `terraform/modules/*/` and `terraform/environments/*/` holding `.tf` files;
+  `terraform test` iterates `terraform/modules/*/` only, guarded on that module
+  having `tests/*.tftest.hcl`. All three are conditioned on the pull request
+  touching a Terraform path. So `modules/volume` is now covered by all three —
+  which is what this task's gap was about — while environments are covered by two
+  of the three, `terraform test` having nothing to run in them. The gap this task
+  recorded is gone; the record of it stays, because the task genuinely was not
+  performed at the time.

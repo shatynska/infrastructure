@@ -6956,8 +6956,31 @@ CORRECTION_RULE_FRAGMENTS = (
 CORRECTION_RULE_ANCHOR = "corrected only to"
 CORRECTION_RULE_LOCALITY = 400
 
-DISCLOSURE_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+not\s+performed\s*$", re.IGNORECASE)
+# The canonical heading is `## Not performed`, per this change's tasks.md 5.2
+# and the rule it writes into AGENTS.md. It is matched LOOSELY -- any heading
+# whose text BEGINS with the phrase, so `## Not performed:` and
+# `## Not performed (two tasks)` open the section too. An exact, `$`-anchored
+# match fails OPEN: an author writing either of those produces a section that
+# discloses work and a scan that reports nothing, and no checkbox is left for
+# `openspec validate --archived` to catch it either -- silence, arrived at by
+# the one route the check exists to close.
+#
+# It must BEGIN with the phrase rather than merely contain it, so that an
+# ordinary numbered section mentioning it -- `## 4. Settle the work not
+# performed` -- is not read as a disclosure section and its outstanding tasks
+# are not read as silent disclosures. That direction matters: a false offence
+# blocks every pull request in the repository until someone edits an archived
+# record, which is the operational cost design.md's Risks section names.
+DISCLOSURE_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+not\s+performed\b", re.IGNORECASE)
 MARKDOWN_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+\S")
+
+# A fenced block QUOTING the heading is documentation, not a section. Without
+# fence awareness, quoting it opens the section for the rest of the file and
+# turns every later top-level task into an entry owing a `Reason:` -- an
+# unsatisfiable failure on a change that did nothing wrong. This change's own
+# artifacts already quote the heading in prose, so the fenced case is a live
+# path rather than a hypothetical one.
+CODE_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})")
 LIST_ITEM = re.compile(r"^(?P<indent>[ \t]*)(?:[-*+]|\d+[.)])\s+(?P<text>.*)$")
 REASON_LABEL = "Reason"
 
@@ -7040,6 +7063,19 @@ def steps_delegating_the_validation(workflow: dict | None = None):
 
 
 def job_defaults_working_directory(job: dict) -> str:
+    """The `working-directory` a job's `defaults.run` declares, or "".
+
+    Takes the job's MAPPING, not its name. `steps()` yields the job NAME, so a
+    caller copying that idiom would hand this function a `str`; that is refused
+    by name here rather than raising a bare `AttributeError` from somewhere
+    inside, because the two read very differently in a failure report. The one
+    caller resolves the mapping with `jobs(workflow)[job_name]` before calling.
+    """
+    if not isinstance(job, dict):
+        raise AssertionError(
+            "job_defaults_working_directory takes the job's mapping, not "
+            f"{job!r}; resolve it with jobs(workflow)[job_name] first"
+        )
     defaults = job.get("defaults") or {}
     if not isinstance(defaults, dict):
         return ""
@@ -7151,50 +7187,89 @@ def reason_text(line: str) -> str | None:
     return rest[1:].strip().strip("*_ ").strip()
 
 
-def disclosure_entries(text: str):
-    """Yield (line number, [lines]) for each item disclosed under a
-    `## Not performed` heading.
+def unfenced_lines(text: str) -> tuple[list[tuple[int, str]], bool]:
+    """Every (line number, line) lying outside a fenced code block, and whether
+    a fence was left open at end of file.
+
+    The second element matters because an unterminated fence would otherwise
+    hide the whole remainder of a file from the scan -- the same fail-open the
+    fence awareness was added to prevent, reached from the other side.
+    """
+    lines: list[tuple[int, str]] = []
+    fence: str | None = None
+    for number, raw in enumerate(text.splitlines(), start=1):
+        match = CODE_FENCE.match(raw)
+        if match:
+            token = match.group("fence")
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is None:
+            lines.append((number, raw))
+    return lines, fence is not None
+
+
+def disclosure_sections(text: str) -> list[tuple[int, str, list[tuple[int, list[str]]]]]:
+    """Every disclosure section, as (heading line number, heading, entries).
+
+    A section is returned even when it holds no entries, so that a heading which
+    discloses nothing is visible to the caller rather than indistinguishable
+    from a file with no heading at all.
 
     A top-level list item that is itself a `Reason:` label is attached to the
     preceding entry rather than read as a new one, so that a disclosure written
     with its reason as a sibling item is still read as carrying one.
     """
-    section_level = None
-    entries: list[tuple[int, list[str]]] = []
+    lines, _ = unfenced_lines(text)
+    sections: list[tuple[int, str, list[tuple[int, list[str]]]]] = []
+    entries: list[tuple[int, list[str]]] | None = None
     current: tuple[int, list[str]] | None = None
-    for number, raw in enumerate(text.splitlines(), start=1):
+    level: int | None = None
+
+    def close_entry() -> None:
+        nonlocal current
+        if current is not None and entries is not None:
+            entries.append(current)
+        current = None
+
+    for number, raw in lines:
         heading = MARKDOWN_HEADING.match(raw)
         if heading:
-            level = len(heading.group("hashes"))
-            if DISCLOSURE_HEADING.match(raw.rstrip()):
-                if current:
-                    entries.append(current)
-                    current = None
-                section_level = level
+            depth = len(heading.group("hashes"))
+            if DISCLOSURE_HEADING.match(raw):
+                close_entry()
+                entries = []
+                sections.append((number, raw.strip(), entries))
+                level = depth
                 continue
-            if section_level is not None and level <= section_level:
-                if current:
-                    entries.append(current)
-                    current = None
-                section_level = None
+            if level is not None and depth <= level:
+                close_entry()
+                entries = None
+                level = None
             continue
-        if section_level is None:
+        if level is None:
             continue
         item = LIST_ITEM.match(raw)
         if item and not item.group("indent"):
             if current is not None and reason_text(raw) is not None:
                 current[1].append(raw)
                 continue
-            if current is not None:
-                entries.append(current)
+            close_entry()
             current = (number, [raw])
             continue
         if current is not None:
             current[1].append(raw)
-    if current is not None:
-        entries.append(current)
-    for entry in entries:
-        yield entry
+    close_entry()
+    return sections
+
+
+def disclosure_entries(text: str):
+    """Yield (line number, [lines]) for every disclosed item, across sections."""
+    for _, _, entries in disclosure_sections(text):
+        for entry in entries:
+            yield entry
 
 
 def task_lists(root: Path | None = None) -> list[Path]:
@@ -7207,20 +7282,57 @@ def task_lists(root: Path | None = None) -> list[Path]:
 
 
 def disclosure_offences(root: Path | None = None) -> list[str]:
-    """Every disclosure of unperformed work that carries no `Reason:` label, or
-    one whose text is empty, as `<path>:<line>: <the entry>`."""
+    """Every disclosure the check refuses, as `<path>:<line>: <what is wrong>`.
+
+    Three kinds, and all three are the same thing -- silence the reader cannot
+    see:
+
+    * an entry carrying no `Reason:` label, or one whose text is empty. This is
+      the scenario's own case.
+    * a section that discloses NOTHING: a heading followed by prose alone, or by
+      nothing at all. Prose is not a disclosure this check can read, so a
+      section shaped that way reports zero offences while carrying exactly the
+      silence the label exists to make detectable -- and `openspec validate
+      --archived` is green over it too, there being no checkbox left. Prose
+      INTRODUCING the entries is fine and is the shape the settled archived
+      records already use; what is refused is a section with no entries at all.
+    * a file that leaves a code fence open while naming the heading somewhere.
+      The scan cannot then tell a quoted heading from a real one, and says so
+      rather than guessing in the direction that reports nothing.
+    """
     root = ROOT if root is None else root
     offences: list[str] = []
     for path in task_lists(root):
         text = path.read_text(encoding="utf-8", errors="replace")
-        for number, lines in disclosure_entries(text):
-            given = [reason for reason in (reason_text(line) for line in lines) if reason is not None]
-            relative = path.relative_to(root).as_posix()
-            entry = " ".join(lines[0].split())
-            if not given:
-                offences.append(f"{relative}:{number}: no `Reason:` label: {entry}")
-            elif not any(given):
-                offences.append(f"{relative}:{number}: empty `Reason:` label: {entry}")
+        relative = path.relative_to(root).as_posix()
+        _, fence_left_open = unfenced_lines(text)
+        if fence_left_open and any(
+            DISCLOSURE_HEADING.match(line) for line in text.splitlines()
+        ):
+            offences.append(
+                f"{relative}:1: a code fence is left open in a file that names the "
+                "disclosure heading, so the scan cannot tell a quoted heading from a "
+                "real one"
+            )
+            continue
+        for heading_number, heading, entries in disclosure_sections(text):
+            if not entries:
+                offences.append(
+                    f"{relative}:{heading_number}: discloses nothing: {heading!r} is "
+                    "followed by no list item, so whatever it discloses is prose the "
+                    "check cannot read"
+                )
+            for number, lines in entries:
+                given = [
+                    reason
+                    for reason in (reason_text(line) for line in lines)
+                    if reason is not None
+                ]
+                entry = " ".join(lines[0].split())
+                if not given:
+                    offences.append(f"{relative}:{number}: no `Reason:` label: {entry}")
+                elif not any(given):
+                    offences.append(f"{relative}:{number}: empty `Reason:` label: {entry}")
     return offences
 
 
@@ -7273,11 +7385,13 @@ class TestTheDisclosureCheckIsARealReadOfTheFile(unittest.TestCase):
     """ADDED requirement: The Specification Record Is Verified in Continuous
     Integration.
 
-    No `## Not performed` section exists in this repository yet -- the change
-    that specifies the disclosure is the change that writes the first ones. The
-    repository-scoped assertion above therefore passes today over a scan that
-    finds nothing to judge, and these fixtures are what establish that it will
-    bite once there is something to read.
+    The repository-scoped assertion above is green, and greenness alone does not
+    say why: it reads the same as a scan that found nothing to judge. These
+    fixtures are what separate the two. They were written when no
+    `## Not performed` section existed anywhere in the repository -- this change
+    writes the first ones -- and they still carry the whole discrimination now
+    that the settled records each carry one, because a repository whose
+    disclosures happen to be well formed exercises none of the rejections below.
     """
 
     def _fixture(self, body: str) -> Path:
@@ -7393,6 +7507,124 @@ class TestTheDisclosureCheckIsARealReadOfTheFile(unittest.TestCase):
             "- [ ] 2.1 An ordinary outstanding task\n"
         )
         self.assertEqual([], disclosure_offences(root))
+
+    def test_a_heading_with_trailing_punctuation_still_opens_the_section(self) -> None:
+        """SPECIFIED -- "in any `tasks.md` under the changes directory", read
+        against the scenario it serves. An exact-match heading fails OPEN here:
+        the section becomes invisible, the silent entry inside it goes
+        unreported, and no checkbox is left for the validating tool to catch."""
+        root = self._fixture("## Not performed:\n\n- 1.2 Something that did not happen\n")
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+    def test_a_heading_with_a_trailing_parenthetical_still_opens_the_section(self) -> None:
+        """SPECIFIED -- the same clause and the same fail-open, reached by the
+        other ordinary author deviation."""
+        root = self._fixture(
+            "## Not performed (two tasks)\n\n"
+            "- 1.2 Something that did not happen\n"
+            "- 1.3 Something else that did not happen\n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(2, len(offences), offences)
+
+    def test_a_disclosure_written_as_prose_is_rejected(self) -> None:
+        """SPECIFIED -- "A disclosed item that states no reason SHALL fail the
+        check exactly as an unticked task does". A prose paragraph under the
+        heading states no `Reason:` label the check can read, so accepting it
+        would be accepting silence in the one shape the label cannot cover."""
+        root = self._fixture(
+            "## Not performed\n\n"
+            "Task 1.2 was not performed, and the reasons are complicated enough that\n"
+            "they are set out here rather than on a line of their own.\n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+    def test_a_section_that_discloses_nothing_is_rejected(self) -> None:
+        """DERIVED -- no scenario states it. A heading with nothing under it is
+        either a leftover or a disclosure that never got written; both read as a
+        clean scan, which is what this check exists to make impossible."""
+        root = self._fixture("# Tasks\n\n## Not performed\n\n## 2. A later section\n")
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+    def test_prose_introducing_the_entries_is_accepted(self) -> None:
+        """SPECIFIED -- the converse half of the two rejections above, and the
+        shape the settled archived records actually use: a paragraph explaining
+        why the section exists, then the entries. Without this, the empty-section
+        rule would turn every one of those records red."""
+        root = self._fixture(
+            "## Not performed\n\n"
+            "Three tasks in section 1 were not performed. They are moved here with\n"
+            "their original dispositions preserved word for word.\n\n"
+            "- 1.2 Something that did not happen\n"
+            "  Reason: no credential for it existed in the authoring sandbox.\n"
+        )
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_a_numbered_section_merely_mentioning_the_phrase_is_not_a_disclosure(self) -> None:
+        """DERIVED -- no scenario states it. The loose heading match must not
+        reach an ordinary section whose title happens to contain the phrase: its
+        outstanding `- [ ]` tasks are the validating tool's business, and reading
+        them as silent disclosures would fail a change that did nothing wrong."""
+        root = self._fixture(
+            "# Tasks\n\n"
+            "## 4. Settle the work not performed\n\n"
+            "- [ ] 4.1 An ordinary outstanding task\n"
+            "- [x] 4.2 A done one\n"
+        )
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_a_heading_quoted_inside_a_code_fence_opens_no_section(self) -> None:
+        """DERIVED -- no scenario states it. Without fence awareness a quoted
+        heading opens the section for the rest of the file, and every later task
+        becomes an entry owing a reason: an unsatisfiable red on a change that
+        did nothing wrong. This change's artifacts already quote the heading."""
+        root = self._fixture(
+            "# Tasks\n\n"
+            "## 1. Section\n\n"
+            "The disclosure format is:\n\n"
+            "```markdown\n"
+            "## Not performed\n\n"
+            "- 1.2 The task\n"
+            "  Reason: why\n"
+            "```\n\n"
+            "- [ ] 1.1 An ordinary outstanding task\n"
+        )
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_a_fenced_block_inside_a_real_section_does_not_end_it(self) -> None:
+        """DERIVED -- no scenario states it. The converse half: fence awareness
+        must not make a real section stop being read because an entry quotes
+        something."""
+        root = self._fixture(
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+            "  Reason: the command it needed was never available here:\n"
+            "  ```\n"
+            "  terraform plan\n"
+            "  ```\n"
+            "- 1.3 Something else that did not happen\n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("1.3", offences[0])
+
+    def test_an_unterminated_fence_over_a_disclosure_heading_is_rejected(self) -> None:
+        """DERIVED -- no scenario states it. An unterminated fence hides the rest
+        of the file from the scan, which is the fence fix's own fail-open reached
+        from the other side. Refused only where the file names the heading, so an
+        unrelated malformed file is not this check's business."""
+        root = self._fixture(
+            "# Tasks\n\n"
+            "```markdown\n"
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("code fence", offences[0])
 
     def test_an_active_change_is_scanned_as_well_as_an_archived_one(self) -> None:
         """SPECIFIED -- "in any `tasks.md` under the changes directory, archived

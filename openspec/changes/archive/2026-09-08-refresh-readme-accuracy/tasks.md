@@ -81,9 +81,13 @@
 
 Task 8.6 asked for the branch and working tree to be removed, and both were:
 verified 2026-09-08 by `make-openspec-validation-a-usable-gate` —
-`git ls-remote --heads origin` returns `refs/heads/main` alone, no
-`refresh-readme-accuracy` branch exists locally, and no such working tree is
-registered.
+`git ls-remote --heads origin` returns no `refresh-readme-accuracy` ref, no such
+branch exists locally, and no such working tree is registered. (Narrowed from an
+earlier wording that said the command returned `refs/heads/main` alone: that was
+true when run and stopped being true within the day, as Dependabot opened
+branches. A citation that cannot be re-run is what the correction rule in
+`AGENTS.md` exists to prevent, and this record should not be the first to break
+it.)
 
 The task is recorded here in prose rather than as a checkbox, and this is **not**
 a disclosure of unperformed work: it was performed. It could never have been
