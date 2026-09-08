@@ -922,3 +922,100 @@ alternatives are a directory exclusion inside the walk, which is enough today,
 and asking git what is tracked, which is the general answer but needs a
 subprocess the suite's own assertions forbid. Whichever is taken, the test that
 covers it has to fail on the current arrangement first.
+
+## 35. catch-up-the-drifted-galaxy-pins
+
+**Not blocked.** Recorded 2026-09-08, from an inventory taken while archiving
+`open-autoupdate-pr-with-app-token`.
+
+`ansible/requirements.yml` pins five things. Two are current; three are behind
+by at least a major version:
+
+| Collection | Pinned | Latest on 2026-09-08 |
+|---|---|---|
+| `hetzner.hcloud` | 7.0.0 | 7.0.0 |
+| `geerlingguy.docker` (role) | 8.0.0 | 8.0.0 |
+| `community.general` | 9.5.0 | 13.4.0 |
+| `ansible.posix` | 1.6.2 | 2.2.2 |
+| `community.docker` | 4.1.0 | 5.3.0 |
+
+This is the most drifted manifest in the repository, and it is the one no tool
+watches: Dependabot has no `ansible-galaxy` ecosystem, so unlike the Terraform
+and Actions pins nothing has ever proposed a bump here.
+
+Four majors is a migration rather than a version bump, which is why this is an
+entry and not a rider on anything. The collections are used by the hardening
+role (`community.general.ufw`), `deploy_user`
+(`ansible.posix.authorized_key`'s `key_options`, `community.docker.docker_login`)
+and the dynamic inventory. Molecule is the check that would catch a break, and
+`molecule test --all` per role is the gate this change has to pass -- read the
+SCENARIO RECAP rather than the exit code, per the note in `AGENTS.md`.
+
+**Also delete the stale caveat while here.** Four of the five pins carry a
+comment saying the version "was chosen without the ability to query Galaxy from
+this environment (no network access) -- confirm it resolves". All five were
+confirmed against the Galaxy API on 2026-09-08 and every one resolves. The
+comment is now false where it is not merely stale, and it invites the next
+reader to re-do work that has been done.
+
+## 36. cover-the-pip-manifests-with-dependabot
+
+**Not blocked; a one-stanza change in `.github/dependabot.yml`,** the same shape
+as entry 31.
+
+Dependabot watches `terraform` and `github-actions`. Nothing watches the five
+pip pins: `.github/requirements-ci.txt` (`pre-commit==4.6.2`, `PyYAML==6.0.1`)
+and `ansible/requirements-test.txt` (`ansible-core==2.21.3`, `molecule==26.8.0`,
+`molecule-plugins[docker]==26.7.15`). Dependabot's `pip` ecosystem reads both
+file shapes.
+
+Lower stakes than entry 31 -- these are the test and CI toolchain rather than
+production services -- but the cost is a few lines and the alternative is the
+same "when a person notices" that entry 35 is the consequence of.
+
+Note the ordering constraint against entry 35: `ansible-core` is pinned here and
+the collections are pinned there, and the two are a matched set --
+`ansible/requirements-test.txt`'s own comment records that the toolchain was
+"verified together, in this combination, on Python 3.12". A Dependabot bump of
+`ansible-core` landing mid-migration would confuse which half broke.
+
+## 37. decide-renovate-versus-dependabot
+
+**Not blocked, but deliberately deferred.** Recorded 2026-09-08 with a
+recommendation attached, so that revisiting it starts from a position rather
+than from scratch.
+
+Seven manifests in this repository carry pins. Three are watched -- the
+Terraform lockfiles and Actions refs by Dependabot, `.pre-commit-config.yaml` by
+the workflow `open-autoupdate-pr-with-app-token` repaired. Four are not: the
+eight `platform/docker-compose.yml` images (entry 31), the five galaxy pins
+(entry 35), and the five pip pins across two files (entry 36).
+
+Renovate has native managers for all seven, including `pre-commit` and
+`ansible-galaxy`, which Dependabot has for neither. One tool and one config
+would close every gap and retire the bespoke workflow.
+
+**The recommendation is to stay with Dependabot, for now.** Entries 31 and 36
+close two of the four gaps with configuration alone and no new trust
+relationship. What Renovate uniquely adds is the galaxy manager -- and entry 35
+argues that a four-major backlog wants a deliberate migration, not a bot
+proposing it. Hosted Renovate is also a third-party application with write
+access, which cuts against the reasoning already recorded in the
+*Automated Dependency Updates* requirement about third-party supply-chain risk.
+
+Self-hosted Renovate is the interesting middle: it would reuse the
+`infrastructure-autoupdate` GitHub App, which is already scoped to Contents and
+Pull requests on this repository alone, so no third party gains write access and
+the credential work is done. The generalised requirement was written to permit
+exactly this -- *any* workflow opening a pull request, not just the hook-update
+one.
+
+**Revisit when** a second Compose stack appears, or the galaxy manifest grows
+past a handful of entries, or entry 35's migration is done and the small
+incremental bumps it will then need start being missed again. The single-config
+argument strengthens as the manifest count rises; at four unwatched manifests it
+does not yet carry the trust cost.
+
+**Do not revisit before entry 32.** Adding a fifth automation to a repository
+where nothing notices a red scheduled run makes the observability gap worse, not
+better -- which is the lesson `open-autoupdate-pr-with-app-token` was.
