@@ -220,3 +220,42 @@ wrong by the first real user rather than by review.
 instance. That is the first moment the design has a consumer to be right about;
 until then the manual recipe is not a workaround but the whole of what is
 needed.
+
+## Managing DNS in Terraform
+
+Was `docs/change-queue.md` entry 26, deleted from there and recorded here on
+2026-09-08 when the zone was actually read and the operator decided against the
+migration.
+
+The entry assumed the work was a `terraform/modules/` addition and a token
+split. Reading the live zone showed why it is not. `shatynska.com` is served by
+`ns15`/`ns25`/`ns35.inhostedns.*` — the nameservers of ukraine.com.ua, neither
+Hetzner DNS nor Cloudflare — so managing the records in Terraform means moving
+the nameservers, not adding a provider. Read on 2026-09-08:
+
+| Record | Value |
+|---|---|
+| `shatynska.com` A | `2.29.14.98` — the prod host |
+| `www` A | `2.29.14.98` |
+| `fuperia` A | `2.29.14.98` — the name commerce-ops routes, and what Traefik holds a certificate for |
+| `shatynska.com` MX | `mx.ukraine.com.ua` |
+| `shatynska.com` TXT | `v=spf1 include:_spf.ukraine.com.ua ~all` |
+
+**The zone carries live mail.** An NS migration moves the MX and SPF records
+with it, and a transcription error there stops mail rather than a web service —
+a failure that is silent to every check this repository has, because nothing
+here monitors mail. That is a different risk class from the one the entry was
+weighing, and it is the reason this is deferred rather than queued: the work is
+not waiting on another change, it was declined on its merits for now.
+
+**What the original entry was right about.** DNS is still the one piece of the
+running system that lives in no repository, and a rebuild (`docs/change-queue.md`
+entry 30) or an IPv4 change is still followed by a manual edit nobody has
+written down. The table above is the mitigation for the moment: the records are
+now recorded somewhere, which is most of what the entry was protecting against.
+
+**Revisit when** a staging environment exists to rehearse the migration against
+(`docs/change-queue.md` entry 24), or when mail moves off this zone, or when a
+second hostname makes the manual edits frequent enough to be worth the risk.
+Cloudflare and Hetzner DNS were the two candidates considered; neither was
+chosen, and that choice is still open.

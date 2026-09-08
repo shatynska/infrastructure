@@ -213,7 +213,7 @@ ssh -i ~/.ssh/<company>-prod root@<ipv4>
 
 ### 4.4 DNS
 
-In the DNS provider, create an `A` record per hostname an application will serve, pointing at `<ipv4>`. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now. There is no Terraform for DNS yet (`docs/change-queue.md` entry 26); record where these live in the password manager's notes.
+In the DNS provider, create an `A` record per hostname an application will serve, pointing at `<ipv4>`. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now. There is no Terraform for DNS, deliberately — see "Managing DNS in Terraform" in `docs/deferred-work.md`, which names the provider (ukraine.com.ua, nameservers `inhostedns.*`) and lists the zone's records as read on 2026-09-08, including the MX and SPF that make an automated migration riskier than it looks.
 
 **Secrets created in this stage:** none. `.envrc` holds the read-only token and is gitignored.
 
