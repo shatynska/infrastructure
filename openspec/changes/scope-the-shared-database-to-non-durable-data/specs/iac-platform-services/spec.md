@@ -16,7 +16,7 @@ The instance exists so that several small services can share one PostgreSQL rath
 
 This requirement binds when an application actually keeps data on this host. An application that keeps none is not in scope for it and is not owed a database.
 
-How a database and its role are provisioned inside the instance is deliberately not defined here, because no application has needed one and a mechanism designed against no consumer is guesswork. It SHALL be defined when the first application needs technical storage in this instance, and until then this requirement obliges the provisioning rather than any particular mechanism for it. The deferral is tracked in `docs/deferred-work.md`; the obligation and its trigger are stated here, because that file's entries are deleted when they stop being true — which is exactly when the mechanism gets defined.
+How a database and its role are provisioned inside the instance is deliberately not **automated**, because no application has needed one and a mechanism designed against no consumer is guesswork. The step itself is written down — an operator runs it by hand — and automating it, along with delivering the credential, SHALL be done when the first application needs technical storage in this instance. Until then this requirement obliges the provisioning rather than any particular mechanism for it. The deferral is tracked in `docs/deferred-work.md`; the obligation and its trigger are stated here, because that file's entries are deleted when they stop being true — which is exactly when the mechanism gets defined.
 
 #### Scenario: A new application requests a database
 - **WHEN** an application deployed to this host needs to store non-durable technical or temporary data in a relational database

@@ -1,6 +1,6 @@
 ## Purpose
 
-Guardrails against destructive, unnoticed, or externally-exposed changes — deletion protection, backups, network baseline, resource labeling, and automated dependency updates.
+Guardrails against destructive, unnoticed, or externally-exposed changes — deletion protection, backups, the classification of what data this host's persistent stores may hold, network baseline, resource labeling, and automated dependency updates.
 
 ## Requirements
 

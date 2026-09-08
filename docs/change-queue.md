@@ -582,83 +582,23 @@ cheaper, and stays true until entry 8 lands.
 
 ---
 
-Entries 19 to 30 came out of a second full review on 2026-09-08 (trunk at
-`74c7101`), made to judge whether this repository's shape can be reused for a
-second, company-owned host. Only what applies to **this** host too is recorded
-here; the company-only findings (repository visibility, a second approver, an
+The entries from here to 31 came out of a second full review on 2026-09-08
+(trunk at `74c7101`), made to judge whether this repository's shape can be
+reused for a second, company-owned host. It opened with 19 and 20 — logical
+off-host backups of the shared database, and a decision on the database model —
+and both are gone from this file, resolved together by
+`scope-the-shared-database-to-non-durable-data`: reading the host showed the
+instance those entries argued over holds no application data at all, and
+that what this host needs is a stated boundary rather than a backup
+pipeline. Entries recorded after that review continue the numbering.
+
+Only what applies to **this** host too is recorded here; the company-only
+findings (repository visibility, a second approver, an
 organisation-owned repository) are not this repository's concern. The review's
 verdict repeated the first audit's: the architecture is sound, and what follows
 is operational rather than structural. It read the live host as well as the
 tree, so where an entry cites a host fact, that is what `main-server` showed on
 2026-09-08, not an inference from the code.
-
-## 19. back-up-the-shared-database-logically-and-off-host
-
-**Not blocked. The most consequential entry in this file.**
-
-The only backup that exists is Hetzner's daily server snapshot -- `backups =
-true` in `terraform/environments/prod/terraform.tfvars`, seven retained, taken
-in the 02:00-06:00 window. It covers the root disk only: the `main-data`
-Volume is not part of a server backup, and Postgres's data lives in a named
-Docker volume on the root disk, so it *is* captured, but crash-consistently,
-once a day, restorable only by rolling the entire server back to that image.
-There is no logical dump, no copy outside the Hetzner project, and nothing in
-this repository records a restore ever having been performed.
-
-*Data Durability for Stateful Resources* (`openspec/specs/iac-safety-hardening/spec.md`)
-says of this exactly what it should: "Restoring from a backup is the only remedy
-... and no Terraform-level guardrail substitutes for it". It does not say the
-backup has to be one a database can actually be restored from.
-
-What this wants is a scheduled `pg_dump` per database inside the shared
-instance, written to object storage outside the server (Hetzner Object Storage
-is the same vendor and the same bill), with a retention policy, an alert on
-staleness rather than on failure -- the same reasoning as entry 15: a job that
-stops being scheduled produces no failure -- and a restore rehearsed once and
-written down. The host has `deploy`'s `/opt/platform` and the `platform_edge`
-network to reach Postgres from; whether the dump runs as a platform service or a
-host timer is the design question.
-
-Note that the instance it would back up currently holds no application
-database at all (entry 20). The two entries are independent but land better
-together.
-
-## 20. decide-the-database-model-and-define-per-application-provisioning
-
-**Not blocked; recorded because the specification and the host disagree, and
-the disagreement was found by reading the host.**
-
-*Single Shared PostgreSQL Instance, Per-Application Databases*
-(`openspec/specs/iac-platform-services/spec.md`) requires every application to
-be given a database inside the platform's one instance rather than its own
-container. On 2026-09-08 `docker ps` on the host showed `commerce-ops-postgres-1`
-(`postgres:16-alpine`, on the application's own `app_db` network) alongside
-`platform-postgres-1`, and `\l` on the shared instance listed no database
-beyond the defaults. The one application this host runs does not use the
-shared instance, and the requirement is not met.
-
-The cause is the gap `platform/README.md` states openly: "How a new
-application actually gets its own database/role inside that instance is not
-yet defined". With no provisioning mechanism, the first application did the
-only thing it could. Nothing here is the application's fault.
-
-Two coherent resolutions, and this repository should pick one rather than keep
-a requirement it does not enforce:
-
-- **Keep the shared instance and define provisioning.** A per-application
-  database and a restricted role, created by something in this repository
-  (the platform deploy, a host-side script, or an operator step written down
-  once), with the credential delivered through that application's own
-  Environment secret the way its deploy key already is. One instance to
-  back up (entry 19), tune, and watch through postgres-exporter.
-- **Drop the requirement and let each application own its Postgres.**
-  Isolates upgrades and failure per application, at the cost of one backup
-  job, one exporter and one set of limits per instance -- and a `MODIFIED`
-  delta removing the requirement.
-
-The first is the better fit for a host expecting several small services; the
-second is what the host does today. Either way the decision is a specification
-change, which is why it is queued rather than folded into entry 19.
 
 ## 21. rotate-container-logs
 
@@ -845,7 +785,15 @@ the replace), DNS (entry 26), a hand-run Ansible converge with the Vault
 password and a fresh tailnet key (entry 23), the platform deploy from a re-run
 of `platform-deploy.yml`, one deploy per application from its own repository,
 the two manual steps `platform/README.md` lists (the `pgexporter` role and the
-dead-man's-switch registration), and a database restore (entry 19). Those live
+dead-man's-switch registration). No *platform-stack* store needs restoring:
+`scope-the-shared-database-to-non-durable-data` classified each of them as
+needing no backup — each is either recreated by a redeploy or its loss is
+accepted, and the runbook should say which, because Prometheus's history and
+Grafana's UI-created state fall in the second group and do not come back.
+That leaves one gap, and it is the one the same change names as a divergence —
+`commerce-ops` keeps durable data in a PostgreSQL container of its own that
+nothing backs up, so a rebuild today loses it. Entry 33 is what closes that;
+until it does, the runbook has to say so. Those steps live
 in four repositories and two README sections, in no stated order, and the
 time they take is unknown.
 
@@ -901,3 +849,76 @@ directly.
 Worth deciding as part of it: whether the dead-man's-switch this project already
 runs for single-host observability is the right place, or whether a failing
 GitHub Actions run wants its own path.
+
+## 33. move-commerce-ops-durable-data-to-supabase
+
+**Not blocked, and not this repository's to do — recorded because
+`openspec/specs/iac-safety-hardening/spec.md` now names it as a divergence and
+nothing else tracks it.**
+
+*No Store on This Host Holds Data Requiring Backup* classifies every store on
+this host as needing no backup, and states one exception: `commerce-ops` keeps
+durable data in a PostgreSQL container of its own, on its own `app_db` network.
+On 2026-09-08 that database held 12 MB. Most of its rows are transient —
+roughly 17,000 across the `procrastinate_*` queue tables, which are exactly the
+non-durable class the shared instance exists for — but the part that matters is
+small and hand-curated: 358 `playbook_steps`, 35 `launch_journal_entries`, 26
+`launch_clickup_tasks`, 11 `roles`, 8 `role_holders`, 7 `known_work`, 5
+`products`. Nothing backs any of it up. The daily Hetzner snapshot covers the
+root disk the volume sits on, crash-consistently, restorable only by rolling the
+whole server back.
+
+The resolution is that the application's durable data moves to Supabase, which
+owns its own backups. That is work in the commerce-ops repository, over which
+this repository has no authority — which is the reason this entry exists rather
+than a task somewhere.
+
+**Resolving it takes two steps, and the second has no other owner.** The
+migration, there; and the deletion of the divergence paragraph from *No Store on
+This Host Holds Data Requiring Backup*, here. No change in this repository would
+otherwise prompt the second, so a completed migration would quietly leave the
+specification describing a divergence that no longer exists.
+
+Worth knowing for whoever takes it: the migration is not all-or-nothing. The
+`procrastinate_*` tables could legitimately stay on this host, in the shared
+instance, under the scoping that requirement now records.
+
+## 34. keep-the-static-suite-green-in-the-main-working-tree
+
+**Not blocked; unrelated to the change that found it, and recorded under
+`AGENTS.md`'s "A second change surfacing" rather than fixed in passing.**
+
+`.github/tests`'s Dependabot-coverage assertion walks the tree for
+`.terraform.lock.hcl` and requires each directory holding one to be named by a
+`terraform` entry in `.github/dependabot.yml`. It walks into `.claude/worktrees/`
+as readily as anywhere else, and a worktree is a full copy of the tree — so it
+finds three phantom directories and fails:
+
+```
+'/.claude/worktrees/<name>/terraform/environments/prod'
+'/.claude/worktrees/<name>/terraform/modules/server'
+'/.claude/worktrees/<name>/terraform/modules/volume'
+```
+
+This is not a leftover from one badly-cleaned change. `AGENTS.md` requires every
+change to take a working tree at `.claude/worktrees/<name>`, so the condition
+holds whenever any change is in progress — which is most of the time. Continuous
+integration never sees it, because a checkout carries tracked files only, and
+the suite is green when run from *inside* a worktree, because the walk starts at
+that tree's own root. It fails only from the repository's main working tree,
+which is where a session runs it after leaving a worktree.
+
+The cost is a red suite that a session must learn to disbelieve — the exact
+habit this repository refuses everywhere else, and the one its own reasoning
+about `openspec validate` names: "a gate that fails on arrival gets disabled
+rather than fixed".
+
+Three shapes to weigh, and the cheapest is not the one in the suite.
+`.claude/worktrees/` is **not gitignored** — `git check-ignore` exits 1 on it,
+and a session's `git status` shows it untracked — so a `.gitignore` line fixes
+this at the source and additionally removes the standing risk that a `git add
+-A` from the main working tree stages a duplicate copy of the whole tree. The
+alternatives are a directory exclusion inside the walk, which is enough today,
+and asking git what is tracked, which is the general answer but needs a
+subprocess the suite's own assertions forbid. Whichever is taken, the test that
+covers it has to fail on the current arrangement first.
