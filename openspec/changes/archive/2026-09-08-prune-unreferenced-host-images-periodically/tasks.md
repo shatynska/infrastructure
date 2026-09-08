@@ -464,17 +464,17 @@ commands are in scope; the Terraform row is not.
   operation. Section 2 is not complete until this is done.
 - [x] 3.3 Run `pre-commit run --all-files` (`ansible-lint`,
   `ansible-playbook --syntax-check`, `gitleaks`) and the `.github/tests` suite.
-- [ ] 3.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
+- [x] 3.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
   diff that already passes 3.1, 3.2 and 3.3. Ask it to read the installed
   script's enumerate-before-keep-set ordering and its per-tag re-resolution
   line by line: `test-plan.md` records both as unverified by any assertion, and
   this review is the only thing that checks them.
-- [ ] 3.5 Ship by merging. The host-configuration half reaches prod by an
+- [x] 3.5 Ship by merging. The host-configuration half reaches prod by an
   operator running `ansible-playbook` — this repository has no Ansible pipeline,
   and that is already how every host-configuration change reaches production
   here, including the one that installs `app-deploy`. It needs the Ansible Vault
   password, which only the operator holds.
-- [ ] 3.6 **Confirm the effect** — this change can answer the gate, so it is not
+- [x] 3.6 **Confirm the effect** — this change can answer the gate, so it is not
   waivable. On the host after the converge: `systemctl list-timers` names
   `prune-host-images.timer` with a next elapse; `systemd-analyze verify` accepts
   both units; `docker system df` is unchanged by the converge itself; then

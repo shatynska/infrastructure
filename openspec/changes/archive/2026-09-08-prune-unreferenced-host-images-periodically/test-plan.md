@@ -489,6 +489,50 @@ This assertion had never executed before: the derivation pass's run stopped at
 the first check for an installed artifact, and fail-fast hid everything after
 it.
 
+## Confirmed in production, 2026-09-08
+
+`ship:confirm` was answered by observation, not waived. Converged onto
+`main-server` (`ok=61 changed=6 failed=0`), then the service started once by
+hand:
+
+```
+prune-host-images: considered 29, removed 19
+Result=success  ExecMainStatus=0
+```
+
+| | Before | After |
+|---|---|---|
+| Images | 29 | 10 |
+| Reclaimable | 3.221 GB (47%) | 0 B (0%) |
+| Dangling | 10 | 0 |
+| Disk used on `/` | 11 G | 7.4 G |
+| Containers running | 11 | 11 |
+
+Two properties were observed on the real host that no scenario could establish
+there:
+
+**Configuring the host did not prune it.** After the converge and before the
+hand-started run, `docker system df` read 29 images and 3.221 GB reclaimable —
+identical to the pre-merge measurement — and the service reported
+`ActiveState=inactive` with both `ExecMainStartTimestampMonotonic` and
+`ActiveEnterTimestampMonotonic` at `0`. That is the delta scenario "Configuring
+the host does not prune it", and it is also the assertion whose encoding was
+corrected during implementation: systemd 249 reports `n/a` rather than empty for
+a never-started unit, and the monotonic form reads `0` on both.
+
+**Identity comparison saved a live image, and a string comparison would not
+have.** `postgres:16` survived. It and `postgres:16.15` are one image with two
+tags — both `sha256:f1c3376c26f2609ab…`, held by `platform-postgres-1` — and
+`platform`'s Compose file names only `16.15`. Because the keep set is compared
+by resolved identity rather than by reference string, the `postgres:16` tag was
+never a candidate. An implementation matching strings would have found it in no
+Compose file and dropped it, untagging an image the running database holds.
+This change's central design decision was exercised in production by the case
+most likely to expose it, and held.
+
+`considered 29` equals the host's distinct image identities at the time, not its
+`docker images` row count, confirming the deduplication the delta specifies.
+
 ## Obsolete tests
 
 **Not applicable, and the reason is the change's own shape**: the delta carries
