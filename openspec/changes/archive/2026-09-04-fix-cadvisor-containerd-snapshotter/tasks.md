@@ -6,7 +6,7 @@
 ## 2. Verify
 
 - [x] 2.1 Run `docker compose config` against the changed file to confirm it's still valid — passes
-- [x] 2.2 Confirm `openspec validate --strict` passes for this change — passes
+- [ ] 2.2 Confirm `openspec validate --strict` passes for this change — passes
 
 ## 3. Deploy and confirm
 
