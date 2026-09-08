@@ -413,23 +413,28 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 
 ### 8.3 Database
 
-Decide per application until `docs/change-queue.md` entry 20 settles it:
+This is settled, and the answer depends on one question about the data: would losing it be tolerable?
 
-- **Own instance** (what commerce-ops does): a `postgres` service in the application's Compose file on a private network of its own, with its password in the application's `.env`. Simple; the application owns its backup.
-- **Shared instance** (what the specification asks for): from your operator account, create a database and a role:
+- **Durable data** — anything whose loss would not be tolerable — goes to an **external managed service that owns its own backups**, not onto this host. Never into the shared instance: that is absolute, and no backup lifts it, because holding only non-durable data is what makes that instance classifiable as needing none. Not into a PostgreSQL container of the application's own either, unless a logical backup written off the host and a restore rehearsed and checked are both in place before the data lands — *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) is where that is written, and no application has cleared that bar.
+- **Non-durable relational data** — a job table, bookkeeping, state whose loss its writer can shrug at — goes in the **shared instance**, never a container of the application's own. That part is unconditional: no backup licenses a private PostgreSQL. From your operator account, create a database and a role:
 
   ```sh
   docker exec -it platform-postgres-1 psql -U <PLATFORM_POSTGRES_USER> -c \
     "CREATE ROLE <app> WITH LOGIN PASSWORD '<generated>'; CREATE DATABASE <app> OWNER <app>;"
   ```
 
-  The application reaches it at `postgres:5432` over `platform_edge` with that role.
+  The application reaches it at `postgres:5432` over `platform_edge` with that role. Automating this step, and delivering that password the way a deploy key is delivered, is deliberately deferred until an application needs it — see `docs/deferred-work.md`.
+
+  A **non-relational** store — a Redis cache, a queue file, an uploads directory — is not covered by either bullet and does not belong in this instance. It is governed by *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) like any other store on this host, which is to say: name which of its reasons the store satisfies, in the change that adds it, or give it a logical backup written off the host and a rehearsed restore before it holds anything.
+
+  `commerce-ops` runs a PostgreSQL container of its own, which is what the first bullet forbids. That is a known divergence, named as such in the requirement above, and its resolution is in that application's own repository rather than here. Do not read it as a pattern to copy.
 
 ### 8.4 Application side
 
 In the application repository:
 
-1. A `Dockerfile` and a `docker-compose.yml` whose web service joins the external network `platform_edge` and carries the Traefik labels shown in `platform/README.md`, "Joining the platform network", with its hostname and its container port. Use `env_file: .env` for runtime secrets and `image: ghcr.io/<org>/<app>:${IMAGE_TAG}`.
+1. **Anything your Compose file persists — a volume, named or anonymous, or a writable bind mount — has to say why it needs no backup.** Name which reason in *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) the store satisfies, in the change that adds it; a store satisfying none owes a logical backup written off this host and a rehearsed, checked restore before it first holds data. This catches the store a bumped image newly declares as much as one you wrote.
+2. A `Dockerfile` and a `docker-compose.yml` whose web service joins the external network `platform_edge` and carries the Traefik labels shown in `platform/README.md`, "Joining the platform network", with its hostname and its container port. Use `env_file: .env` for runtime secrets and `image: ghcr.io/<org>/<app>:${IMAGE_TAG}`.
 2. A `production` Environment with a required reviewer, as in stage 3.2.
 3. A deploy workflow on push to `main` with two jobs, copied from commerce-ops: a `build-and-push` job (`permissions: packages: write`, `docker/login-action` with `GITHUB_TOKEN`, `docker/build-push-action` tagging the image with `github.sha`), then a `deploy` job on the `production` Environment that joins the tailnet with `tailscale/github-action`, renders `.env` from secrets (including `IMAGE_TAG=${{ github.sha }}`), and runs:
 
@@ -500,8 +505,8 @@ Every credential the system uses, in one place. "Env" means the `production` Git
 
 ## Appendix B. Rebuilding an existing host
 
-The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, 5.3's auth key if the old one expired, 6.3, 6.4 (new tailnet IP → `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by re-running the last Platform Deploy from Actions, 7.5, then each application's deploy from its own Actions, then the database restore. `docs/change-queue.md` entry 30 is the plan to turn this paragraph into a rehearsed runbook with timings.
+The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, 5.3's auth key if the old one expired, 6.3, 6.4 (new tailnet IP → `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by re-running the last Platform Deploy from Actions, 7.5, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/change-queue.md` entry 33 is what closes that, and entry 30 is the plan to turn this paragraph into a rehearsed runbook with timings.
 
 ## Appendix C. What to change for a company host
 
-Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and `docs/change-queue.md` entries 19 to 31. The ones to do before real data arrives: logical database backups off the host (19), a decided database model (20), log rotation (21), swap and container limits (22, 7). The ones a company needs that this repository does not: a private repository in the company organisation, an approver who is not the author, and DNS as code (26).
+Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/change-queue.md`. The first two findings there — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The ones still to do before real data arrives: log rotation (21), swap and container limits (22, 7). The ones a company needs that this repository does not: a private repository in the company organisation, an approver who is not the author, and DNS as code (26).

@@ -5003,5 +5003,961 @@ class TestTheAutomationCredentialIsDocumentedInTheReadme(
         )
 
 
+
+# --------------------------------------------------------------------------
+# iac-safety-hardening / No Store on This Host Holds Data Requiring Backup
+#
+# Derived from the delta specs of the OpenSpec change
+# `scope-the-shared-database-to-non-durable-data`, before any implementation of
+# that change existed. The requirement named in this section's heading is held
+# in `openspec/specs/iac-safety-hardening/spec.md`; the requirement it defers to
+# for the shared PostgreSQL instance, *Single Shared PostgreSQL Instance,
+# Per-Application Databases*, is held in
+# `openspec/specs/iac-platform-services/spec.md`. See that change's
+# test-plan.md for the scenario-to-test mapping, the baseline, and the several
+# scenarios of that change deliberately left uncovered.
+#
+# These assertions live in THIS suite rather than in `terraform test` or in a
+# Molecule scenario because they are static reads of a committed file the
+# pipeline deploys: `platform/docker-compose.yml` (AGENTS.md, "Testing"). They
+# need no network call, credential, container runtime or Terraform binary, and
+# they add no import.
+#
+# WHY A SPECIFICATION-ONLY CHANGE HAS TESTS AT ALL
+# ------------------------------------------------
+# The change adds no code. What it adds is a classification of the host's
+# persistent stores, and two of the five reasons that classification rests on
+# are properties of this committed file -- Prometheus's retention bounds, and
+# Grafana's provisioned datasource and dashboards. That change's design records
+# the silent disappearance of those properties as the failure mode the
+# requirement exists to catch: no new data arrives, no clause reads as
+# breached, and the host is then holding unrecoverable data under a
+# specification asserting it holds none. The scenario "A store's stated reason
+# ceases to hold" is written for exactly that, and the classes below are its
+# executable half.
+#
+# WHAT THIS SECTION CANNOT SEE
+# ----------------------------
+# The requirement's scope reaches "any volume, named or anonymous, including
+# one an image declares rather than the stack definition". An image-declared
+# volume is not in this file -- `prom/alertmanager` declares `VOLUME
+# /alertmanager`, so Alertmanager holds an anonymous volume the stack
+# definition never mentions, and that store is deliberately absent from
+# CLASSIFIED_STACK_STORES below because it is not stack-declared. Reading it
+# would need `docker inspect` against a running host, which this suite is
+# specified not to do. The census below is therefore a NECESSARY condition over
+# the stack-declared subset and never the whole obligation; the whole of it is
+# carried by the host census the change's own tasks require.
+# --------------------------------------------------------------------------
+
+TSDB_SERVICE = "prometheus"
+
+# Grafana is `DASHBOARD_SERVICE`, defined with the dashboard-base-URL helpers
+# above and reused here rather than shadowed.
+
+# Retention flags whose presence and non-disabling value are what make
+# Prometheus's store "bounded by both time and size". The requirement's table
+# states the property, not the numbers, so nothing below asserts `28d` or
+# `4GB`: shortening the window preserves the reason, and removing either flag
+# does not.
+TSDB_RETENTION_FLAGS = ("--storage.tsdb.retention.time", "--storage.tsdb.retention.size")
+TSDB_PATH_FLAG = "--storage.tsdb.path"
+
+GRAFANA_DATASOURCE_DIR = "/etc/grafana/provisioning/datasources"
+GRAFANA_DASHBOARD_PROVIDER_DIR = "/etc/grafana/provisioning/dashboards"
+
+# The dashboard-state policy in the requirement's body is written against these
+# two settings being what the stack sets them to. It is stated as a standing
+# property of the store rather than a hypothetical, so a change to either makes
+# the requirement's own text false and obliges a restatement.
+DASHBOARD_PROVIDER_STANDING_SETTINGS = {"allowUiUpdates": True, "disableDeletion": False}
+
+# Every store the stack definition itself declares, and the reason the
+# requirement gives for it needing no backup. Not a copy of the requirement's
+# table: the table also carries Alertmanager's image-declared volume, which no
+# read of this file can reach. Adding a store to the stack without adding it
+# here fails `test_every_persistent_store_the_stack_declares_is_classified` --
+# which is the point, because the requirement obliges a store added later to
+# state which reason it satisfies.
+CLASSIFIED_STACK_STORES = {
+    "postgres_data": (
+        "non-durable by policy -- Single Shared PostgreSQL Instance, "
+        "Per-Application Databases limits it to technical or temporary records"
+    ),
+    "traefik_letsencrypt": "certificates re-issued on demand by the certificate authority",
+    "/mnt/main-data/prometheus": (
+        "rolling retention Prometheus enforces on itself, bounded by both time and size"
+    ),
+    "/mnt/main-data/grafana": (
+        "split -- the provisioned datasource and dashboards are reproduced by a "
+        "redeploy; the rest is non-durable under the dashboard-state policy"
+    ),
+}
+
+
+def compose_document(path: Path | None = None) -> dict:
+    """The whole stack definition, parsed.
+
+    `compose_services` above reads the same file for the `services:` mapping;
+    this is needed as well because `volumes:` and `configs:` are siblings of it.
+    """
+    target = PLATFORM_COMPOSE if path is None else path
+    if not target.is_file():
+        raise AssertionError(f"{target} does not exist")
+    document = yaml.safe_load(target.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise AssertionError(f"{target} does not parse as a Compose document")
+    return document
+
+
+def stack_configs(path: Path | None = None) -> dict:
+    """The top-level `configs:` mapping, or an empty mapping."""
+    configs = compose_document(path).get("configs")
+    return configs if isinstance(configs, dict) else {}
+
+
+def normalised_mount(entry: object) -> dict | None:
+    """A service's mount entry as {source, target, read_only, kind}, or None
+    where the entry is not a mount this check can read.
+
+    Handles both forms Compose accepts: the short `SRC:DST[:OPTS]` string and
+    the long mapping. `source` is None for an anonymous volume -- a short entry
+    naming only a destination, which the stack declares and Compose backs with
+    an unnamed volume. That case is kept rather than dropped: an anonymous
+    volume the stack declares persists data exactly as a named one does, and
+    the requirement's scope names it.
+    """
+    if isinstance(entry, dict):
+        kind = str(entry.get("type") or "volume")
+        source = entry.get("source")
+        return {
+            "source": str(source) if source is not None else None,
+            "target": str(entry.get("target") or ""),
+            "read_only": bool(entry.get("read_only")),
+            "kind": kind,
+        }
+    if not isinstance(entry, str) or not entry.strip():
+        return None
+    fields = entry.split(":")
+    if len(fields) == 1:
+        return {"source": None, "target": fields[0], "read_only": False, "kind": "volume"}
+    source, target = fields[0], fields[1]
+    options = fields[2].split(",") if len(fields) > 2 else []
+    return {
+        "source": source,
+        "target": target,
+        "read_only": "ro" in options,
+        "kind": "bind" if source.startswith(("/", "./", "../", "~")) else "volume",
+    }
+
+
+def service_mounts(path: Path | None = None):
+    """Yield (service, normalised mount) for every `volumes:` entry in the
+    stack, in service order.
+
+    `configs:` entries are deliberately not yielded. Nothing persists into one:
+    every deploy recreates it from the stack definition, which is why the
+    change's own host census passes over them.
+    """
+    for name, definition in sorted(compose_services(path).items()):
+        if not isinstance(definition, dict):
+            continue
+        entries = definition.get("volumes")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            mount = normalised_mount(entry)
+            if mount is not None:
+                yield name, mount
+
+
+def stack_declared_stores(path: Path | None = None) -> dict:
+    """Every store the stack definition declares, as identifier -> where.
+
+    A store is a mount data can be persisted into. Excluded, for the reason the
+    requirement's own scope clause gives -- data persisted "outside its
+    container's writable layer":
+
+    * a read-only mount, into which nothing persists. This is what removes the
+      host paths cAdvisor and node-exporter read (`/`, `/proc`, `/sys`,
+      `/var/lib/docker`, the Docker and containerd sockets), each of which the
+      stack mounts `:ro`. They are excluded for being read-only, never for
+      being on a list, so one remounted writable would appear here.
+    * a `tmpfs` mount, which does not survive the container.
+    """
+    stores: dict[str, str] = {}
+    for service, mount in service_mounts(path):
+        if mount["read_only"] or mount["kind"] == "tmpfs":
+            continue
+        source = mount["source"]
+        # Known hole, deliberately left. An anonymous volume is keyed on
+        # its target alone, so two services each declaring `- /data` would
+        # collapse into one entry, and classifying either would silently
+        # classify the other. Unreachable today -- the stack declares no
+        # anonymous volume at all -- and closing it changes the shape of
+        # this identifier, which a derived test asserts. Left for whoever
+        # adds the first one.
+        identifier = source if source else f"<anonymous volume at {mount['target']}>"
+        stores.setdefault(identifier, f"{service} -> {mount['target']}")
+    return stores
+
+
+def unclassified_stack_declared_stores(path: Path | None = None) -> list[str]:
+    return sorted(
+        f"{identifier} ({where})"
+        for identifier, where in stack_declared_stores(path).items()
+        if identifier not in CLASSIFIED_STACK_STORES
+    )
+
+
+def service_command_words(name: str, path: Path | None = None) -> list[str]:
+    """A service's `command:`, in either the list or the string form Compose
+    accepts, as a flat list of words."""
+    definition = compose_services(path).get(name)
+    if not isinstance(definition, dict):
+        raise AssertionError(f"the stack defines no service named {name!r}")
+    command = definition.get("command")
+    if isinstance(command, list):
+        return [str(word) for word in command]
+    if isinstance(command, str):
+        return command.split()
+    return []
+
+
+def command_flag_value(name: str, flag: str, path: Path | None = None) -> str | None:
+    """The value a service's command gives a flag, or None where it gives none.
+
+    Accepts both `--flag=value` and `--flag value`; the stack uses the first.
+    """
+    words = service_command_words(name, path)
+    for index, word in enumerate(words):
+        if word == flag:
+            following = words[index + 1] if index + 1 < len(words) else ""
+            return "" if following.startswith("-") else following
+        if word.startswith(flag + "="):
+            return word.split("=", 1)[1]
+    return None
+
+
+def bound_is_disabling(value: str | None) -> bool:
+    """Whether a retention value leaves the store unbounded.
+
+    A bound with no non-zero digit is Prometheus's own way of spelling "no
+    limit": `--storage.tsdb.retention.time=0` disables time-based retention and
+    `--storage.tsdb.retention.size=0` disables the size cap, so a flag present
+    with such a value bounds nothing while looking, to a grep, exactly like one
+    that does.
+    """
+    if value is None:
+        return True
+    return re.search(r"[1-9]", value) is None
+
+
+def unbounded_tsdb_retention(path: Path | None = None) -> list[str]:
+    offences = []
+    for flag in TSDB_RETENTION_FLAGS:
+        value = command_flag_value(TSDB_SERVICE, flag, path)
+        if value is None:
+            offences.append(f"{flag}: absent")
+        elif bound_is_disabling(value):
+            offences.append(f"{flag}: {value!r}, which sets no bound")
+    return offences
+
+
+def service_config_mounts(name: str, path: Path | None = None) -> list[dict]:
+    """A service's `configs:` entries as {source, target}, in either form.
+
+    A short entry naming only a source resolves to `/<source>`, which is what
+    Compose does with it.
+    """
+    definition = compose_services(path).get(name)
+    if not isinstance(definition, dict):
+        raise AssertionError(f"the stack defines no service named {name!r}")
+    entries = definition.get("configs")
+    if not isinstance(entries, list):
+        return []
+    mounts = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            source = entry.get("source")
+            if source is None:
+                continue
+            target = entry.get("target") or f"/{source}"
+            mounts.append({"source": str(source), "target": str(target)})
+        elif isinstance(entry, str) and entry.strip():
+            mounts.append({"source": entry, "target": f"/{entry}"})
+    return mounts
+
+
+def _under(directory: str, target: str) -> bool:
+    # `"/".rstrip("/") + "/"` is `"/"`, which every absolute path starts with,
+    # so without the emptiness guard a provider path or volume target of `/`
+    # would satisfy every containment check while provisioning nothing.
+    root = directory.rstrip("/")
+    return bool(root) and target.startswith(root + "/")
+
+
+def config_content(source: str, path: Path | None = None) -> str:
+    """The inline `content:` of a top-level config, or the empty string.
+
+    A config provisioned from a file on the deploy runner rather than from
+    inline content would return empty here, which is the honest answer: the
+    reason under test is that the artifacts are "reproduced from this
+    repository by a redeploy", and content this file does not carry is not
+    reproduced from this repository.
+    """
+    definition = stack_configs(path).get(source)
+    if not isinstance(definition, dict):
+        return ""
+    content = definition.get("content")
+    return content if isinstance(content, str) else ""
+
+
+def dashboard_provider_entries(path: Path | None = None) -> list[dict]:
+    """Every provider declared by whatever config the stack mounts into
+    Grafana's dashboard-provisioning directory."""
+    providers = []
+    for mount in service_config_mounts(DASHBOARD_SERVICE, path):
+        if not _under(GRAFANA_DASHBOARD_PROVIDER_DIR, mount["target"]):
+            continue
+        document = yaml.safe_load(config_content(mount["source"], path) or "") or {}
+        declared = document.get("providers") if isinstance(document, dict) else None
+        if isinstance(declared, list):
+            providers.extend(entry for entry in declared if isinstance(entry, dict))
+    return providers
+
+
+def grafana_provisioning_offences(path: Path | None = None) -> list[str]:
+    """Why Grafana's provisioned half is not reproduced by a redeploy, or [].
+
+    Sentences rather than a boolean, so a failure names which limb of the
+    reason went: the datasource, the provider, the dashboards, or the path that
+    connects the last two.
+    """
+    offences = []
+    mounts = service_config_mounts(DASHBOARD_SERVICE, path)
+
+    datasources = [m for m in mounts if _under(GRAFANA_DATASOURCE_DIR, m["target"])]
+    if not datasources:
+        offences.append(
+            f"no config is mounted into {GRAFANA_DATASOURCE_DIR}, so the datasource "
+            f"is no longer provisioned from this repository"
+        )
+    for mount in datasources:
+        if not config_content(mount["source"], path).strip():
+            offences.append(
+                f"the datasource config {mount['source']!r} carries no inline content, "
+                f"so a redeploy does not reproduce it from this repository"
+            )
+
+    providers = [m for m in mounts if _under(GRAFANA_DASHBOARD_PROVIDER_DIR, m["target"])]
+    if not providers:
+        offences.append(
+            f"no config is mounted into {GRAFANA_DASHBOARD_PROVIDER_DIR}, so no "
+            f"dashboard provider is provisioned and no dashboard is loaded from disk"
+        )
+
+    provider_paths = []
+    for entry in dashboard_provider_entries(path):
+        options = entry.get("options")
+        if isinstance(options, dict) and options.get("path"):
+            provider_paths.append(str(options["path"]))
+    if providers and not provider_paths:
+        offences.append(
+            "the dashboard provider names no options.path, so nothing states where "
+            "the provisioned dashboards are read from"
+        )
+
+    dashboards = [
+        m
+        for m in mounts
+        if any(_under(provider_path, m["target"]) for provider_path in provider_paths)
+    ]
+    if provider_paths and not dashboards:
+        offences.append(
+            f"the stack mounts no dashboard under any of {sorted(set(provider_paths))}, "
+            f"so the provider provisions nothing and the dashboards this repository "
+            f"carries are not reproduced by a redeploy"
+        )
+    for mount in dashboards:
+        if not config_content(mount["source"], path).strip():
+            offences.append(
+                f"the dashboard config {mount['source']!r} carries no inline content, "
+                f"so a redeploy does not reproduce it from this repository"
+            )
+    return offences
+
+
+def bind_mount_targets(service: str, source: str, path: Path | None = None) -> list[str]:
+    """Where a named host path is mounted inside a service's container."""
+    return [
+        mount["target"]
+        for name, mount in service_mounts(path)
+        if name == service and mount["source"] == source
+    ]
+
+
+class TestEveryPersistentStoreTheStackDeclaresIsClassified(unittest.TestCase):
+    """ADDED requirement: No Store on This Host Holds Data Requiring Backup.
+
+    WHAT PASSING THIS CLASS ESTABLISHES, AND WHAT IT DOES NOT
+    --------------------------------------------------------
+    Only a NECESSARY condition, over the stack-declared subset of the host's
+    stores. The requirement is normative over every store on the host,
+    including one an image declares rather than the stack definition and one an
+    application deployed from another repository persists. Neither is in this
+    file. Alertmanager's `/alertmanager` is the worked example: the image
+    declares it, the stack definition does not mention it, and the change's own
+    first draft missed it by reading this file rather than the host.
+
+    So a green result here means no store was added to the stack definition
+    without a stated reason. It does NOT mean the host holds no unclassified
+    store, and no assertion below should be read as discharging the host census
+    the requirement's own change performs.
+    """
+
+    def test_the_census_reaches_every_service_the_stack_defines(self) -> None:
+        """DERIVED -- no scenario states it. It guards the assertion below from
+        passing vacuously over a partial read, the same non-vacuity guard this
+        suite's shared-stack pinning section applies to its own discovery."""
+        services = sorted(compose_services())
+        self.assertTrue(services, "the stack definition declares no services")
+        visited = sorted({service for service, _ in service_mounts()})
+        self.assertTrue(
+            visited,
+            "the census found no mount at all in a stack that declares named "
+            "volumes, so it is not reading the file",
+        )
+        self.assertEqual(
+            [],
+            sorted(set(visited) - set(services)),
+            "the census reports mounts for services the stack does not define",
+        )
+
+    def test_every_persistent_store_the_stack_declares_is_classified(self) -> None:
+        """SPECIFIED -- scenario "A persistent store is added to the host": a
+        store added to the platform stack, or an existing service beginning to
+        persist there, "SHALL be recoverable without a backup of it, for one of
+        the reasons above". This is the half of that a static read can decide:
+        every store the stack declares carries a stated reason."""
+        offenders = unclassified_stack_declared_stores()
+        self.assertEqual(
+            [],
+            offenders,
+            "these stores are declared by the platform stack and carry no stated "
+            "reason for needing no backup: "
+            f"{offenders}. Each one has to be classified under one of the reasons "
+            "the requirement enumerates -- or, failing all of them, given a logical "
+            "backup and a rehearsed restore before it first holds data -- and then "
+            "named in CLASSIFIED_STACK_STORES above",
+        )
+
+    def test_every_classified_store_is_still_declared_by_the_stack(self) -> None:
+        """DERIVED -- no scenario states it. The converse half: without it, a
+        store removed or renamed in the stack definition would leave the
+        requirement's dated table naming a store that no longer exists, and the
+        assertion above would keep passing because the enumeration only ever
+        grows stale in the permissive direction."""
+        declared = set(stack_declared_stores())
+        missing = sorted(set(CLASSIFIED_STACK_STORES) - declared)
+        self.assertEqual(
+            [],
+            missing,
+            "these stores carry a stated reason but are no longer declared by the "
+            f"platform stack: {missing}. Either the stack moved them, in which case "
+            "the classification names a store that does not exist, or they were "
+            "removed, in which case the requirement's table needs the deletion",
+        )
+
+    def test_the_census_records_that_it_cannot_see_an_image_declared_volume(self) -> None:
+        """DERIVED -- no scenario states it. The requirement's scope explicitly
+        reaches a volume "an image declares rather than the stack definition",
+        and this file cannot show one. A caveat nobody can delete without a
+        test failing is the only durable form of that record; without it, a
+        later reader takes a green census for the whole obligation, which is
+        the exact reading that missed Alertmanager's store."""
+        recorded = (type(self).__doc__ or "").lower()
+        for phrase in ("necessary condition", "image declares", "alertmanager", "host census"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    recorded,
+                    "the census no longer records that it reads only the "
+                    "stack-declared subset, so it now presents a partial read as the "
+                    "whole obligation",
+                )
+
+
+class TestTheStoreCensusIsARealReadOfTheFile(unittest.TestCase):
+    """ADDED requirement: No Store on This Host Holds Data Requiring Backup.
+
+    The class above would pass identically if the census enumerated the four
+    stores that exist today and read nothing. These run the same census over
+    throwaway stack definitions differing from the committed one in exactly one
+    property, so its verdict is shown to depend on the file.
+    """
+
+    BASE = "  traefik:\n    image: traefik:v3.7.10\n"
+
+    def compose_fixture(self, services: str, extra: str = "") -> Path:
+        directory = Path(tempfile.mkdtemp(prefix="platform-store-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = directory / "docker-compose.yml"
+        path.write_text("---\nservices:\n" + services + extra, encoding="utf-8")
+        return path
+
+    def test_a_named_volume_added_to_a_service_is_caught_with_no_test_edit(self) -> None:
+        """SPECIFIED -- scenario "A persistent store is added to the host", the
+        limb covering "a service that persists data outside its container's
+        writable layer is added to the platform stack"."""
+        fixture = self.compose_fixture(
+            self.BASE + "  newcomer:\n    image: redis:7.4.2\n    volumes:\n      - redis_data:/data\n",
+            extra="volumes:\n  redis_data:\n",
+        )
+        self.assertEqual(
+            ["redis_data (newcomer -> /data)"],
+            unclassified_stack_declared_stores(fixture),
+            "a named volume added to the stack was not caught, so the census "
+            "enumerates the stores it knows about rather than reading the file",
+        )
+
+    def test_a_host_bind_mount_added_to_a_service_is_caught_with_no_test_edit(self) -> None:
+        """SPECIFIED -- the same scenario's limb covering a host bind mount,
+        which is the form both `/mnt/main-data` stores take."""
+        fixture = self.compose_fixture(
+            self.BASE
+            + "  uploads:\n    image: nginx:1.29.3\n    volumes:\n      - /mnt/main-data/uploads:/srv/uploads\n"
+        )
+        self.assertEqual(
+            ["/mnt/main-data/uploads (uploads -> /srv/uploads)"],
+            unclassified_stack_declared_stores(fixture),
+            "a host bind mount added to the stack was not caught",
+        )
+
+    def test_an_anonymous_volume_the_stack_declares_is_caught(self) -> None:
+        """SPECIFIED -- the scenario names "any volume -- named or anonymous,
+        declared by the stack definition or by the image". The stack-declared
+        half of "anonymous" is readable here; the image-declared half is not,
+        which is what the census's own docstring records."""
+        fixture = self.compose_fixture(
+            self.BASE + "  spool:\n    image: nginx:1.29.3\n    volumes:\n      - /var/spool/app\n"
+        )
+        self.assertEqual(
+            ["<anonymous volume at /var/spool/app> (spool -> /var/spool/app)"],
+            unclassified_stack_declared_stores(fixture),
+            "an anonymous volume the stack itself declares was passed over, which "
+            "is the form the requirement's scope was widened to reach",
+        )
+
+    def test_a_read_only_host_path_is_not_counted_as_a_store(self) -> None:
+        """SPECIFIED -- the requirement's scope clause covers data persisted
+        "outside its container's writable layer", and nothing persists into a
+        read-only mount. This is the converse half: without it a census that
+        reported every mount would satisfy the three tests above while failing
+        on the read-only host paths cAdvisor and node-exporter already mount."""
+        fixture = self.compose_fixture(
+            self.BASE
+            + "  reader:\n    image: prom/node-exporter:v1.9.1\n    volumes:\n"
+            "      - /proc:/host/proc:ro\n"
+            "      - /:/host/root:ro\n"
+            "      - /var/run/docker.sock:/var/run/docker.sock:ro\n"
+        )
+        self.assertEqual(
+            [],
+            unclassified_stack_declared_stores(fixture),
+            "a read-only mount was counted as a store, which would report the host "
+            "paths the monitoring services read as unclassified data stores",
+        )
+
+    def test_a_read_only_path_remounted_writable_becomes_a_store(self) -> None:
+        """DERIVED -- no scenario states it. The exclusion above is by the
+        mount's own read-only flag and never by a list of paths; this is the
+        assertion that would catch it degenerating into one."""
+        fixture = self.compose_fixture(
+            self.BASE + "  writer:\n    image: prom/node-exporter:v1.9.1\n    volumes:\n      - /proc:/host/proc\n"
+        )
+        self.assertEqual(
+            ["/proc (writer -> /host/proc)"],
+            unclassified_stack_declared_stores(fixture),
+            "a host path mounted writable was excluded anyway, so the census "
+            "excludes paths by name rather than by whether anything can persist "
+            "into them",
+        )
+
+    def test_a_config_mount_is_not_counted_as_a_store(self) -> None:
+        """DERIVED -- no scenario states it, and the change's own host census
+        names the eight `configs:` mounts as expected non-stores: every deploy
+        recreates them from the stack definition, so nothing persists into
+        one."""
+        fixture = self.compose_fixture(
+            self.BASE
+            + "  configured:\n    image: nginx:1.29.3\n    configs:\n"
+            "      - source: app_config\n        target: /etc/app/app.yml\n"
+            "    volumes:\n      - configured_data:/data\n",
+            extra=(
+                "configs:\n  app_config:\n    content: |\n      key: value\n"
+                "volumes:\n  configured_data:\n"
+            ),
+        )
+        self.assertEqual(
+            ["configured_data (configured -> /data)"],
+            unclassified_stack_declared_stores(fixture),
+            "the config mount was counted as a store, or the volume beside it "
+            "was missed. The service carries both deliberately: with only a "
+            "`configs:` block the census would return [] whether or not it "
+            "distinguished the two, and the test would pass for the wrong "
+            "reason",
+        )
+
+    def test_a_stack_whose_stores_all_carry_a_reason_is_accepted(self) -> None:
+        """DERIVED -- the converse half. Without it, a census that reported
+        every store as unclassified would satisfy the tests above while failing
+        every change to the stack regardless of what it changed."""
+        fixture = self.compose_fixture(
+            self.BASE
+            + "  postgres:\n    image: postgres:16.15\n    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+            "  prometheus:\n    image: prom/prometheus:v3.7.3\n    volumes:\n      - /mnt/main-data/prometheus:/prometheus\n",
+            extra="volumes:\n  postgres_data:\n",
+        )
+        self.assertEqual([], unclassified_stack_declared_stores(fixture))
+
+    def test_a_stack_declaring_no_services_fails_rather_than_reading_nothing(self) -> None:
+        """DERIVED -- the file-level non-vacuity guard, matching the one this
+        suite's shared-stack pinning section already applies."""
+        directory = Path(tempfile.mkdtemp(prefix="platform-store-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = directory / "docker-compose.yml"
+        path.write_text("---\nvolumes:\n  postgres_data:\n", encoding="utf-8")
+        with self.assertRaises(AssertionError):
+            unclassified_stack_declared_stores(path)
+
+
+class TestTheStatedReasonsForTheClassifiedStoresStillHold(unittest.TestCase):
+    """ADDED requirement: No Store on This Host Holds Data Requiring Backup --
+    scenario "A store's stated reason ceases to hold".
+
+    The scenario names its two examples outright: "the retention settings that
+    bound Prometheus's database, or the provisioning from this repository that
+    reproduces Grafana's dashboards". Both are properties of
+    `platform/docker-compose.yml`, and both can be removed by a change that
+    adds no data and breaches no other clause. These are the assertions that
+    make such a change fail rather than pass quietly.
+
+    WHAT PASSING THIS CLASS ESTABLISHES, AND WHAT IT DOES NOT
+    --------------------------------------------------------
+    That the committed stack definition still carries the properties the two
+    reasons rest on. NOT that the running host is deployed from this file at
+    this commit, and NOT that Prometheus is in fact discarding data on that
+    schedule -- both are observations of a running host, which this suite is
+    specified not to make.
+    """
+
+    def test_prometheus_bounds_its_database_by_both_time_and_size(self) -> None:
+        """SPECIFIED -- the store's stated reason is "rolling retention it
+        enforces on itself, bounded by both time and size", and the scenario
+        names "the retention settings that bound Prometheus's database" as the
+        property a change must not silently remove.
+
+        Asserts the bounds exist and bound something. It deliberately does not
+        assert the numbers: the reason is boundedness, so shortening the window
+        preserves it, while dropping a flag -- or setting it to Prometheus's own
+        spelling of "no limit" -- does not.
+        """
+        offences = unbounded_tsdb_retention()
+        self.assertEqual(
+            [],
+            offences,
+            "Prometheus's time-series database is no longer bounded by both time "
+            f"and size: {offences}. The store's stated reason for needing no backup "
+            "rests on exactly that, so this change either restores the bound, "
+            "restates the store's reason as another of the ones the requirement "
+            "enumerates, or puts a logical backup and a rehearsed restore in place",
+        )
+
+    def test_the_retention_bounds_govern_the_store_the_classification_names(self) -> None:
+        """SPECIFIED -- the classification names a particular store,
+        `/mnt/main-data/prometheus`, and the retention flags bound whatever
+        directory `--storage.tsdb.path` names. If those two came apart, the
+        bounds would be enforced over a directory other than the classified
+        store, and every assertion above would still pass."""
+        tsdb_path = command_flag_value(TSDB_SERVICE, TSDB_PATH_FLAG)
+        self.assertTrue(
+            tsdb_path,
+            f"the {TSDB_SERVICE} service names no {TSDB_PATH_FLAG}, so nothing "
+            f"states which directory its retention bounds",
+        )
+        targets = bind_mount_targets(TSDB_SERVICE, "/mnt/main-data/prometheus")
+        self.assertTrue(
+            targets,
+            "the stack no longer mounts /mnt/main-data/prometheus into the "
+            f"{TSDB_SERVICE} service, so the store the classification names is not "
+            "the one this service writes into",
+        )
+        self.assertTrue(
+            any(tsdb_path == target or _under(target, tsdb_path) for target in targets),
+            f"{TSDB_PATH_FLAG} is {tsdb_path!r}, which is not inside the classified "
+            f"store mounted at {targets}: the retention bounds and the store the "
+            f"requirement classifies have come apart, so the bound no longer bounds "
+            f"the data the classification is about",
+        )
+
+    def test_grafanas_datasource_and_dashboards_are_provisioned_from_this_repository(self) -> None:
+        """SPECIFIED -- the Grafana store's reason is split, and its first half
+        is that "the datasource and the dashboards this repository provisions
+        are reproduced by a redeploy". The scenario names "the provisioning
+        from this repository that reproduces Grafana's dashboards" as the
+        property a change must not silently remove."""
+        offences = grafana_provisioning_offences()
+        self.assertEqual(
+            [],
+            offences,
+            "Grafana's provisioned half is no longer reproduced by a redeploy: "
+            f"{offences}. That is the stated reason the classified store needs no "
+            "backup, so this change either restores the provisioning, restates the "
+            "store's reason, or puts a logical backup and a rehearsed restore in "
+            "place before it lands",
+        )
+
+    def test_the_grafana_store_the_classification_names_is_the_one_grafana_writes_into(self) -> None:
+        """SPECIFIED -- the same store identification as the Prometheus
+        assertion above, and additionally what makes the split coherent: the
+        provisioned dashboards are written inside the very directory the table
+        classifies, so a provider path outside it would mean the reproduced
+        half is not part of the store the row is about."""
+        targets = bind_mount_targets(DASHBOARD_SERVICE, "/mnt/main-data/grafana")
+        self.assertTrue(
+            targets,
+            "the stack no longer mounts /mnt/main-data/grafana into the "
+            f"{DASHBOARD_SERVICE} service, so the store the classification names is "
+            "not the one this service writes into",
+        )
+        provider_paths = [
+            str(entry["options"]["path"])
+            for entry in dashboard_provider_entries()
+            if isinstance(entry.get("options"), dict) and entry["options"].get("path")
+        ]
+        self.assertTrue(provider_paths, "the dashboard provider names no options.path")
+        for provider_path in provider_paths:
+            with self.subTest(provider_path=provider_path):
+                self.assertTrue(
+                    any(
+                        provider_path == target or _under(target, provider_path)
+                        for target in targets
+                    ),
+                    f"the dashboard provider reads {provider_path!r}, which is not "
+                    f"inside the classified store mounted at {targets}",
+                )
+
+    def test_the_dashboard_provider_still_permits_the_ui_edits_the_policy_covers(self) -> None:
+        """SPECIFIED -- the requirement's dashboard-state policy states these
+        two settings as fact: "The stack permits such edits -- its dashboard
+        provider sets `allowUiUpdates` true and `disableDeletion` false -- so
+        this is a standing property of that store rather than a hypothetical".
+
+        A change to either makes that sentence false, whichever direction it
+        moves in, which the scenario answers with "restate the store's reason".
+        The assertion is therefore on the stated values and not on a judgement
+        about which values would be safer.
+        """
+        providers = dashboard_provider_entries()
+        self.assertTrue(
+            providers,
+            "the stack declares no dashboard provider, so the settings the "
+            "dashboard-state policy is written against are gone entirely",
+        )
+        for entry in providers:
+            name = entry.get("name", "<unnamed>")
+            for key, stated in DASHBOARD_PROVIDER_STANDING_SETTINGS.items():
+                with self.subTest(provider=name, setting=key):
+                    self.assertEqual(
+                        stated,
+                        entry.get(key),
+                        f"the dashboard provider {name!r} sets {key} to "
+                        f"{entry.get(key)!r}, where the requirement's dashboard-state "
+                        f"policy states it as {stated!r}. That policy is what covers "
+                        f"the non-provisioned half of the Grafana store, so its own "
+                        f"stated basis has changed and the requirement needs "
+                        f"restating rather than this assertion being edited to match",
+                    )
+
+
+class TestTheStatedReasonChecksAreARealReadOfTheFile(unittest.TestCase):
+    """ADDED requirement: No Store on This Host Holds Data Requiring Backup --
+    scenario "A store's stated reason ceases to hold".
+
+    The class above asserts of the committed file. These run the same checks
+    over throwaway definitions in which exactly one reason has been removed, so
+    each check is shown to fail when the property it is about goes -- which is
+    the whole of what the scenario asks for.
+    """
+
+    PROVIDER_CONTENT = (
+        "configs:\n"
+        "  grafana_datasource:\n"
+        "    content: |\n"
+        "      apiVersion: 1\n"
+        "      datasources:\n"
+        "        - name: Prometheus\n"
+        "  grafana_dashboard_provider:\n"
+        "    content: |\n"
+        "      apiVersion: 1\n"
+        "      providers:\n"
+        "        - name: platform-monitoring\n"
+        "          options:\n"
+        "            path: {provider_path}\n"
+        "  grafana_dashboard_host:\n"
+        "    content: |\n"
+        '      {{"title": "Host resources"}}\n'
+    )
+
+    def compose_fixture(self, body: str) -> Path:
+        directory = Path(tempfile.mkdtemp(prefix="platform-reason-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        path = directory / "docker-compose.yml"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def prometheus_fixture(self, *flags: str) -> Path:
+        command = "".join(f"      - {flag}\n" for flag in flags)
+        return self.compose_fixture(
+            "---\nservices:\n  prometheus:\n    image: prom/prometheus:v3.7.3\n"
+            "    command:\n" + command + "    volumes:\n      - /mnt/main-data/prometheus:/prometheus\n"
+        )
+
+    def grafana_fixture(
+        self, dashboard_target: str, provider_path: str = "/var/lib/grafana/dashboards"
+    ) -> Path:
+        return self.compose_fixture(
+            "---\nservices:\n  grafana:\n    image: grafana/grafana:12.3.0\n"
+            "    configs:\n"
+            "      - source: grafana_datasource\n"
+            "        target: /etc/grafana/provisioning/datasources/prometheus.yml\n"
+            "      - source: grafana_dashboard_provider\n"
+            "        target: /etc/grafana/provisioning/dashboards/dashboards.yml\n"
+            f"      - source: grafana_dashboard_host\n        target: {dashboard_target}\n"
+            "    volumes:\n      - /mnt/main-data/grafana:/var/lib/grafana\n\n"
+            + self.PROVIDER_CONTENT.format(provider_path=provider_path)
+        )
+
+    def test_a_retention_flag_removed_is_caught(self) -> None:
+        """SPECIFIED -- the scenario's first named example, "the retention
+        settings that bound Prometheus's database"."""
+        fixture = self.prometheus_fixture(
+            "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=28d"
+        )
+        self.assertEqual(
+            ["--storage.tsdb.retention.size: absent"],
+            unbounded_tsdb_retention(fixture),
+            "the size bound was removed and the check did not notice, so the store "
+            "is bounded by time alone while the classification says both",
+        )
+
+    def test_a_retention_flag_left_present_but_disabled_is_caught(self) -> None:
+        """DERIVED -- no scenario names this form. It is the failure a check
+        written as "the flag is present" would miss entirely: `0` is
+        Prometheus's own spelling of no limit, so the flag survives every text
+        search while bounding nothing."""
+        fixture = self.prometheus_fixture(
+            "--storage.tsdb.path=/prometheus",
+            "--storage.tsdb.retention.time=0",
+            "--storage.tsdb.retention.size=0",
+        )
+        self.assertEqual(
+            [
+                "--storage.tsdb.retention.time: '0', which sets no bound",
+                "--storage.tsdb.retention.size: '0', which sets no bound",
+            ],
+            unbounded_tsdb_retention(fixture),
+            "a retention flag set to Prometheus's own value for 'no limit' was read "
+            "as a bound",
+        )
+
+    def test_a_prometheus_bounded_by_both_is_accepted(self) -> None:
+        """DERIVED -- the converse half, and the assertion that keeps the check
+        a floor rather than a demand for particular numbers: a shorter window
+        preserves the reason and must not fail."""
+        fixture = self.prometheus_fixture(
+            "--storage.tsdb.path=/prometheus",
+            "--storage.tsdb.retention.time=7d",
+            "--storage.tsdb.retention.size=512MB",
+        )
+        self.assertEqual([], unbounded_tsdb_retention(fixture))
+
+    def test_removing_the_dashboard_provisioning_stanza_is_caught(self) -> None:
+        """SPECIFIED -- the scenario's second named example, "the provisioning
+        from this repository that reproduces Grafana's dashboards"."""
+        fixture = self.compose_fixture(
+            "---\nservices:\n  grafana:\n    image: grafana/grafana:12.3.0\n"
+            "    volumes:\n      - /mnt/main-data/grafana:/var/lib/grafana\n"
+        )
+        offences = grafana_provisioning_offences(fixture)
+        self.assertTrue(
+            offences,
+            "the whole provisioning stanza was deleted and the check reported no "
+            "offence, so the reason the Grafana store needs no backup could be "
+            "removed without anything failing",
+        )
+        self.assertTrue(
+            any(GRAFANA_DASHBOARD_PROVIDER_DIR in offence for offence in offences),
+            f"the deleted dashboard provider was not named among {offences}",
+        )
+
+    def test_a_dashboard_provisioned_outside_the_providers_path_is_caught(self) -> None:
+        """DERIVED -- no scenario names it. It is the quiet form of the same
+        loss: the stanza survives, every source is still mounted, and the
+        provider reads a directory none of the dashboards land in, so nothing
+        is reproduced by a redeploy while the file still looks provisioned."""
+        fixture = self.grafana_fixture(dashboard_target="/tmp/host-resources.json")
+        offences = grafana_provisioning_offences(fixture)
+        self.assertTrue(
+            offences,
+            "a dashboard mounted outside the provider's own path was accepted, so "
+            "the check confirms the stanza's presence rather than that it "
+            "reproduces anything",
+        )
+
+    def test_a_config_carrying_no_inline_content_is_caught(self) -> None:
+        """DERIVED -- no scenario names it. The reason is "reproduced from THIS
+        repository by a redeploy"; a config whose content this file does not
+        carry is reproduced from somewhere else, and the distinction is
+        invisible to a check that only counts mounts."""
+        fixture = self.compose_fixture(
+            "---\nservices:\n  grafana:\n    image: grafana/grafana:12.3.0\n"
+            "    configs:\n"
+            "      - source: grafana_datasource\n"
+            "        target: /etc/grafana/provisioning/datasources/prometheus.yml\n"
+            "      - source: grafana_dashboard_provider\n"
+            "        target: /etc/grafana/provisioning/dashboards/dashboards.yml\n"
+            "      - source: grafana_dashboard_host\n"
+            "        target: /var/lib/grafana/dashboards/host-resources.json\n"
+            "configs:\n"
+            "  grafana_datasource:\n    file: ./datasource.yml\n"
+            "  grafana_dashboard_provider:\n"
+            "    content: |\n"
+            "      apiVersion: 1\n"
+            "      providers:\n"
+            "        - name: platform-monitoring\n"
+            "          options:\n"
+            "            path: /var/lib/grafana/dashboards\n"
+            "  grafana_dashboard_host:\n"
+            "    content: |\n"
+            '      {"title": "Host resources"}\n'
+        )
+        offences = grafana_provisioning_offences(fixture)
+        self.assertTrue(
+            any("inline content" in offence for offence in offences),
+            f"a config provisioned from outside this repository was accepted: {offences}",
+        )
+
+    def test_a_fully_provisioned_grafana_is_accepted(self) -> None:
+        """DERIVED -- the converse half. Without it, a check that reported an
+        offence unconditionally would satisfy every test above while failing
+        every change to the stack regardless of what it changed."""
+        fixture = self.grafana_fixture(
+            dashboard_target="/var/lib/grafana/dashboards/host-resources.json"
+        )
+        self.assertEqual([], grafana_provisioning_offences(fixture))
+
+
 if __name__ == "__main__":
     unittest.main()

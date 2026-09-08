@@ -2,7 +2,9 @@
 
 A map of this repository as it stood at trunk `74c7101`, read to answer one question: can its shape be reused, mostly unchanged, for a second Hetzner host owned by a company that will run several small services on it? The review read the tree, the live `main-server` host over SSH as `ops-claude`, the Hetzner API with the read-only token, the GitHub repository settings, and the one application currently deployed. Nothing was changed by it.
 
-**Verdict.** The architecture fits and needs no restructuring. The gaps are operational: they concern the data on the host and the ability to recover it, not the ability to change it safely. Every gap that applies to this host too is recorded as an entry in `docs/change-queue.md` (entries 19 to 31); this document is the map those entries hang off, and it does not repeat their detail.
+**Verdict.** The architecture fits and needs no restructuring. The gaps are operational: they concern the data on the host and the ability to recover it, not the ability to change it safely. Every gap that applies to this host too was recorded as an entry in `docs/change-queue.md`; this document is the map those entries hang off, and it does not repeat their detail.
+
+**This is a dated record and is not maintained.** Everything below is what was read on 2026-09-08 and stays written as it was read, including the gaps since closed. Where a row names a queue entry that no longer exists, the note beside it says what became of it; the queue itself is the current list, and this document is not.
 
 ## How the system is built
 
@@ -35,8 +37,8 @@ Ordered by consequence for a business host. The last column says whether the fin
 
 | # | Finding | Evidence | Applies to | Recorded |
 |---|---|---|---|---|
-| 1 | No logical database backup, no off-host copy, no recorded restore | Hetzner snapshots are root-disk only; volume excluded; Postgres data in a Docker volume, captured crash-consistently once a day | Both | Queue 19 |
-| 2 | The shared-Postgres requirement is not what the host does | `commerce-ops-postgres-1` runs its own instance; the platform instance lists no application database; provisioning is "not yet defined" in `platform/README.md` | Both | Queue 20 |
+| 1 | No logical database backup, no off-host copy, no recorded restore | Hetzner snapshots are root-disk only; volume excluded; Postgres data in a Docker volume, captured crash-consistently once a day | Both | **Resolved** by `scope-the-shared-database-to-non-durable-data`, which answered it as a classification rather than a backup: no *platform-stack* store holds data requiring one, and durable data is not to be kept on this host. The gap this row names survives in one place the requirement names as a divergence — `commerce-ops`'s own PostgreSQL — tracked as queue entry 33 |
+| 2 | The shared-Postgres requirement is not what the host does | `commerce-ops-postgres-1` runs its own instance; the platform instance lists no application database; provisioning is "not yet defined" in `platform/README.md` | Both | **Resolved** by the same change, which narrowed the requirement to non-durable data and named the `commerce-ops` container as a divergence in the requirement itself |
 | 3 | Container logs are unbounded | `json-file` driver, no `daemon.json`, empty `LogConfig` on every container | Both | Queue 21 |
 | 4 | No swap, no container resource limits | `swapon --show` empty; no `deploy.resources` anywhere in `platform/docker-compose.yml` | Both | Queue 7 and 22 |
 | 5 | Host configuration ships from a workstation | No workflow runs the playbook; Vault password and tailnet key are local | Both | Queue 23 |
@@ -56,11 +58,11 @@ Ordered by consequence for a business host. The last column says whether the fin
 
 The order to work in, if the goal is a company host that can be trusted with commerce data:
 
-1. Entries 19 and 20 together: decide the database model, then back it up. Nothing else on this list protects data.
+1. ~~Entries 19 and 20 together: decide the database model, then back it up. Nothing else on this list protects data.~~ Done, and not the way this line assumed: reading the host showed the instance those entries argued over holds no application data, so the answer was a stated boundary — durable data lives in an external managed service, and no platform-stack store needs a backup — rather than a pipeline. One divergence outlives it, recorded as such in the requirement and tracked as queue entry 33: `commerce-ops`'s own database.
 2. Entries 21 and 22: log rotation and swap. Cheap, and they turn two classes of outage into alerts.
 3. Entry 24, then 23: make the pipeline environment-aware, then move the host converge into it. Staging is where the rest gets rehearsed.
 4. Entries 25, 26, 29, 31: hardening, DNS as code, Traefik defaults, Dependabot for images. Each is small on its own.
-5. Entries 27 and 30: external checks and the rebuild runbook. These are what turn "we have backups" into "we can recover".
+5. Entries 27 and 30: external checks and the rebuild runbook. These are what turn "the host can be rebuilt" into "we know it can, and how long it takes" — no backup is restored in that sequence, and entry 30 was rewritten to say so.
 6. Entry 28 when the second or third service lands.
 
 For a company-owned copy, additionally: a private repository in the company organisation, a `production` reviewer who is not the author, and a decision about how much of the OpenSpec workflow to carry across. Those are settings and policy, not code, which is why they have no queue entry here.

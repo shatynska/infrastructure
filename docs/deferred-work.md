@@ -194,3 +194,29 @@ claims the suite does not stand behind.
 requests, which is the moment the exposure stops being second-order — or sooner,
 as a small change of its own that adds the scenario and has the assertion derived
 from it.
+
+## Automating per-application provisioning in the shared PostgreSQL instance
+
+*Single Shared PostgreSQL Instance, Per-Application Databases*
+(`openspec/specs/iac-platform-services/spec.md`) obliges this host to give an
+application its own database inside the shared instance when it keeps
+non-durable relational data here. Nothing automates that.
+
+Note what is deferred and what is not. The step itself is **defined**:
+`docs/bootstrap-a-new-host.md` carries the `CREATE ROLE` / `CREATE DATABASE`
+recipe, run from the operator account, and `platform/README.md` documents the
+same shape for the `pgexporter` role. What is deferred is the **machinery** — a
+script or a deploy-time hook that creates the database and role, and delivers
+the credential to the application the way its deploy key is delivered.
+
+It is deliberately not built because no application has ever asked for one. On
+2026-09-08 the shared instance held no application database at all, and the only
+application on the host keeps its data elsewhere. A provisioning mechanism
+designed against no consumer would fix the shape of a credential path, a naming
+convention and a failure mode by guesswork, and the guesses would be discovered
+wrong by the first real user rather than by review.
+
+**Revisit when** an application actually needs technical storage in the shared
+instance. That is the first moment the design has a consumer to be right about;
+until then the manual recipe is not a workaround but the whole of what is
+needed.
