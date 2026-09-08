@@ -871,3 +871,33 @@ ecosystem reads Compose files directly.
 The floor check in `.github/tests` (*Shared-Stack Service Images Are Pinned to
 an Exact Release*) still applies to what Dependabot proposes, and the human
 half of that requirement is what the resulting pull request review is for.
+
+## 32. notice-a-scheduled-workflow-that-goes-red
+
+**Not blocked.** Recorded by `open-autoupdate-pr-with-app-token`, whose
+`design.md` names it a non-goal.
+
+That change repairs `pre-commit-autoupdate.yml`, which had failed on every one
+of its last three scheduled runs -- 2026-08-24, 2026-08-31, 2026-09-07 -- with
+`GitHub Actions is not permitted to create or approve pull requests`. Each
+failure was red in the Actions tab and each sent GitHub's own failure email to
+the workflow file's last committer. Three weeks passed anyway. The signal
+existed and did not work.
+
+That is not a property of the workflow being repaired, and repairing it changes
+nothing about the next one. `drift.yml` runs nightly and `image_prune` runs
+weekly; both fail the same way, into the same silence. Entry 15 (*alert when the
+host prune stops working*) is the same concern reached from the host side and
+wants reconciling with this rather than solving twice -- the question is
+plausibly one mechanism covering every scheduled workflow, not one alert per
+workflow.
+
+It was not folded into `open-autoupdate-pr-with-app-token` because its blast
+radius is every scheduled workflow in the repository rather than the one being
+fixed, and because that change can be confirmed without it: its own confirm gate
+is a pull request that opens and reports its checks, which is observable
+directly.
+
+Worth deciding as part of it: whether the dead-man's-switch this project already
+runs for single-host observability is the right place, or whether a failing
+GitHub Actions run wants its own path.

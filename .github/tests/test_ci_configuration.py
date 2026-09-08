@@ -4448,5 +4448,560 @@ class TestChangeDetectionResolvesTheGatesInput(
                 )
 
 
+# --------------------------------------------------------------------------
+# iac-safety-hardening / Automated Dependency Updates -- the identity a
+# workflow opens a pull request with
+#
+# Derived from the delta specs of the OpenSpec change
+# `open-autoupdate-pr-with-app-token`, before any implementation of that change
+# existed. The requirement is held in `iac-safety-hardening`
+# (openspec/specs/iac-safety-hardening/spec.md); the clauses these tests trace
+# to do not appear there until that change is archived, which is the one
+# bounded interval this repository's citation rule accepts. See that change's
+# test-plan.md for the scenario-to-test mapping, the baseline, and the
+# scenarios deliberately left uncovered.
+#
+# The subject is EVERY workflow that opens a pull request, discovered by
+# reading steps rather than by naming `pre-commit-autoupdate.yml`: the delta
+# states the constraint over all of them so that a second such workflow written
+# later cannot reintroduce the defect without violating anything. Today exactly
+# one workflow matches, which is why the discovery below carries a vacuity
+# guard -- with no match every other assertion here passes over an empty list,
+# and a discovery that has stopped matching is then indistinguishable from a
+# repository that satisfies the requirement.
+#
+# What is asserted is shape, not function. This suite makes no network call, so
+# it cannot establish that the secrets exist, that an App is installed, or that
+# a pull request opened and became mergeable. That last one is the change's own
+# confirm-gate observation, not a static read of a committed file.
+# --------------------------------------------------------------------------
+
+README = ROOT / "README.md"
+
+# An action whose job is to open a pull request. Matched on the action's own
+# name rather than on one vendor's full reference, so a fork, a rename or a
+# major-version bump of `peter-evans/create-pull-request` is still discovered.
+PR_OPENING_ACTION = re.compile(r"create-pull-request", re.IGNORECASE)
+
+# A shell step that opens one. `gh api repos/.../pulls/<n>` is deliberately not
+# matched here: apply.yml READS a pull request that way, and reading is not
+# opening. Only a POST to the collection creates one.
+PR_OPENING_COMMANDS = (
+    re.compile(r"\bgh\s+pr\s+create\b"),
+    re.compile(r"\bhub\s+pull-request\b"),
+)
+PR_OPENING_API_POST = (
+    re.compile(r"(?:-X|--method)\s+POST"),
+    re.compile(r"/pulls\b"),
+)
+
+# The two spellings of the token a workflow gets for free, lowercased: Actions
+# context names are case-insensitive, and `secrets.GITHUB_TOKEN` carries an
+# underscore where `github.token` carries a dot, so neither matches the other.
+DEFAULT_TOKEN_EXPRESSIONS = ("secrets.github_token", "github.token")
+
+# Environment names through which a shell step receives a token.
+TOKEN_ENVIRONMENT_NAMES = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
+
+STEP_OUTPUT_REFERENCE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+")
+SECRET_REFERENCE = re.compile(r"secrets\.([A-Za-z_][A-Za-z0-9_]*)")
+
+WRITE_PERMISSION_LEVELS = frozenset({"write", "write-all"})
+NON_WRITE_BLANKET_LEVELS = frozenset({"read-all", "none"})
+
+# Vocabulary the README runbook is read for. The obligations are the delta's
+# ("the authority it is scoped to", "how it is rotated"); the words are this
+# check's own choice, because a runbook sentence has no other static form.
+ROTATION_VOCABULARY = ("rotat",)
+AUTHORITY_VOCABULARY = ("permission", "scope", "authorit", "read and write", "write access")
+
+
+def workflow_files() -> list[Path]:
+    """Every committed workflow, both spellings of the YAML suffix."""
+    if not WORKFLOWS.is_dir():
+        return []
+    return sorted(
+        path for path in WORKFLOWS.iterdir() if path.suffix in (".yml", ".yaml") and path.is_file()
+    )
+
+
+def step_opens_a_pull_request(step: dict) -> bool:
+    """Whether a step opens a pull request, read from what the step does."""
+    if not isinstance(step, dict):
+        return False
+    if PR_OPENING_ACTION.search(str(step.get("uses", ""))):
+        return True
+    run = str(step.get("run", ""))
+    if any(pattern.search(run) for pattern in PR_OPENING_COMMANDS):
+        return True
+    return all(pattern.search(run) for pattern in PR_OPENING_API_POST)
+
+
+class PullRequestOpeningStep:
+    """One discovered step, with the job and workflow it sits in.
+
+    The job and the workflow travel with the step because two of the three
+    scenarios below are about the job's `permissions:`, and a job-level block
+    is only readable against the workflow-level one it replaces.
+    """
+
+    def __init__(self, path: Path, workflow: dict, job_key: str, job: dict, index: int, step: dict):
+        self.path = path
+        self.workflow = workflow
+        self.job_key = job_key
+        self.job = job
+        self.index = index
+        self.step = step
+
+    @property
+    def label(self) -> str:
+        return f"{self.path.name}:{step_label(self.job_key, self.index, self.step)}"
+
+    @property
+    def job_steps(self) -> list:
+        return self.job.get("steps") or []
+
+
+def pull_request_opening_steps() -> list[PullRequestOpeningStep]:
+    """Every step in every committed workflow that opens a pull request."""
+    found: list[PullRequestOpeningStep] = []
+    for path in workflow_files():
+        workflow = load_yaml(path)
+        if not isinstance(workflow, dict):
+            continue
+        for job_key, job in jobs(workflow).items():
+            if not isinstance(job, dict):
+                continue
+            for index, step in enumerate(job.get("steps") or []):
+                if step_opens_a_pull_request(step):
+                    found.append(
+                        PullRequestOpeningStep(path, workflow, job_key, job, index, step)
+                    )
+    return found
+
+
+def token_inputs(step: dict) -> dict:
+    """Every input through which the step receives a token, by input name.
+
+    For an action step that is `with: token:` and any sibling ending `-token`
+    (`create-pull-request`'s `branch-token` is one, and design.md Decision 3
+    turns on it). For a shell step it is the environment names the GitHub CLI
+    reads. A step giving none is not a step whose token happens to be fine --
+    it is one running on the default token implicitly.
+    """
+    inputs: dict = {}
+    with_block = step.get("with")
+    if isinstance(with_block, dict):
+        for name, value in with_block.items():
+            key = str(name)
+            if key == "token" or key.endswith("-token"):
+                inputs[f"with.{key}"] = str(value)
+    env_block = step.get("env")
+    if isinstance(env_block, dict):
+        for name, value in env_block.items():
+            if str(name) in TOKEN_ENVIRONMENT_NAMES:
+                inputs[f"env.{name}"] = str(value)
+    return inputs
+
+
+def is_default_token(expression: str) -> bool:
+    """Whether an expression resolves to the workflow's own `GITHUB_TOKEN`."""
+    compacted = compact(expression).lower()
+    return any(default in compacted for default in DEFAULT_TOKEN_EXPRESSIONS)
+
+
+def declared_permissions(workflow: dict, job: dict):
+    """`(source, declaration)` for what a job's `GITHUB_TOKEN` actually gets.
+
+    A job-level block REPLACES the workflow-level one rather than adding to it,
+    and a job declaring none inherits the workflow's whole -- so what a job
+    receives is not what it declares, and reading `job["permissions"]` alone
+    would call a workflow-level `contents: write` a job with no write.
+
+    Where neither level declares one, the source is `None`. What the job
+    receives is then the repository's default token scope: a repository
+    setting, not repository content, which this suite makes no network call to
+    read and so must refuse to accept rather than read as permissive.
+    """
+    if isinstance(job, dict) and "permissions" in job:
+        holder, source = job, "job"
+    elif isinstance(workflow, dict) and "permissions" in workflow:
+        holder, source = workflow, "workflow"
+    else:
+        return None, None
+    value = holder["permissions"]
+    if not isinstance(value, (dict, str)):
+        # `permissions:` with an empty value parses to None. That is not a
+        # grant of nothing; it is a line no reader can tell from a typo.
+        return None, value
+    return source, value
+
+
+def write_scopes(declaration) -> list[str]:
+    """The write grants in a permissions declaration, as `scope: level`.
+
+    The blanket string form is handled separately from the mapping form:
+    `write-all` grants every scope, and an unrecognised string is reported
+    rather than passed, because a level this check cannot read is not one it
+    has established to be read-only.
+    """
+    if isinstance(declaration, str):
+        return [] if declaration in NON_WRITE_BLANKET_LEVELS else [declaration]
+    if not isinstance(declaration, dict):
+        return []
+    return sorted(
+        f"{scope}: {level}"
+        for scope, level in declaration.items()
+        if str(level) in WRITE_PERMISSION_LEVELS
+    )
+
+
+def secrets_referenced_by(job: dict) -> set[str]:
+    """Repository secrets a job names, other than the free `GITHUB_TOKEN`."""
+    text = yaml.safe_dump(job, default_flow_style=False)
+    names = {match.group(1) for match in SECRET_REFERENCE.finditer(text)}
+    return {name for name in names if name.upper() != "GITHUB_TOKEN"}
+
+
+def readme_sections(text: str) -> list[str]:
+    """The README split at its Markdown headings, each section keeping its own
+    heading line, so a passage can be read as a passage rather than as two
+    facts that merely both appear in one long file."""
+    sections: list[list[str]] = [[]]
+    for line in text.splitlines():
+        if line.startswith("#"):
+            sections.append([])
+        sections[-1].append(line)
+    return ["\n".join(lines) for lines in sections if lines]
+
+
+class PullRequestIdentityMixin:
+    """The discovery every class below shares, with its vacuity guard."""
+
+    def _opening_steps(self) -> list[PullRequestOpeningStep]:
+        found = pull_request_opening_steps()
+        self.assertTrue(
+            found,
+            "no step in any committed workflow was discovered opening a pull request. "
+            "Either the repository has stopped refreshing pinned hook revisions by "
+            "pull request -- which the Automated Dependency Updates requirement "
+            "mandates -- or this discovery no longer recognises the way one is opened. "
+            "Both are failures; neither is this section passing.",
+        )
+        return found
+
+
+class TestNoWorkflowOpensAPullRequestWithTheDefaultToken(
+    PullRequestIdentityMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Automated Dependency Updates."""
+
+    def test_a_committed_workflow_step_opens_a_pull_request_at_all(self) -> None:
+        """SPECIFIED -- "pinned hook revisions SHALL instead be maintained by a
+        scheduled workflow that runs `pre-commit autoupdate` and opens a pull
+        request with the result". Stated as its own test rather than left as a
+        setUp precondition because it is the one failure that would otherwise
+        turn every other test in this section green."""
+        self._opening_steps()
+
+    def test_every_pull_request_opening_step_is_given_an_explicit_token(self) -> None:
+        """SPECIFIED -- scenario "No workflow opens a pull request with the
+        default workflow token": the step "SHALL be given an explicit token
+        input". A step supplying none does not thereby avoid the defect -- it
+        falls back to the default token silently, which is the state this
+        repository has already spent three scheduled runs in."""
+        offenders = [
+            record.label for record in self._opening_steps() if not token_inputs(record.step)
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            "these steps open a pull request with no explicit token input, so they run "
+            f"on the workflow's own GITHUB_TOKEN by default: {offenders}",
+        )
+
+    def test_no_pull_request_opening_step_is_given_the_default_workflow_token(self) -> None:
+        """SPECIFIED -- same scenario: the token "SHALL be ... neither
+        `secrets.GITHUB_TOKEN` nor `github.token`".
+
+        Every token-shaped input is read, not `token:` alone. That extension is
+        DERIVED, from design.md Decision 3: passing the App token as `token:`
+        while pinning `branch-token:` to the default would open the pull
+        request correctly and then push every later update to its branch as
+        GITHUB_TOKEN, producing no `synchronize` event and so no re-run of the
+        required checks -- the same defect on the update path, and subtler.
+        """
+        # A step with no token input at all satisfies the loop below over an
+        # empty set, and does so while running on precisely the token this test
+        # forbids. The guard is called rather than duplicated so that the two
+        # halves of the scenario cannot drift apart.
+        self.test_every_pull_request_opening_step_is_given_an_explicit_token()
+        offenders = []
+        for record in self._opening_steps():
+            for name, expression in token_inputs(record.step).items():
+                if is_default_token(expression):
+                    offenders.append(f"{record.label} -> {name}: {expression}")
+        self.assertEqual(
+            [],
+            sorted(offenders),
+            "these pull-request-opening steps are given the workflow's own default "
+            "token. An event caused by GITHUB_TOKEN starts no workflow run, so the "
+            "pull request receives no `on: pull_request` run, no required status check "
+            f"reports on it, and it stays pending and unmergeable: {sorted(offenders)}",
+        )
+
+    def test_a_step_producing_that_token_appears_earlier_in_the_same_job(self) -> None:
+        """SPECIFIED -- same scenario: "a step producing that token SHALL appear
+        before it in the same job".
+
+        A token drawn straight from `secrets.SOME_PAT` references no step and
+        fails here. That is the scenario's own consequence, not this check
+        being strict: the requirement forbids a credential that expires on a
+        schedule, and a token minted per run from a non-expiring secret is what
+        satisfies both clauses at once.
+        """
+        # Same reason as above: with no token input there is nothing whose
+        # producer could be missing, and the check would pass over the state it
+        # exists to reject.
+        self.test_every_pull_request_opening_step_is_given_an_explicit_token()
+        offenders = []
+        for record in self._opening_steps():
+            ids_before = {
+                str(step.get("id"))
+                for step in record.job_steps[: record.index]
+                if isinstance(step, dict) and step.get("id")
+            }
+            for name, expression in token_inputs(record.step).items():
+                if is_default_token(expression):
+                    continue  # already reported by the test above
+                produced_by = set(STEP_OUTPUT_REFERENCE.findall(compact(expression)))
+                if not produced_by:
+                    offenders.append(
+                        f"{record.label} -> {name}: {expression} names no step output"
+                    )
+                    continue
+                missing = sorted(produced_by - ids_before)
+                if missing:
+                    offenders.append(
+                        f"{record.label} -> {name}: no earlier step in job "
+                        f"`{record.job_key}` has id {missing}"
+                    )
+        self.assertEqual(
+            [],
+            sorted(offenders),
+            "the token these steps open a pull request with is not produced by a step "
+            f"running before them in the same job: {sorted(offenders)}",
+        )
+
+
+class TestThePullRequestJobLeavesTheDefaultTokenNoWrite(
+    PullRequestIdentityMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Automated Dependency Updates."""
+
+    def test_the_job_opening_a_pull_request_declares_permissions_explicitly(self) -> None:
+        """SPECIFIED -- scenario "A permissions declaration is present rather
+        than merely absent": the job's effective permissions "SHALL come from an
+        explicit declaration at workflow or job level".
+
+        This one holds today and is expected to keep holding; it is not
+        coverage of behaviour this change introduces, it is the guard on the
+        way that behaviour would be faked. "Grants no write" is trivially true
+        of a workflow declaring nothing, so deleting both blocks is the
+        cheapest way to make the next test green -- and it is the opposite of
+        what the requirement asks, because an absent declaration falls back to
+        a repository setting that can change with no commit at all.
+        """
+        offenders = []
+        for record in self._opening_steps():
+            source, value = declared_permissions(record.workflow, record.job)
+            if source is None:
+                offenders.append(
+                    f"{record.path.name}: job `{record.job_key}` -- declared: {value!r}"
+                )
+        self.assertEqual(
+            [],
+            sorted(offenders),
+            "these jobs open a pull request while no explicit `permissions:` "
+            "declaration is in force for them at either workflow or job level, so what "
+            "their GITHUB_TOKEN receives is the repository's default token scope -- a "
+            f"setting, not repository content, and unreadable here: {sorted(offenders)}",
+        )
+
+    def test_the_job_opening_a_pull_request_receives_no_write_scope(self) -> None:
+        """SPECIFIED -- scenario "The default workflow token is not left holding
+        unused write authority": an explicit declaration "SHALL be in force for
+        that job, and the permissions it grants SHALL NOT include a write that
+        the separate identity performs instead".
+
+        Absence is an offender here as well as in the test above, deliberately:
+        the scenario is satisfied by a declaration granting no write and NOT by
+        the absence of one, so a check that accepted absence would report
+        success over the weakest state the workflow can be in.
+        """
+        offenders = []
+        for record in self._opening_steps():
+            source, declaration = declared_permissions(record.workflow, record.job)
+            if source is None:
+                offenders.append(f"{record.path.name}: `{record.job_key}` declares none")
+                continue
+            for grant in write_scopes(declaration):
+                offenders.append(f"{record.path.name}: `{record.job_key}` ({source}) {grant}")
+        self.assertEqual(
+            [],
+            sorted(offenders),
+            "the default token of these pull-request-opening jobs still holds write "
+            "authority the separate identity exercises instead, contrary to the "
+            f"Least-Privilege Workflow Permissions requirement: {sorted(offenders)}",
+        )
+
+
+class TestPermissionsReading(unittest.TestCase):
+    """MODIFIED requirement: Automated Dependency Updates. Unit-level cover for
+    the two helpers the pair above rests on -- the smallest level at which the
+    absent-versus-declared distinction is observable, and the one this section
+    would otherwise assert only against a tree where it happens to hold."""
+
+    def test_a_job_block_replaces_the_workflow_block_rather_than_adding_to_it(self) -> None:
+        """DERIVED -- no scenario states the precedence; it is GitHub Actions'
+        own semantics, and reading it the other way would let a job-level
+        `contents: write` hide behind a workflow-level `contents: read`."""
+        workflow = {"permissions": {"contents": "read"}}
+        job = {"permissions": {"contents": "write"}}
+        self.assertEqual(("job", {"contents": "write"}), declared_permissions(workflow, job))
+        self.assertEqual(
+            ("workflow", {"contents": "read"}), declared_permissions(workflow, {"steps": []})
+        )
+
+    def test_a_declaration_absent_at_both_levels_is_read_as_absent(self) -> None:
+        """SPECIFIED -- scenario "A permissions declaration is present rather
+        than merely absent". Without this case the check above is only ever
+        exercised against a tree that declares one, so its discrimination would
+        rest on nothing."""
+        self.assertEqual((None, None), declared_permissions({"jobs": {}}, {"steps": []}))
+        self.assertEqual((None, None), declared_permissions({"permissions": None}, {}))
+
+    def test_an_empty_mapping_is_a_declaration_granting_no_write(self) -> None:
+        """SPECIFIED -- same scenario, its other side: `permissions: {}` grants
+        nothing and is the strongest state a job can declare, so reading it as
+        absent would fail the one workflow that had done exactly what the
+        requirement asks."""
+        source, declaration = declared_permissions({}, {"permissions": {}})
+        self.assertEqual("job", source)
+        self.assertEqual([], write_scopes(declaration))
+
+    def test_write_grants_are_recognised_in_both_the_mapping_and_blanket_forms(self) -> None:
+        """SPECIFIED -- "the permissions it grants SHALL NOT include a write".
+        `write-all` is a write in one word and would pass a check that only
+        looked inside a mapping."""
+        self.assertEqual(
+            ["contents: write", "pull-requests: write"],
+            write_scopes({"contents": "write", "pull-requests": "write", "issues": "read"}),
+        )
+        self.assertEqual([], write_scopes({"contents": "read"}))
+        self.assertEqual(["write-all"], write_scopes("write-all"))
+        self.assertEqual([], write_scopes("read-all"))
+
+    def test_the_default_token_is_recognised_in_both_its_spellings(self) -> None:
+        """SPECIFIED -- scenario "No workflow opens a pull request with the
+        default workflow token": "neither `secrets.GITHUB_TOKEN` nor
+        `github.token`". Whitespace and case vary freely inside an Actions
+        expression and must not decide the verdict."""
+        for expression in (
+            "${{ secrets.GITHUB_TOKEN }}",
+            "${{secrets.github_token}}",
+            "${{ github.token }}",
+            "${{ GITHUB.TOKEN }}",
+        ):
+            self.assertTrue(is_default_token(expression), expression)
+        for expression in ("${{ steps.app-token.outputs.token }}", "${{ secrets.APP_TOKEN }}"):
+            self.assertFalse(is_default_token(expression), expression)
+
+
+class TestTheAutomationCredentialIsDocumentedInTheReadme(
+    PullRequestIdentityMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Automated Dependency Updates."""
+
+    def _credential_secrets(self) -> set[str]:
+        names: set[str] = set()
+        for record in self._opening_steps():
+            names |= secrets_referenced_by(record.job)
+        self.assertTrue(
+            names,
+            "the job opening a pull request names no repository secret other than "
+            "GITHUB_TOKEN, so it has no separate identity to open one with. The "
+            "requirement's identity is supplied by repository secrets; a job "
+            "referencing none is running on the default token however its inputs read.",
+        )
+        return names
+
+    def test_the_pull_request_job_draws_its_identity_from_a_repository_secret(self) -> None:
+        """DERIVED -- from the requirement's "such an identity is supplied by
+        repository secrets rather than by repository content", not from a
+        scenario. It is the enabling condition for the three tests below: with
+        no secret discovered they would each pass over an empty set, and the
+        README obligation would be satisfied by a README saying nothing."""
+        self._credential_secrets()
+
+    def test_every_secret_holding_that_credential_is_named_in_the_readme(self) -> None:
+        """SPECIFIED -- scenario "A long-lived automation credential is
+        documented where it can be found": the runbook "SHALL name that
+        credential, the secrets holding it ...". A credential whose only
+        description lives in the change that introduced it is undocumented from
+        the moment that change is archived."""
+        text = read_text(README)
+        missing = sorted(name for name in self._credential_secrets() if name not in text)
+        self.assertEqual(
+            [],
+            missing,
+            "the workflow that opens a pull request reads these repository secrets and "
+            f"the README names none of them: {missing}",
+        )
+
+    def _documenting_sections(self) -> list[str]:
+        names = self._credential_secrets()
+        sections = [
+            section for section in readme_sections(read_text(README))
+            if all(name in section for name in names)
+        ]
+        self.assertTrue(
+            sections,
+            "no single README section names all of "
+            f"{sorted(names)}, so there is no passage documenting the credential -- "
+            "only mentions a reader would have to assemble one",
+        )
+        return sections
+
+    def test_the_readme_passage_says_how_that_credential_is_rotated(self) -> None:
+        """SPECIFIED for the obligation -- "and how it is rotated". DERIVED for
+        the word matched: a runbook sentence has no other static form, and this
+        check may not read anything but the committed file."""
+        sections = self._documenting_sections()
+        self.assertTrue(
+            any(
+                word in section.lower() for section in sections for word in ROTATION_VOCABULARY
+            ),
+            "the README passage naming the secrets that hold the automation credential "
+            "does not say how it is rotated, so the one durable record of the procedure "
+            "is the change that introduced it -- which is about to be archived",
+        )
+
+    def test_the_readme_passage_states_the_authority_that_credential_holds(self) -> None:
+        """SPECIFIED for the obligation -- "the authority it is scoped to".
+        DERIVED for the vocabulary, as above. The requirement bounds the
+        credential to this repository and to no more than the pull-request step
+        exercises; a reader who cannot see what it was scoped to cannot tell
+        whether a later widening broke that bound."""
+        sections = self._documenting_sections()
+        self.assertTrue(
+            any(
+                word in section.lower() for section in sections for word in AUTHORITY_VOCABULARY
+            ),
+            "the README passage naming the secrets that hold the automation credential "
+            "does not state the authority it is scoped to",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
