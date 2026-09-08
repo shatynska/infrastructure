@@ -6886,5 +6886,614 @@ class TestAProposedImageUpdateIsNotExemptFromTheStacksObligations(unittest.TestC
 # refuse. Continuous integration was unaffected (it uses `unittest discover`),
 # which is exactly why nothing caught it. Append below this comment, never
 # above it.
+# iac-cicd-pipeline / The Specification Record Is Verified in Continuous
+# Integration
+#
+# Derived from the delta spec of the OpenSpec change
+# `make-openspec-validation-a-usable-gate`, before any implementation of that
+# change existed. The requirement these assertions trace to is
+# `iac-cicd-pipeline`'s "The Specification Record Is Verified in Continuous
+# Integration" -- which exists only as that change's delta until it is
+# archived; its permanent path is openspec/specs/iac-cicd-pipeline/spec.md. See
+# that change's test-plan.md for the scenario-to-test mapping, the baseline,
+# and the scenarios deliberately left uncovered.
+#
+# These assertions live in THIS suite rather than in `terraform test` or in a
+# Molecule scenario because every one of them is a static read of a committed
+# file (AGENTS.md, "Testing"). The delta is explicit that the validating tool
+# itself must NOT be run from here: doing so would break this suite's own
+# "spawns nothing outside bash/sh" and "stdlib plus pinned dependencies only"
+# assertions, and routing it through `bash -c` to evade the AST check is
+# recorded as refused in that change's design.md, Decision 5. The division of
+# labour is the pipeline's existing one: the workflow runs the tool, and this
+# suite asserts statically that the workflow does so, unconditionally, from a
+# pinned manifest, without suppressing the result.
+#
+# `json` is imported here rather than in the header import block so that this
+# section is purely additive to a file that was already complete. It is
+# standard library, as
+# `TestTheSuiteNeedsNoPrivilegedResource
+# .test_the_suite_imports_only_the_standard_library_and_pinned_dependencies`
+# requires of everything this file imports.
+# --------------------------------------------------------------------------
+
+import json
+
+OPENSPEC_MANIFEST = ROOT / ".github" / "package.json"
+OPENSPEC_LOCKFILE = ROOT / ".github" / "package-lock.json"
+AGENTS_FILE = ROOT / "AGENTS.md"
+CHANGES_DIRECTORY_NAME = "changes"
+
+VALIDATING_TOOL = "openspec"
+VALIDATING_SUBCOMMAND = "validate"
+VALIDATING_FLAGS = ("--all", "--archived")
+
+# `npx` resolves the locally installed binary that the lockfile-exact install
+# places in `node_modules/.bin`; it is the only prefix the closed form below
+# admits, and it may carry no arguments of its own (a `--package`/`--yes` form
+# would be a fresh resolution, and is rejected as an extra token).
+RUNNER_PREFIXES = ("npx",)
+
+PACKAGE_MANAGERS = frozenset({"npm", "yarn", "pnpm"})
+LOCKFILE_EXACT_INSTALL = ("npm", "ci")
+
+EXACT_NPM_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+
+SETUP_NODE = "setup-node"
+MUTABLE_ACTION_REFS = frozenset({"", "main", "master", "head", "latest", "trunk", "develop"})
+
+MANAGED_BLOCK_END = "<!-- /ai-toolkit:development-workflow -->"
+
+# The rule's own words, because the delta requires the assertion to be written
+# "so that rephrasing the rule fails it, rather than so that a rephrasing which
+# inverts the rule passes". "only" and "never" are the polarity-bearing words;
+# an inversion cannot keep them and still mean the opposite.
+CORRECTION_RULE_FRAGMENTS = (
+    "corrected only to",
+    "what actually happened",
+    "never to change what was decided or built",
+)
+CORRECTION_RULE_ANCHOR = "corrected only to"
+CORRECTION_RULE_LOCALITY = 400
+
+DISCLOSURE_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+not\s+performed\s*$", re.IGNORECASE)
+MARKDOWN_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s+\S")
+LIST_ITEM = re.compile(r"^(?P<indent>[ \t]*)(?:[-*+]|\d+[.)])\s+(?P<text>.*)$")
+REASON_LABEL = "Reason"
+
+
+def relative_directory(value: object) -> str:
+    """Normalise a directory reference to a repository-relative POSIX path."""
+    text = str(value).strip()
+    if text.startswith("./"):
+        text = text[2:]
+    return text.lstrip("/").rstrip("/")
+
+
+def significant_lines(script: object) -> list[str]:
+    """The lines of a `run:` script that are neither blank nor whole-line
+    comments.
+
+    A `#` line following a backslash continuation is not a comment, so dropping
+    it here could in principle hide text. It cannot hide anything from the
+    closed-form check below, which rejects the continuation line itself: the
+    trailing backslash is an extra token no permitted invocation carries.
+    """
+    return [
+        line.strip()
+        for line in str(script).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+def validating_invocation_flag(line: str) -> str | None:
+    """The flag `line` invokes the validating tool with, or None where the line
+    is not exactly one permitted invocation.
+
+    This is the positive half of the closed form the delta specifies. Nothing
+    is blocklisted: a line either is an invocation or it is not, so `|| true`,
+    `|| :`, `; true`, a pipe, a redirection, a command substitution, a captured
+    status and every construction nobody has thought of yet all fail the same
+    way -- by contributing a token the permitted shape has no place for.
+    """
+    tokens = line.split()
+    if tokens and tokens[0] in RUNNER_PREFIXES:
+        tokens = tokens[1:]
+    if len(tokens) != 3:
+        return None
+    command, subcommand, flag = tokens
+    if command.rsplit("/", 1)[-1] != VALIDATING_TOOL:
+        return None
+    if subcommand != VALIDATING_SUBCOMMAND:
+        return None
+    if flag not in VALIDATING_FLAGS:
+        return None
+    return flag
+
+
+def record_validation_steps(workflow: dict | None = None):
+    """Every `run:` step of the required check that mentions the validating
+    tool and its subcommand, whatever shape it is in.
+
+    Deliberately looser than `validating_invocation_flag`: a step whose script
+    is `openspec validate --all || true` must be FOUND, so that the shape
+    assertions fail on it, rather than missed so that they pass over it.
+    """
+    workflow = load_yaml(PR_VALIDATION) if workflow is None else workflow
+    found = []
+    for job, index, step in steps(workflow):
+        script = str(step.get("run", ""))
+        if VALIDATING_TOOL in script and VALIDATING_SUBCOMMAND in script:
+            found.append((job, index, step))
+    return found
+
+
+def steps_delegating_the_validation(workflow: dict | None = None):
+    """Steps that reach the validating tool through `uses:` rather than by
+    running it, which is the relocation the delta forbids."""
+    workflow = load_yaml(PR_VALIDATION) if workflow is None else workflow
+    return [
+        (job, index, step)
+        for job, index, step in steps(workflow)
+        if VALIDATING_TOOL in str(step.get("uses", ""))
+    ]
+
+
+def job_defaults_working_directory(job: dict) -> str:
+    defaults = job.get("defaults") or {}
+    if not isinstance(defaults, dict):
+        return ""
+    run = defaults.get("run") or {}
+    if not isinstance(run, dict):
+        return ""
+    return relative_directory(run.get("working-directory", ""))
+
+
+def install_targets(job: dict, step: dict) -> set[str]:
+    """The directories an install step operates in: its own or its job's
+    `working-directory`, plus any `--prefix`/`-C` the script names."""
+    targets = set()
+    for candidate in (step.get("working-directory"), job_defaults_working_directory(job)):
+        normalised_candidate = relative_directory(candidate or "")
+        if normalised_candidate:
+            targets.add(normalised_candidate)
+    for line in significant_lines(step.get("run", "")):
+        tokens = line.split()
+        for position, token in enumerate(tokens):
+            if token in ("--prefix", "-C") and position + 1 < len(tokens):
+                targets.add(relative_directory(tokens[position + 1]))
+            elif token.startswith("--prefix="):
+                targets.add(relative_directory(token.split("=", 1)[1]))
+    return targets
+
+
+def package_manager_lines(workflow: dict | None = None):
+    """(step label, line) for every script line in the required check whose
+    first word is a package manager."""
+    workflow = load_yaml(PR_VALIDATION) if workflow is None else workflow
+    found = []
+    for job, index, step in steps(workflow):
+        for line in significant_lines(step.get("run", "")):
+            tokens = line.split()
+            if tokens and tokens[0] in PACKAGE_MANAGERS:
+                found.append((step_label(job, index, step), line))
+    return found
+
+
+def npm_manifest(path: Path | None = None) -> dict:
+    path = OPENSPEC_MANIFEST if path is None else path
+    if not path.is_file():
+        raise AssertionError(f"{path.relative_to(ROOT).as_posix()} does not exist")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def manifest_pin(name: str, manifest: dict) -> str | None:
+    for section in ("dependencies", "devDependencies"):
+        block = manifest.get(section) or {}
+        if isinstance(block, dict) and name in block:
+            return str(block[name])
+    return None
+
+
+def lockfile_versions(name: str, path: Path | None = None) -> set[str]:
+    path = OPENSPEC_LOCKFILE if path is None else path
+    if not path.is_file():
+        raise AssertionError(f"{path.relative_to(ROOT).as_posix()} does not exist")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    versions = set()
+    packages = data.get("packages") or {}
+    if isinstance(packages, dict):
+        for key, entry in packages.items():
+            if not key or not isinstance(entry, dict):
+                continue
+            if key.rsplit("node_modules/", 1)[-1] != name:
+                continue
+            if entry.get("version"):
+                versions.add(str(entry["version"]))
+    legacy = data.get("dependencies") or {}
+    if isinstance(legacy, dict):
+        entry = legacy.get(name)
+        if isinstance(entry, dict) and entry.get("version"):
+            versions.add(str(entry["version"]))
+    return versions
+
+
+def dependabot_directories(ecosystem: str, path: Path | None = None) -> list[str]:
+    config = load_yaml(DEPENDABOT if path is None else path)
+    configured: list[str] = []
+    for entry in config.get("updates") or []:
+        if not isinstance(entry, dict) or entry.get("package-ecosystem") != ecosystem:
+            continue
+        if entry.get("directory"):
+            configured.append(str(entry["directory"]))
+        configured.extend(str(directory) for directory in (entry.get("directories") or []))
+    return configured
+
+
+def reason_text(line: str) -> str | None:
+    """The text a `Reason:` label carries, or None where the line is not one.
+
+    Tolerant of the label being a nested list item and of it being emphasised,
+    because neither changes whether a reason was given. It is not tolerant of a
+    different label: the delta names `Reason:` literally, and the label is the
+    whole mechanism by which silence becomes detectable.
+    """
+    stripped = line.strip()
+    item = LIST_ITEM.match(stripped)
+    if item:
+        stripped = item.group("text").strip()
+    stripped = stripped.lstrip("*_ ")
+    if not stripped.startswith(REASON_LABEL):
+        return None
+    rest = stripped[len(REASON_LABEL) :].lstrip("*_ ")
+    if not rest.startswith(":"):
+        return None
+    return rest[1:].strip().strip("*_ ").strip()
+
+
+def disclosure_entries(text: str):
+    """Yield (line number, [lines]) for each item disclosed under a
+    `## Not performed` heading.
+
+    A top-level list item that is itself a `Reason:` label is attached to the
+    preceding entry rather than read as a new one, so that a disclosure written
+    with its reason as a sibling item is still read as carrying one.
+    """
+    section_level = None
+    entries: list[tuple[int, list[str]]] = []
+    current: tuple[int, list[str]] | None = None
+    for number, raw in enumerate(text.splitlines(), start=1):
+        heading = MARKDOWN_HEADING.match(raw)
+        if heading:
+            level = len(heading.group("hashes"))
+            if DISCLOSURE_HEADING.match(raw.rstrip()):
+                if current:
+                    entries.append(current)
+                    current = None
+                section_level = level
+                continue
+            if section_level is not None and level <= section_level:
+                if current:
+                    entries.append(current)
+                    current = None
+                section_level = None
+            continue
+        if section_level is None:
+            continue
+        item = LIST_ITEM.match(raw)
+        if item and not item.group("indent"):
+            if current is not None and reason_text(raw) is not None:
+                current[1].append(raw)
+                continue
+            if current is not None:
+                entries.append(current)
+            current = (number, [raw])
+            continue
+        if current is not None:
+            current[1].append(raw)
+    if current is not None:
+        entries.append(current)
+    for entry in entries:
+        yield entry
+
+
+def task_lists(root: Path | None = None) -> list[Path]:
+    """Every `tasks.md` under the changes directory, archived or active."""
+    root = ROOT if root is None else root
+    changes = root / "openspec" / CHANGES_DIRECTORY_NAME
+    if not changes.is_dir():
+        return []
+    return sorted(path for path in changes.rglob("tasks.md") if path.is_file())
+
+
+def disclosure_offences(root: Path | None = None) -> list[str]:
+    """Every disclosure of unperformed work that carries no `Reason:` label, or
+    one whose text is empty, as `<path>:<line>: <the entry>`."""
+    root = ROOT if root is None else root
+    offences: list[str] = []
+    for path in task_lists(root):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for number, lines in disclosure_entries(text):
+            given = [reason for reason in (reason_text(line) for line in lines) if reason is not None]
+            relative = path.relative_to(root).as_posix()
+            entry = " ".join(lines[0].split())
+            if not given:
+                offences.append(f"{relative}:{number}: no `Reason:` label: {entry}")
+            elif not any(given):
+                offences.append(f"{relative}:{number}: empty `Reason:` label: {entry}")
+    return offences
+
+
+def flattened(text: str) -> str:
+    """Collapse whitespace, so a rule wrapped across lines still reads as one
+    sentence."""
+    return " ".join(text.split())
+
+
+class TestUnperformedWorkIsDisclosedWithAReason(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration. Scenario "Unperformed work disclosed without a reason fails the
+    check"."""
+
+    def test_the_scan_reaches_the_repositorys_task_lists(self) -> None:
+        """DERIVED -- no scenario states it. The assertion below is over every
+        `tasks.md` under the changes directory; a scan that reached none of them
+        would report a clean repository having read nothing, which is the vacuous
+        success this whole change is about."""
+        found = task_lists()
+        self.assertTrue(found, "the scan reached no tasks.md at all under the changes directory")
+        archived = [path for path in found if ARCHIVE_SEGMENT in path.relative_to(ROOT).parts]
+        self.assertTrue(
+            archived,
+            "the scan reached no archived tasks.md, so the disclosures the gate "
+            "exists to read would be invisible to it",
+        )
+
+    def test_every_disclosure_carries_a_reason_with_text(self) -> None:
+        """SPECIFIED -- "A disclosed item that states no reason SHALL fail the
+        check exactly as an unticked task does", and "the check SHALL assert that
+        the label is present and its text non-empty, and SHALL NOT attempt to
+        assess whether the reason is a good one".
+
+        Scoped to every `tasks.md` under the changes directory, archived or
+        active, per the delta: the first disclosure this repository writes is in
+        an active change, and a check that only read the archive would not see
+        it.
+        """
+        offences = disclosure_offences()
+        self.assertEqual(
+            [],
+            offences,
+            "these disclosures of unperformed work state no reason, which is less "
+            f"information than the unticked box they replaced: {offences}",
+        )
+
+
+class TestTheDisclosureCheckIsARealReadOfTheFile(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration.
+
+    No `## Not performed` section exists in this repository yet -- the change
+    that specifies the disclosure is the change that writes the first ones. The
+    repository-scoped assertion above therefore passes today over a scan that
+    finds nothing to judge, and these fixtures are what establish that it will
+    bite once there is something to read.
+    """
+
+    def _fixture(self, body: str) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="not-performed-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        directory = (
+            root / "openspec" / CHANGES_DIRECTORY_NAME / ARCHIVE_SEGMENT / "2026-01-01-a-change"
+        )
+        directory.mkdir(parents=True)
+        (directory / "tasks.md").write_text(body, encoding="utf-8")
+        return root
+
+    def test_a_disclosure_with_a_reason_is_accepted(self) -> None:
+        """SPECIFIED -- the converse half of the scenario. Without it, a check
+        that reported an offence unconditionally would satisfy every rejection
+        below while failing every honest disclosure."""
+        root = self._fixture(
+            "# Tasks\n\n"
+            "## 1. Section\n\n"
+            "- [x] 1.1 Something that happened\n\n"
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+            "  Reason: no credential for it existed in the authoring sandbox.\n"
+        )
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_a_reason_wrapped_across_lines_is_accepted(self) -> None:
+        """DERIVED -- no scenario states it. Prose in this repository wraps at
+        eighty columns, so a check that required the whole reason on the label
+        line would reject the ordinary case."""
+        root = self._fixture(
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+            "  Reason: the run this describes is gone and the counts it reported\n"
+            "  were never captured.\n"
+        )
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_a_reason_written_as_a_sibling_item_is_accepted(self) -> None:
+        """DERIVED -- no scenario states it. The delta requires the label, not a
+        particular indentation of it."""
+        root = self._fixture(
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+            "- Reason: it was declined on judgment.\n"
+        )
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_a_disclosure_with_no_reason_label_is_rejected(self) -> None:
+        """SPECIFIED -- "an archived change discloses work as not performed and
+        carries no `Reason:` label"."""
+        root = self._fixture("## Not performed\n\n- 1.2 Something that did not happen\n")
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+    def test_a_disclosure_with_an_empty_reason_is_rejected(self) -> None:
+        """SPECIFIED -- "or carries one whose text is empty"."""
+        root = self._fixture(
+            "## Not performed\n\n- 1.2 Something that did not happen\n  Reason:\n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+    def test_a_reason_of_whitespace_alone_is_rejected(self) -> None:
+        """SPECIFIED -- the same clause. Whitespace is silence spelled
+        differently."""
+        root = self._fixture(
+            "## Not performed\n\n- 1.2 Something that did not happen\n  Reason:    \n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+    def test_a_reason_stated_outside_the_section_does_not_satisfy_a_disclosure(self) -> None:
+        """DERIVED -- no scenario states it. A file-wide search for the label
+        would let one reason cover every silent disclosure in the file."""
+        root = self._fixture(
+            "## 1. Section\n\n"
+            "- [ ] 1.1 An ordinary outstanding task\n"
+            "  Reason: this is not a disclosure at all.\n\n"
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+    def test_each_silent_disclosure_is_reported_separately(self) -> None:
+        """DERIVED -- no scenario states it. A check reporting one offence per
+        file would tell an author to fix one of two silences."""
+        root = self._fixture(
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+            "- 1.3 Something else that did not happen\n"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(2, len(offences), offences)
+
+    def test_an_ordinary_task_list_raises_no_offence(self) -> None:
+        """SPECIFIED -- the check reaches disclosures, not task lists. An
+        outstanding `- [ ]` is the validating tool's business, and this suite is
+        specified not to reimplement it."""
+        root = self._fixture("# Tasks\n\n## 1. Section\n\n- [ ] 1.1 Outstanding\n- [x] 1.2 Done\n")
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_the_section_ends_at_the_next_heading(self) -> None:
+        """DERIVED -- no scenario states it. A section that ran to end of file
+        would read every later task as a silent disclosure and make the check
+        unsatisfiable."""
+        root = self._fixture(
+            "## Not performed\n\n"
+            "- 1.2 Something that did not happen\n"
+            "  Reason: it was declined on judgment.\n\n"
+            "## 2. A later section\n\n"
+            "- [ ] 2.1 An ordinary outstanding task\n"
+        )
+        self.assertEqual([], disclosure_offences(root))
+
+    def test_an_active_change_is_scanned_as_well_as_an_archived_one(self) -> None:
+        """SPECIFIED -- "in any `tasks.md` under the changes directory, archived
+        or active". The first disclosure this repository writes is in an active
+        change, before it is archived."""
+        root = Path(tempfile.mkdtemp(prefix="not-performed-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        directory = root / "openspec" / CHANGES_DIRECTORY_NAME / "an-active-change"
+        directory.mkdir(parents=True)
+        (directory / "tasks.md").write_text(
+            "## Not performed\n\n- 12.3 Something that did not happen\n", encoding="utf-8"
+        )
+        offences = disclosure_offences(root)
+        self.assertEqual(1, len(offences), offences)
+
+
+class TestTheArchivedRecordCorrectionRuleIsStated(unittest.TestCase):
+    """ADDED requirement: The Specification Record Is Verified in Continuous
+    Integration.
+
+    The delta concedes one blind spot openly: a task deleted outright rather
+    than disclosed is invisible both to the check above and to the validating
+    tool. It delegates that case to a convention, and then obliges this suite to
+    assert that the convention is stated -- because "a delegation to a rule
+    nothing checks for is a delegation to nothing".
+
+    These assertions establish only that the rule is STATED. They do not
+    establish that it is followed; the deletion case still ends at a reviewer,
+    and this is what makes the rule they review against durable.
+    """
+
+    def setUp(self) -> None:
+        self.text = read_text(AGENTS_FILE)
+        self.flat = flattened(self.text)
+
+    def test_the_conventions_file_states_the_correction_rule(self) -> None:
+        """SPECIFIED -- "That convention SHALL be stated in the repository-root
+        `AGENTS.md`, and that it is stated there SHALL itself be asserted by the
+        suite".
+
+        Matched on the rule's own words, because the delta requires the assertion
+        to be "written so that rephrasing the rule fails it, rather than so that
+        a rephrasing which inverts the rule passes". A rephrasing failing here is
+        the intended behaviour: this wording is what a reviewer relies on, so a
+        change to it is a reviewed event rather than an editorial one.
+        """
+        missing = [fragment for fragment in CORRECTION_RULE_FRAGMENTS if fragment not in self.flat]
+        self.assertEqual(
+            [],
+            missing,
+            "AGENTS.md does not state the archived-record correction rule in the "
+            f"words this assertion is written against: {missing} not found. The rule "
+            "is that an archived change's record may be corrected only to make it "
+            "say what actually happened, with the evidence cited, and never to "
+            "change what was decided or built",
+        )
+
+    def test_the_correction_rule_requires_the_evidence_to_be_cited(self) -> None:
+        """DERIVED -- the delta states the rule as "corrected only to say what
+        actually happened" and does not mention evidence; the evidence clause
+        comes from that change's design.md Decision 2 and its tasks.md 5.2. It is
+        asserted near the rule rather than anywhere in the file, so an unrelated
+        use of the word cannot satisfy it."""
+        anchor = self.flat.find(CORRECTION_RULE_ANCHOR)
+        self.assertNotEqual(
+            -1,
+            anchor,
+            f"AGENTS.md does not state {CORRECTION_RULE_ANCHOR!r}, so there is no "
+            "correction rule for this assertion to read",
+        )
+        neighbourhood = self.flat[anchor : anchor + CORRECTION_RULE_LOCALITY]
+        self.assertIn(
+            "evidence",
+            neighbourhood,
+            "the correction rule does not require the correction's evidence to be "
+            "cited, so a retroactive tick asserting nothing would satisfy it",
+        )
+
+    def test_the_correction_rule_is_stated_outside_the_generated_block(self) -> None:
+        """DERIVED -- no scenario states it. That change's design.md Decision 4
+        records that the workflow block at the top of AGENTS.md is generated and
+        replaced on update: a rule stated inside it is a rule that disappears on
+        the next regeneration, which would satisfy the assertion above today and
+        silently stop being true."""
+        end = self.text.find(MANAGED_BLOCK_END)
+        self.assertNotEqual(
+            -1,
+            end,
+            f"AGENTS.md carries no {MANAGED_BLOCK_END!r} marker, so this assertion "
+            "cannot tell the generated block from the project's own conventions",
+        )
+        below = flattened(self.text[end + len(MANAGED_BLOCK_END) :])
+        missing = [fragment for fragment in CORRECTION_RULE_FRAGMENTS if fragment not in below]
+        self.assertEqual(
+            [],
+            missing,
+            "the archived-record correction rule is not stated below the generated "
+            f"workflow block, so it sits where the next regeneration replaces it: "
+            f"{missing} not found there",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
