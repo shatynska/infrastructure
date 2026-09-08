@@ -1,0 +1,309 @@
+# Tasks
+
+Ordered deliberately, per `design.md`'s Migration Plan: the archived records are
+settled and `openspec validate --archived` is green **before** the gate is wired.
+A gate that fails on arrival gets disabled rather than fixed.
+
+**Three pull requests**, per Decision 2: the settled records (section 8), the
+gate (section 12), the specification record (section 13). Correcting history and
+changing the pipeline get separate review. Each of the first two passes
+verification and review on its own branch head before it opens — `AGENTS.md`'s
+`ship` begins once verification passes and `build`'s review has cleared, and that
+holds for every pull request a change opens, not only its last.
+
+**What this list does not own.** The static assertions in
+`.github/tests/test_ci_configuration.py` are the *derived tests* for this change's
+delta scenarios, authored independently from the delta before implementation, per
+`AGENTS.md`. They are not implementation tasks here. Tasks 7.1 and 10.2 confirm
+they exist and bite; they do not write them.
+
+**How the derived tests are apportioned across the three pull requests.** They
+fall into two groups with disjoint subjects, and each travels with the pull
+request that implements its subject:
+
+- **The disclosure group** — the `Reason:` label check and the `AGENTS.md`
+  correction-rule check — asserts properties of the records and conventions that
+  pull request 1 writes. It travels with pull request 1 and is green there.
+- **The gate group** — the step exists, it and its job are unconditional, neither
+  suppresses the validating command's failure, the step holds its closed form, it
+  installs from the pinned manifest, the `npm` stanza covers it — asserts
+  properties of a workflow that does not exist until section 9. It travels with
+  pull request 2.
+
+Both groups are **authored** at derive time, from the delta, before any
+implementation. They are **committed** at different points: the disclosure group
+before sections 1–5, the gate group after pull request 1 merges and before
+section 9. Each group's commit still precedes the implementation of its own
+subject, which is what derive-then-implement is for; what it does not do is put
+an assertion in a pull request that cannot satisfy it.
+
+This is a deliberate deviation from strict derive-then-implement ordering, and it
+is what makes pull request 1 mergeable at all: `.github/tests` is an unconditional
+required check, so a gate assertion riding in pull request 1 would fail against a
+workflow pull request 1 does not contain. Neither group is ever skipped, marked
+expected-fail, or otherwise softened to travel — that is the vacuous-success
+pattern task 10.2 exists to catch, and it would be a worse defect than the
+ordering it worked around.
+
+**Disclosure format.** A `## Not performed` entry is a list item naming the task
+it replaces, with its reason on a following line introduced by a `Reason:` label.
+The delta specifies this, so the derived test and these tasks agree on it rather
+than one predicting the other.
+
+Per Decision 4, this list ends at the archive commit. Branch and working-tree
+removal happen after that commit is written and are not tasks here.
+
+## 0. Establish what is actually red
+
+- [ ] 0.1 Run `openspec validate --archived` and record what it names **now**.
+  Sections 1–5 were written against the four changes red on 2026-09-08; the entry
+  that prompted this change named three, and a fourth appeared within a day.
+  Settle what the command reports today, not what it reported then. If it names a
+  record these sections do not cover, settle it in the same shape — a tick with
+  cited evidence, or a disclosure with a `Reason:` — and say so here.
+
+## 1. Settle `add-prod-data-volume`
+
+- [ ] 1.1 Add a `## Not performed` section to that change's archived `tasks.md`
+  and move 3.4 and 3.6 into it verbatim, dropping the `- [ ]` marker and keeping
+  every word of their existing disposition, in the disclosure format above. 3.4's
+  reason is that no `HCLOUD_TOKEN` was available in the authoring sandbox,
+  superseded by the PR's own CI-run plan; 3.6's records a standing pipeline gap —
+  `modules/volume` is `terraform validate`'d and `tflint`'d by neither, because
+  `pr-validation.yml` hardcodes those to `modules/server` and `environments/prod`.
+  Confirm before moving that the gap is still real; if a later change closed it,
+  say so on the line rather than deleting it.
+- [ ] 1.2 Move 3.5 to `## Not performed` too, but **only after** 2.1 has recorded
+  it as still-wanted work — it is the one line here describing something the
+  project still needs, and prose in an archived change is where it would be lost.
+
+## 2. Record what is still wanted
+
+- [ ] 2.1 Add an entry to `docs/change-queue.md` for the live plan-only check of
+  the `volume_enabled && server_enabled` coupling: set `volume_enabled = false`
+  and re-plan, then `server_enabled = false` and re-plan, confirming the second
+  destroys server, firewall **and** volume together. Say that
+  `modules/volume/tests/` cannot reach the coupling, that it has never been
+  exercised against live state, and that it is plan-only and never applied. Cite
+  the requirement it protects by its permanent path in
+  `openspec/specs/iac-data-volumes/spec.md`, not by the change's directory.
+- [ ] 2.2 Add an entry for the `modules/volume` CI coverage gap 1.1 preserves,
+  unless that gap has since been closed.
+
+## 3. Settle `fix-cadvisor-containerd-snapshotter`
+
+- [ ] 3.1 Move 2.3 to a `## Not performed` section of that change's archived
+  `tasks.md`, keeping its reason — `pre-commit`/`gitleaks` were not installed in
+  that session's environment. Do not re-run it retroactively and tick it: a
+  `pre-commit` run today reads today's tree, not the tree that change shipped, and
+  would be evidence for a different claim than the one the task makes.
+- [ ] 3.2 Note on the line which of that task's checks have since become
+  unconditional in `pr-validation.yml` — `gitleaks` runs on every pull request and
+  the platform Compose file goes through `docker compose config` — so a reader can
+  tell what is now covered from what remains uncovered.
+
+## 4. Settle `reclaim-superseded-app-images`
+
+Each tick names the evidence that settles **that** task, not the pool of evidence
+generally. Decision 3 exists to remove ambiguity, and a tick reaching further than
+its evidence would reintroduce it. Tasks below are numbered to match the archived
+task each one settles.
+
+- [ ] 4.1 Settles **its 4.1** (the baseline reading). Tick against the 2026-09-08
+  `docker system df` on `main-server` — 10 images, 3.553 GB, 0 B reclaimable —
+  read against the baseline that task itself records, 219 images / 46.43 GB /
+  42.88 GB reclaimable. Mark it as a retroactive tick resting on evidence read
+  after the fact.
+- [ ] 4.2 Settles **its 4.2** (the hand clearance). Tick against the same reading
+  plus the tag count: one `ghcr.io/fuperia-it/commerce-ops` against the 190 that
+  task records. Corroborate with `prune-unreferenced-host-images-periodically`'s
+  `design.md`, which records the same one-against-190 independently and was
+  written by a different change the following day. Mark as retroactive.
+- [ ] 4.3 Settles **its 4.3** (the playbook run). Tick against
+  `/usr/local/bin/app-deploy` being present on the host, dated 2026-09-07,
+  carrying the `reclaim()` function — the artefact that task exists to place. Mark
+  as retroactive.
+- [ ] 4.4 Settles **its 4.4** (the `ship:confirm` observation). Put the
+  retroactive reading to the operator: the observation that change's own text asks
+  for is *the single tag that deploy superseded is gone and the tag it deployed
+  remains*, and the host shows exactly that. **Do not tick it on this session's
+  reading**, and **do not offer a waiver** — `AGENTS.md` waives only an
+  observation that cannot be made and a change that was the wrong change, and
+  neither fits an observation that was made and whose effect is present.
+  **The operator confirmed this on 2026-09-08** (recorded in `design.md` under
+  Resolved questions). Tick it in that change's archived `tasks.md`, recording on
+  the line that it was confirmed retroactively on 2026-09-08 for a gate that
+  should have closed on 2026-09-07, and citing the host reading the confirmation
+  rested on. Do not present it as contemporaneous.
+- [ ] 4.5 Settles **its 4.5**. Move it to `## Not performed` with its reason: the
+  reclamation step's reported counts and the first steady-state deploy's elapsed
+  time were never captured and that run is gone. Say that later runs can still
+  supply the expectation it was meant to establish, so the loss is bounded.
+
+## 5. Settle `refresh-readme-accuracy` and write down all three rules
+
+- [ ] 5.1 Remove 8.6 from that change's archived `tasks.md` and record in prose
+  that branch and working tree were removed — verified 2026-09-08: no such branch
+  locally, none on `origin` (`git ls-remote --heads origin` returns
+  `refs/heads/main` alone), no such working tree.
+- [ ] 5.2 Add three rules to `AGENTS.md`'s **project conventions** section — not
+  the managed workflow block above it, which is generated:
+  - A change's `tasks.md` ends at the archive commit, because branch and
+    working-tree removal happen after that commit is written and can never be
+    ticked in it. Keep it narrow; the archive step itself belongs in `tasks.md`
+    and is not affected.
+  - An archived change's record may be corrected only to make it say what actually
+    happened, with the evidence cited, and never to change what was decided or
+    built. This is the only guard against a task being deleted rather than
+    disclosed — no static check can see a deleted line.
+  - Work not performed is disclosed under `## Not performed` as a list item naming
+    the task, with its reason on a following line introduced by `Reason:`. The
+    label is what the pipeline checks; the reason is what the reviewer reads.
+
+## 6. Confirm the record is green
+
+- [ ] 6.1 Run `openspec validate --archived` and confirm it reports **0 failed** —
+  not a fixed total, which would go stale the moment a change is archived. Run
+  `openspec validate --all` and confirm it is green too. Nothing past section 7
+  begins otherwise.
+
+## 7. Verify and review pull request 1
+
+Sections 1–5 edit four archived `tasks.md` files, `docs/change-queue.md` and
+`AGENTS.md` — exactly the committed markdown the repository-wide assertions in
+`.github/tests` read. This is not an exempt "documentation-only" change.
+
+- [ ] 7.1 `python3 -m unittest discover --start-directory .github/tests` from the
+  repository root, green on the branch head.
+- [ ] 7.2 `pre-commit run --all-files`. Provision it first if the working tree has
+  not been provisioned; report it as **not run, and why** rather than as passing
+  if it cannot be reached.
+- [ ] 7.3 Dispatch `ai-toolkit:change-code-reviewer` over the records diff. It is
+  a diff and it is reviewable; that it contains no code is not an exemption, and
+  retroactive ticks are exactly the kind of claim an independent reader should
+  check against the evidence cited. **Scope the dispatch**, or the review will
+  report the gate's requirements unimplemented and the gate's tests missing, and
+  be right about a diff that was never meant to carry them:
+  - Name this as the first of three pull requests, and give the reviewer the delta
+    clauses this diff actually implements — the disclosure obligation, its fixed
+    `Reason:` form, and the conventions-document rule — not the whole requirement.
+  - Say which derived tests travel with this pull request (the disclosure group)
+    and which do not (the gate group), per the apportionment above.
+  - Distinguish what the reviewer can check in-repository — the corroborating
+    figure in `prune-unreferenced-host-images-periodically`'s `design.md`, the
+    `Reason:` format, that each moved disposition is preserved word for word,
+    that no line was deleted rather than disclosed — from the 2026-09-08 host
+    reading, which is attested and not reproducible by a read-only reader. Ask it
+    to say which of the two each finding rests on.
+
+## 8. Pull request 1 — the settled records
+
+- [ ] 8.1 Open the pull request carrying sections 1–5 and nothing else. Its
+  subject is the historical record; the workflow is not in it. Let continuous
+  integration run and wait for the operator's confirmation that it merged.
+
+## 9. Wire the gate
+
+- [ ] 9.1 Add `.github/package.json` pinning `openspec` to an exact version, and
+  commit its lockfile beside it. Pin the version this change was verified against;
+  do not use a range. Declare the Node major version in `engines`.
+- [ ] 9.2 Add an `npm` stanza to `.github/dependabot.yml` naming `/.github`,
+  weekly, matching the shape of the existing entries. The comment should say why a
+  repository with no JavaScript carries an npm manifest.
+- [ ] 9.3 Add an unconditional step to `pr-validation.yml`'s `validate` job: set up
+  Node at the pinned major version with a version-pinned setup action, install
+  from the lockfile exactly (failing if manifest and lockfile disagree), then run
+  `openspec validate --all` and `openspec validate --archived`. No `if:` guard and
+  no path filter — Decision 5 gives the reason and the step should carry it in a
+  comment.
+- [ ] 9.4 Give the step the closed form the delta specifies, so that suppression
+  is excluded by shape rather than by blocklist: its script is the two validating
+  invocations and nothing else — no shell operator joining them to anything, no
+  redirection or capture of their status, no `shell:` override — and **neither the
+  step nor the `validate` job** declares `continue-on-error` in any form,
+  including an expression-valued one. Do not relocate the invocations into a
+  called workflow or composite action. Every other property in section 9 is
+  satisfied by a step that runs, is pinned, is never skipped, and throws its
+  result away; such a step reports green forever, which is the thing this change
+  exists to remove. The derived test asserts the shape; this task is giving it
+  something true to assert.
+- [ ] 9.5 Confirm the unconditionality reaches further than the step: the
+  enclosing `validate` job carries no `if:`, and `pr-validation.yml` has no
+  workflow-level `paths`/`paths-ignore` filter. A step that cannot be skipped
+  inside a job that can is skippable, and that is the green-because-skipped
+  failure this pipeline forbids elsewhere.
+- [ ] 9.6 Place the step so it does not sit behind the Terraform-conditional
+  steps, and confirm it requires no credential and no deployment `environment:`.
+
+## 10. Verification
+
+- [ ] 10.1 `python3 -m unittest discover --start-directory .github/tests` from the
+  repository root.
+- [ ] 10.2 Confirm the derived tests actually bite, rather than passing over
+  absent structure. For each: temporarily break what it asserts — remove the step,
+  add an `if:` to it, add `continue-on-error: true` to the **step**, add it to the
+  **job**, give it an expression value, append `|| true` to the script, append
+  `|| :` instead, add a `shell:` override, unpin the manifest reference, drop the
+  `npm` stanza, strip the `Reason:` label from one `## Not performed` entry, and
+  delete the correction rule from `AGENTS.md` — and confirm the matching test
+  fails each time. Revert each. The `|| :` and job-level cases matter most: they
+  are the ones a blocklist-shaped test passes and a shape-shaped test catches,
+  which is the difference this change is relying on. A test that passes against a repository
+  missing the thing it asserts is the vacuous-success defect this change is about.
+- [ ] 10.3 `openspec validate --all` and `openspec validate --archived`, both
+  green — now including this change's own delta. **If a record has gone red since
+  6.1** — another change archived in the meantime — settle it in its own pull
+  request before the gate's opens. It does not ride in with the workflow change;
+  that is the mixing Decision 2 exists to prevent, reached from the other
+  direction. Note that the gate cannot land green over a red record even if this
+  is missed: pull request 2's own continuous integration runs the step pull
+  request 2 adds.
+- [ ] 10.4 `pre-commit run --all-files`, with the same provisioning caveat as 7.2.
+- [ ] 10.5 Confirm the new workflow step parses as YAML and that `actionlint`, if
+  available, reports nothing new about it. `actionlint` is not installed by this
+  repository — `docs/change-queue.md` entry 6 records why — so a clean run is a
+  bonus, not the gate.
+
+## 11. Review
+
+- [ ] 11.1 Dispatch `ai-toolkit:change-code-reviewer` over the gate diff, against
+  a diff that already passes section 10.
+
+## 12. Pull request 2 — the gate, and confirming it
+
+- [ ] 12.1 Open the pull request carrying sections 9–10. Let continuous
+  integration run and wait for the operator's confirmation that it merged and the
+  deploy is healthy.
+- [ ] 12.2 **Confirm the effect — this is the `ship:confirm` gate.** On the merged
+  pull request, the new step ran, reported and passed, and it ran on a pull request
+  touching no Terraform file, which is what distinguishes *the check is present*
+  from *the check is not skipped*. This is performable by reading the run, needs
+  nobody's cooperation, and is a genuine observation of the change's effect. Do
+  not waive it; an observation is performable, which is what the waiver classes
+  exclude.
+- [ ] 12.3 **Observe the composition.** Propose to the operator a throwaway pull
+  request that unticks one task in an archived change, confirm the check fails on
+  it, and close it without merging.
+  Be accurate about what this adds, per Decision 8. Two of the three facts behind
+  *a bad record fails the check* are already held: `openspec validate` exits
+  non-zero on a bad record — the observed premise of this whole change — and the
+  step does not suppress that exit, asserted statically by the derived test. What
+  remains is the composition: that GitHub reports a failed step as a failed
+  required check. That is worth observing and is not what the change rests on.
+  This is a whole task, separate from 12.2 by Decision 8: if the operator
+  declines, disclose it under this change's `## Not performed` with that reason —
+  stating the composition as what went unobserved, not the whole gating property,
+  which would misdescribe the loss — and record it in `docs/change-queue.md`. It
+  does **not** close 12.2's gate and is not a route past it.
+
+## 13. Pull request 3 — archive
+
+- [ ] 13.1 Bring the branch back to the freshly fetched trunk and apply the delta
+  to `openspec/specs/iac-cicd-pipeline/spec.md`. Update that capability's
+  `## Purpose` paragraph too: it enumerates the capability's tiers and does not
+  mention specification-record validation, and no delta reaches it because it is
+  not a requirement.
+- [ ] 13.2 Delete `docs/change-queue.md` entry 12, confirming first that both of
+  its halves were delivered — the records settled **and** the gate wired — and
+  that the entries added in sections 2 and 12.3 are not deleted with it.
+- [ ] 13.3 Open the record's own pull request.
