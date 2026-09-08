@@ -803,23 +803,6 @@ deliverable. The rehearsal is the point; the document is how it survives.
 Entry 24's staging environment is where the rehearsal can happen without
 touching prod.
 
-## 31. cover-platform-images-with-dependabot
-
-**Not blocked; a one-stanza change in `.github/dependabot.yml`.**
-
-Dependabot watches `terraform` and `github-actions` here and nothing else.
-The nine image pins in `platform/docker-compose.yml` -- Traefik, Postgres,
-Grafana, Prometheus, Alertmanager, three exporters, cAdvisor -- are refreshed
-only when a person notices, which is the same shape as the Molecule digest in
-`docs/deferred-work.md`, minus that entry's argument for leaving it: these are
-production services, and a stale Traefik or Postgres is a security exposure
-rather than a test-reproducibility trade. Dependabot's `docker-compose`
-ecosystem reads Compose files directly.
-
-The floor check in `.github/tests` (*Shared-Stack Service Images Are Pinned to
-an Exact Release*) still applies to what Dependabot proposes, and the human
-half of that requirement is what the resulting pull request review is for.
-
 ## 32. notice-a-scheduled-workflow-that-goes-red
 
 **Not blocked.** Recorded by `open-autoupdate-pr-with-app-token`, whose

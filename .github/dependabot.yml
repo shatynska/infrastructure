@@ -18,3 +18,36 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  - package-ecosystem: "docker-compose"
+    # The shared platform stack's image pins. The directory is listed
+    # explicitly because there is no alternative: Dependabot's Compose file
+    # fetcher lists the contents of the configured directory and does not
+    # descend into subdirectories, and it fails outright when that directory
+    # holds no Compose file -- so "/" would not scan the tree, it would error,
+    # because no Compose file sits at the repository root. It also selects by
+    # FILENAME, so a stack file added here under a name containing no
+    # "compose" would sit in a covered directory and never be read. The
+    # CI-configuration test suite compares both conditions against the tree
+    # and fails if either diverges.
+    directory: "/platform"
+    schedule:
+      interval: "weekly"
+    groups:
+      # Blast radius, not tidiness. Eight images weekly is up to eight gated
+      # production deploys; grouping the six monitoring images makes a routine
+      # week three pull requests at most. Traefik terminates TLS for every
+      # public hostname and postgres is the one stateful service, so each
+      # reaches the deploy approver as its own diff.
+      #
+      # Patterns are DEPENDENCY names -- the image reference with its tag
+      # stripped -- not Compose service keys, which Dependabot never matches
+      # on and which differ for all six. postgres-exporter is named in full
+      # rather than as `postgres*`, which would silently pull the shared
+      # database into the group this split exists to keep it out of.
+      platform-monitoring-images:
+        patterns:
+          - "prom/*"
+          - "grafana/*"
+          - "ghcr.io/google/cadvisor"
+          - "quay.io/prometheuscommunity/postgres-exporter"

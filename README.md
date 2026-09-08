@@ -284,6 +284,26 @@ Whether they are registered as required contexts is a repository setting, not
 anything this repository can state — see the note in Local setup step 5 for
 what answers it.
 
+Dependabot covers the rest, across three ecosystems: `terraform` provider pins,
+`github-actions` references, and — via `docker-compose` over `/platform` — the
+shared stack's eight container image pins. Those pins are exact by requirement,
+so they never move on their own; this is what proposes the move, and the
+proposal then goes through the same review and the same gated deploy as a
+hand-written bump.
+
+**Reviewing one of those image pull requests carries an obligation no check in
+this repository can discharge.** Ask whether the proposed image declares a
+persistent store the current one does not — a volume the image itself declares,
+which appears in no committed file and which `docker-compose.yml` therefore
+cannot be read for. Establishing that needs a registry call, which the
+CI-configuration suite forbids itself; a new store arriving unnoticed is what
+*No Store on This Host Holds Data Requiring Backup*
+(`openspec/specs/iac-safety-hardening/spec.md`) exists to prevent, and its
+classification of every store on this host is what a silent one would falsify.
+Version tags are the other half: the automated floor rejects a tag naming fewer
+than two version components, and whether a tag that passes is a release rather
+than a series its publisher repoints is likewise yours to decide.
+
 ### Testing
 
 Terraform has no traditional unit-test layer here; verification is the static

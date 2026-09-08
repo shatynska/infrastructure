@@ -233,14 +233,14 @@ class TestDependabotCoverage(unittest.TestCase):
             f"`terraform` entry names them: {sorted(uncovered)}; configured: {sorted(configured)}",
         )
 
-    def test_dependabot_configures_both_required_ecosystems(self) -> None:
-        """SPECIFIED -- the requirement's opening sentence, which is the enabling
-        condition for the "Provider version update" and "Action version update"
-        scenarios. It does not establish either scenario's outcome; see the
-        test plan."""
-        ecosystems = {entry.get("package-ecosystem") for entry in self.updates}
-        for required in ("terraform", "github-actions"):
-            self.assertIn(required, ecosystems, f"no Dependabot entry for the {required} ecosystem")
+    # `test_dependabot_configures_both_required_ecosystems` was removed by
+    # `cover-platform-images-with-dependabot`, not renamed. Its body iterated
+    # the literal pair ("terraform", "github-actions") and its name asserted
+    # "both" -- the enumeration that change widens to three. Its replacement is
+    # `TestDependabotWatchesEveryRequiredEcosystem
+    # .test_dependabot_configures_every_required_ecosystem`, which reads the
+    # requirement's full set. The lockfile-directory assertion above is
+    # untouched and stays here.
 
 
 class TestScheduledHookRefresh(unittest.TestCase):
