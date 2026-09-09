@@ -285,6 +285,42 @@ directly, on the only host that matters. That is a stronger observation than a
 container could give, and it is the gate this repository already requires before
 a record is archived.
 
+### Decision 7b: The scenario cannot use the role's default swap path
+
+Found by CI on 2026-09-09, on the first run of this change's pull request, by
+the scenario's own collision guard.
+
+`/proc/swaps` is not namespaced, so the table a scenario reads is the runner's —
+and **GitHub's Ubuntu runners swap to `/swapfile`, which is exactly this role's
+default** (ubuntu-24.04 image 20260831.293.1). Left at the default, the role
+inside the instance reads the runner's swap file as "my file is already active",
+skips `mkswap`, and the run fails at the signature assertion for a reason that
+belongs to the rig.
+
+This is the hazard Decision 7 describes, arriving from a direction that decision
+did not anticipate: not a write escaping the container, but a *read* of host
+state that the role mistakes for its own. Production is unaffected — on a real
+host `/proc/swaps` is that host's table and the check is correct — so the fix
+belongs to the scenario, not the role.
+
+The scenario therefore overrides `swap_file_path` to a path nothing swaps to,
+and the collision guard now watches that path instead.
+
+**Overriding it does not leave the shipped default unchecked.** `verify.yml`
+reads `ansible/roles/swap/defaults/main.yml` from the repository and asserts the
+approved literals — path, size, tendency, sysctl file, and that `swap_activate`
+ships enabled — directly. That is the **stronger** of the two checks: it fails
+whether or not any scenario happens to exercise the value, and the defaults are
+what a host built from this repository inherits, since nothing sets them from
+inventory. The `docker` role's scenario already uses the same technique to
+assert the external role's pin from the committed `requirements.yml`.
+
+*What this cost, and what it bought.* A local run cannot reach this: the
+developer machine swaps to `/dev/sdc`. The guard was added on the theory that a
+collision was possible, was called "not hypothetical" on reasoning alone, and
+then turned out to be the CI environment itself. It is the one finding in this
+change that no amount of local verification would have produced.
+
 ### Decision 7a: Reboot persistence is exercised, not observed
 
 The delta obliges swap and the swap tendency to survive a reboot. Nothing in

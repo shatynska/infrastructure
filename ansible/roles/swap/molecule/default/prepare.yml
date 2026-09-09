@@ -89,24 +89,24 @@
     # the run would go red at the signature assertion for a reason that is the
     # rig's rather than the role's.
     #
-    # It is green on the two rigs this repository actually uses (this
-    # developer machine swaps to /dev/sdc; GitHub-hosted runners to
-    # /mnt/swapfile), which is exactly why the collision would arrive as a
-    # mystery rather than as a known limitation.
+    # THIS IS NOT HYPOTHETICAL, and the guard has already earned its place.
+    # GitHub's Ubuntu runners swap to `/swapfile` -- the role's own default --
+    # observed on image 20260831.293.1 in CI on 2026-09-09, when this assertion
+    # failed the scenario. That is why converge.yml now overrides
+    # `swap_file_path` to a path nothing swaps to; the guard below checks THAT
+    # path, so it still fires if a future runner ever collides with it.
     - name: Read the runner's own swap table, which this container shares
       ansible.builtin.command: cat /proc/swaps
       register: swap_prepare_collision_check
       changed_when: false
 
     #
-    # The path is the LITERAL the role defaults to, not `swap_file_path`: this
-    # play does not include the role, so the role's defaults are not in scope
-    # here. It is the same literal verify.yml asserts against, and for the same
-    # reason -- reading the value out of the role under test would make
-    # whatever it shipped correct by construction.
+    # The path is a LITERAL, not `swap_file_path`: this play does not include
+    # the role, so neither the role's defaults nor converge.yml's overrides are
+    # in scope here. It must be kept in step with the override in converge.yml.
     - name: Refuse to run where the runner's own swap collides with the path under test
       vars:
-        swap_collision_path: /swapfile
+        swap_collision_path: /opt/molecule-swapfile
       ansible.builtin.assert:
         that:
           - swap_collision_path not in (swap_prepare_collision_check.stdout | regex_findall('(?m)^(/\S*)'))

@@ -32,7 +32,10 @@
   become: true
   vars:
     # DERIVED (design.md Decision 6 / tasks.md 1.4), per the header above.
-    swap_expected_file_path: /swapfile
+    # The scenario overrides swap_file_path -- see converge.yml for why it has
+    # to. The role's SHIPPED default is asserted separately, below, by reading
+    # defaults/main.yml from the repository.
+    swap_expected_file_path: /opt/molecule-swapfile
     swap_expected_swappiness: "10"
     swap_expected_sysctl_file: /etc/sysctl.d/60-swappiness.conf
     # SPECIFIED BY THE SCENARIO'S OWN CONVERGE: converge.yml sets
@@ -45,6 +48,57 @@
     # /mnt/main-data (ansible/roles/platform_data_volume/defaults/main.yml).
     swap_forbidden_prefix: /mnt/main-data
   tasks:
+    # ------------------------------------------------------------------
+    # THE ROLE'S SHIPPED DEFAULTS, read from the committed file rather than
+    # from a converge.
+    #
+    # This scenario cannot converge with the default swap_file_path (converge.yml
+    # says why: GitHub's runners swap to that exact path and /proc/swaps is not
+    # namespaced), so the approved literals are checked here instead. Reading
+    # the committed defaults is the STRONGER check of the two: it fails whether
+    # or not any scenario happens to exercise the value, and it is the value a
+    # host built from this repository actually inherits -- this project sets
+    # none of these from inventory.
+    #
+    # The literals come from the change `bound-host-log-growth-and-add-swap`,
+    # `design.md` Decision 6. Changing one is a change to that decision AND to
+    # this file, together and visibly. Same technique as the `docker` role's
+    # scenario, which reads the committed requirements.yml to assert the
+    # external role's pin.
+    # ------------------------------------------------------------------
+    - name: Read the role's committed defaults from the repository (not the managed node)
+      ansible.builtin.set_fact:
+        swap_shipped_defaults: "{{ lookup('file', playbook_dir + '/../../defaults/main.yml') | from_yaml }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Report the shipped defaults
+      ansible.builtin.debug:
+        var: swap_shipped_defaults
+
+    - name: Assert the role ships the approved defaults
+      delegate_to: localhost
+      become: false
+      ansible.builtin.assert:
+        that:
+          - swap_shipped_defaults.swap_file_path == '/swapfile'
+          - swap_shipped_defaults.swap_size_mb == 4096
+          - swap_shipped_defaults.swap_swappiness == 10
+          - swap_shipped_defaults.swap_sysctl_file == '/etc/sysctl.d/60-swappiness.conf'
+          - swap_shipped_defaults.swap_activate is true
+        fail_msg: >-
+          ansible/roles/swap/defaults/main.yml does not ship the approved
+          values. It has: {{ swap_shipped_defaults }}.
+          Expected swap_file_path /swapfile, swap_size_mb 4096,
+          swap_swappiness 10, swap_sysctl_file
+          /etc/sysctl.d/60-swappiness.conf, swap_activate true. These are what
+          a host built from this repository inherits -- nothing sets them from
+          inventory -- so a wrong default here is a wrong production host, not
+          a test detail. swap_activate in particular is a test affordance and
+          must ship enabled.
+        success_msg: "The role ships the approved defaults."
+        quiet: true
+
     # ------------------------------------------------------------------
     # WHERE THE ROLE PUT IT. This block runs FIRST, before anything stats the
     # path this file expects, and the order is the point. A role reconfigured

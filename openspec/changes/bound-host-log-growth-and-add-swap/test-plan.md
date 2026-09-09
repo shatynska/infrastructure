@@ -368,6 +368,22 @@ the three prepares, not an observed failure. Whoever implements should run
 
 ---
 
+## 6a. Amendment, 2026-09-09: the scenario no longer converges the default path
+
+CI's first run of this change failed `swap` / `default` at the scenario's own
+collision guard: GitHub's Ubuntu runners swap to `/swapfile`, the role's
+default, and `/proc/swaps` is shared with the container.
+
+`converge.yml` now overrides `swap_file_path`, and `verify.yml` gained an
+assertion that reads `ansible/roles/swap/defaults/main.yml` from the repository
+and checks the approved literals there. So the shipped defaults are still
+covered — more strictly than before, because that assertion does not depend on a
+scenario exercising them — while the behavioural assertions run against a path
+that cannot collide with the runner's own swap.
+
+Mutation-checked: changing `swap_swappiness` to 60 in the committed defaults
+turns `verify` red.
+
 ## 7. What the implementation must make pass
 
 * `cd ansible/roles/docker && molecule test --all` — recap must name
