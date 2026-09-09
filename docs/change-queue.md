@@ -773,46 +773,6 @@ Worth knowing for whoever takes it: the migration is not all-or-nothing. The
 `procrastinate_*` tables could legitimately stay on this host, in the shared
 instance, under the scoping that requirement now records.
 
-## 34. keep-the-static-suite-green-in-the-main-working-tree
-
-**Not blocked; unrelated to the change that found it, and recorded under
-`AGENTS.md`'s "A second change surfacing" rather than fixed in passing.**
-
-`.github/tests`'s Dependabot-coverage assertion walks the tree for
-`.terraform.lock.hcl` and requires each directory holding one to be named by a
-`terraform` entry in `.github/dependabot.yml`. It walks into `.claude/worktrees/`
-as readily as anywhere else, and a worktree is a full copy of the tree — so it
-finds three phantom directories and fails:
-
-```
-'/.claude/worktrees/<name>/terraform/environments/prod'
-'/.claude/worktrees/<name>/terraform/modules/server'
-'/.claude/worktrees/<name>/terraform/modules/volume'
-```
-
-This is not a leftover from one badly-cleaned change. `AGENTS.md` requires every
-change to take a working tree at `.claude/worktrees/<name>`, so the condition
-holds whenever any change is in progress — which is most of the time. Continuous
-integration never sees it, because a checkout carries tracked files only, and
-the suite is green when run from *inside* a worktree, because the walk starts at
-that tree's own root. It fails only from the repository's main working tree,
-which is where a session runs it after leaving a worktree.
-
-The cost is a red suite that a session must learn to disbelieve — the exact
-habit this repository refuses everywhere else, and the one its own reasoning
-about `openspec validate` names: "a gate that fails on arrival gets disabled
-rather than fixed".
-
-Three shapes to weigh, and the cheapest is not the one in the suite.
-`.claude/worktrees/` is **not gitignored** — `git check-ignore` exits 1 on it,
-and a session's `git status` shows it untracked — so a `.gitignore` line fixes
-this at the source and additionally removes the standing risk that a `git add
--A` from the main working tree stages a duplicate copy of the whole tree. The
-alternatives are a directory exclusion inside the walk, which is enough today,
-and asking git what is tracked, which is the general answer but needs a
-subprocess the suite's own assertions forbid. Whichever is taken, the test that
-covers it has to fail on the current arrangement first.
-
 ## 35. catch-up-the-drifted-galaxy-pins
 
 **Not blocked.** Recorded 2026-09-08, from an inventory taken while archiving
