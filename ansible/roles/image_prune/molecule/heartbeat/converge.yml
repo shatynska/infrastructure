@@ -1,0 +1,100 @@
+---
+# Converges the container runtime, builds the one fixture this scenario's
+# assertions need, and then converges `image_prune` with its reporter pointed
+# at the local sink prepare.yml started.
+#
+# THE THREE PLAYS ARE ORDERED, NOT ARBITRARY.
+#
+#   1. The fixture is a real image and a real container, so the runtime has to
+#      exist before it can be made -- and `roles:` runs after `pre_tasks` in
+#      the same play, so the runtime cannot be a role of the fixture play.
+#   2. The fixture is made BEFORE `image_prune` converges, which is what makes
+#      the delta scenario "Installing the report does not activate the unit"
+#      assertable at all: verify.yml compares the image list this play records
+#      against the host's image list after the converge, and reads a sink that
+#      must still be empty. A scenario that only checked the unit file carries
+#      ExecStopPost= would pass against a role that runs a prune on every
+#      converge.
+#   3. `image_prune` converges last, with the inputs verify.yml reads.
+#
+# WHY THE FIXTURE IS WHAT IT IS. The delta scenario "A successful activation is
+# reported" needs an activation that genuinely SUCCEEDS, and the prune script
+# abandons -- non-zero -- on a host whose keep set is empty, which is any host
+# with no container and no referenced image. One stopped container holding one
+# image is the smallest arrangement that makes a successful run reachable; it
+# is not decoration, and removing it turns this scenario's success case into a
+# second failure case that would still read as covered.
+#
+# `solo` is enumerated and has NO /opt/solo at all, which the prune skips as
+# the benign never-deployed case. That keeps this scenario's fixture to one
+# image: the keep set comes from the container, not from a Compose file, and
+# `default` is where the Compose-file keep set is exercised.
+#
+# THIS SCENARIO'S test_sequence IS MOLECULE'S DEFAULT, which means CONVERGE
+# RUNS TWICE -- once here and once for `idempotence`. That is deliberate: the
+# delta scenario "Installing the report does not activate the unit" is stated
+# over a host "where the unit is already installed", and the second converge is
+# what makes it that. verify.yml's sink assertion covers both.
+
+- name: Install the container runtime the fixture and the role both need
+  hosts: all
+  become: true
+  vars:
+    # FIXTURE ONLY, and the same reasoning as this role's `default` scenario:
+    # this scenario runs a real container INSIDE the Molecule instance, which
+    # fails under the default overlayfs snapshotter with "failed to mount ...
+    # fstype: overlay ... invalid argument". vfs is slower but mounts
+    # anywhere. Supplied as a role variable rather than written to
+    # /etc/docker/daemon.json in prepare.yml, because the `docker` role now
+    # renders that file itself with `copy:` and a file written beforehand does
+    # not survive; these options merge UNDER the role's log ceiling, so this
+    # fixture cannot unset the thing that role exists to guarantee.
+    docker_daemon_extra_options:
+      storage-driver: vfs
+      features:
+        containerd-snapshotter: false
+  roles:
+    - role: docker
+
+- name: Build the one fixture this scenario's assertions need
+  hosts: all
+  become: true
+  tasks:
+    - name: Pull one image and leave one stopped container holding it
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker pull alpine:3.19 >/dev/null
+        docker rm -f image_prune_heartbeat_holder >/dev/null 2>&1 || true
+        docker run --name image_prune_heartbeat_holder alpine:3.19 /bin/true >/dev/null
+        # The image list AS IT STANDS BEFORE `image_prune` converges.
+        # verify.yml asserts it is unchanged afterwards.
+        docker images -a --no-trunc -q | sort -u \
+          > /var/tmp/image-prune-images-before-converge
+      args:
+        executable: /bin/bash
+        creates: /var/tmp/image-prune-images-before-converge
+      changed_when: false
+
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # The seam design.md Decision 12 exists for. Every scenario this role has
+    # sets it, including the ones that assert nothing about reporting, and
+    # `.github/tests/test_ci_configuration.py` asserts that over all of them:
+    # a scenario left on the production default would ping the external
+    # observer from a hosted runner and, under `?create=1`, create a check
+    # there on every pull request touching `ansible/`.
+    image_prune_heartbeat_base_url: http://127.0.0.1:8099
+    # NOT A CREDENTIAL. The sink accepts any key; this value names no real
+    # project and grants access to nothing. In production this arrives from an
+    # Ansible Vault variable (`ansible/inventory/group_vars/prod.yml`).
+    image_prune_heartbeat_ping_key: fixture-key-not-a-real-ping-key
+    deploy_apps:
+      - name: solo
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeSoloKeyOnlyNotARealCredential
+          solo-molecule@ci
+  roles:
+    - role: image_prune

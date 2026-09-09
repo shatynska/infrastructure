@@ -86,7 +86,11 @@ by this role cannot share one check and mask each other's silence (Decision 4).
   `image_prune_heartbeat_ping_key`, in the established form and before any task
   changes the host, per *A Role's Absent Required Input Is Reported by Name*
   (`openspec/specs/iac-host-configuration/spec.md`) and Decision 13. `deploy_apps`
-  in this same role is the pattern to follow.
+  in this same role is the pattern to follow. Extend
+  `.github/tests`' existing `REQUIRED_INPUT_ASSERTIONS` with the `image_prune`
+  entry for this input as part of the same task — the test author could not, since
+  that means editing an existing test, so it falls to the implementer and is
+  otherwise the kind of coverage that is silently never added.
 - [ ] 3.3 Install a root-owned `0700` reporting script that sources
   `heartbeat.env` and pings `<base_url>/<key>/<templated slug>` on
   success and `.../fail` on failure, `?create=1` on both. The URL SHALL NOT be
@@ -195,7 +199,13 @@ commands apply; the Terraform row does not.
   obliges.
 - [ ] 4.8b `.github/tests`: no `image_prune` Molecule scenario leaves
   `image_prune_heartbeat_base_url` at its production default, and every one supplies
-  a ping key (3.6). A scenario's own variables are a static read of a committed
+  a ping key (3.6) **except a scenario whose subject is the absent key itself**,
+  which task 4.10 requires to supply none. That exemption is recognised
+  structurally — by the scenario expecting the converge to fail — rather than by
+  naming a scenario, so a second such scenario inherits it and a scenario that
+  merely forgot the key does not. The base-URL obligation is not waived by it: a
+  converge that fails at the assertion never reaches the reporter, but a scenario
+  that stops failing would otherwise start pinging the vendor. A scenario's own variables are a static read of a committed
   file, and this is what turns "the reporting scenarios use a sink" into a property
   of all of them. Note for the author: this role's scenarios pass role variables in
   the `Converge` play's `vars:` block in `converge.yml` — that is the file 3.6 sets
