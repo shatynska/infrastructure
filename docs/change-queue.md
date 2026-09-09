@@ -560,39 +560,6 @@ is operational rather than structural. It read the live host as well as the
 tree, so where an entry cites a host fact, that is what `main-server` showed on
 2026-09-08, not an inference from the code.
 
-## 21. rotate-container-logs
-
-**Not blocked; small.**
-
-`docker info` on the host reports the `json-file` logging driver, and
-`/etc/docker/daemon.json` does not exist, so no container's log is bounded:
-`docker inspect` shows an empty `LogConfig` map on every service. Docker's
-default here is unlimited growth per container, on the root disk, next to
-Postgres's data. The `HostDiskPressure` alert fires at 90% full, which for a
-log that fills a disk is a report of the outage rather than a warning of it.
-
-`geerlingguy.docker` already accepts `docker_daemon_options`; a `log-driver`
-of `json-file` with `max-size` and `max-file` in `log-opts`, set from
-`ansible/inventory/group_vars/prod.yml`, is the whole change. It applies to
-containers created after the daemon restart, so existing ones pick it up at
-their next deploy, and the `docker` role's Molecule scenario can assert the
-rendered file.
-
-## 22. give-the-host-swap-and-treat-entry-7-as-its-companion
-
-**Blocked on the same data as entry 7, and the same decision.**
-
-`swapon --show` on the host is empty: an 8 GB host with no swap and no
-container limits (entry 7) means the first service to leak memory is stopped
-by the OOM killer, and the killer's choice is not the leaking service's --
-Postgres and Prometheus are the largest resident processes and therefore the
-likeliest victims. A modest swap file does not fix a leak but turns a hard
-kill into a slowdown the `HostMemoryPressure` alert has time to report.
-
-Recorded separately from entry 7 because it is a host-level change (an
-Ansible task, a `vm.swappiness` sysctl) where entry 7 is a Compose-level one,
-and because it is worth doing even before entry 7's data is in.
-
 ## 23. apply-host-configuration-through-a-gated-workflow
 
 **Not blocked; recorded because it is the one path to production this
@@ -715,8 +682,10 @@ both; the next application may not.
 `--entrypoints.web.http.redirections.entrypoint.to=websecure` and
 `--entrypoints.websecure.http.tls.certresolver=letsencrypt` on the Traefik
 service make the safe form the default and the labels optional. While there,
-Traefik's access log is off; turning it on (to stdout, bounded by entry 21) is
-what makes entry 28 useful for HTTP traffic.
+Traefik's access log is off; turning it on (to stdout, where the host's daemon
+now bounds it -- see *Container Logs Are Bounded by the Host's Daemon
+Configuration* in openspec/specs/iac-host-configuration/spec.md) is what makes
+entry 28 useful for HTTP traffic.
 
 ## 30. write-and-rehearse-the-rebuild-runbook
 
