@@ -282,8 +282,20 @@ derived from the working tree:
   from either working tree resolved to `molecule.dnU2.*`, while the other roles
   each held their own — `1UjF` `docker`, `Dp-1` `platform_data_volume`, `E127`
   `ops_user`, `HeLe` `hardening`. Relocating a working tree therefore does not
-  escape it, and `MOLECULE_EPHEMERAL_DIRECTORY` is the only lever.
+  escape it. `MOLECULE_EPHEMERAL_DIRECTORY` is not the only lever, as the
+  next bullet records.
 - **Molecule's cache**, `~/.cache/molecule/<role>` — keyed by role name alone.
+  **Checked again 2026-09-09 and no longer live**: under the pinned toolchain
+  (`molecule==26.8.0`) the ephemeral tree is the only one written, and the
+  `~/.cache/molecule/ops_user` still on this machine is dated 2026-09-01 and
+  holds an older layout. Two handles, not three — confirm before the proposal
+  enshrines a third. The ephemeral one is reachable by `ANSIBLE_HOME` as well
+  as by `MOLECULE_EPHEMERAL_DIRECTORY`, and the two are not equivalent:
+  `MOLECULE_EPHEMERAL_DIRECTORY` names one directory outright, so a single
+  exported value collapses every scenario of every role into it, while
+  `ANSIBLE_HOME` moves the tree and leaves the per-scenario
+  `molecule.<id>.<scenario>` split intact. Only the second composes with
+  `molecule test --all`.
 
 Because the ephemeral id is stable per role rather than per run, **inheriting
 another working tree's directory is the default rather than the exception**.
@@ -342,10 +354,10 @@ The danger is not the red runs. A colliding run can equally **pass** against a
 container the other session converged, which reads as evidence the change under
 test is sound.
 
-The fix is one decision covering all three: a per-working-tree instance name —
+The fix is one decision covering both live handles: a per-working-tree instance name —
 which means templating it in every `molecule.yml`, with `.github/tests`
-asserting that each one does — plus the ephemeral-directory and cache
-overrides, and a binding section in `AGENTS.md` that ties `AGENTS.md:27` to
+asserting that each one does — plus the ephemeral-directory
+override, and a binding section in `AGENTS.md` that ties `AGENTS.md:27` to
 Molecule the way it was always meant to be tied to something.
 
 ## 8a. a review agent's mutation check writes to the tree it is reviewing
@@ -519,26 +531,6 @@ together and strike it from here."
 
 Adopting it would also cover the two abandon branches added by that review's
 own fix, which are likewise unasserted.
-
-## 18. give the Molecule shared-state hazard a permanent home
-
-Molecule's instance name, `~/.ansible/tmp/molecule.*` and
-`~/.cache/molecule/<role>` are shared across working trees and stable per role.
-Two sessions running the same role's scenarios collide: a container is killed
-under a live module and it surfaces as "Module result deserialization failed" at
-`create`, `prepare` or `verify`, which reads as a module bug and is not one. A
-colliding run can pass as easily as fail.
-
-This is recorded nowhere in this repository. The queue entry that held it was
-deleted when its change archived, and it has since cost two sessions time they
-did not need to spend. It belongs in `AGENTS.md`'s Testing section, beside the
-`molecule test --all` note about reading the SCENARIO RECAP, not in a queue
-entry that will be deleted again.
-
-Entry 8 (`namespace-the-molecule-suite-per-working-tree`) would remove the
-hazard rather than document it; this entry is worth doing anyway and is much
-cheaper, and stays true until entry 8 lands.
-
 
 ---
 
