@@ -154,10 +154,11 @@ rather than a false negative:
   POST` to that step would classify a read-only step as one that opens a pull
   request.
 - `secrets_referenced_by` scans the whole job rather than the identity path. If
-  the `autoupdate` job ever gains an unrelated secret — plausible, given
-  change-queue entry 32's alerting proposal — the README tests would demand that
-  secret be documented in the same passage as the App credential, which could
-  only be satisfied by misdescribing it.
+  the `autoupdate` job ever gains an unrelated secret — no longer hypothetical:
+  `notice-when-a-periodic-job-stops-reporting` added `HEARTBEAT_PING_KEY` to
+  that workflow, in a job of its own — the README tests would demand that secret
+  be documented in the same passage as the App credential, which could only be
+  satisfied by misdescribing it.
 - `readme_sections` splits the README at any line beginning with `#`, including
   inside a fenced code block. Adding a shell snippet with a comment line to the
   section documenting the App would split that passage in two and fail two
