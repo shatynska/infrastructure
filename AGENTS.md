@@ -199,14 +199,19 @@ Collections are shared rather than namespaced, being read-only content pinned by
 `ansible/requirements.yml`. They must be named explicitly all the same, because
 relocating `ANSIBLE_HOME` relocates `$ANSIBLE_HOME/collections` with it. On a
 machine that has never installed them, the entry point says so and stops; the
-one-time install is `ansible-galaxy collection install community.docker
-ansible.posix`. Without that check the run fails deep inside `create` with
+one-time install is `ansible-galaxy collection install -r
+ansible/requirements.yml`, which is the manifest that pins them — naming the
+collections individually would both miss `community.general`, which `hardening`
+and `platform_data_volume` need at converge, and resolve floating versions this
+project's own pinning rule forbids. Without that check the run fails deep inside `create` with
 `couldn't resolve module/action 'community.docker.docker_login'`, which reads as
 a broken mechanism rather than an unprovisioned machine.
 
 **Bringing your namespace to the project's initial state**, which the rule above
-requires as much as taking one: `ansible/scripts/run-molecule destroy` removes
-this tree's containers, and its ephemeral directories are `.molecule-home/tmp/`
+requires as much as taking one: `ansible/scripts/run-molecule destroy --all`, run from each role
+directory, removes this tree's containers — `--all` for the same reason it is
+required above, since without it Molecule destroys only that role's `default`
+scenario and leaves every sibling up; and its ephemeral directories are `.molecule-home/tmp/`
 inside the tree — removable wholesale, since nothing outside the tree reads
 them. Molecule does not clear that directory itself, even after a run that
 exits 0, so a tree resumed after a crashed run starts from whatever the crash
@@ -235,7 +240,7 @@ This project has **three** test commands, and a change may owe tests under any o
 | Subject | Test command | Test-path glob |
 |---|---|---|
 | Terraform modules | `terraform test`, run from each module directory | `terraform/modules/<name>/tests/*.tftest.hcl` |
-| The behaviour of an Ansible role on a host — what it converges to, and how it fails | `molecule test --all`, run from each role directory | `ansible/roles/<name>/molecule/<scenario>/` |
+| The behaviour of an Ansible role on a host — what it converges to, and how it fails | `ansible/scripts/run-molecule test --all`, run from each role directory | `ansible/roles/<name>/molecule/<scenario>/` |
 | Any property that is a static read of a committed file — CI configuration such as workflows, `dependabot.yml` and `.pre-commit-config.yaml`; static properties of what CI runs, such as the image pins in `ansible/roles/*/molecule/*/molecule.yml`; and repository-wide conventions such as the citation form below | `python3 -m unittest discover --start-directory .github/tests`, run from the repository root | `.github/tests/*.py` |
 
 The `.github/tests` suite exists because `terraform test` can only exercise Terraform modules, so the guarantees this pipeline makes about its own configuration were unverifiable by anything the project had. Its dependencies are pinned in `.github/requirements-ci.txt`.
@@ -244,7 +249,7 @@ Its subject is deliberately wider than `.github/`, and wider than the pipeline: 
 
 The Molecule row and the `.github/tests` row are near-opposites and are easy to confuse. Molecule asserts what a role *does* — it needs a container runtime and converges a real host, so it is the only place a role's failure path can be observed. `.github/tests` asserts what a committed file *says*, statically, and may not spawn a container at all. A property of a `molecule.yml` — its image pin — is therefore asserted by `.github/tests`, while the behaviour that scenario exercises is asserted by Molecule. Its toolchain is pinned in `ansible/requirements-test.txt`, and CI runs it as `ansible-verify.yml`.
 
-Two things about `molecule test --all` that a verification claim depends on. It runs a role's scenarios in sorted order and **stops at the first failure**, so every scenario sorting after a failing one is silently not executed and not listed in the run's SCENARIO RECAP — read the recap and confirm it names every scenario the role has, rather than reading the exit code alone. While a role is red, run its scenarios individually with `-s <name>`. Molecule's own `--continue-on-failure` is not available here: it applies only with `--workers`, and `--workers > 1` requires collection mode (`galaxy.yml`), which these plain roles are not.
+Two things about `molecule test --all` that a verification claim depends on. It runs a role's scenarios in sorted order and **stops at the first failure**, so every scenario sorting after a failing one is silently not executed and not listed in the run's SCENARIO RECAP — read the recap and confirm it names every scenario the role has, rather than reading the exit code alone. While a role is red, run its scenarios individually with `ansible/scripts/run-molecule test -s <name>`. Molecule's own `--continue-on-failure` is not available here: it applies only with `--workers`, and `--workers > 1` requires collection mode (`galaxy.yml`), which these plain roles are not.
 
 **Molecule's state is shared across working trees, and two of its handles are stable per role.** The instance name is a literal in each scenario's `platforms[].name`, so two working trees running the same role create, converge and destroy *the same container*. The ephemeral directory is `$ANSIBLE_HOME/tmp/molecule.<id>.<scenario>` (`~/.ansible/tmp/` by default), and `<id>` is a checksum of the role directory's **basename** rather than of its path — so it is identical across working trees by construction, and relocating a working tree does not escape it. Molecule does not remove that directory when a run finishes, so inheriting one another tree left behind is the default rather than the exception, and `flock` does not help: serialising two runs in time does nothing about a run inheriting a directory left earlier.
 

@@ -39,14 +39,14 @@
 
 ## 6. Carry the pipeline with it
 
-- [ ] 6.1 Supply the namespace in `ansible-verify.yml` so continuous integration satisfies the sentinel like any other caller, and verify the Molecule matrix runs green on a pull request that touches `ansible/` — this change cannot land on a skipped matrix
-- [ ] 6.2 Verify the aggregating job still concludes on the matrix's behalf, and that no job gained a write scope or an `environment:`
+- [x] 6.1 Supply the namespace in `ansible-verify.yml` so continuous integration satisfies the sentinel like any other caller, and verify the Molecule matrix runs green on a pull request that touches `ansible/` — this change cannot land on a skipped matrix
+- [x] 6.2 Verify the aggregating job still concludes on the matrix's behalf, and that no job gained a write scope or an `environment:`
 
 ## 7. Record what this change moves
 
 - [x] 7.1 Record in `docs/deferred-work.md` the residues this design accepts rather than solves — the shared ephemeral write on a namespace-less run, that namespaces accumulate unreclaimed, that a working tree renamed after a run orphans its state, and the rejected stronger form that would make the entry point unavoidable — since `design.md` is archived with the change and would take them with it
 - [x] 7.2 Delete change-queue entry 8, and correct entry 11's account where it assumes the shared-state hazard is still open; verify no remaining entry or source comment cites entry 8 after its deletion
-- [x] 7.3 Record a change-queue entry for adopting a ShellCheck pre-commit hook, this change having added the repository's first script with no linter to check it; verify the entry states why it was not folded in here
+- [x] 7.3 Record a change-queue entry (46, renumbered from 43 when the trunk claimed that number mid-change) for adopting a ShellCheck pre-commit hook, this change having added the repository's first script with no linter to check it; verify the entry states why it was not folded in here
 - [ ] 7.4 Verify the full suite and `openspec validate --all` pass, then archive the record through its own pull request
 
 ## Not performed

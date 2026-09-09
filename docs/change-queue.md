@@ -22,8 +22,9 @@ of queued — they had branches and handoffs, not entries here:
 `decide-archived-change-reference-policy` — the citation form live source uses
 for this repository's own change records, and a check that enforces it.
 **Archived 2026-09-07** (PR #70). It delivered the former entries 1 and 2, which
-are gone with it, and unblocked entry 3; entries 8 and 8a below were opened by
-verifying it.
+are gone with it, and unblocked entry 3. It also opened entries 8 and 8a; 8 was
+delivered by `namespace-the-molecule-suite-per-working-tree` and is gone with
+it, and 8a remains below.
 
 Most entries below are queued because they are **blocked on something that must
 happen first**, and they are listed in dependency order. Where an entry is not
