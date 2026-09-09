@@ -8622,5 +8622,114 @@ class TestDockerLogBoundCannotBeUnset(unittest.TestCase):
             )
 
 
+# --------------------------------------------------------------------------
+# Molecule's shared state across working trees is stated in AGENTS.md.
+#
+# This is a static read of a committed file, so it belongs here (AGENTS.md,
+# "Testing"). It asserts only that the hazard is STATED -- nothing here can
+# establish that a session heeded it.
+#
+# It exists because the knowledge has already been lost once. It was recorded
+# in a `docs/change-queue.md` entry, that entry was deleted when its change
+# archived, as the queue's own rule requires, and two later sessions then spent
+# time rediscovering it. Moving the text into AGENTS.md is what makes it
+# durable against archiving; this assertion is what makes it durable against
+# an editorial pass, by turning its removal into a red required check rather
+# than a silent deletion no reviewer is guaranteed to notice.
+#
+# Matched on the hazard's own load-bearing words rather than on a heading, for
+# the reason the archived-record correction rule is matched that way: a
+# rephrasing SHOULD fail here. The wording is what a session reads before
+# trusting a Molecule result, so changing it is a reviewed event.
+#
+# Deliberately NOT asserted: the count of shared handles. The entry that
+# recorded this hazard named three, and the third -- `~/.cache/molecule/<role>`
+# -- proved not to be written by the pinned toolchain at all. A count is the
+# part of this knowledge most likely to go stale against a Molecule upgrade,
+# and a check pinning one would fail for a correct file.
+# --------------------------------------------------------------------------
+
+MOLECULE_SHARED_STATE_FRAGMENTS = (
+    "shared across working trees",
+    "the same container",
+    "basename",
+    "rc 137",
+    "can equally pass",
+)
+MOLECULE_SHARED_STATE_ANCHOR = "shared across working trees"
+MOLECULE_SHARED_STATE_LOCALITY = 2000
+
+
+class TestTheConventionsFileStatesTheMoleculeSharedStateHazard(unittest.TestCase):
+    """DERIVED -- this change declares no specification deltas. The rule it
+    guards is AGENTS.md's own Testing section, and what makes the guard worth
+    having is recorded in the block above."""
+
+    def setUp(self) -> None:
+        self.text = read_text(AGENTS_FILE)
+        self.flat = flattened(self.text)
+
+    def test_the_conventions_file_states_the_hazard(self) -> None:
+        missing = [
+            fragment for fragment in MOLECULE_SHARED_STATE_FRAGMENTS if fragment not in self.flat
+        ]
+        self.assertEqual(
+            [],
+            missing,
+            "AGENTS.md does not state the Molecule shared-state hazard in the words "
+            f"this assertion is written against: {missing} not found. The hazard is "
+            "that Molecule's instance name and ephemeral directory are shared across "
+            "working trees and stable per role, so two sessions running one role "
+            "drive the same container -- and that such a run can pass as readily as "
+            "it fails",
+        )
+
+    def test_the_hazard_names_what_a_colliding_run_looks_like(self) -> None:
+        """A statement of the hazard that does not say how it PRESENTS leaves a
+        session to read `rc 137` as a module bug, which is the misreading that
+        cost the two sessions their time. Asserted near the hazard rather than
+        anywhere in the file, so an unrelated mention cannot satisfy it."""
+        anchor = self.flat.find(MOLECULE_SHARED_STATE_ANCHOR)
+        self.assertNotEqual(
+            -1,
+            anchor,
+            f"AGENTS.md does not state {MOLECULE_SHARED_STATE_ANCHOR!r}, so there is "
+            "no statement of the hazard for this assertion to read",
+        )
+        neighbourhood = self.flat[anchor : anchor + MOLECULE_SHARED_STATE_LOCALITY]
+        for fragment in ("rc 137", "can equally pass"):
+            self.assertIn(
+                fragment,
+                neighbourhood,
+                f"the Molecule shared-state hazard is stated without {fragment!r} "
+                "near it, so a session meeting a collision has nothing to recognise "
+                "it by",
+            )
+
+    def test_the_hazard_is_stated_outside_the_generated_block(self) -> None:
+        """The workflow block at the top of AGENTS.md is generated and replaced
+        on update, so a statement inside it is one the next regeneration
+        deletes -- the same disappearance this whole entry exists to prevent,
+        reached by a different route."""
+        end = self.text.find(MANAGED_BLOCK_END)
+        self.assertNotEqual(
+            -1,
+            end,
+            f"AGENTS.md carries no {MANAGED_BLOCK_END!r} marker, so this assertion "
+            "cannot tell the generated block from the project's own conventions",
+        )
+        below = flattened(self.text[end + len(MANAGED_BLOCK_END) :])
+        missing = [
+            fragment for fragment in MOLECULE_SHARED_STATE_FRAGMENTS if fragment not in below
+        ]
+        self.assertEqual(
+            [],
+            missing,
+            "the Molecule shared-state hazard is not stated below the generated "
+            "workflow block, so it sits where the next regeneration replaces it: "
+            f"{missing} not found there",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
