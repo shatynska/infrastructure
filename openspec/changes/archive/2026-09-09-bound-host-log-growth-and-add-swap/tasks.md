@@ -286,10 +286,10 @@ the implementation, per this project's workflow.
   citations are subject to its citation-form check.
 - [x] 3.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
   tree where 3.1–3.3 already pass.
-- [ ] 3.5 Ship by merging. Nothing here reaches prod on merge:
+- [x] 3.5 Ship by merging. Nothing here reaches prod on merge:
   `host-baseline.yml` is hand-applied (queue entry 23), and merging is what
   makes the tree correct, not what applies it.
-- [ ] 3.6 **Capture the running application set, then apply to prod** by hand at
+- [x] 3.6 **Capture the running application set, then apply to prod** by hand at
   a chosen moment. `docker ps` **before** converging — that list is the baseline
   task 3.7 compares against, and it cannot be reconstructed afterwards.
 
@@ -303,7 +303,7 @@ the implementation, per this project's workflow.
   window (`openspec/specs/iac-platform-services/spec.md`), so a single
   simultaneous restart is not expected to fire it — an alert that does arrive is
   the converge, not an incident.
-- [ ] 3.7 **Confirm what the converge established.** First, compare `docker ps`
+- [x] 3.7 **Confirm what the converge established.** First, compare `docker ps`
   against 3.6's baseline: the set of running applications must be exactly the
   set from before, and anything missing must be named rather than noticed later.
   This is the delta's "Restarting the runtime to adopt configuration adds no
@@ -335,7 +335,7 @@ the implementation, per this project's workflow.
   confirm it still shows the empty map the delta says it will. Do not wait for a
   platform deploy to supply the subject, and do not tick this on the daemon
   configuration alone.
-- [ ] 3.8 **Exercise the boot-time records, and record that this is what was
+- [x] 3.8 **Exercise the boot-time records, and record that this is what was
   done.** `swapoff -a && swapon -a` returns swap from `/etc/fstab`;
   `sysctl --system` re-applies the tendency from `/etc/sysctl.d/`. Both are the
   code paths boot uses, and they catch the two ways this half realistically
@@ -353,10 +353,10 @@ the implementation, per this project's workflow.
   survives a reboot" scenario directly; offer it to the operator as an optional
   step in the same window, and if it is declined, record in the change's own
   artifacts that the scenario rests on the records rather than on a boot.
-- [ ] 3.9 **Re-run the playbook.** The `swap` role must report no change and the
+- [x] 3.9 **Re-run the playbook.** The `swap` role must report no change and the
   daemon must not restart a second time. This is where the active-swap reformat
   guard is observed, since Molecule cannot reach it (2.7): a role that
   reformatted here would report changed.
-- [ ] 3.10 Archive: bring the branch back to the freshly fetched trunk, commit
+- [x] 3.10 Archive: bring the branch back to the freshly fetched trunk, commit
   the specification record, and delete entries 21 and 22 from
   `docs/change-queue.md` in that same pull request.
