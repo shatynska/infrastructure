@@ -268,10 +268,6 @@ commands apply; the Terraform row does not.
   role.
 - [x] 6.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 6.2 and 6.3
   pass.
-- [ ] 6.5 Confirm tasks 1.1 and 1.2 are done before the pull request merges, then
-  open it, let CI run, and wait for the operator's confirmation that it merged and
-  that the deploy is healthy. Nothing here applies to production from a local
-  machine.
 - [x] 6.5a The host half does not reach the host by merging. No workflow converges
   `ansible/` — that is queue entry 23, which is not this change — so after the merge
   the operator runs `ansible-playbook playbooks/host-baseline.yml` against prod, as
@@ -304,16 +300,20 @@ than as tasks that could never be ticked.
 
 ## Not performed
 
-- 6.5's pre-merge ordering: "Confirm tasks 1.1 and 1.2 are done before the pull
-  request merges". Pull request #116 merged on 2026-09-09 with neither done.
-  Reason: the pull request stated both as blockers in its own body and the
-  operator merged before setting them, which was their call to make; the
-  prerequisites were then supplied within the hour — the repository secret at
-  12:09 UTC and the Vault variable by pull request #117 at 16:45 UTC — and no
-  scheduled run fell due in between, so no reporter ever ran without its
-  credential. The remainder of 6.5 was performed: the pull request was opened,
-  continuous integration ran, and the merge was confirmed by the operator rather
-  than inferred.
+- 6.5 Confirm tasks 1.1 and 1.2 are done before the pull request merges, then
+  open it, let CI run, and wait for the operator's confirmation that it merged
+  and that the deploy is healthy. Nothing here applies to production from a
+  local machine.
+  Reason: only the pre-merge ordering went unperformed, and it is the whole of
+  what this task added over 6.5a — pull request #116 stated both prerequisites
+  as blockers in its own body and merged on 2026-09-09 with neither done, which
+  was the operator's call to make. They were supplied within the hours after:
+  the repository secret at 12:09 UTC and the Vault variable by pull request #117
+  at 16:45 UTC. No scheduled run fell due in between, so no reporter ever ran
+  without its credential, and the first run after the secret existed reported
+  successfully. The rest of the task was performed: the pull request was opened,
+  continuous integration ran and passed, and the merge was confirmed by the
+  operator rather than inferred from a green check.
 
 ## Confirmation
 
