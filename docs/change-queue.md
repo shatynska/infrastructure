@@ -11,11 +11,13 @@ Three of the audit's findings were ready to act on and were **opened** instead
 of queued — they had branches and handoffs, not entries here:
 
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift.
-  **Archived 2026-09-07** (PR #66). Entries 3a, 3b, 3c and 3d below were opened
-  by it.
+  **Archived 2026-09-07** (PR #66). It opened entries 3a, 3b, 3c and 3d. Only
+  3b remains below: the other three were declined on their merits on
+  2026-09-09 and are now in `docs/deferred-work.md`.
 - `refresh-readme-accuracy` — README statements that are no longer true.
   **Archived 2026-09-08** (PR #76). It delivered the former entry 9, which is
-  gone with it; entries 13 and 14 below were recorded by it.
+  gone with it, and recorded entries 13 and 14 — both likewise declined on
+  2026-09-09 and moved to `docs/deferred-work.md`.
 
 `decide-archived-change-reference-policy` — the citation form live source uses
 for this repository's own change records, and a check that enforces it.
@@ -64,36 +66,6 @@ by `fix-volume-discovery-and-consistency`, which was editing that file anyway):
 The tailscale role is 48 comment lines against 90 non-blank; this is a style
 question with a real maintenance cost, not a cosmetic one.
 
-## 3a. decide-multiple-volume-selection-policy
-
-**Not blocked on anything; recorded rather than folded in, because it is a
-policy decision about the host rather than a defect.**
-
-`fix-volume-discovery-and-consistency` made `platform_data_volume`'s device
-discovery deterministic: where more than one `/dev/disk/by-id/scsi-0HC_Volume_*`
-device is attached, it now sorts and takes the first instead of taking whatever
-`find` returned first. That closes the nondeterminism, and a PAIR of Molecule scenarios holds it
-closed: `multiple-devices-discoverable` and `multiple-devices-reverse-order`, one per
-directory-read arrangement. Either alone is weaker than it looks — the first
-catches a role selecting `files[0]`, the second one selecting `files | last`.
-
-What it does **not** decide is whether a deterministic pick is the right
-behaviour at all. The alternative — fail when discovery matches more than one
-device, on the grounds that an ambiguous pick is worse than a refusal — was
-considered in that change's `design.md` Decision 2 and rejected *for that
-change*, not on the merits: the role does not own what else may be attached to
-the host, and a second Hetzner Volume mounted for a reason unrelated to
-`platform/` would then break `host-baseline.yml` for every host.
-
-Deciding it needs an answer to a question that is the operator's: is a second
-attached volume something this project ever expects, and if so, should the role
-be told which one is `main-data` rather than inferring it? Note that being told
-is close to the `linux_device` hand-copying that `add-platform-monitoring`
-already considered and rejected, so this is not a free choice either.
-
-Today the question is academic — prod has one volume attached — which is why it
-is queued rather than opened.
-
 ## 3b. report-an-absent-tailscale-auth-key
 
 **Not blocked on another change; recorded because doing it well is a larger
@@ -129,50 +101,6 @@ Three things make this its own change rather than a fold-in:
 
 Recorded by `fix-volume-discovery-and-consistency`, whose `design.md`
 Decision 3a carries the full reasoning.
-
-## 3c. decide-whether-required-input-checks-belong-to-the-play
-
-**Not blocked; recorded because it is a question about the playbook, not a
-defect in either role.**
-
-`fix-volume-discovery-and-consistency` gave `hardening` and `deploy_user` an
-assertion that fires before either role changes the host, satisfying
-`iac-host-configuration`'s *A Role's Absent Required Input Is Reported by Name*
-at **role** scope, which is the scope its Molecule scenarios verify.
-
-At **play** scope the guarantee is weaker, and the change's artifacts do not say
-so. `ansible/playbooks/host-baseline.yml` runs `docker`, `hardening`,
-`tailscale`, `deploy_user`, `ops_user`, `platform_data_volume` in that order.
-Against a host whose `group_vars` omits `deploy_apps`, a real run installs and
-starts Docker, runs the whole of `hardening` including `Enable UFW`, and joins
-the host to the tailnet before `deploy_user`'s assertion is reached. The
-requirement's wording — "before any task that acts on the host has changed it" —
-reads naturally as the play, and at that scope it is not met.
-
-The fix is not more per-role assertions: it is a `pre_tasks` block on the play,
-or a validation role placed first, checking every required input of every role
-the play is about to run. That is a different shape of change from the one
-`fix-volume-discovery-and-consistency` proposed, which is why it is here.
-
-Worth deciding explicitly rather than leaving the two readings ambiguous.
-
-## 3d. assert-the-shape-of-required-input-elements
-
-**Not blocked; small, and deliberately outside the requirement as written.**
-
-The assertions `fix-volume-discovery-and-consistency` added check the
-*container* — defined, a sequence, not a string, not a mapping — and nothing
-about the elements. So `deploy_apps: ["platform"]`, a list of strings rather
-than of `{name, public_key}` mappings, passes the assertion and then fails at
-`item.name` in `Render each application's sudoers.d NOPASSWD rule for
-app-deploy`, after the deploy group, the account and its `.ssh` directory
-already exist — the partial application the assertion exists to prevent.
-
-The requirement is scoped to an input that "was not supplied", and a
-wrongly-shaped one was supplied, so this sits just outside it rather than being
-a gap in it. Closing it means either widening the requirement to cover element
-shape or adding the check as a local nicety; that choice is the reason this is
-recorded rather than done.
 
 ## 11. matrix-the-molecule-suite-over-scenarios
 
@@ -305,73 +233,6 @@ meant to prevent. The monitoring stack now collects exactly the data needed —
 `container_memory_usage_bytes` by container, already on the "Container health"
 dashboard. Let it run long enough to show real steady-state and peak, then size
 from observation.
-
-## 13. assert-the-readme-agrees-with-the-tree
-
-**Not blocked; recorded rather than folded into `refresh-readme-accuracy`,
-which is the change that found it.** That change corrected eleven statements in
-`README.md` that had gone stale. Two of them are static reads of committed
-files, and nothing noticed either for weeks:
-
-- the region, which the README stated as `fsn1` while
-  `terraform/environments/prod/terraform.tfvars` said `hel1` — a reader
-  trusting it would look in the wrong Hetzner location;
-- the Molecule scenario count, stated as eight against twelve in the tree.
-
-Both are inside what `.github/tests` can assert — a static read of two
-committed files, no network, no credential, no container runtime — and this
-repository already enforces a documentation convention that way. The
-citation-form check exists because "no author or reviewer can catch a
-violation: the citation is correct when written, correct when reviewed, and
-wrong only once the change it cites has succeeded". A README fact that
-duplicates another file's value is the same shape.
-
-It was not folded in for two reasons, and the first is the binding one.
-**It needs a requirement.** This repository does not enforce a convention it
-has not recorded, and `refresh-readme-accuracy` declares no specification
-delta — adding one would have made a documentation truth pass into a change
-owing derived tests, with a different set of gates.
-
-**Its scope is a real question, not a detail.** The region pair is one
-assertion and the scenario count another, both cheap. Whether the CI/CD
-section's workflow list should also be checked against `ls .github/workflows/`
-is the interesting case, and it has a cost: the section would then have to be
-edited in the same commit as any new workflow, or the build goes red. Deciding
-that inside a documentation fix would have decided it badly. The same question
-applies to the Repository layout section, which that change made checkable by
-`git ls-files | grep / | sed 's|/.*||' | sort -u` without asserting it.
-
-Note that `refresh-readme-accuracy` reduced the surface deliberately: where the
-useful content was a count or a list of examples, it replaced the answer with
-the command that produces it. What remains to assert is the handful of facts
-that are genuinely duplicated rather than derived.
-
-## 14. The specification says `terraform.tfvars` holds labels; it does not
-
-**Not a change to open — a correction to batch into whatever change next
-touches `iac-repo-foundations`.** Recorded so the divergence is tracked rather
-than silent.
-
-*Version Control Excludes State and Secrets*
-(`openspec/specs/iac-repo-foundations/spec.md`) describes
-`terraform/environments/<env>/terraform.tfvars` as holding "server type,
-region, image, labels, allowed CIDRs". The file holds no labels; the only
-`labels` block under `terraform/environments/prod/` is in `ssh_key.tf`.
-`refresh-readme-accuracy` corrected the README's copy of that list and left
-this one, because correcting a requirement means a `MODIFIED` delta.
-
-The parenthetical is illustrative rather than an inventory — the requirement's
-normative content is that the file is committed and non-secret, and labels
-genuinely are non-secret environment configuration, simply set on the resource
-— in the module, or in `ssh_key.tf` — rather than passed through this file. So
-the two are in factual, not normative, disagreement.
-
-The reason not to take the delta then, rather than merely the cost: a
-`MODIFIED` delta owes derived tests, and the test it would owe is "the
-requirement's parenthetical agrees with `terraform.tfvars`" — precisely the
-cross-file assertion entry 13 defers as needing its own requirement and its own
-scope decision. Taking it would have settled that queued question in passing,
-by implication.
 
 ## 15. alert when the host prune stops working
 
@@ -525,21 +386,59 @@ Molecule scenario.
 ## 27. check-public-endpoints-from-outside
 
 **Not blocked; recorded because the monitoring stack watches the host and not
-the customer's path to it.**
+the customer's path to it. Narrowed on 2026-09-09 by
+`alert-on-certificate-expiry`, which delivered the certificate-expiry half.**
 
 The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves
 the exporters are. `ApplicationHighErrorRate` needs requests to reach Traefik
 before it can count them. Nothing checks, from outside the host, that a public
-hostname resolves, answers on 443, and presents a certificate that is not about
-to expire -- so a DNS mistake, a Traefik ACME failure, or a cloud-firewall
-change that blocks 443 is invisible until a person notices.
+hostname resolves and answers on 443.
 
-Two shapes: an external uptime service (the dead-man's-switch provider likely
-offers one) with a check per hostname, or `blackbox-exporter` in the platform
-stack probing each hostname and alerting on `probe_success` and
-`probe_ssl_earliest_cert_expiry`. The second stays in the stack and is
-disk-free; the first is independent of the host, which is the property the
-Watchdog was chosen for. Both is not excessive.
+**What was delivered and is no longer in scope here.** A certificate quietly
+ageing out was the third of the three failures this entry named, and it turned
+out to need no probe at all: Traefik publishes `traefik_tls_certs_not_after`,
+Prometheus was already scraping it, and one alert rule now reads it. What
+survives of that failure is only the half no metric can express -- a hostname
+resolving to this host with **no** certificate at all, which produces no series
+because Traefik's default self-signed certificate is not published as one.
+`shatynska.com` and `www.shatynska.com` are in exactly that state today, by
+design, because no application is bound to them yet.
+
+**`blackbox-exporter` cannot serve this entry's own motive**, which is the
+finding that most changes what remains. It runs on the host, and a packet
+addressed to an IP configured on a local interface is delivered locally -- so a
+probe from the host to the host's own public address never traverses the Hetzner
+cloud firewall, which filters ingress at the network edge. The cheaper of the
+two shapes this entry offered cannot see the firewall failure it was offered
+for. It would still catch a routing mistake and would measure what a client is
+actually served rather than what Traefik believes it holds; neither is the same
+thing as looking from outside.
+
+**The two failures that remain, stated more accurately than this entry stated
+them.**
+
+*A cloud-firewall change blocking 443* is gated in one of at least three ways it
+can close, not in all of them. `web_allowed_cidrs` reaches production only
+through the gated pipeline, where a human reviews the exact plan -- but
+`AGENTS.md`'s firewall split makes UFW the co-equal host-level layer, entry 23
+records that the playbook applying it is run by hand with no gate at all, and
+entry 32 records that a console-side change is caught only by a drift workflow
+that itself fails into silence. An outside check is the only thing that would
+see the other two.
+
+*A DNS mistake* is not bounded by how often the zone is hand-edited.
+`docs/deferred-work.md` records that `shatynska.com` is served by third-party
+nameservers at ukraine.com.ua, so a provider outage or a lapsed registration is
+a DNS failure with no edit behind it -- and it is exactly the "invisible until a
+person notices" class this entry was recorded for.
+
+**So what is left is an external uptime service**, with a check per hostname,
+independent of the host in the way the Watchdog is. Note that the assumption
+this entry made about it is probably false: the heartbeat provider named in
+`docs/bootstrap-a-new-host.md` is healthchecks.io, which monitors inbound pings
+and does not make outbound HTTP checks. This is likely a second vendor account
+and therefore an operator decision with a cost attached, which is the main
+reason it is still queued rather than opened.
 
 ## 28. aggregate-container-logs
 
@@ -958,7 +857,99 @@ Worth writing into `AGENTS.md`'s derive-tests paragraph rather than leaving it
 as a queue entry, since the next change hits it the same way and the cost is
 invisible until review.
 
-## 43. lint-the-repository's-shell-scripts
+## 43. remove-the-stale-test-hostname
+
+**Not blocked; small, and recorded rather than folded into
+`alert-on-certificate-expiry`, which found it while reading Traefik's
+certificate metrics on 2026-09-09.**
+
+`test.shatynska.com` was a throwaway smoke test. The archived change
+`fix-traefik-docker-api-version` used a `whoami` container behind that hostname
+in August 2026 to confirm Traefik's Docker provider had stopped erroring, and
+its `tasks.md` records the confirmation. The container is long gone -- the name
+returns Traefik's 404 -- but two things it left behind are still live:
+
+- the `A` record, `2.29.14.98`, which resolves today and was missing from the
+  zone table in `docs/deferred-work.md` until that table was corrected;
+- a Let's Encrypt certificate, which Traefik still holds and **still renews
+  every 60 days**, and which appears in `traefik_tls_certs_not_after` alongside
+  the real one.
+
+Nothing is broken by it. It is a standing request to a public certificate
+authority for a name nothing serves, and a second series in a metric that now
+drives an alert -- so if that renewal ever fails, the alert correctly reports a
+hostname nobody wants, at which point the operator has to remember what `test`
+was before deciding it does not matter.
+
+**Order matters when removing it.** Take the DNS record away first, then the
+certificate from Traefik's `acme.json`. The reverse leaves a name resolving to
+the host whose certificate has already gone, which is a worse state than the one
+being cleaned up. There is no router to remove -- the container that had one is
+already gone -- so this is a DNS edit plus an `acme.json` edit, and the second
+requires deciding whether editing that file by hand is acceptable at all or
+whether the entry is better closed by leaving the certificate to lapse once the
+record is gone.
+
+## 44. name-every-alert-in-a-grouped-slack-notification
+
+**Not blocked; recorded rather than folded into
+`alert-on-certificate-expiry`, which routed around it for its own alert and
+found the general case in doing so.**
+
+Alertmanager's `slack` receiver renders `{{ .CommonAnnotations.summary }}` and
+`{{ .CommonAnnotations.description }}`. `CommonAnnotations` holds only the
+annotation pairs **identical across every alert in the notification's group** --
+so any alert whose annotations name a per-series label delivers an empty title
+and an empty body the moment two of them group together.
+
+`ApplicationHighErrorRate` is in exactly that state and has been since it was
+written: its summary names the router, `group_by` is `["alertname"]`, and two
+routers erroring at once -- which a shared Traefik makes correlated rather than
+independent -- produce a Slack message that says nothing. Nobody has seen it
+because the alert has not fired on two routers yet.
+
+`alert-on-certificate-expiry` fixed this for its own alert by adding `cn` to
+`group_by` on that alert's own route, which is correct and minimal for one
+alert. It does not generalise: every future alert naming a per-series label
+needs the same treatment, and forgetting is silent.
+
+The general fix is in the receiver, not in a route: render `{{ range .Alerts }}`
+so a grouped notification lists each alert's own annotations. That changes
+delivery for **every** alert in the stack, including ones nobody has re-read,
+which is why it is a change of its own rather than a fold-in. Worth pairing with
+an assertion that no alert's annotations reference a label absent from its
+route's `group_by`, which is a static read of the committed file and would catch
+the next instance instead of waiting for it to fire.
+
+## 45. hold-the-whole-static-suite-to-its-own-constraints
+
+**Not blocked; small, and recorded by `alert-on-certificate-expiry`, which is
+the change that made it untrue.**
+
+`AGENTS.md` says of the `.github/tests` suite that it may not make a network
+call, use a credential, spawn a container runtime or need a Terraform binary,
+and that "those constraints are themselves asserted by tests in that suite".
+They are: three assertions in `TestTheSuiteNeedsNoPrivilegedResource` and its
+neighbours parse the suite and check its imports and subprocess use.
+
+What they parse is `SUITE_PATH`, which is `Path(__file__)` -- that one module.
+While `test_ci_configuration.py` was the whole suite that was the same thing.
+`alert-on-certificate-expiry` added `test_certificate_expiry_alerting.py` as a
+second module, and the new file sits outside all three checks. It was held to
+them by hand, which is exactly the assurance those assertions exist to replace.
+
+The fix is to widen the three from their own file to every `test_*.py` in the
+suite directory. The alternative -- keeping the suite to one file so the
+self-check stays honest -- is worse: it is already 8,600 lines, and it would
+make "add a test" mean "edit the file the derive-tests step forbids an
+independent author from touching".
+
+Note this is the second entry recorded from the same edge: entry 42 is about
+derived tests arriving as a new file and being folded, and this one is about
+what happens when they are not folded. Whichever way that question is settled,
+both should be settled with it.
+
+## 46. lint-the-repository's-shell-scripts
 
 **Not blocked; recorded rather than folded into
 `namespace-the-molecule-suite-per-working-tree`**, which added the script that
