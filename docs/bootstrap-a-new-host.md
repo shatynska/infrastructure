@@ -265,7 +265,7 @@ This stage is run from your workstation. It installs Docker, the host firewall a
 
 ### 6.1 Fill in the inventory variables
 
-Edit `ansible/inventory/group_vars/prod.yml`. Every value except one is non-secret and committed.
+Edit `ansible/inventory/group_vars/prod.yml`. Every value except the last two is non-secret and committed; those two are Vault-encrypted in place.
 
 | Variable | Set to |
 |---|---|
@@ -276,6 +276,7 @@ Edit `ansible/inventory/group_vars/prod.yml`. Every value except one is non-secr
 | `platform_data_volume_subdirs` | Leave as is |
 | `ghcr_pull_username` | The GitHub username whose token is below. For an organisation, a dedicated machine user with read access to the application repositories is cleaner than a person's account. |
 | `ghcr_pull_token` | Vault-encrypted, see below |
+| `image_prune_heartbeat_ping_key` | Vault-encrypted, see below. **The play refuses to run without it**, so set it now rather than at stage 7 |
 
 **The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`).
 
@@ -287,6 +288,15 @@ ansible-vault encrypt_string --vault-id prod@prompt '<ghp_... token>' --name ghc
 ```
 
 Paste the output block into `group_vars/prod.yml` in place of the existing `ghcr_pull_token` value. The encrypted block is safe to commit; the Vault password is not written anywhere in the repository.
+
+**The heartbeat ping key.** The `image_prune` role installs a weekly unit that reports each activation to an external observer, and it **asserts this input before any role in the play changes the host** — so an absent key aborts `host-baseline.yml` rather than installing a scheduled unit nothing watches. Create the project ping key at the heartbeat service now (it is the same value as the `HEARTBEAT_PING_KEY` repository secret in stage 7.3, and Appendix A carries the checks it addresses), then encrypt it the same way:
+
+```sh
+cd ansible
+ansible-vault encrypt_string --vault-id prod@prompt '<ping key>' --name image_prune_heartbeat_ping_key
+```
+
+The key must be a bare token of letters, digits, `_` and `-`; the role refuses anything else by name, because the value is rendered into a shell file its reporting script sources and a quote in it would make that script fail silently.
 
 ### 6.2 Check the inventory resolves
 
@@ -347,7 +357,7 @@ Traefik, PostgreSQL and monitoring, deployed by `platform-deploy.yml` on a merge
 
 **Heartbeat.** At healthchecks.io (or an equivalent), create a check named `<company>-prod alertmanager`. Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one. Copy the ping URL. Configure where that service should alert you when pings stop, ideally somewhere other than the same Slack workspace: this is the alarm for when everything else is down.
 
-**Periodic-job heartbeats.** In the same project, create a **project ping key** (Settings → Ping key) and keep it: it is the `HEARTBEAT_PING_KEY` repository secret in stage 7.4, and the Vault variable `image_prune_heartbeat_ping_key` in stage 6. It addresses one check per periodic job, listed with its period and grace in Appendix A. The jobs create their checks on first ping (`?create=1`), so nothing needs creating by hand here — but an auto-created check carries the vendor's **default** period, so set each one to the value Appendix A gives once it appears, or a weekly job will alarm daily. Route these checks to Slack `#alerts`, **not** to the destination the `alertmanager` check above alerts to: that one is the alarm for when everything is down and a weekly CI failure must not erode it.
+**Periodic-job heartbeats.** In the same project, create a **project ping key** (Settings → Ping key) and keep it: it is the `HEARTBEAT_PING_KEY` **repository** secret in stage 7.3, and the Vault variable `image_prune_heartbeat_ping_key` in stage 6.1 — which is earlier than this stage, so on a first bootstrap create the key here before working 6.1, or the host play will refuse to run. It addresses one check per periodic job, listed with its period and grace in Appendix A. The jobs create their checks on first ping (`?create=1`), so nothing needs creating by hand here — but an auto-created check carries the vendor's **default** period, so set each one to the value Appendix A gives once it appears, or a weekly job will alarm daily. Route these checks to Slack `#alerts`, **not** to the destination the `alertmanager` check above alerts to: that one is the alarm for when everything is down and a weekly CI failure must not erode it.
 
 ### 7.2 Generate the platform's own passwords
 
@@ -370,6 +380,14 @@ All in the `production` Environment of the infrastructure repository.
 | `PLATFORM_DEADMANSWITCH_URL` | The heartbeat ping URL |
 
 Together with `PLATFORM_DEPLOY_SSH_KEY`, `PLATFORM_DEPLOY_HOST`, `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` from earlier stages, that is the complete set `platform-deploy.yml` reads. If any is missing the deploy job fails at the step that needs it, before touching the server.
+
+One more secret belongs to this stage and is **not** in the table above, because it must not be scoped the way those are:
+
+| Name | Where | Value from |
+|---|---|---|
+| `HEARTBEAT_PING_KEY` | **Repository** secret — Settings → Secrets and variables → Actions, *not* the `production` Environment | The project ping key from 7.1, the same value stage 6.1 put into Ansible Vault |
+
+Scoping it to the `production` Environment would break it: a job reading an Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The scheduled workflows read it with no `environment:` declared, and they turn red naming it if it is absent.
 
 ### 7.4 Deploy
 
@@ -526,4 +544,4 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 
 Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/change-queue.md`. The first two findings there — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The ones still to do before real data arrives: log rotation (21), swap and container limits (22, 7). The ones a company needs that this repository does not: a private repository in the company organisation, an approver who is not the author, and DNS as code (26).
 
-**Heartbeat checks are per repository and per host, not per project.** The workflow slugs carry this repository's name (`infrastructure-`) and the host slug is templated from `inventory_hostname`, so a second repository and a second host each get checks of their own — a shared check would let one reporter's success keep it green while the other's job was dead, which is the exact silence this mechanism exists to end. The free tier's 20 checks are the ceiling on how far that scales; count them before adding a third host.
+**Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-server` — the name this repository's own tfvars uses — would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.

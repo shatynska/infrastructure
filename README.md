@@ -227,8 +227,11 @@ matching `*.secret.tfvars` or `secrets.auto.tfvars` are gitignored and must
 never be committed.
 
 Repository secrets in GitHub hold `HCLOUD_TOKEN`, `TF_API_TOKEN` (see CI/CD
-below for the privilege split on those) and `APP_CLIENT_ID` /
-`APP_PRIVATE_KEY`. This is not the full list of secrets the workflows read: the
+below for the privilege split on those), `APP_CLIENT_ID` / `APP_PRIVATE_KEY`,
+and `HEARTBEAT_PING_KEY` — the last of those deliberately repository-scoped
+rather than an Environment secret, because the scheduled workflows report their
+own liveness with it and a job reading an Environment secret would wait on
+required-reviewer approval. This is not the full list of secrets the workflows read: the
 `PLATFORM_*` and `TAILSCALE_OAUTH_*` values, and the read-write overrides of
 `HCLOUD_TOKEN` and `TF_API_TOKEN`, are consumed only by jobs declaring
 `environment: production` and are Environment secrets rather than repository
@@ -354,8 +357,9 @@ those emits no failure for anything else to notice.
 `ansible/inventory/group_vars/prod.yml`, and the checks' routing at the
 observer. Until then the reporters fail loudly rather than quietly — a
 scheduled run turns red naming the missing secret, and a host converge refuses
-— but nothing is being watched. The Status section below says where that
-stands.
+— but nothing is being watched. `docs/bootstrap-a-new-host.md` stage 6.1, stage
+7.1 and stage 7.3 are where those three are set, and its Appendix A carries the
+period and grace each check needs.
 
 The three checks, the slug each reports under, and the period and grace that
 decide when silence becomes an alarm are listed once, in

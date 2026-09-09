@@ -286,7 +286,18 @@
         done
         echo "JOURNAL-LINES $(grep -c . /var/tmp/image-prune-undeliverable.journal || true)"
         echo "JOURNAL-NAMES-ENDPOINT $(grep -c '{{ image_prune_expected_slug }}' /var/tmp/image-prune-undeliverable.journal || true)"
-        echo "JOURNAL-NAMES-CURL $(grep -ci curl /var/tmp/image-prune-undeliverable.journal || true)"
+        # `curl: ` with its colon, not the bare word. The reporting script
+        # writes "curl status N" to stderr itself, so grepping the bare word
+        # would be satisfied by the script talking ABOUT curl rather than by
+        # the --show-error diagnostic reaching the journal, which is what this
+        # reads. Only curl writes the colon form.
+        #
+        # Two characters are deliberately absent from this whole block, in the
+        # comments as well as the code: an apostrophe and an unbalanced
+        # parenthesis. Either one trips the argument splitter in Ansible
+        # before the shell ever sees this, and the error it raises names the
+        # first line of the block rather than the offending one.
+        echo "JOURNAL-NAMES-CURL $(grep -c 'curl: ' /var/tmp/image-prune-undeliverable.journal || true)"
       args:
         executable: /bin/bash
       register: image_prune_undeliverable_run

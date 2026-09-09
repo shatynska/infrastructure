@@ -40,14 +40,23 @@
       - image_prune_heartbeat_ping_key is defined
       - image_prune_heartbeat_ping_key is string
       - image_prune_heartbeat_ping_key | length > 0
+      # The shape limb is not fussiness. The key is rendered into a shell
+      # file the reporting script sources: a value carrying a quote or a
+      # newline makes that file invalid shell, `set -eu` aborts the script,
+      # and the `-` prefix on ExecStopPost= swallows the abort -- leaving a
+      # GREEN unit that reports nothing, forever, whose only symptom is the
+      # silence alarm days later. That is this change's own subject
+      # reproduced inside it, so the value is refused here by name instead.
+      - image_prune_heartbeat_ping_key is match('^[A-Za-z0-9_-]+$')
     fail_msg: >-
-      image_prune_heartbeat_ping_key was not supplied. This role has no default
-      for it: it is the project ping key the scheduled unit reports its own
-      liveness under, and without it the unit would run with nothing noticing
-      when it fails, is killed, or stops being scheduled. Set it
-      Vault-encrypted in ansible/inventory/group_vars/prod.yml; a Molecule
-      scenario supplies a fixture value alongside
-      image_prune_heartbeat_base_url pointed at a local sink.
+      image_prune_heartbeat_ping_key was not supplied, or is not a bare token
+      of letters, digits, `_` and `-`. This role has no default for it: it is
+      the project ping key the scheduled unit reports its own liveness under,
+      and without it the unit would run with nothing noticing when it fails,
+      is killed, or stops being scheduled. Set it Vault-encrypted in
+      ansible/inventory/group_vars/prod.yml; a Molecule scenario supplies a
+      fixture value alongside image_prune_heartbeat_base_url pointed at a
+      local sink.
     quiet: true
 
 - name: Create the directory holding the application enumeration
@@ -484,9 +493,9 @@
       # ExecStopPost= -- so this line is the ONLY local trace that anything
       # went wrong, and an operator answering the resulting silence days later
       # has nothing else to read.
-      printf 'prune-host-images: reporting %s to %s failed with curl status %s, so that check will fall silent and alarm (systemd result %s)\n' \
+      printf 'prune-host-images: reporting %s to %s failed with curl status %s, so that check falls silent and alarms (systemd result %s, exit %s)\n' \
         "${slug}" "${HEARTBEAT_BASE_URL}" "${rc}" \
-        "${SERVICE_RESULT:-unknown}" >&2
+        "${SERVICE_RESULT:-unknown}" "${EXIT_STATUS:-unknown}" >&2
       exit 0
 
 - name: Install the prune service unit
