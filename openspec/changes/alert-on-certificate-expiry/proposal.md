@@ -99,7 +99,7 @@ second case, and the derived tests assert the scrape job that feeds both. The
 `cn!=""` matcher is what makes that rule cover a renamed label as well as a
 renamed metric, which matters because the main rule aggregates on `cn`.
 
-Four pieces of bookkeeping travel with it, because each is a fact this change
+Five pieces of bookkeeping travel with it, because each is a fact this change
 established and none belongs inside the change record, which is archived:
 
 - `docs/change-queue.md` entry 27 is rewritten: the certificate clause is
@@ -119,6 +119,12 @@ established and none belongs inside the change record, which is archived:
   the same blank-notification problem this change fixes for itself, and that
   fixing it properly means changing the shared Slack receiver — which alters
   delivery for every alert in the stack and so belongs in its own change.
+- A new `docs/change-queue.md` entry records that the `.github/tests` suite's
+  own no-network, no-credential, no-container-runtime self-checks parse only the
+  module they live in — which stopped being the whole suite when this change's
+  derived tests arrived as a second file. `AGENTS.md` is hedged at the line that
+  asserted the enforcement, because that file's own testing section says a rule
+  reading as enforced when it is not is worse than one reading as a convention.
 
 ## Capabilities
 

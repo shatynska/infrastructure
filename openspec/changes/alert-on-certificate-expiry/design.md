@@ -235,6 +235,19 @@ matches `cn!=""` and so fires on exactly this condition. Named here rather than
 left implicit because a false negative in an expiry alert is the failure this
 change exists to prevent.
 
+**`cn` can also be lost piecemeal, and that defeats the alert differently.** →
+If one certificate loses the label while others keep it, `absent(…{cn!=""})`
+stays silent, and the affected series still aggregates — under an empty `cn`,
+delivering "TLS certificate for  expires soon", which names nothing and so fails
+the requirement's identification clause while appearing to work. The realistic
+mechanism is a certificate authority dropping the Subject CN at renewal, which
+touches only the renewed certificate and is therefore exactly this shape rather
+than the wholesale one above. The companion rule carries a second clause,
+`count(traefik_tls_certs_not_after{cn=""}) > 0`, for it. The cost is that the
+rule no longer means one thing: it means "expiry is not observable" *or* "is not
+attributable", and its summary says so. That is the right trade — a rule with
+two clauses beats an alert that fires and names nothing.
+
 **Threshold and cadence are judgment calls made against one observed
 certificate.** → Both are single numbers in a committed file, changed by one
 line and a redeploy. The requirement fixes neither, and the only bound the tests

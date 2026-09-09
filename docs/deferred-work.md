@@ -246,7 +246,7 @@ the nameservers, not adding a provider. Read on 2026-09-08:
 | `shatynska.com` A | `2.29.14.98` — the prod host |
 | `www` A | `2.29.14.98` |
 | `fuperia` A | `2.29.14.98` — the name commerce-ops routes, and what Traefik holds a certificate for |
-| `test` A | `2.29.14.98` — **added 2026-09-09**; see below |
+| `test` A | `2.29.14.98` — **row added 2026-09-09**, record itself predates this table; see below |
 | `shatynska.com` MX | `mx.ukraine.com.ua` |
 | `shatynska.com` TXT | `v=spf1 include:_spf.ukraine.com.ua ~all` |
 

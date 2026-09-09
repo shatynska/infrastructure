@@ -441,27 +441,42 @@ configs:
                 severity: warning
               annotations:
                 summary: "TLS certificate for {{ $$labels.cn }} expires soon"
-                description: "{{ $$labels.cn }} has under 21 days of certificate left, so Traefik's renewal at 30 days did not succeed."
+                # $$value is the days remaining, not the threshold. The route
+                # below re-notifies daily for up to three weeks, and a literal
+                # "under 21 days" would make every one of those messages
+                # byte-identical -- a countdown that never counts.
+                description: "{{ $$labels.cn }} has {{ $$value | printf \"%.1f\" }} days of certificate left, so Traefik's renewal at 30 days did not succeed."
 
             # alert-on-certificate-expiry: the rule above returns an empty
             # vector if its series stop existing, and an empty vector never
-            # fires and never complains. MetricsTargetDown covers Traefik
-            # becoming unreachable; this covers Traefik staying up while a
-            # version bump renames or drops the metric -- which Dependabot's
-            # platform-monitoring-images group proposes on a schedule.
+            # fires and never complains. This covers that. It fires on
+            # unreachability too, after staleness plus its own `for`, so
+            # MetricsTargetDown will already have fired -- two notifications
+            # for one fault, which is duplication rather than a division of
+            # labour. What it adds is the case MetricsTargetDown CANNOT see:
+            # Traefik up, scrape job intact, and the metric renamed or dropped
+            # by a version bump -- which Dependabot's platform-monitoring-images
+            # group proposes on a schedule.
             #
-            # Matched on cn!="" rather than on the bare metric name so it
-            # also covers the label being renamed, which would otherwise
-            # collapse the aggregation above into one group with an empty
-            # cn and mask an expiring certificate behind a healthy one.
+            # Two clauses, because `cn` can be lost wholesale or piecemeal and
+            # the alert above is defeated either way. `absent(...{cn!=""})`
+            # catches every series losing the label at once. The count catches
+            # ONE losing it: that series still aggregates, under an empty `cn`,
+            # and would deliver "TLS certificate for  expires soon" naming
+            # nothing -- so the count fires while the metric is otherwise
+            # healthy. A certificate authority dropping the Subject CN at
+            # renewal touches only the renewed certificate, which is exactly
+            # that shape.
             - alert: CertificateExpiryNotObserved
-              expr: absent(traefik_tls_certs_not_after{cn!=""})
+              expr: >-
+                absent(traefik_tls_certs_not_after{cn!=""})
+                or count(traefik_tls_certs_not_after{cn=""}) > 0
               for: 15m
               labels:
                 severity: warning
               annotations:
-                summary: "No TLS certificate expiry is being observed"
-                description: "Traefik is publishing no certificate expiry carrying a cn label, so TLSCertificateExpiringSoon is watching nothing."
+                summary: "TLS certificate expiry is not fully observable"
+                description: "Traefik is publishing no certificate expiry carrying a cn label, or at least one certificate has lost it, so TLSCertificateExpiringSoon is watching nothing or cannot name what it watches."
 
             - alert: Watchdog
               expr: vector(1)

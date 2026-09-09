@@ -53,7 +53,7 @@ asserting, how each is expressed, and where in the suite they belong.
 - [x] 5.1 Run `python3 -m unittest discover --start-directory .github/tests` from the repository root and confirm every assertion from section 2 passes.
 - [x] 5.2 Run `pre-commit run --all-files` and confirm it is clean, or that every remaining finding predates this change and is named.
 - [x] 5.3 Run `openspec validate --strict alert-on-certificate-expiry` and confirm it passes.
-- [ ] 5.4 Dispatch the change's code review over the diff and record the verdict; fix and re-review until it clears.
+- [x] 5.4 Dispatch the change's code review over the diff and record the verdict; fix and re-review until it clears.
 
 ## 6. Ship
 
