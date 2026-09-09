@@ -82,5 +82,19 @@
     # Arrangement 1: the enumeration is present on the host and names no
     # application.
     deploy_apps: []
+    # THE REPORTER IS POINTED AT A LOCAL SINK THAT DOES NOT EXIST, and that is
+    # deliberate. This scenario asserts abandon paths, so its activations
+    # report failures; left on the production default they would create a
+    # check at the external observer from a hosted runner on every pull
+    # request touching ansible/, under `?create=1`. An unreachable local
+    # address makes the reporting a no-op the `-` prefix on ExecStopPost=
+    # swallows, which is exactly the behaviour this scenario's own assertions
+    # need it to have. `.github/tests/test_ci_configuration.py` asserts this
+    # variable over every scenario of a timer-installing role.
+    image_prune_heartbeat_base_url: http://127.0.0.1:8099
+    # NOT A CREDENTIAL: names no real project and grants access to nothing.
+    # Required because the role refuses to converge without it, which is the
+    # point of `absent-heartbeat-key` and not of this scenario.
+    image_prune_heartbeat_ping_key: fixture-key-not-a-real-ping-key
   roles:
     - role: image_prune

@@ -2620,7 +2620,24 @@ class TestDashboardBaseUrlIsNotALiteralAddress(unittest.TestCase):
 REQUIRED_INPUT_ASSERTIONS = {
     "ansible/roles/hardening/tasks/main.yml": "hardening_ssh_allowed_cidrs",
     "ansible/roles/deploy_user/tasks/main.yml": "deploy_apps",
+    "ansible/roles/image_prune/tasks/main.yml": "deploy_apps",
 }
+
+# The same obligation over an input that is a STRING rather than a list, which
+# is why it needs limbs of its own: `is sequence` accepts a string and `is not
+# mapping` says nothing useful about one, so the list-shaped set above would
+# pass on a value this role cannot use. `image_prune_heartbeat_ping_key` is the
+# address the scheduled unit reports its own liveness under, and a converge
+# that installed the timer while silently omitting the reporting would leave a
+# scheduled unit running unobserved -- the state "Scheduled Host Units Report
+# Their Own Liveness" (openspec/specs/iac-host-configuration/spec.md) exists to
+# end. An EMPTY key is the case the length limb is for: it is supplied, so `is
+# defined` passes, and it builds a URL addressing no check at all.
+REQUIRED_STRING_INPUT_ASSERTIONS = {
+    "ansible/roles/image_prune/tasks/main.yml": "image_prune_heartbeat_ping_key",
+}
+
+REQUIRED_STRING_INPUT_LIMBS = ("is defined", "is string", "| length > 0")
 
 # Every limb the assertion needs, and why each is load-bearing. `is defined`
 # alone leaves the undefined case; `is sequence` alone accepts a string, which
@@ -2715,6 +2732,79 @@ class TestRequiredRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
                     defaults,
                     f"{defaults_path} now defines {variable}; the assertion in {path} "
                     f"would pass on the default rather than on a supplied value",
+                )
+
+
+class TestRequiredStringRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
+    """ADDED requirement: A Role's Absent Required Input Is Reported by Name,
+    reached through Scheduled Host Units Report Their Own Liveness.
+
+    Written by the implementer rather than by the test author of the change
+    `notice-when-a-periodic-job-stops-reporting`: covering the new input meant
+    editing an existing test's data, which that change's test-plan.md records
+    as outside a test author's remit. Its tasks.md 3.2 assigns it here for the
+    same reason.
+    """
+
+    def _asserted_variables(self, relative_path):
+        """Every variable named in an assert that runs before any task acts on
+        the host -- the leading run of assertions, and nothing after it."""
+        parsed = yaml.safe_load((ROOT / relative_path).read_text(encoding="utf-8"))
+        self.assertIsInstance(
+            parsed, list, f"{relative_path} did not parse as a task list"
+        )
+        clauses = []
+        for task in parsed:
+            if not isinstance(task, dict) or "ansible.builtin.assert" not in task:
+                break
+            clauses.extend(task["ansible.builtin.assert"].get("that") or [])
+        return clauses
+
+    def test_the_assertion_runs_before_any_task_acts_on_the_host(self) -> None:
+        """SPECIFIED -- the assertion "SHALL fail naming it, before it changes
+        anything on the host". A check placed after the first host-changing
+        task leaves a partially configured host behind."""
+        for path, variable in REQUIRED_STRING_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                clauses = self._asserted_variables(path)
+                self.assertTrue(
+                    any(variable in clause for clause in clauses),
+                    f"{path} does not assert {variable} in its leading run of "
+                    "assertions, so either it is not checked at all or a task has "
+                    "already changed the host by the time it is",
+                )
+
+    def test_the_assertion_carries_every_limb(self) -> None:
+        """SPECIFIED -- the absence must be reported by name "rather than with
+        an undefined-variable, index, or type error raised by a task that
+        consumed it". An empty string is the case the length limb carries: it
+        is supplied, so `is defined` passes, and it addresses no check."""
+        for path, variable in REQUIRED_STRING_INPUT_ASSERTIONS.items():
+            clauses = " ".join(self._asserted_variables(path))
+            for limb in REQUIRED_STRING_INPUT_LIMBS:
+                with self.subTest(role=path, limb=limb):
+                    self.assertIn(
+                        f"{variable} {limb}",
+                        clauses,
+                        f"{path}'s assertion is missing `{variable} {limb}`",
+                    )
+
+    def test_no_default_was_introduced_for_the_asserted_variable(self) -> None:
+        """SPECIFIED -- a required input "SHALL NOT satisfy this obligation by
+        adopting a default value". Here that would be worse than a wrong
+        answer: a defaulted key addresses a check nobody watches, so the unit
+        reports into nothing while every assertion passes."""
+        for path, variable in REQUIRED_STRING_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                defaults_path = Path(path).parent.parent / "defaults" / "main.yml"
+                defaults = yaml.safe_load(
+                    (ROOT / defaults_path).read_text(encoding="utf-8")
+                ) or {}
+                self.assertNotIn(
+                    variable,
+                    defaults,
+                    f"{defaults_path} now defines {variable}; the role would converge "
+                    "on the default and report to a check nobody is watching",
                 )
 
 
@@ -9863,6 +9953,1692 @@ class TestTheBindingCheckIsARealReadOfTheFile(unittest.TestCase):
             entry_points_named_by_the_binding(self.conventions(self.BOUND), root),
         )
 
+# iac-cicd-pipeline / Scheduled Workflows Report Their Own Liveness
+# iac-host-configuration / Scheduled Host Units Report Their Own Liveness
+#
+# Derived from the delta specs of the OpenSpec change
+# `notice-when-a-periodic-job-stops-reporting`, before any implementation of
+# that change existed and without reading any implementation of it -- none
+# exists. See that change's test-plan.md for the scenario-to-test mapping, the
+# recorded baseline, every assertion's SPECIFIED/DERIVED classification, and
+# the delta scenarios deliberately left uncovered.
+#
+# WHY THESE PROPERTIES ARE HERE AND NOT IN MOLECULE. Every one below is a
+# static read of a committed file: a workflow's `on:` block and its jobs, a
+# role's inline unit and reporting script, a Molecule scenario's own
+# variables. None needs a network call, a credential, a container runtime or a
+# Terraform binary, and none adds an import. THE REPORTERS' URLS ARE ASSERTED
+# AS TEXT AND ARE NEVER REQUESTED -- that change's tasks.md 4.11 requires
+# exactly that, and `TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource`
+# at the end of this section holds it for `.github/tests/` as a whole rather
+# than for this one module, which is all the pre-existing audit above covers.
+#
+# WHAT NONE OF IT ESTABLISHES, stated because a static read of a reporter is
+# easy to mistake for evidence that reporting works: that the ping key exists,
+# that the check exists at the observer, that its period and grace are right,
+# or that any alert reaches anybody. Both deltas put the alarm in the
+# observer's SILENCE, and no assertion in this repository can observe a third
+# party's timeout. That is the change's own confirm gate's business, and its
+# test-plan.md records the scenarios resting on it as uncovered rather than
+# approximating them here.
+# --------------------------------------------------------------------------
+
+
+# This repository's own name, per design Decision 4's derivation table. A slug
+# is a pure function of the reporter's own filename, so the test below derives
+# what it expects rather than consulting a second list that can drift from the
+# first: DISTINCTNESS ALONE WOULD PASS `drift.yml` CARRYING THE AUTOUPDATE
+# SLUG, leaving two checks silently swapped and both green.
+LIVENESS_SLUG_PREFIX = "infrastructure-"
+
+# The observer's production base URL (design Decision 12). Named here so a
+# Molecule scenario left pointing at it can be identified; nothing in this
+# suite requests it.
+PRODUCTION_HEARTBEAT_BASE_URL = "https://hc-ping.com"
+
+# What makes a job a liveness reporter, read from what the job says it is.
+# Matched against the job's CODE with whole-line shell comments dropped, so
+# the comment tasks.md 2.3 requires beside each reporting step cannot by
+# itself make a job look like a reporter.
+LIVENESS_HINT = re.compile(r"hc-ping|healthcheck|heartbeat|liveness|ping[_-]?key", re.I)
+
+# Secrets on the `production` Environment carry this prefix in this
+# repository (`PLATFORM_SLACK_WEBHOOK_URL`, `PLATFORM_DEADMANSWITCH_URL`). A
+# job reading one must declare that Environment, and such a job waits on
+# required-reviewer approval -- design Decision 6: an alarm that waits for a
+# human to approve its own delivery is not an alarm.
+ENVIRONMENT_SECRET_PREFIX = "PLATFORM_"
+
+# `${{ ... }}` carries spaces, which would truncate a URL token at the first
+# one. Collapsed to a space-free placeholder before any URL is read, so that
+# `.../${{ secrets.HEARTBEAT_PING_KEY }}/slug?create=1` reads as one URL.
+GITHUB_EXPRESSION = re.compile(r"\$\{\{[^}]*\}\}")
+
+URL_TOKEN = re.compile(r"https?://[^\s\"'`\\<>]+")
+
+# A quoted or bare argument, quotes kept, so that `"$BASE/$KEY"` stays one
+# token and is read as carrying an expansion.
+SHELL_ARGUMENT = re.compile(r"""'[^']*'|"[^"]*"|\S+""")
+
+CURL_INVOCATION = re.compile(r"(?<![\w.-])curl\b")
+CURL_COMMAND = re.compile(r"curl\b")
+
+# An endpoint a shell script builds: rooted at a literal scheme or at a
+# variable holding the base, and carrying at least one path segment.
+SHELL_ENDPOINT = re.compile(
+    r"""(?:https?://|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)[^\s"'`;|)]*"""
+)
+
+# Variable names that carry a check's address or its credential.
+HEARTBEAT_VARIABLE = re.compile(r"PING|KEY|SLUG|HEARTBEAT|CHECK|HC_", re.I)
+
+# Endpoints the observer defines beyond the plain success ping. Stripped when
+# reading a slug out of a URL, so `/<slug>/fail` and `/<slug>` are read as
+# addressing the same check.
+PING_SUFFIXES = ("fail", "start", "log")
+
+COPY_ACTIONS = ("ansible.builtin.copy", "copy", "ansible.builtin.template", "template")
+
+ROLES_DIR = ROOT / "ansible" / "roles"
+
+
+def without_shell_comments(text: str) -> str:
+    """Drop whole-line shell comments, so a comment naming a URL is not read
+    as the script requesting one. Mirrors `uncommented()` for YAML; an inline
+    trailing comment is deliberately left in place, because splitting on `#`
+    would cut a URL fragment and a quoted string."""
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def with_expressions_collapsed(text: str) -> str:
+    return GITHUB_EXPRESSION.sub("$EXPR", text)
+
+
+def step_code(step: dict) -> str:
+    """Everything a step contributes EXCEPT its shell comments."""
+    parts = [str(step.get(key, "")) for key in ("name", "uses", "id", "if")]
+    for block in ("with", "env"):
+        value = step.get(block)
+        if value:
+            parts.append(yaml.safe_dump(value, default_flow_style=False))
+    parts.append(without_shell_comments(str(step.get("run", ""))))
+    return "\n".join(parts)
+
+
+def job_code(job: dict) -> str:
+    parts = [str(job.get(key, "")) for key in ("name", "if", "environment")]
+    if job.get("env"):
+        parts.append(yaml.safe_dump(job["env"], default_flow_style=False))
+    parts.extend(step_code(step) for step in (job.get("steps") or []))
+    return "\n".join(parts)
+
+
+def scheduled_workflows() -> list:
+    """Every committed workflow whose triggers include `schedule`.
+
+    The set is DISCOVERED, never enumerated: the requirement is over "every
+    workflow in this repository triggered by `schedule:`", and a workflow
+    added later has to be covered without a test edit.
+    """
+    found = []
+    for path in workflow_files():
+        workflow = load_yaml(path)
+        if isinstance(workflow, dict) and "schedule" in triggers(workflow):
+            found.append((path, workflow))
+    return found
+
+
+def expected_workflow_slug(path: Path) -> str:
+    return LIVENESS_SLUG_PREFIX + path.stem
+
+
+def liveness_reporting_jobs(workflow: dict) -> list:
+    return [
+        (key, job)
+        for key, job in jobs(workflow).items()
+        if LIVENESS_HINT.search(job_code(job))
+    ]
+
+
+def ping_urls(text: str) -> list:
+    """Every URL a reporter's code carries, other than GitHub's own."""
+    found = []
+    for token in URL_TOKEN.findall(with_expressions_collapsed(text)):
+        token = token.rstrip("\\\"'`,;)")
+        if "github.com" in token:
+            continue
+        found.append(token)
+    return found
+
+
+def endpoint_slug(url: str):
+    """The check identifier a ping URL addresses, or None if it addresses no
+    path at all. `/fail`, `/start` and `/log` are the observer's endpoints on
+    a check rather than identifiers of their own."""
+    path = url.split("?", 1)[0].split("#", 1)[0]
+    segments = [segment for segment in path.split("/")[3:] if segment]
+    while segments and segments[-1] in PING_SUFFIXES:
+        segments.pop()
+    return segments[-1] if segments else None
+
+
+def role_task_list(role: str) -> list:
+    path = ROLES_DIR / role / "tasks" / "main.yml"
+    if not path.is_file():
+        return []
+    parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return parsed if isinstance(parsed, list) else []
+
+
+def inline_files_installed_by(role: str) -> dict:
+    """Every file a role writes with an inline body, keyed by destination.
+
+    THIS REPOSITORY WRITES ITS UNITS AND SCRIPTS INLINE IN `tasks/main.yml`
+    via `copy:`/`content:`, not under `templates/` -- design.md's Risks
+    section names that as the shakier half of this change's coverage and says
+    the read will need revisiting if a role ever templates its units instead.
+    Recorded here, in the discovery itself, so the next reader meets the
+    assumption where it is made rather than in a test that mysteriously finds
+    nothing. `template:` is included among the actions read so that an inline
+    `content:` under it is not dropped; what WOULD be dropped is a unit moved
+    into a separate file under `templates/`, which is why every assertion
+    quantified over this discovery is guarded by a test that fails when the
+    discovery finds nothing.
+    """
+    installed = {}
+    for task in role_task_list(role):
+        if not isinstance(task, dict):
+            continue
+        for action in COPY_ACTIONS:
+            spec = task.get(action)
+            if not isinstance(spec, dict):
+                continue
+            if spec.get("dest") is None or spec.get("content") is None:
+                continue
+            installed[str(spec["dest"])] = {
+                "content": str(spec["content"]),
+                "mode": str(spec.get("mode", "")),
+                "owner": str(spec.get("owner", "")),
+                "task": str(task.get("name", "")),
+                "role": role,
+            }
+    return installed
+
+
+def role_texts(role: str) -> dict:
+    """Every committed text a role carries that could hold a script: the
+    inline bodies above, plus anything under `files/` and `templates/`."""
+    texts = {
+        dest: spec["content"] for dest, spec in inline_files_installed_by(role).items()
+    }
+    for sub in ("files", "templates"):
+        directory = ROLES_DIR / role / sub
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*")):
+            if path.is_file():
+                texts[str(path.relative_to(ROOT))] = path.read_text(
+                    encoding="utf-8", errors="replace"
+                )
+    return texts
+
+
+def timer_installing_roles() -> dict:
+    """Role -> its `.timer` units. The scope of the host delta is units THIS
+    REPOSITORY DEFINES, not every timer on the host: a package this repository
+    installs may ship timers of its own -- unattended security updates do --
+    and those are the packager's to define, report and bound."""
+    found = {}
+    for role in sorted(role_names()):
+        units = {
+            dest: spec
+            for dest, spec in inline_files_installed_by(role).items()
+            if dest.endswith(".timer")
+        }
+        if units:
+            found[role] = units
+    return found
+
+
+def unit_stem(dest: str) -> str:
+    return Path(dest).stem
+
+
+def reporting_scripts(role: str) -> dict:
+    """Every committed text in a role that invokes `curl` -- the reporting
+    script, and nothing else this repository's roles carry."""
+    return {
+        label: text
+        for label, text in role_texts(role).items()
+        if CURL_INVOCATION.search(without_shell_comments(text))
+    }
+
+
+def curl_invocations(text: str) -> list:
+    """Each `curl` command line in a script, continuations joined and comment
+    lines dropped.
+
+    Each line is split at its command separators and a segment is read as an
+    invocation only where `curl` stands in COMMAND POSITION -- after the
+    leading `then`/`else`/`do`, a `!`, or an environment assignment. Matching
+    the word anywhere on the line instead reads
+    `printf "reported %s (curl status %s)" ...` as a second invocation with
+    the message as its arguments, and the reporting script tasks.md 3.3
+    prescribes writes exactly that line to stderr.
+    """
+    joined = re.sub(r"\\\n\s*", " ", without_shell_comments(text))
+    found = []
+    for line in joined.splitlines():
+        for segment in re.split(r"\|\||\||&&|;", line):
+            stripped = re.sub(
+                r"^(?:!\s*|then\s+|else\s+|do\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+",
+                "",
+                segment.strip(),
+            )
+            if CURL_COMMAND.match(stripped):
+                found.append(stripped)
+    return found
+
+
+def curl_arguments(invocation: str) -> list:
+    return SHELL_ARGUMENT.findall(invocation)[1:]
+
+
+# Curl options that consume the token after them. A value-taking option
+# MISSING from this set turns its value into a spurious operand and fails a
+# conforming script; a boolean wrongly IN it lets an operand after that
+# boolean escape. The set is therefore generous, and the name and literal
+# tests below are what carry the detection -- this positional rule is the
+# belt, not the braces.
+CURL_VALUE_OPTIONS = frozenset(
+    {
+        "--config", "-K",
+        "--max-time", "-m",
+        "--connect-timeout",
+        "--retry", "--retry-delay", "--retry-max-time",
+        "--data", "-d", "--data-raw", "--data-binary", "--data-urlencode",
+        "--header", "-H",
+        "--user-agent", "-A",
+        "--output", "-o",
+        "--write-out", "-w",
+        "--request", "-X",
+        "--url",
+        "--proto", "--interface",
+    }
+)
+
+# Options whose value IS an address: naming one puts the address on the
+# command line however the value is spelled.
+CURL_ADDRESS_OPTIONS = frozenset({"--url"})
+
+NAMED_EXPANSION = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+COMMAND_SUBSTITUTION = re.compile(r"\$\(|`")
+
+# Variable names that may hold a check's address or its credential. Matched
+# against the NAME, because a variable's value is not readable from here.
+ADDRESS_OR_CREDENTIAL = re.compile(
+    r"PING|KEY|SLUG|HEARTBEAT|CHECK|HC_|URL|ENDPOINT|TOKEN|SECRET", re.I
+)
+
+
+def curl_arguments_carrying_an_address(invocation: str) -> list:
+    """Arguments on a `curl` command line that carry, or may expand to, the
+    ping URL or the ping key.
+
+    Three rules, because forbidding a literal alone is not enough --
+    `curl "$PING_URL"` contains no literal and puts the key in
+    `/proc/<pid>/cmdline` exactly as design Decision 9 forbids:
+
+      1. any argument containing `://`, or a command substitution;
+      2. any argument expanding a variable whose NAME could hold the address
+         or the credential (a variable's value is not readable from here, so
+         the name is what there is to read);
+      3. any OPERAND -- an argument in neither flag nor flag-value position --
+         because curl's operands are URLs, and so is the value of `--url`.
+
+    What this deliberately does NOT forbid: an expansion whose name is
+    unrelated to the address, in the value of a flag. Decision 9 carries
+    `$EXIT_STATUS` through as diagnostic text in the ping body, and a rule
+    refusing every expansion would fail the very script tasks.md 3.3
+    prescribes.
+
+    The residual hole, stated rather than papered over: `curl --silent "$X"`,
+    where `X` was assigned the URL earlier under a name matching nothing in
+    rule 2, is read as `--silent`'s value and passes. Closing it needs the
+    script's dataflow rather than its text.
+    """
+    arguments = curl_arguments(invocation)
+    offending = []
+    awaiting_value_for = None
+    for argument in arguments:
+        if awaiting_value_for is not None:
+            role, flag = "value", awaiting_value_for
+            awaiting_value_for = None
+        elif argument.startswith("-") and argument != "-":
+            role, flag = "flag", None
+            if argument in CURL_VALUE_OPTIONS:
+                awaiting_value_for = argument
+        else:
+            role, flag = "operand", None
+
+        if "://" in argument or COMMAND_SUBSTITUTION.search(argument):
+            offending.append(argument)
+            continue
+        names = NAMED_EXPANSION.findall(argument)
+        if any(ADDRESS_OR_CREDENTIAL.search(name) for name in names):
+            offending.append(argument)
+            continue
+        if role == "operand":
+            offending.append(argument)
+            continue
+        if role == "value" and flag in CURL_ADDRESS_OPTIONS:
+            offending.append(argument)
+    return offending
+
+
+def shell_endpoints(text: str) -> list:
+    """Ping endpoints a shell script builds, literal or variable-rooted."""
+    found = []
+    for candidate in SHELL_ENDPOINT.findall(without_shell_comments(text)):
+        candidate = candidate.rstrip("\\\"'`,;)")
+        if candidate.count("/") < 2:
+            continue
+        if (
+            "create=" in candidate
+            or "/fail" in candidate
+            or "hc-ping" in candidate
+            or HEARTBEAT_VARIABLE.search(candidate)
+        ):
+            found.append(candidate)
+    return found
+
+
+def scenario_directories(role: str) -> list:
+    molecule = ROLES_DIR / role / "molecule"
+    if not molecule.is_dir():
+        return []
+    return sorted(
+        path
+        for path in molecule.iterdir()
+        if path.is_dir() and (path / "converge.yml").is_file()
+    )
+
+
+def _flatten_task(task):
+    """A task, and every task nested inside its block/rescue/always."""
+    if not isinstance(task, dict):
+        return
+    yield task
+    for key in ("block", "rescue", "always"):
+        for inner in task.get(key) or []:
+            yield from _flatten_task(inner)
+
+
+def _tasks_in(play: dict):
+    for key in ("pre_tasks", "tasks", "post_tasks", "handlers"):
+        for task in play.get(key) or []:
+            yield from _flatten_task(task)
+
+
+def scenario_role_invocations(scenario: Path, role: str) -> list:
+    """(playbook, variables in force) at every point a scenario converges the
+    role -- in ANY of its playbooks, not only `converge.yml`.
+
+    `notice-when-a-periodic-job-stops-reporting`'s tasks.md 4.8b named
+    `converge.yml`, and reading only that file was not enough: this role's
+    `default` and `abandon-paths` scenarios ALSO converge it from their
+    `verify.yml`, through `include_role` with task-level `vars:`, to arrange
+    a retired application and a never-deployed one. Those re-converges are
+    converges -- they need the role's required inputs, and left on the
+    production base URL they would ping the external observer from a hosted
+    runner exactly as a converge would. The narrower read was widened here
+    after both scenarios failed on it; the finding is recorded in that
+    change's test-plan.md.
+    """
+    found = []
+    for path in sorted(scenario.glob("*.yml")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for play in document if isinstance(document, list) else []:
+            if not isinstance(play, dict):
+                continue
+            play_vars = play.get("vars") if isinstance(play.get("vars"), dict) else {}
+            for entry in play.get("roles") or []:
+                named = entry if isinstance(entry, str) else None
+                if isinstance(entry, dict):
+                    named = entry.get("role") or entry.get("name")
+                if named != role:
+                    continue
+                supplied = dict(play_vars)
+                if isinstance(entry, dict) and isinstance(entry.get("vars"), dict):
+                    supplied.update(entry["vars"])
+                found.append((path.name, supplied))
+            for task in _tasks_in(play):
+                spec = task.get("ansible.builtin.include_role") or task.get(
+                    "include_role"
+                )
+                if not isinstance(spec, dict) or spec.get("name") != role:
+                    continue
+                supplied = dict(play_vars)
+                if isinstance(task.get("vars"), dict):
+                    supplied.update(task["vars"])
+                found.append((path.name, supplied))
+    return found
+
+
+def scenario_expects_a_refusal(scenario: Path) -> bool:
+    """Whether a scenario converges the role EXPECTING it to fail.
+
+    Read from the structure `hardening/molecule/absent-ssh-cidrs` established
+    -- a `rescue:` recording the failure the unsupplied input produced -- and
+    not from the scenario's name. Such a scenario is the host delta's "An
+    absent report address is reported by name", and obliging it to supply the
+    address would delete the scenario it exists to be. Its base-URL obligation
+    is NOT waived: see `TestNoTimerRoleScenarioReachesTheExternalObserver`.
+    """
+    return "rescue:" in (scenario / "converge.yml").read_text(encoding="utf-8")
+
+
+class TestEveryScheduledWorkflowReportsItsOwnLiveness(unittest.TestCase):
+    """ADDED requirement: Scheduled Workflows Report Their Own Liveness."""
+
+    def setUp(self) -> None:
+        self.scheduled = scheduled_workflows()
+
+    def _reporters(self) -> list:
+        """(path, workflow, job key, job) for each scheduled workflow's
+        reporting job, failing rather than returning nothing."""
+        self.test_the_repository_carries_at_least_one_scheduled_workflow()
+        found = []
+        for path, workflow in self.scheduled:
+            reporters = liveness_reporting_jobs(workflow)
+            self.assertTrue(
+                reporters,
+                f"{path.name} is schedule-triggered and carries no liveness report; "
+                "see the test that states this obligation on its own",
+            )
+            for key, job in reporters:
+                found.append((path, workflow, key, job))
+        return found
+
+    def test_the_repository_carries_at_least_one_scheduled_workflow(self) -> None:
+        """DERIVED (tasks.md 4.2, 4.7) -- every assertion in this class is
+        universally quantified over what discovery finds, and a discovery that
+        finds nothing would leave each of them quantified over an empty set
+        and green. *Ansible Configuration Is Verified in Continuous
+        Integration and Gates the Merge*
+        (openspec/specs/iac-cicd-pipeline/spec.md) already requires exactly
+        this of Molecule role discovery and is the precedent.
+        """
+        self.assertTrue(
+            self.scheduled,
+            "no workflow under .github/workflows/ declares a `schedule:` trigger, so "
+            "every assertion about scheduled workflows below would pass having read "
+            "nothing -- this repository has two, so a discovery finding none is a "
+            "defect in the discovery, not a change in the repository",
+        )
+
+    def test_every_scheduled_workflow_carries_a_liveness_report(self) -> None:
+        """SPECIFIED -- "Every workflow in this repository triggered by
+        `schedule:` SHALL report the outcome of each scheduled run to an
+        external observer", and scenario "A scheduled workflow added without a
+        report fails the pull request": the required status check SHALL fail.
+        This assertion IS that check; that it gates the pull request is held by
+        `TestTheSuiteIsWiredIntoTheRequiredCheck` above.
+        """
+        self.test_the_repository_carries_at_least_one_scheduled_workflow()
+        without = [
+            path.name
+            for path, workflow in self.scheduled
+            if not liveness_reporting_jobs(workflow)
+        ]
+        self.assertEqual(
+            [],
+            without,
+            f"these schedule-triggered workflows carry no liveness report: {without}. "
+            "A run of one that fails, is killed, or never happens at all is visible "
+            "to nothing -- and GitHub disables a scheduled workflow after 60 days of "
+            "repository inactivity, which emits no failure and no run",
+        )
+
+    def test_every_reporter_addresses_the_slug_derived_from_its_own_filename(self) -> None:
+        """SPECIFIED -- "SHALL address its own report by an identifier that is
+        a literal in the workflow file, distinct per workflow". The particular
+        derivation (`infrastructure-` + the file's stem) is DERIVED, from
+        design Decision 4 and tasks.md 4.2, and is what catches the failure
+        distinctness alone does not: `drift.yml` carrying the autoupdate slug,
+        so that two checks silently swap meaning while both stay green.
+        """
+        for path, _, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                expected = expected_workflow_slug(path)
+                urls = ping_urls(job_code(job))
+                self.assertTrue(
+                    urls,
+                    f"{path.name}'s reporting job {key!r} carries no ping URL at all, "
+                    "so nothing in the committed file says which check it addresses",
+                )
+                addressed = sorted(
+                    {slug for slug in (endpoint_slug(url) for url in urls) if slug}
+                )
+                self.assertEqual(
+                    [expected],
+                    addressed,
+                    f"{path.name}'s reporting job {key!r} addresses {addressed} rather "
+                    f"than exactly {[expected]}. The slug is a pure function of the "
+                    "workflow's own filename, so that no second list can drift from "
+                    "the first",
+                )
+
+    def test_the_reporting_job_depends_on_every_other_job_in_its_workflow(self) -> None:
+        """SPECIFIED -- "The report SHALL be emitted from a job that runs
+        whatever the outcome of the rest of the workflow, and that depends on
+        every other job in it", and scenario "A failure in an early job is
+        still reported"."""
+        for path, workflow, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                declared = job.get("needs") or []
+                if isinstance(declared, str):
+                    declared = [declared]
+                missing = sorted(set(jobs(workflow)) - {key} - set(declared))
+                self.assertEqual(
+                    [],
+                    missing,
+                    f"{path.name}'s reporting job {key!r} does not depend on {missing}. "
+                    "A job it does not need can fail without the report saying so, and "
+                    "the failure would then be caught only by the observer's silence "
+                    "timeout -- slower than the signal that was available at the time",
+                )
+
+    def test_the_reporting_job_runs_whatever_the_outcome(self) -> None:
+        """SPECIFIED -- scenario "A scheduled run that fails is reported as a
+        failure": it SHALL report that failure "without waiting for the
+        observer's silence timeout to expire", which requires the job to run
+        at all after a failed one."""
+        for path, _, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                condition = str(job.get("if", ""))
+                self.assertIn(
+                    "always()",
+                    condition,
+                    f"{path.name}'s reporting job {key!r} is conditioned on "
+                    f"{condition!r}. Without `always()` a needed job's failure skips "
+                    "the reporter, and a failed run reports nothing at all",
+                )
+
+    def test_the_failure_branch_keys_on_a_needed_job_having_failed(self) -> None:
+        """SPECIFIED -- scenario "A run in which a conditional job is skipped
+        reports success": a skipped job is an ordinary outcome of a healthy
+        run, and "an alarm that fires when nothing is wrong is an alarm that
+        stops being read". Under `if: always()`, `success()` is FALSE whenever
+        a needed job was merely skipped, so a reporter keyed on it pings
+        `/fail` on a healthy nightly (design Decision 7). The discriminator
+        has to read a needed job's own result.
+        """
+        for path, _, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                code = job_code(job)
+                self.assertTrue(
+                    re.search(r"needs\.(?:\*|[A-Za-z0-9_-]+)\.result", code)
+                    and "failure" in code,
+                    f"{path.name}'s reporting job {key!r} does not discriminate on a "
+                    "needed job's `result` being 'failure'. Nothing else available "
+                    "under `if: always()` tells a failed run from one carrying a "
+                    "skipped conditional job",
+                )
+                self.assertNotIn(
+                    "success()",
+                    code,
+                    f"{path.name}'s reporting job {key!r} uses `success()`. Under "
+                    "`if: always()` that is false for a merely SKIPPED needed job, so "
+                    "the reporter would ping /fail on a healthy run -- the one outcome "
+                    "that destroys this mechanism's credibility fastest",
+                )
+
+    def test_a_cancelled_run_reports_neither_success_nor_failure(self) -> None:
+        """SPECIFIED -- scenario "A cancelled run raises no alarm of its own":
+        "no failure SHALL be reported for that run". A cancellation is an
+        operator's act rather than a defect; the observer's silence timeout
+        remains the backstop if cancellations continue.
+        """
+        for path, _, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                self.assertIn(
+                    "cancelled(",
+                    job_code(job),
+                    f"{path.name}'s reporting job {key!r} never mentions `cancelled()`, "
+                    "so a cancelled run takes the same branch as a failed one and "
+                    "reports a failure the operator caused deliberately",
+                )
+
+    def test_no_reporting_job_declares_a_deployment_environment(self) -> None:
+        """SPECIFIED -- scenario "The report needs no human approval": the
+        reporting job "SHALL declare no deployment `environment:`, so that it
+        is never queued behind a required-reviewer approval"."""
+        for path, _, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                self.assertIsNone(
+                    job.get("environment"),
+                    f"{path.name}'s reporting job {key!r} declares "
+                    f"environment {job.get('environment')!r}. The `production` "
+                    "Environment is gated on required-reviewer approval, and an alarm "
+                    "that waits for a human to approve its own delivery is not an alarm",
+                )
+
+    def test_the_reporting_job_reads_a_repository_scoped_secret(self) -> None:
+        """SPECIFIED -- "The credential that report is sent under SHALL be
+        repository-scoped and SHALL NOT be an Environment secret", and
+        scenario "The routine alarm does not consume the last-resort one":
+        the destination SHALL NOT be the one the platform stack's
+        dead-man's-switch alerts to. `PLATFORM_DEADMANSWITCH_URL` is that
+        destination and is itself an Environment secret, so both clauses meet
+        in this one read. The `PLATFORM_` prefix as the marker of an
+        Environment secret is DERIVED, from design Decision 6.
+        """
+        for path, _, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                named = secrets_referenced_by(job)
+                self.assertTrue(
+                    named,
+                    f"{path.name}'s reporting job {key!r} reads no secret at all, so "
+                    "either it addresses no check or its credential is committed",
+                )
+                environment_scoped = sorted(
+                    name
+                    for name in named
+                    if name.upper().startswith(ENVIRONMENT_SECRET_PREFIX)
+                )
+                self.assertEqual(
+                    [],
+                    environment_scoped,
+                    f"{path.name}'s reporting job {key!r} reads {environment_scoped}. "
+                    "Those are secrets on the `production` Environment: reading one "
+                    "means declaring that Environment and waiting on required-reviewer "
+                    "approval, and PLATFORM_DEADMANSWITCH_URL is additionally the "
+                    "out-of-band destination this change must not erode",
+                )
+
+    def test_every_ping_url_requests_the_check_be_created(self) -> None:
+        """DERIVED (design Decision 5, tasks.md 4.5) -- no scenario states
+        `?create=1`; the requirement it serves is the observer alarming on
+        silence at all. A slug-addressed ping to a check that does not exist
+        returns 404 and does nothing: the reporter believes it is reporting,
+        the observer has nothing to go quiet, and the whole mechanism is
+        decorative. It has to be on BOTH URLs -- a job that fails from its
+        first run never takes the success path, so a success-only `create=1`
+        leaves the chronically failing case reported by nothing at all.
+
+        THE SHAPE THIS READS IS AN ASSUMPTION: two whole URLs, each carrying
+        its own query string. An implementation that builds one URL and
+        appends `/fail` and `?create=1` separately satisfies the requirement
+        and fails this test. That is a DERIVED assertion to be RECONSIDERED
+        against the implementation, deliberately and recorded -- not weakened
+        to green.
+        """
+        for path, _, key, job in self._reporters():
+            with self.subTest(workflow=path.name, job=key):
+                urls = ping_urls(job_code(job))
+                failing = [url for url in urls if "/fail" in url]
+                succeeding = [url for url in urls if "/fail" not in url]
+                self.assertTrue(
+                    failing and succeeding,
+                    f"{path.name}'s reporting job {key!r} does not carry both a success "
+                    f"and a /fail ping URL; it carries {urls}",
+                )
+                without = sorted(url for url in urls if "create=1" not in url)
+                self.assertEqual(
+                    [],
+                    without,
+                    f"{path.name}'s reporting job {key!r} carries ping URLs without "
+                    f"`create=1`: {without}. A ping to a check that does not exist "
+                    "404s silently, and the failure path is where that matters most",
+                )
+
+
+class TestEveryTimerInstallingRoleReportsItsUnitsLiveness(unittest.TestCase):
+    """ADDED requirement: Scheduled Host Units Report Their Own Liveness."""
+
+    def setUp(self) -> None:
+        self.roles = timer_installing_roles()
+
+    def test_at_least_one_role_installs_a_timer_unit(self) -> None:
+        """DERIVED (tasks.md 4.7, which states the obligation in those words)
+        -- the assertions below are universally quantified over what discovery
+        finds. A role that later writes its units from a file under
+        `templates/` rather than inline would leave them quantified over an
+        empty set, and green. Failing here is what turns that into a visible
+        change of shape rather than a silent loss of cover.
+        """
+        self.assertTrue(
+            self.roles,
+            "no role under ansible/roles/ installs a `.timer` unit inline in its "
+            "tasks/main.yml, so every assertion about scheduled host units below "
+            "would pass having read nothing. `image_prune` installs one; if this "
+            "fails, the discovery no longer matches the shape this repository "
+            "writes its units in",
+        )
+
+    def test_every_timer_installs_a_service_unit_of_its_own(self) -> None:
+        """SPECIFIED -- the requirement is over "Every scheduled unit whose
+        definition a role in this repository writes"; the service unit is
+        where the report is attached, so a timer without one cannot carry a
+        report at all."""
+        self.test_at_least_one_role_installs_a_timer_unit()
+        for role, units in self.roles.items():
+            installed = inline_files_installed_by(role)
+            for dest in units:
+                with self.subTest(role=role, timer=dest):
+                    service = [
+                        other
+                        for other in installed
+                        if other.endswith(".service")
+                        and unit_stem(other) == unit_stem(dest)
+                    ]
+                    self.assertTrue(
+                        service,
+                        f"{role} installs {dest} but no {unit_stem(dest)}.service "
+                        "carrying its definition",
+                    )
+
+    def _service_units(self) -> list:
+        self.test_at_least_one_role_installs_a_timer_unit()
+        found = []
+        for role, units in self.roles.items():
+            installed = inline_files_installed_by(role)
+            for dest in units:
+                for other, spec in installed.items():
+                    if other.endswith(".service") and unit_stem(other) == unit_stem(dest):
+                        found.append((role, other, spec))
+        self.assertTrue(found, "no service unit was found for any installed timer")
+        return found
+
+    def test_every_such_service_unit_reports_from_the_init_system(self) -> None:
+        """SPECIFIED -- "The report SHALL come from the init system rather
+        than from inside the unit's own script", and scenario "A run killed by
+        its own bound is reported": a run terminated from outside the process
+        cannot report its own death, and that kill is precisely the case the
+        duration bound exists for. `ExecStopPost=` is DERIVED (design Decision
+        9) as the one directive that runs on every exit path including that
+        kill -- unlike `OnFailure=` (failure only) or `ExecStartPost=`
+        (success path only).
+        """
+        for role, dest, spec in self._service_units():
+            with self.subTest(role=role, unit=dest):
+                self.assertIn(
+                    "ExecStopPost=",
+                    spec["content"],
+                    f"{role}'s {dest} carries no ExecStopPost=. A run killed on its "
+                    "own TimeoutStartSec produces no output and cannot report itself; "
+                    "only the init system can report that activation",
+                )
+
+    def test_a_failed_report_cannot_fail_the_unit(self) -> None:
+        """SPECIFIED -- scenario "An undeliverable report leaves a local
+        trace": "the unit's own result SHALL be unaffected by the delivery
+        having failed". A prune that did its work correctly must not be
+        recorded as failed because a third party was briefly unreachable; the
+        unsent ping becomes silence, and silence is what the observer alarms
+        on. The `-` prefix is systemd's spelling of that (design Decision 9).
+        """
+        for role, dest, spec in self._service_units():
+            with self.subTest(role=role, unit=dest):
+                lines = [
+                    line.strip()
+                    for line in spec["content"].splitlines()
+                    if line.strip().startswith("ExecStopPost=")
+                ]
+                self.assertTrue(lines, f"{role}'s {dest} carries no ExecStopPost= line")
+                unprefixed = [
+                    line
+                    for line in lines
+                    if not line.split("=", 1)[1].lstrip().startswith("-")
+                ]
+                self.assertEqual(
+                    [],
+                    unprefixed,
+                    f"{role}'s {dest} has ExecStopPost= lines that are not prefixed "
+                    f"with `-`: {unprefixed}. Without it a failed ping marks a "
+                    "SUCCESSFUL run's unit failed, which reports the third party's "
+                    "outage as a defect in this host's own work",
+                )
+
+    def test_every_host_reporter_addresses_a_slug_templated_per_host(self) -> None:
+        """SPECIFIED -- "The identifier the unit reports under SHALL be
+        distinct from every other reporter's". The specific template
+        (`{{ inventory_hostname }}-<unit stem>`) is DERIVED, from design
+        Decision 4: this role is meant to be run against a second host, and
+        two hosts sharing one check would mean the live host's weekly success
+        keeps the check green while the other host's timer is dead. Templating
+        makes that collision unreachable rather than documented.
+        """
+        self.test_at_least_one_role_installs_a_timer_unit()
+        for role, units in self.roles.items():
+            joined = "\n".join(role_texts(role).values())
+            for dest in units:
+                with self.subTest(role=role, timer=dest):
+                    pattern = re.compile(
+                        r"\{\{\s*inventory_hostname\s*\}\}-" + re.escape(unit_stem(dest))
+                    )
+                    self.assertTrue(
+                        pattern.search(joined),
+                        f"{role} does not address a check named "
+                        f"`{{{{ inventory_hostname }}}}-{unit_stem(dest)}`. A slug "
+                        "written as a literal makes a second converged host share this "
+                        "one's check and mask its silence",
+                    )
+
+
+class TestEveryReportersIdentifierIsDistinct(unittest.TestCase):
+    """ADDED requirements: Scheduled Workflows Report Their Own Liveness, and
+    Scheduled Host Units Report Their Own Liveness.
+
+    The host delta's distinctness clause reaches ACROSS the two halves of this
+    change -- "distinct from every other reporter's -- every other unit's and
+    every schedule-triggered workflow's" -- which no single-role or
+    single-workflow test can establish (tasks.md 4.6).
+    """
+
+    def _identifiers(self) -> dict:
+        found = {}
+        scheduled = scheduled_workflows()
+        self.assertTrue(
+            scheduled,
+            "no schedule-triggered workflow was discovered, so this distinctness "
+            "assertion would compare an empty set with itself and pass",
+        )
+        for path, workflow in scheduled:
+            reporters = liveness_reporting_jobs(workflow)
+            self.assertTrue(reporters, f"{path.name} carries no liveness report")
+            slugs = sorted(
+                {
+                    slug
+                    for _, job in reporters
+                    for slug in (endpoint_slug(url) for url in ping_urls(job_code(job)))
+                    if slug
+                }
+            )
+            self.assertEqual(
+                1,
+                len(slugs),
+                f"{path.name} addresses {slugs}; a reporter addressing none has no "
+                "identifier to be distinct, and one addressing several cannot be told "
+                "apart from a reporter that was copied and half-edited",
+            )
+            found[f".github/workflows/{path.name}"] = slugs[0]
+
+        roles = timer_installing_roles()
+        self.assertTrue(
+            roles,
+            "no timer-installing role was discovered, so the host half of this "
+            "distinctness assertion would read nothing",
+        )
+        for role, units in roles.items():
+            joined = "\n".join(role_texts(role).values())
+            for dest in units:
+                match = re.search(
+                    r"\{\{\s*inventory_hostname\s*\}\}-(" + re.escape(unit_stem(dest)) + r")",
+                    joined,
+                )
+                self.assertIsNotNone(
+                    match,
+                    f"{role} addresses no per-host slug for {dest}; see the test that "
+                    "states that obligation on its own",
+                )
+                found[f"ansible/roles/{role}:{unit_stem(dest)}"] = (
+                    "{{ inventory_hostname }}-" + match.group(1)
+                )
+        return found
+
+    def test_every_reporter_this_repository_defines_addresses_its_own_check(self) -> None:
+        """SPECIFIED -- "distinct per workflow" (CI delta) and "distinct from
+        every other reporter's" (host delta). Two reporters sharing one check
+        means one of them going silent is invisible for as long as the other
+        keeps reporting."""
+        identifiers = self._identifiers()
+        self.assertGreaterEqual(
+            len(identifiers),
+            2,
+            "fewer than two reporters were discovered, so pairwise distinctness "
+            f"establishes nothing: {identifiers}",
+        )
+        values = list(identifiers.values())
+        collisions = {
+            slug: sorted(name for name, value in identifiers.items() if value == slug)
+            for slug in set(values)
+            if values.count(slug) > 1
+        }
+        self.assertEqual(
+            {},
+            collisions,
+            f"these reporters share a check identifier: {collisions}. One of them "
+            "going silent stays invisible for as long as the other keeps reporting",
+        )
+
+
+class TestTheHostReporterKeepsTheAddressOffTheCommandLine(unittest.TestCase):
+    """ADDED requirement: Scheduled Host Units Report Their Own Liveness."""
+
+    def _scripts(self) -> list:
+        roles = timer_installing_roles()
+        self.assertTrue(
+            roles,
+            "no timer-installing role was discovered, so every assertion about a "
+            "reporting script below would read nothing",
+        )
+        found = []
+        for role in roles:
+            scripts = reporting_scripts(role)
+            self.assertTrue(
+                scripts,
+                f"{role} installs a timer unit and carries no committed text invoking "
+                "curl, so there is no reporting script to read. The report is what "
+                "makes a unit that fails, is killed, or stops being scheduled visible",
+            )
+            for label, text in scripts.items():
+                found.append((role, label, text))
+        return found
+
+    def test_the_reporting_script_hands_curl_the_url_off_its_command_line(self) -> None:
+        """SPECIFIED -- the address "SHALL NOT be left world-readable on the
+        host": a command line is readable from `/proc/<pid>/cmdline` by any
+        local account for as long as the process runs, and this host
+        deliberately carries unprivileged operator accounts. Expanding the
+        ping key into argv defeats the `0600` file it was just read from,
+        during exactly the window the ping is in flight. `--config` (or `-K`)
+        is DERIVED, from design Decision 9, as curl's way of taking a URL off
+        the command line.
+        """
+        for role, label, text in self._scripts():
+            for invocation in curl_invocations(text):
+                with self.subTest(role=role, script=label, invocation=invocation[:60]):
+                    arguments = curl_arguments(invocation)
+                    self.assertTrue(
+                        any(argument in ("--config", "-K") for argument in arguments),
+                        f"{role}'s {label} invokes curl without `--config`/`-K`, so "
+                        "the URL can only have reached it on the command line: "
+                        f"{invocation}",
+                    )
+
+    def test_no_curl_argument_carries_or_expands_to_the_url_or_the_ping_key(self) -> None:
+        """SPECIFIED -- as above, and this is the negative that has to be
+        precise. FORBIDDING ONLY A LITERAL IS NOT ENOUGH: `curl "$PING_URL"`
+        contains no literal and puts the key in `/proc/<pid>/cmdline` exactly
+        as the requirement forbids. So this refuses BOTH a literal URL and ANY
+        parameter expansion or command substitution among curl's arguments --
+        a variable's value is not readable from here, so an argument that
+        expands to something cannot be shown not to expand to the address.
+
+        The width of that negative is DERIVED (tasks.md 4.8a states the
+        obligation; refusing every expansion is this test's way of meeting
+        it), and it has a cost worth naming: `--max-time "$timeout"` would
+        fail here too. Reconsider this assertion deliberately, and record the
+        reconsideration, if an implementation needs an expansion that provably
+        cannot carry the address -- do not weaken it to green.
+        """
+        for role, label, text in self._scripts():
+            for invocation in curl_invocations(text):
+                with self.subTest(role=role, script=label, invocation=invocation[:60]):
+                    offending = curl_arguments_carrying_an_address(invocation)
+                    self.assertEqual(
+                        [],
+                        offending,
+                        f"{role}'s {label} passes {offending} on curl's command line. "
+                        "A literal address, or a variable that may hold one, is "
+                        "readable from /proc/<pid>/cmdline by any local account while "
+                        f"the ping is in flight: {invocation}",
+                    )
+
+    def test_both_endpoints_the_reporter_builds_request_the_check_be_created(self) -> None:
+        """DERIVED (design Decision 5, tasks.md 4.8a) -- Decision 5 calls a
+        missing check "the worst one available here" and names the
+        chronically failing prune as its example: a unit that fails from its
+        first activation never takes the success path, so a success-only
+        `create=1` leaves its check never created, its /fail pings 404ing, and
+        the unit reported by nothing.
+
+        Reads the same two-whole-endpoints shape the continuous-integration
+        half does, and carries the same caveat: an implementation that appends
+        `/fail` and the query string separately satisfies the requirement and
+        fails this test. That is a reconsideration, recorded, and not a
+        weakening.
+        """
+        for role, label, text in self._scripts():
+            with self.subTest(role=role, script=label):
+                endpoints = shell_endpoints(text)
+                failing = [endpoint for endpoint in endpoints if "/fail" in endpoint]
+                succeeding = [endpoint for endpoint in endpoints if "/fail" not in endpoint]
+                self.assertTrue(
+                    failing and succeeding,
+                    f"{role}'s {label} does not build both a success and a /fail "
+                    f"endpoint; what was read: {endpoints}",
+                )
+                without = sorted(
+                    endpoint for endpoint in endpoints if "create=1" not in endpoint
+                )
+                self.assertEqual(
+                    [],
+                    without,
+                    f"{role}'s {label} builds endpoints without `create=1`: {without}",
+                )
+
+    def test_the_report_branches_on_the_service_result_not_the_exit_status(self) -> None:
+        """SPECIFIED -- scenario "A run killed by its own bound is reported":
+        a unit "terminated by the init system on expiry of its configured
+        start timeout, producing no output of its own" SHALL still report a
+        failure. systemd sets `$EXIT_STATUS` to a SIGNAL NAME (`KILL`) on
+        exactly that path, so any construction treating it as a number breaks
+        there and only there -- the worst place for a defect to hide.
+        `$SERVICE_RESULT` is the discriminator (design Decision 9);
+        `$EXIT_STATUS` may be carried as diagnostic text, and that use is not
+        what this forbids.
+        """
+        for role, label, text in self._scripts():
+            with self.subTest(role=role, script=label):
+                body = without_shell_comments(text)
+                self.assertIn(
+                    "SERVICE_RESULT",
+                    body,
+                    f"{role}'s {label} never reads $SERVICE_RESULT, so it cannot tell "
+                    "a successful activation from one killed on its start timeout",
+                )
+                branching = [
+                    line.strip()
+                    for line in body.splitlines()
+                    if "EXIT_STATUS" in line
+                    and re.search(r"^\s*(if|elif|case|while|until)\b|\[\[|\[ ", line)
+                ]
+                self.assertEqual(
+                    [],
+                    branching,
+                    f"{role}'s {label} branches on $EXIT_STATUS: {branching}. On the "
+                    "TimeoutStartSec path -- the one this reporting exists for -- "
+                    "systemd sets it to `KILL`, a signal name and not a number",
+                )
+
+    def test_an_undeliverable_report_is_written_to_the_hosts_log(self) -> None:
+        """SPECIFIED -- scenario "An undeliverable report leaves a local
+        trace": "the attempted endpoint and the delivery's outcome SHALL be
+        written to the host's log". Because the `-` prefix makes a failed ping
+        invisible to systemd deliberately, this write is the ONLY local trace
+        of it -- an operator answering the resulting silence days later
+        otherwise finds a successful unit and no account of why nothing was
+        reported. Curl's `--show-error` and the script's own stderr write are
+        DERIVED (tasks.md 3.3/4.8a) as the means; that stderr from
+        `ExecStopPost=` reaches the journal is systemd's behaviour.
+        """
+        for role, label, text in self._scripts():
+            for invocation in curl_invocations(text):
+                with self.subTest(role=role, script=label, invocation=invocation[:60]):
+                    arguments = curl_arguments(invocation)
+                    self.assertTrue(
+                        any(
+                            argument in ("--show-error", "-S")
+                            or (
+                                argument.startswith("-")
+                                and not argument.startswith("--")
+                                and "S" in argument
+                            )
+                            for argument in arguments
+                        ),
+                        f"{role}'s {label} invokes curl without --show-error, so a "
+                        f"failed delivery says nothing at all: {invocation}",
+                    )
+                    silenced = [
+                        argument for argument in arguments if argument.startswith("2>")
+                    ]
+                    self.assertEqual(
+                        [],
+                        silenced,
+                        f"{role}'s {label} redirects curl's stderr away: {silenced}. "
+                        "The journal is then the only trace of an undeliverable "
+                        "report, and it would be empty",
+                    )
+            with self.subTest(role=role, script=label, wrote="stderr"):
+                written = [
+                    line.strip()
+                    for line in without_shell_comments(text).splitlines()
+                    if ">&2" in line
+                ]
+                self.assertTrue(
+                    written,
+                    f"{role}'s {label} writes nothing to stderr, so the endpoint it "
+                    "tried is recorded nowhere on this host",
+                )
+
+
+class TestNoTimerRoleScenarioReachesTheExternalObserver(unittest.TestCase):
+    """ADDED requirement: Scheduled Host Units Report Their Own Liveness --
+    scenario "A report is observable without reaching the external observer".
+
+    This is what turns "the reporting scenarios use a sink" from a constraint
+    on one scenario into a property of ALL of them (tasks.md 4.8b, 4.11). The
+    role's scenarios activate the unit, so a scenario left on the production
+    base URL would ping the observer from a hosted runner and, with
+    `?create=1`, CREATE a check there -- on every pull request touching
+    `ansible/`.
+    """
+
+    def _scenarios(self) -> list:
+        roles = timer_installing_roles()
+        self.assertTrue(
+            roles,
+            "no timer-installing role was discovered, so this assertion would read "
+            "no scenario at all",
+        )
+        found = []
+        for role in roles:
+            scenarios = scenario_directories(role)
+            self.assertTrue(
+                scenarios,
+                f"{role} installs a timer unit and carries no Molecule scenario, so "
+                "nothing observes what its reporting converges to",
+            )
+            found.extend((role, scenario) for scenario in scenarios)
+        return found
+
+    def test_no_scenario_leaves_the_reporter_pointed_at_the_external_observer(self) -> None:
+        """SPECIFIED -- the report "SHALL be directable to a local
+        destination, so that what a failing, a killed and a successful
+        activation report can be asserted without a credential or a call to
+        the third-party observer". Asserted over EVERY scenario, including the
+        ones that assert nothing about reporting: it is those that would ping
+        the observer unnoticed. The variable's name is DERIVED, from tasks.md
+        3.1.
+        """
+        for role, scenario in self._scenarios():
+            invocations = scenario_role_invocations(scenario, role)
+            self.assertTrue(
+                invocations,
+                f"{role}/molecule/{scenario.name} converges {role} nowhere this read "
+                "can see, so every assertion below would pass having read nothing",
+            )
+            for playbook, supplied in invocations:
+                with self.subTest(
+                    role=role, scenario=scenario.name, playbook=playbook
+                ):
+                    variable = f"{role}_heartbeat_base_url"
+                    self.assertIn(
+                        variable,
+                        supplied,
+                        f"{role}/molecule/{scenario.name}/{playbook} converges the "
+                        f"role supplying no {variable}, so the reporter runs against "
+                        "its production default and pings the external observer from "
+                        "a hosted runner",
+                    )
+                    value = str(supplied[variable])
+                    self.assertNotEqual(
+                        PRODUCTION_HEARTBEAT_BASE_URL,
+                        value.rstrip("/"),
+                        f"{role}/molecule/{scenario.name}/{playbook} points the "
+                        "reporter at the production observer",
+                    )
+                    self.assertTrue(
+                        any(
+                            local in value
+                            for local in ("127.0.0.1", "localhost", "[::1]")
+                        ),
+                        f"{role}/molecule/{scenario.name}/{playbook} points the "
+                        f"reporter at {value!r}, which is not a local sink -- a "
+                        "scenario may reach no third party",
+                    )
+
+    def test_every_scenario_supplies_the_ping_key_the_role_requires(self) -> None:
+        """DERIVED (tasks.md 3.6/4.8b) -- the requirement itself makes the
+        address a required input; this is the consequence for the scenarios,
+        and without it `molecule test --all` is red on its first run for a
+        reason no other test explains.
+
+        A scenario that converges the role EXPECTING it to fail is exempt, and
+        is identified by its `rescue:` rather than by its name: it is the host
+        delta's "An absent report address is reported by name", and obliging
+        it to supply the address would delete the scenario it exists to be.
+        """
+        for role, scenario in self._scenarios():
+            if scenario_expects_a_refusal(scenario):
+                continue
+            invocations = scenario_role_invocations(scenario, role)
+            self.assertTrue(
+                invocations,
+                f"{role}/molecule/{scenario.name} converges {role} nowhere this read "
+                "can see, so this assertion would pass having read nothing",
+            )
+            for playbook, supplied in invocations:
+                with self.subTest(
+                    role=role, scenario=scenario.name, playbook=playbook
+                ):
+                    variable = f"{role}_heartbeat_ping_key"
+                    self.assertIn(
+                        variable,
+                        supplied,
+                        f"{role}/molecule/{scenario.name}/{playbook} converges the "
+                        f"role supplying no {variable}; the role requires it and this "
+                        "scenario does not converge expecting a refusal, so the run "
+                        "fails for want of an input rather than on anything it "
+                        "asserts -- a re-converge from verify.yml is a converge",
+                    )
+
+
+class TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource(unittest.TestCase):
+    """ADDED requirement: The Continuous-Integration Configuration Is Itself
+    Verified -- scenario "The suite needs no privileged or external resource".
+
+    `TestTheSuiteNeedsNoPrivilegedResource` above audits THIS MODULE by name.
+    `notice-when-a-periodic-job-stops-reporting`'s tasks.md 4.11 states the
+    constraint over `.github/tests` as a whole -- no network call, no
+    credential, no container runtime, no Terraform binary -- and that change
+    adds assertions about URLs which must never be requested. A module added
+    to this directory later would be outside an audit by name; this reads
+    every module the directory holds, and reuses that audit's own constants so
+    the two cannot drift apart.
+    """
+
+    def _modules(self) -> list:
+        modules = sorted(SUITE_DIR.glob("*.py"))
+        self.assertTrue(
+            modules,
+            f"no Python module was discovered under {SUITE_DIR}, so this audit would "
+            "pass having read nothing -- this file is one",
+        )
+        return modules
+
+    def _imported_roots(self, module: Path) -> set:
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        roots = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                roots.add(node.module.split(".")[0])
+        return roots
+
+    def test_no_module_in_the_directory_imports_a_network_capable_module(self) -> None:
+        """SPECIFIED -- the suite completes without a network call. The
+        reporters' URLs are asserted as TEXT and are never requested; this is
+        what holds that for the directory rather than for one file."""
+        for module in self._modules():
+            with self.subTest(module=module.name):
+                offenders = sorted(
+                    self._imported_roots(module)
+                    & TestTheSuiteNeedsNoPrivilegedResource.NETWORK_MODULES
+                )
+                self.assertEqual(
+                    [],
+                    offenders,
+                    f"{module.name} imports network-capable modules: {offenders}",
+                )
+
+    def test_no_module_in_the_directory_imports_outside_the_pinned_manifest(self) -> None:
+        """SPECIFIED -- "SHALL depend only on its runtime's standard library
+        and on dependencies pinned exactly in a repository manifest".
+
+        A module of this suite importing a SIBLING module of the same suite is
+        neither: it is the suite reusing its own helpers, which is what keeps a
+        discovery rule or a parser in one place. Two modules on the trunk do
+        exactly that. So the siblings are enumerated from the directory and
+        allowed -- narrowly, by their own filenames, so that an import of
+        anything the directory does not contain still fails.
+        """
+        siblings = {module.stem for module in self._modules()}
+        for module in self._modules():
+            with self.subTest(module=module.name):
+                outside = sorted(
+                    root
+                    for root in self._imported_roots(module)
+                    if root not in sys.stdlib_module_names
+                    and root not in TestTheSuiteNeedsNoPrivilegedResource.ALLOWED_THIRD_PARTY
+                    and root not in siblings
+                )
+                self.assertEqual(
+                    [],
+                    outside,
+                    f"{module.name} imports neither standard library nor a pinned "
+                    f"dependency: {outside}",
+                )
+
+    def test_no_module_in_the_directory_spawns_a_container_runtime_or_terraform(self) -> None:
+        """SPECIFIED -- the suite completes without a container runtime or a
+        Terraform binary. Reads each module's own `subprocess` calls out of
+        its AST, as the audit above does, rather than grepping its text."""
+        for module in self._modules():
+            with self.subTest(module=module.name):
+                tree = ast.parse(module.read_text(encoding="utf-8"))
+                spawned = []
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    target = node.func
+                    if not (
+                        isinstance(target, ast.Attribute)
+                        and target.attr
+                        in ("run", "Popen", "call", "check_output", "check_call")
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "subprocess"
+                    ):
+                        continue
+                    if not node.args:
+                        continue
+                    argv = node.args[0]
+                    if isinstance(argv, ast.List) and argv.elts:
+                        head = argv.elts[0]
+                        if isinstance(head, ast.Constant) and isinstance(head.value, str):
+                            spawned.append(head.value)
+                    elif isinstance(argv, ast.Constant) and isinstance(argv.value, str):
+                        words = argv.value.split()
+                        spawned.append(words[0] if words else argv.value)
+                offenders = sorted(
+                    {
+                        name
+                        for name in spawned
+                        if name not in TestTheSuiteNeedsNoPrivilegedResource.SPAWNABLE
+                    }
+                )
+                self.assertEqual(
+                    [],
+                    offenders,
+                    f"{module.name} spawns commands outside the shell the suite needs "
+                    f"to exercise a workflow snippet: {offenders}",
+                )
+
+class TestTheLivenessChecksAreARealReadOfTheFile(unittest.TestCase):
+    """ADDED requirements: Scheduled Workflows Report Their Own Liveness, and
+    Scheduled Host Units Report Their Own Liveness.
+
+    Every assertion above this class is red until
+    `notice-when-a-periodic-job-stops-reporting` is implemented, so nothing
+    else here establishes that they would go GREEN on a conforming reporter --
+    or that they would stay red on the specific defects they name. A check
+    that can only fail is worth as little as one that can only pass.
+
+    So this class exercises the same predicates against fixture text: one
+    shape the change's tasks.md prescribes, and one defect per assertion. It
+    reads no committed file and is expected to pass from the moment it is
+    written, which is the opposite of every other new test in this section and
+    is stated so that its passing is not mistaken for coverage of the change.
+    """
+
+    CONFORMING_REPORTER = {
+        "name": "report",
+        "needs": ["drift"],
+        "if": "always()",
+        "steps": [
+            {
+                "name": "Report this run's liveness to the external observer",
+                "if": "${{ !cancelled() && !contains(needs.*.result, 'failure') }}",
+                "env": {"KEY": "${{ secrets.HEARTBEAT_PING_KEY }}"},
+                "run": (
+                    "# Silence, not this ping, is what raises the alarm.\n"
+                    'curl --fail --silent --show-error --retry 3 '
+                    '"https://hc-ping.com/$KEY/infrastructure-drift?create=1"\n'
+                ),
+            },
+            {
+                "name": "Report this run's failure",
+                "if": "${{ !cancelled() && contains(needs.*.result, 'failure') }}",
+                "env": {"KEY": "${{ secrets.HEARTBEAT_PING_KEY }}"},
+                "run": (
+                    'curl --fail --silent --show-error --retry 3 '
+                    '"https://hc-ping.com/$KEY/infrastructure-drift/fail?create=1"\n'
+                ),
+            },
+        ],
+    }
+
+    CONFORMING_SCRIPT = (
+        "#!/bin/bash\n"
+        "# Reports this unit's activation. See https://hc-ping.com in a comment only.\n"
+        "set -euo pipefail\n"
+        ". /etc/prune-host-images/heartbeat.env\n"
+        'endpoint="${HEARTBEAT_BASE_URL}/${HEARTBEAT_PING_KEY}/${HEARTBEAT_SLUG}?create=1"\n'
+        'if [ "${SERVICE_RESULT:-}" != "success" ]; then\n'
+        '  endpoint="${HEARTBEAT_BASE_URL}/${HEARTBEAT_PING_KEY}/${HEARTBEAT_SLUG}/fail?create=1"\n'
+        "fi\n"
+        'printf "url = \\"%s\\"\\n" "$endpoint" | '
+        "curl --config - --max-time 10 --retry 2 --silent --show-error "
+        '--data-raw "EXIT_STATUS=${EXIT_STATUS:-}"\n'
+        'status=$?\n'
+        'printf "prune-host-images: reported %s (curl status %s)\\n" "$endpoint" "$status" >&2\n'
+    )
+
+    def test_a_conforming_reporting_job_is_recognised_as_one(self) -> None:
+        self.assertTrue(
+            LIVENESS_HINT.search(job_code(self.CONFORMING_REPORTER)),
+            "the shape tasks.md 2.1 prescribes is not recognised as a reporting job, "
+            "so every assertion quantified over reporting jobs would read nothing",
+        )
+
+    def test_a_job_naming_a_reporter_only_in_a_comment_is_not_recognised(self) -> None:
+        commented = {
+            "name": "drift",
+            "steps": [{"name": "plan", "run": "# no heartbeat here yet\nterraform plan\n"}],
+        }
+        self.assertIsNone(
+            LIVENESS_HINT.search(job_code(commented)),
+            "a job that only MENTIONS a heartbeat in a shell comment is read as "
+            "carrying one, which would let a comment satisfy the coverage assertion",
+        )
+
+    def test_both_ping_urls_are_read_from_a_conforming_job(self) -> None:
+        urls = ping_urls(job_code(self.CONFORMING_REPORTER))
+        self.assertEqual(2, len(urls), urls)
+        self.assertTrue(all("create=1" in url for url in urls), urls)
+        self.assertEqual(
+            ["infrastructure-drift"],
+            sorted({endpoint_slug(url) for url in urls}),
+            "the success URL and the /fail URL must read as addressing ONE check; "
+            f"they read as {[endpoint_slug(url) for url in urls]}",
+        )
+
+    def test_a_ping_url_written_as_a_github_expression_is_still_read(self) -> None:
+        """`${{ secrets.X }}` carries spaces. Without collapsing it first, a URL
+        token would end at the first space and both the slug and `create=1`
+        would be invisible -- the check would pass by reading nothing."""
+        job = {
+            "steps": [
+                {
+                    "name": "heartbeat",
+                    "run": (
+                        "curl --fail "
+                        '"https://hc-ping.com/${{ secrets.HEARTBEAT_PING_KEY }}'
+                        '/infrastructure-drift?create=1"\n'
+                    ),
+                }
+            ]
+        }
+        urls = ping_urls(job_code(job))
+        self.assertEqual(1, len(urls), urls)
+        self.assertIn("create=1", urls[0])
+        self.assertEqual("infrastructure-drift", endpoint_slug(urls[0]))
+
+    def test_a_ping_url_missing_create_is_read_as_missing_it(self) -> None:
+        url = "https://hc-ping.com/$KEY/infrastructure-drift/fail"
+        self.assertNotIn("create=1", url)
+        self.assertEqual("infrastructure-drift", endpoint_slug(url))
+
+    def test_curl_passing_a_url_variable_is_flagged(self) -> None:
+        """THE EXACT DEFECT tasks.md 4.8a names: `curl "$PING_URL"` carries no
+        literal address and puts the ping key in `/proc/<pid>/cmdline` all the
+        same. A negative that forbade only a literal would pass it."""
+        invocations = curl_invocations('curl --fail --silent "$PING_URL"\n')
+        self.assertEqual(1, len(invocations), invocations)
+        self.assertEqual(
+            ['"$PING_URL"'], curl_arguments_carrying_an_address(invocations[0])
+        )
+
+    def test_curl_passing_a_literal_url_is_flagged(self) -> None:
+        invocations = curl_invocations('curl "https://hc-ping.com/k/s?create=1"\n')
+        self.assertEqual(
+            ['"https://hc-ping.com/k/s?create=1"'],
+            curl_arguments_carrying_an_address(invocations[0]),
+        )
+
+    def test_a_conforming_script_passes_every_assertion_made_about_one(self) -> None:
+        """The one test here that would catch this section shipping assertions
+        no conforming implementation can satisfy: it runs the whole host-side
+        read against the shape tasks.md 3.3 prescribes."""
+        text = self.CONFORMING_SCRIPT
+        invocations = curl_invocations(text)
+        self.assertEqual(1, len(invocations), invocations)
+        arguments = curl_arguments(invocations[0])
+        self.assertIn("--config", arguments)
+        self.assertEqual(
+            [],
+            curl_arguments_carrying_an_address(invocations[0]),
+            f"a conforming script's own curl line was flagged: {arguments}",
+        )
+        self.assertIn("--show-error", arguments)
+
+        endpoints = shell_endpoints(text)
+        self.assertTrue(
+            [endpoint for endpoint in endpoints if "/fail" in endpoint], endpoints
+        )
+        self.assertTrue(
+            [endpoint for endpoint in endpoints if "/fail" not in endpoint], endpoints
+        )
+        self.assertEqual(
+            [],
+            [endpoint for endpoint in endpoints if "create=1" not in endpoint],
+            f"a conforming script's endpoints were read as missing create=1: {endpoints}",
+        )
+        self.assertIn("SERVICE_RESULT", without_shell_comments(text))
+        self.assertTrue(
+            [line for line in text.splitlines() if ">&2" in line],
+            "a conforming script's stderr write was not seen",
+        )
+
+    def test_a_script_branching_on_the_exit_status_is_flagged(self) -> None:
+        """systemd sets `$EXIT_STATUS` to `KILL` on the TimeoutStartSec path --
+        the one path this reporting exists for."""
+        text = 'if [ "$EXIT_STATUS" -eq 0 ]; then\n  :\nfi\n'
+        branching = [
+            line.strip()
+            for line in without_shell_comments(text).splitlines()
+            if "EXIT_STATUS" in line
+            and re.search(r"^\s*(if|elif|case|while|until)\b|\[\[|\[ ", line)
+        ]
+        self.assertEqual(1, len(branching), branching)
+
+    def test_carrying_the_exit_status_as_diagnostic_text_is_not_flagged(self) -> None:
+        """The complement of the test above, so that the assertion is known to
+        forbid the branch rather than the variable: Decision 9 carries
+        `$EXIT_STATUS` through as diagnostic text deliberately."""
+        text = 'printf "status=%s\\n" "${EXIT_STATUS:-}" >&2\n'
+        branching = [
+            line.strip()
+            for line in without_shell_comments(text).splitlines()
+            if "EXIT_STATUS" in line
+            and re.search(r"^\s*(if|elif|case|while|until)\b|\[\[|\[ ", line)
+        ]
+        self.assertEqual([], branching)
+
+    def test_a_scenarios_variables_are_read_from_its_converge_playbook(self) -> None:
+        """The scenario read is the one property here that touches the
+        filesystem, so it is exercised against a scratch tree rather than
+        against a committed scenario -- which, before this change is
+        implemented, supplies neither variable."""
+        scratch = Path(tempfile.mkdtemp(prefix="heartbeat-scenario-"))
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        (scratch / "converge.yml").write_text(
+            "---\n"
+            "- name: Prepare\n"
+            "  hosts: all\n"
+            "  tasks: []\n"
+            "- name: Converge\n"
+            "  hosts: all\n"
+            "  vars:\n"
+            "    image_prune_heartbeat_base_url: http://127.0.0.1:8099\n"
+            "    image_prune_heartbeat_ping_key: fixture-key\n"
+            "  roles:\n"
+            "    - role: image_prune\n",
+            encoding="utf-8",
+        )
+        invocations = scenario_role_invocations(scratch, "image_prune")
+        self.assertEqual(
+            1,
+            len(invocations),
+            "the scenario read found the wrong number of role convergences",
+        )
+        _, supplied = invocations[0]
+        self.assertEqual(
+            "http://127.0.0.1:8099", supplied["image_prune_heartbeat_base_url"]
+        )
+        self.assertEqual("fixture-key", supplied["image_prune_heartbeat_ping_key"])
+
+    def test_a_re_converge_from_a_verify_playbook_is_read_as_a_convergence(self) -> None:
+        """Reading `converge.yml` alone was not enough, and this fixture is
+        why: `default` and `abandon-paths` both converge the role a second
+        time from their `verify.yml`, through `include_role` with task-level
+        `vars:`. Those re-converges need the role's required inputs and, left
+        on the production base URL, would ping the external observer exactly
+        as a converge would. Both scenarios failed on this after the narrower
+        read passed them."""
+        scratch = Path(tempfile.mkdtemp(prefix="heartbeat-reconverge-"))
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        (scratch / "converge.yml").write_text(
+            "---\n"
+            "- name: Converge\n"
+            "  hosts: all\n"
+            "  vars:\n"
+            "    image_prune_heartbeat_base_url: http://127.0.0.1:8099\n"
+            "    image_prune_heartbeat_ping_key: fixture-key\n"
+            "  roles:\n"
+            "    - role: image_prune\n",
+            encoding="utf-8",
+        )
+        (scratch / "verify.yml").write_text(
+            "---\n"
+            "- name: Verify\n"
+            "  hosts: all\n"
+            "  tasks:\n"
+            "    - name: Re-converge with a reduced enumeration\n"
+            "      ansible.builtin.include_role:\n"
+            "        name: image_prune\n"
+            "      vars:\n"
+            "        deploy_apps: []\n",
+            encoding="utf-8",
+        )
+        invocations = scenario_role_invocations(scratch, "image_prune")
+        playbooks = sorted(playbook for playbook, _ in invocations)
+        self.assertEqual(
+            ["converge.yml", "verify.yml"],
+            playbooks,
+            "a re-converge from verify.yml was not read as a convergence, so a "
+            "scenario could point it at the production observer unnoticed",
+        )
+        supplied = dict(invocations)["verify.yml"]
+        self.assertNotIn(
+            "image_prune_heartbeat_base_url",
+            supplied,
+            "this fixture's re-converge deliberately supplies no base URL: the read "
+            "must report what that invocation actually has in force, not what a "
+            "sibling playbook supplied",
+        )
+        self.assertFalse(
+            scenario_expects_a_refusal(scratch),
+            "a scenario with no rescue: was read as one that expects a refusal, which "
+            "would exempt every scenario from supplying the ping key",
+        )
+
+    def test_a_scenario_that_expects_a_refusal_is_recognised_as_one(self) -> None:
+        scratch = Path(tempfile.mkdtemp(prefix="heartbeat-refusal-"))
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        (scratch / "converge.yml").write_text(
+            "---\n"
+            "- name: Converge\n"
+            "  hosts: all\n"
+            "  tasks:\n"
+            "    - name: Converge with no ping key supplied\n"
+            "      block:\n"
+            "        - name: Run the role\n"
+            "          ansible.builtin.include_role:\n"
+            "            name: image_prune\n"
+            "      rescue:\n"
+            "        - name: Record the refusal\n"
+            "          ansible.builtin.debug:\n"
+            "            msg: refused\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(scenario_expects_a_refusal(scratch))
 
 if __name__ == "__main__":
     unittest.main()

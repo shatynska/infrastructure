@@ -1,0 +1,171 @@
+---
+# Verifies the outcome converge.yml recorded for a run with
+# `image_prune_heartbeat_ping_key` not supplied, and -- separately -- that the
+# host was not changed before the run stopped.
+#
+# Provenance of each assertion (full classification in the change
+# `notice-when-a-periodic-job-stops-reporting`'s test-plan.md):
+#
+#   outcome == 'failed'          SPECIFIED -- "it SHALL fail naming that
+#                                input". On its own it establishes little,
+#                                which is why it is never the last assertion.
+#   'assert' in failed_action    SPECIFIED -- through "A Role's Absent
+#                                Required Input Is Reported by Name", which
+#                                design.md Decision 13 says governs this
+#                                input: the failure SHALL NOT be "an
+#                                undefined-variable, index, or type error
+#                                raised by a task that consumed it". A
+#                                substring test, because a recorded action may
+#                                be short (`assert`) or fully qualified.
+#   message names the variable   SPECIFIED -- "SHALL fail naming that input".
+#   message names group_vars/    The clause "and how to supply it" is
+#   prod.yml                     SPECIFIED; the choice of that particular path
+#                                to satisfy it is DERIVED, from tasks.md 1.2,
+#                                which is where the Vault-encrypted value is
+#                                to be set. Same classification as
+#                                hardening/molecule/absent-ssh-cidrs.
+#   nothing installed            SPECIFIED -- "before changing anything on the
+#                                host, and SHALL NOT install the unit with
+#                                reporting omitted". A scheduled unit that
+#                                runs unobserved is the state this requirement
+#                                exists to end, so an absent address is a
+#                                misconfiguration rather than a mode of
+#                                operation.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    image_prune_outcome_path: /var/tmp/molecule-absent-heartbeat-key-outcome.json
+  tasks:
+    - name: Read the outcome converge.yml recorded for the unsupplied-input run
+      ansible.builtin.slurp:
+        src: "{{ image_prune_outcome_path }}"
+      register: image_prune_absent_key_outcome_raw
+
+    - name: Report the recorded outcome
+      ansible.builtin.debug:
+        var: image_prune_absent_key_outcome_raw.content | b64decode | from_json
+
+    - name: Assert the run failed rather than converging with reporting omitted
+      vars:
+        absent_key_outcome: "{{ image_prune_absent_key_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - absent_key_outcome.outcome == "failed"
+        fail_msg: >-
+          The image_prune role converged without a heartbeat ping key having
+          been supplied. The role SHALL NOT install the unit with reporting
+          silently omitted: a scheduled unit that runs unobserved is the exact
+          state this requirement exists to end, and the failure it would
+          otherwise produce -- nothing noticing that the prune stopped working
+          -- is this change's own subject, arriving quietly. Tolerating
+          absence the way the GHCR credential path does is wrong here: a
+          registry credential's absence is a legitimate operating mode for a
+          host that pulls no private images; an absent reporting address is
+          not.
+        success_msg: >-
+          The run failed, as required. (Which failure it was is what the next
+          assertions decide -- on its own this establishes little.)
+        quiet: true
+
+    - name: Assert the failure came from an explicit check, not from a task that consumed the variable
+      vars:
+        absent_key_outcome: "{{ image_prune_absent_key_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'assert' in absent_key_outcome.failed_action"
+        fail_msg: >-
+          The run failed, but not at an explicit check -- the failing task was
+          '{{ absent_key_outcome.failed_task_name }}' (action
+          '{{ absent_key_outcome.failed_action }}', message
+          '{{ absent_key_outcome.failed_msg }}'). A role with no assertion
+          fails too, deep inside the task that renders the address into
+          /etc/prune-host-images/heartbeat.env, naming the expression that
+          failed rather than the decision the operator has to make. "A Role's
+          Absent Required Input Is Reported by Name" forbids exactly that
+          substitution.
+        success_msg: >-
+          The failure came from an explicit check rather than from a task that
+          consumed the variable.
+        quiet: true
+
+    - name: Assert the failure was not an undefined-variable error raised by a consuming task
+      vars:
+        absent_key_outcome: "{{ image_prune_absent_key_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'undefined variable' not in absent_key_outcome.failed_msg | lower"
+        fail_msg: >-
+          The recorded failure message is an undefined-variable error:
+          '{{ absent_key_outcome.failed_msg }}'. Stated separately from the
+          task-identity assertion above so that the run reports WHICH wrong
+          failure occurred, rather than only that the right one did not.
+        success_msg: >-
+          The failure was not an undefined-variable error.
+        quiet: true
+
+    - name: Assert the diagnostic names the input and where it is expected to be set
+      vars:
+        absent_key_outcome: "{{ image_prune_absent_key_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'image_prune_heartbeat_ping_key' in absent_key_outcome.failed_msg"
+          - "'group_vars/prod.yml' in absent_key_outcome.failed_msg"
+        fail_msg: >-
+          The run failed at a check, but its message does not name both the
+          input and where it is expected to be set:
+          '{{ absent_key_outcome.failed_msg }}'. An operator reading it has to
+          be told which input was not supplied and how to supply it -- the
+          value is Vault-encrypted in ansible/inventory/group_vars/prod.yml,
+          and that is the whole difference between this diagnostic and the
+          error it replaces.
+        success_msg: >-
+          The diagnostic names image_prune_heartbeat_ping_key and the
+          inventory file it is expected to be set in.
+        quiet: true
+
+    # ============================================================
+    # "before changing anything on the host": a refusal to proceed, not a
+    # partial application -- and, specifically, not a unit installed with its
+    # reporting omitted.
+    #
+    # `Create the directory holding the application enumeration` is the role's
+    # first host-changing task, so that directory's absence is the observable
+    # form of the refusal. The unit files are read as well, because "SHALL NOT
+    # install the unit with reporting omitted" is a clause of its own: a role
+    # that asserted late would leave a scheduled, unobserved prune behind on
+    # exactly the host whose operator was told the run had failed.
+    #
+    # Not vacuous: the pinned base image carries none of these paths, and the
+    # role creates all of them on a converge that proceeds.
+    # ============================================================
+    - name: Read what the refused converge left on the host
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/prune-host-images
+        - /etc/prune-host-images/heartbeat.env
+        - /usr/local/bin/prune-host-images
+        - /etc/systemd/system/prune-host-images.service
+        - /etc/systemd/system/prune-host-images.timer
+      register: image_prune_absent_key_paths
+
+    - name: Assert the run installed nothing at all
+      ansible.builtin.assert:
+        that:
+          - image_prune_absent_key_paths.results
+            | selectattr('stat.exists') | map(attribute='item') | list == []
+        fail_msg: >-
+          A converge refused for want of the report address left these behind:
+          {{ image_prune_absent_key_paths.results
+             | selectattr('stat.exists') | map(attribute='item') | list }}.
+          The run SHALL fail before changing anything on the host, and SHALL
+          NOT install the unit with reporting omitted -- a partial application
+          here is a scheduled prune that runs unobserved on a host whose
+          operator was told the run failed. The check has to precede the
+          role's first host-changing task, not merely the task that consumes
+          the address.
+        success_msg: >-
+          Nothing was installed: a refusal to proceed, not a partial
+          application.
+        quiet: true

@@ -1,0 +1,83 @@
+---
+# Molecule scenario for the ADDED requirement "Scheduled Host Units Report
+# Their Own Liveness" in openspec/specs/iac-host-configuration/spec.md.
+#
+# Derived from that delta spec ahead of any implementation, by an author who
+# read no implementation of it -- none exists. THESE PLAYBOOKS FAIL UNTIL THE
+# CHANGE `notice-when-a-periodic-job-stops-reporting` IS IMPLEMENTED: the role
+# has no `image_prune_heartbeat_ping_key` input, writes no
+# /etc/prune-host-images/heartbeat.env, installs no reporting script and puts
+# no ExecStopPost= on its unit, so `converge` fails on an undefined variable
+# and, once that is supplied, `verify` fails on the absent unit directive. That
+# is the intended pre-implementation state, recorded in that change's
+# test-plan.md, and not a defect in this file.
+#
+# WHAT THIS SCENARIO COVERS, AND WHAT ITS SIBLINGS COVER INSTEAD
+# --------------------------------------------------------------
+# This one holds what the ROLE'S REPORTING converges to and what it reports:
+# a successful activation, a failed one, one killed on its own start timeout,
+# a report that cannot be delivered, the permissions on the file carrying the
+# address, and that installing the reporting does not itself run the unit.
+#
+# `default` holds the prune's own keep-set and removal behaviour;
+# `abandon-paths` holds its three abandon branches; `absent-heartbeat-key`
+# holds the role's refusal when the report address is not supplied. None of
+# them is duplicated here.
+#
+# NO PING LEAVES THIS INSTANCE. `image_prune_heartbeat_base_url` points at a
+# local sink this scenario runs (prepare.yml), which is the seam design.md
+# Decision 12 exists for: without it a scenario asserting "a killed activation
+# reports a failure" would have to carry a real ping key or point a dummy one
+# at the vendor -- a third-party call and, under `?create=1`, a check created
+# there on every pull request touching `ansible/`.
+# `.github/tests/test_ci_configuration.py` asserts that property over EVERY
+# scenario this role has, not only this one.
+#
+# ORDERING INSIDE verify.yml IS LOAD-BEARING. The "installing the report does
+# not activate the unit" assertion reads a sink that has received nothing, so
+# it must precede every arrangement that activates the unit; the undeliverable
+# report needs the prune to still succeed, so it precedes the arrangement that
+# breaks the prune. verify.yml says so again at each point.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from `default`'s `image_prune-role-instance`, from
+  # `abandon-paths`'s, and from every sibling scenario in this repository, so
+  # that scenarios can be created side by side without colliding.
+  #
+  # Namespaced per working tree, with a default Docker refuses, and an explicit
+  # `hostname` because the driver would otherwise derive one from the name and
+  # cross the 64-byte limit. See
+  # ansible/roles/docker/molecule/default/molecule.yml for the full account --
+  # every scenario must agree on the variable.
+  - name: image_prune-heartbeat-instance-${INFRA_WORKTREE_NS:-unset:run-via-ansible/scripts/run-molecule}
+    hostname: image-prune-heartbeat
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py fails the build on a partial
+    # refresh. See ansible/roles/docker/molecule/default/molecule.yml for why
+    # a digest and not a version tag, and for how to refresh it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

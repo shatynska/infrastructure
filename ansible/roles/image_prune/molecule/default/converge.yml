@@ -267,6 +267,21 @@
   hosts: all
   become: true
   vars:
+    # THE REPORTER IS POINTED AWAY FROM THE EXTERNAL OBSERVER. This scenario
+    # asserts keep-set and removal behaviour and nothing about reporting, but
+    # left on the production default its activations would create a check at
+    # the observer from a hosted runner on every pull request touching
+    # ansible/, under `?create=1`. The `heartbeat` scenario is where a report
+    # is actually observed, against a sink it starts itself;
+    # `.github/tests/test_ci_configuration.py` asserts this variable over
+    # every scenario of a timer-installing role, which is what makes "no
+    # scenario reaches the vendor" a property of all of them rather than an
+    # inference from one.
+    image_prune_heartbeat_base_url: http://127.0.0.1:8099
+    # NOT A CREDENTIAL: names no real project and grants access to nothing.
+    # In production this arrives Vault-encrypted from
+    # ansible/inventory/group_vars/prod.yml.
+    image_prune_heartbeat_ping_key: fixture-key-not-a-real-ping-key
     deploy_apps:
       - name: alpha
         public_key: >-

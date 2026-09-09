@@ -87,3 +87,21 @@ ghcr_pull_token: !vault |
           3335623564633964380a386563643938616165333636383637366536656339386432363235316263
           39663331643930396130376666396162396361643261363531336139623937316432376237666266
           3830613337306566353336303437663339653739636362313561
+
+# STILL TO BE SUPPLIED, and the host-baseline play refuses to converge until
+# it is. `image_prune` reports each activation of its scheduled unit to an
+# external observer, and a scheduled unit running unobserved is the state that
+# reporting exists to end -- so the role asserts this input by name rather than
+# defaulting it (openspec/specs/iac-host-configuration/spec.md, "Scheduled Host
+# Units Report Their Own Liveness" and "A Role's Absent Required Input Is
+# Reported by Name").
+#
+# It is the same project ping key as the `HEARTBEAT_PING_KEY` repository
+# secret, and it is a genuine secret for the same reason `ghcr_pull_token`
+# above is: a party who holds it can suppress this alarm by reporting success
+# on the unit's behalf. Encrypt it in place, never in plain text:
+#
+#   ansible-vault encrypt_string --name image_prune_heartbeat_ping_key '<key>'
+#
+# and paste the result here. `docs/bootstrap-a-new-host.md` Appendix A records
+# where the key comes from and what each check it addresses needs.

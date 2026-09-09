@@ -104,3 +104,61 @@ jobs:
           body: Automated `pre-commit autoupdate` run.
           branch: chore/pre-commit-autoupdate
           delete-branch: true
+
+  # Liveness reporting, per the Scheduled Workflows Report Their Own Liveness
+  # requirement (openspec/specs/iac-cicd-pipeline/spec.md). This workflow is
+  # why that requirement exists: it failed on three consecutive scheduled runs,
+  # each red in the Actions tab and each emailed to a person, and three weeks
+  # passed before anyone acted. The alarm here is this check's SILENCE at the
+  # external observer, which a red run, a killed run and a run that never
+  # happens at all all produce.
+  #
+  # The period and grace that decide when silence becomes an alarm are the
+  # observer's own configuration and are NOT readable from this file. They are
+  # recorded in docs/bootstrap-a-new-host.md, Appendix A, beside the secret.
+  #
+  # A manual workflow_dispatch reports too, and so resets that silence timer:
+  # after dispatching to recover a disabled workflow, confirm the schedule
+  # itself is enabled rather than reading the green check as evidence. See the
+  # change notice-when-a-periodic-job-stops-reporting, design.md Decision 7.
+  report:
+    name: report
+    needs: [autoupdate]
+    # Runs whatever the rest of the workflow did, so an early failure reports
+    # at once rather than waiting out the observer's silence timeout.
+    if: always()
+    runs-on: ubuntu-latest
+    # No `environment:` and no scope: the ping key is a repository secret
+    # precisely so this job never queues behind a required-reviewer approval.
+    permissions: {}
+    steps:
+      - name: Report this run's outcome to its heartbeat check
+        # A cancellation is an operator's act, not a defect. Reporting it as a
+        # failure would train the alarm to be ignored, and the silence timeout
+        # is still the backstop if cancellations continue.
+        if: ${{ !cancelled() }}
+        env:
+          PING_KEY: ${{ secrets.HEARTBEAT_PING_KEY }}
+          # NOT `success()`. Under `if: always()` that is false for a merely
+          # SKIPPED needed job, which is an ordinary outcome of a healthy run,
+          # and a reporter keyed on it would ping /fail on a healthy week.
+          RUN_FAILED: ${{ contains(needs.*.result, 'failure') }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PING_KEY}" ]; then
+            echo "::error::HEARTBEAT_PING_KEY is empty or unset, so this run cannot report to its heartbeat check, and this workflow going quiet raises no alarm until it is set."
+            exit 1
+          fi
+
+          # create=1 on BOTH endpoints, not on the success path alone: this
+          # workflow spent three weeks never taking the success path, which is
+          # exactly the run of failures a success-only create=1 would leave
+          # reported by nothing at all.
+          if [ "${RUN_FAILED}" = "true" ]; then
+            url="https://hc-ping.com/${PING_KEY}/infrastructure-pre-commit-autoupdate/fail?create=1"
+          else
+            url="https://hc-ping.com/${PING_KEY}/infrastructure-pre-commit-autoupdate?create=1"
+          fi
+
+          curl --fail --silent --show-error --retry 3 --max-time 30 "${url}"

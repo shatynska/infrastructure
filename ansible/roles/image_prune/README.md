@@ -92,11 +92,43 @@ succeeded, this unit has no caller to damage. It fails, so the host records it.
 Making a silently-stopped prune alertable needs node-exporter's textfile
 collector and is recorded in `docs/change-queue.md`.
 
+## Liveness reporting — a silent check is the alarm, not a red unit
+
+Every activation reports to an external observer: the unit's `ExecStopPost=`
+runs a `0700` script that pings this host's own check on success and that
+check's `/fail` endpoint otherwise. **What raises the alarm is the check going
+quiet**, not the ping — so a failed run, a run killed on the duration bound,
+and a timer that has stopped firing altogether are equally visible. The last of
+those is the one nothing else here can see: a timer that never fires leaves no
+failed unit behind, and `systemctl list-units --failed` is a manual read that
+nothing performs on a schedule.
+
+The slug is `<inventory_hostname>-prune-host-images`, templated rather than
+written as a literal, so a second host converged by this role gets a check of
+its own rather than sharing this one — two hosts on one check would mean the
+live host's weekly success keeping it green while the other host's timer was
+dead.
+
+The period and grace that decide when silence becomes an alarm are the
+observer's own configuration and are **not** in this repository; they are
+recorded in `docs/bootstrap-a-new-host.md`, Appendix A, beside the secret.
+
+Two consequences worth knowing before editing this:
+
+- **The report cannot fail the unit.** `ExecStopPost=` carries a `-` prefix, so
+  a prune that did its work correctly is never recorded as failed because the
+  observer was briefly unreachable. The undelivered ping becomes silence, which
+  is what alarms. The attempted endpoint and `curl`'s status go to the journal,
+  and that line is the only local trace an operator answering the silence has.
+- **Removing the ping key input breaks convergence by design.** See below.
+
 ## Variables
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `deploy_apps` | *(required, no default)* | The version-controlled application enumeration |
+| `image_prune_heartbeat_ping_key` | *(required, no default)* | The observer's project ping key, Vault-encrypted in inventory. A scheduled unit running unobserved is the state this reporting exists to end, so an absent key is refused rather than tolerated |
+| `image_prune_heartbeat_base_url` | `https://hc-ping.com` | The observer's base URL. A variable rather than a literal so a Molecule scenario can point the reporter at a local sink; every scenario this role has sets it, and `.github/tests` asserts that over all of them |
 | `image_prune_on_calendar` | `Sun *-*-* 04:00:00 UTC` | Timer schedule |
 | `image_prune_randomized_delay_sec` | `3600` | Jitter, so runs do not land on a fixed minute |
 | `image_prune_timeout_start_sec` | `600` | Duration bound for the whole run, enumeration included |
@@ -107,12 +139,20 @@ report about a killed region has to come from.
 
 ## Testing
 
-`molecule test --all` from this directory. Two scenarios: `default` for the
+`molecule test --all` from this directory. Four scenarios: `default` for the
 keep-set and removal cases, `abandon-paths` for the three abandon branches whose
-arrangements `default`'s own fixtures put out of reach. Read the
-`SCENARIO RECAP` rather than the exit code — scenarios run in sorted order and
-stop at the first failure, so `abandon-paths` sorting first means a red one
-hides `default` entirely.
+arrangements `default`'s own fixtures put out of reach, `heartbeat` for what a
+successful, a failing and a killed activation report, and
+`absent-heartbeat-key` for the role refusing to converge when the ping key is
+not supplied. Read the `SCENARIO RECAP` rather than the exit code — scenarios
+run in sorted order and stop at the first failure, so `abandon-paths` sorting
+first means a red one hides the other three entirely.
+
+No scenario reaches the external observer: each one points
+`image_prune_heartbeat_base_url` at a local address, and `heartbeat` starts a
+sink there to read what arrived. That is not tidiness — left on the production
+default, a scenario would create a check at the observer from a hosted runner
+on every pull request touching `ansible/`.
 
 Two guards are **not** covered by any assertion and are held by review and a
 static read of the installed script: the pre-removal tag re-check and the

@@ -13,6 +13,30 @@ image_prune_on_calendar: "Sun *-*-* 04:00:00 UTC"
 # unattended-upgrades randomises its own.
 image_prune_randomized_delay_sec: 3600
 
+# The external observer this unit reports its own liveness to, per
+# openspec/specs/iac-host-configuration/spec.md's "Scheduled Host Units Report
+# Their Own Liveness". What raises the alarm is the check's SILENCE, so a unit
+# that fails, one killed on the bound below, and a timer that has stopped
+# firing altogether are equally visible -- the last of those leaves no failed
+# unit behind and is why reporting failures alone is not enough.
+#
+# The base URL has a default because production has one address. It is a
+# variable rather than a literal so that a Molecule scenario can point the
+# reporter at a local sink: without that seam no scenario could observe what a
+# failing or a killed activation reports, and pointing a scenario at the real
+# observer would create a check there from a hosted runner on every pull
+# request touching ansible/. Every scenario this role has sets it, and
+# .github/tests asserts that over all of them.
+image_prune_heartbeat_base_url: https://hc-ping.com
+
+# DELIBERATELY NO DEFAULT, like `deploy_apps` above. A scheduled unit that runs
+# unobserved is the state the requirement exists to end, so an absent key is a
+# misconfiguration to refuse rather than a mode to tolerate -- unlike the GHCR
+# credential, whose absence is a legitimate operating mode for a host that
+# pulls no private images. Supplied Vault-encrypted from
+# ansible/inventory/group_vars/prod.yml.
+# image_prune_heartbeat_ping_key:
+
 # Generous against a legitimate run, which enumerates a few dozen images and
 # removes a handful. It exists for a container runtime that stops answering:
 # enumeration is as much a daemon call as removal, so the bound covers the

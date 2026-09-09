@@ -142,6 +142,13 @@
       ansible.builtin.include_role:
         name: image_prune
       vars:
+        # A re-converge is a converge: the role's required inputs are its
+        # required inputs here too, and the reporter must be pointed at the
+        # same unreachable local address this scenario's converge.yml uses --
+        # left at the production default it would ping the external observer
+        # from a hosted runner and create a check there under `?create=1`.
+        image_prune_heartbeat_base_url: http://127.0.0.1:8099
+        image_prune_heartbeat_ping_key: fixture-key-not-a-real-ping-key
         deploy_apps:
           - name: undeployed
             public_key: >-

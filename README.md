@@ -227,8 +227,11 @@ matching `*.secret.tfvars` or `secrets.auto.tfvars` are gitignored and must
 never be committed.
 
 Repository secrets in GitHub hold `HCLOUD_TOKEN`, `TF_API_TOKEN` (see CI/CD
-below for the privilege split on those) and `APP_CLIENT_ID` /
-`APP_PRIVATE_KEY`. This is not the full list of secrets the workflows read: the
+below for the privilege split on those), `APP_CLIENT_ID` / `APP_PRIVATE_KEY`,
+and `HEARTBEAT_PING_KEY` — the last of those deliberately repository-scoped
+rather than an Environment secret, because the scheduled workflows report their
+own liveness with it and a job reading an Environment secret would wait on
+required-reviewer approval. This is not the full list of secrets the workflows read: the
 `PLATFORM_*` and `TAILSCALE_OAUTH_*` values, and the read-write overrides of
 `HCLOUD_TOKEN` and `TF_API_TOKEN`, are consumed only by jobs declaring
 `environment: production` and are Environment secrets rather than repository
@@ -340,12 +343,42 @@ subject:
 matter when running them. See the change `project-foundation`'s design.md for
 the full testing strategy.
 
+### When a periodic job stops working
+
+Every periodic job — the nightly drift check, the weekly hook autoupdate, and
+the weekly image prune on the host — reports each run to a heartbeat check of
+its own, and **the alarm is the check going quiet**, delivered to Slack
+`#alerts`. A run that failed, a run killed mid-flight and a run that never
+happened at all therefore look the same to it, which is the point: the last of
+those emits no failure for anything else to notice.
+
+**This is only live once three things exist outside this repository**: the
+`HEARTBEAT_PING_KEY` repository secret, the same key Vault-encrypted in
+`ansible/inventory/group_vars/prod.yml`, and the checks' routing at the
+observer. Until then the reporters fail loudly rather than quietly — a
+scheduled run turns red naming the missing secret, and a host converge refuses
+— but nothing is being watched. `docs/bootstrap-a-new-host.md` stage 6.1, stage
+7.1 and stage 7.3 are where those three are set, and its Appendix A carries the
+period and grace each check needs.
+
+The three checks, the slug each reports under, and the period and grace that
+decide when silence becomes an alarm are listed once, in
+`docs/bootstrap-a-new-host.md`'s Appendix A, beside the `HEARTBEAT_PING_KEY`
+secret they are addressed with. They are the observer's configuration, not this
+repository's, so nothing here can verify them.
+
 ### Re-enabling the drift-detection workflow
 
 GitHub automatically disables `schedule`-triggered workflows after 60 days
 without any repository activity. If the nightly drift check appears to have
 stopped running, check **Actions → Drift Detection → ⋯ → Enable workflow**,
 then trigger it once manually (`workflow_dispatch`) to confirm it runs clean.
+
+**A manual dispatch reports to the heartbeat check too, and so resets its
+silence timer.** After dispatching, confirm the schedule itself is enabled
+rather than reading the green check as evidence that it is: a workflow that is
+still disabled will look healthy for one whole period — a day for drift, a week
+for the autoupdate — before the alarm you were acting on comes back.
 
 ## Status
 
