@@ -11270,7 +11270,16 @@ class TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource(unittest.TestC
 
     def test_no_module_in_the_directory_imports_outside_the_pinned_manifest(self) -> None:
         """SPECIFIED -- "SHALL depend only on its runtime's standard library
-        and on dependencies pinned exactly in a repository manifest"."""
+        and on dependencies pinned exactly in a repository manifest".
+
+        A module of this suite importing a SIBLING module of the same suite is
+        neither: it is the suite reusing its own helpers, which is what keeps a
+        discovery rule or a parser in one place. Two modules on the trunk do
+        exactly that. So the siblings are enumerated from the directory and
+        allowed -- narrowly, by their own filenames, so that an import of
+        anything the directory does not contain still fails.
+        """
+        siblings = {module.stem for module in self._modules()}
         for module in self._modules():
             with self.subTest(module=module.name):
                 outside = sorted(
@@ -11278,6 +11287,7 @@ class TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource(unittest.TestC
                     for root in self._imported_roots(module)
                     if root not in sys.stdlib_module_names
                     and root not in TestTheSuiteNeedsNoPrivilegedResource.ALLOWED_THIRD_PARTY
+                    and root not in siblings
                 )
                 self.assertEqual(
                     [],
