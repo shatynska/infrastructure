@@ -286,3 +286,39 @@ Step 2 is what makes this a confirmation rather than a restatement of the diff.
 Delivery of a multi-certificate notification cannot be observed without a real
 firing, so the grouping is confirmed as configuration in step 4 rather than as
 an observed Slack message.
+
+## What was confirmed, on 2026-09-09
+
+The four steps above were performed against prod after the deploy that finally
+applied this change's configuration. **Which was not this change's own deploy.**
+
+This change merged as PR #109 and deployed green on 2026-09-09 at 05:55, and its
+rules did not reach the host: Compose does not include inline `configs:` content
+in the per-service digest it compares to decide whether to replace a container,
+so it replaced nothing and reported every container `Running` and `Healthy`.
+The rules sat in the stack definition on the host, unloaded, for about four
+hours. `apply-shipped-config-on-deploy` fixed that defect, and the deploy at
+09:03 replaced `prometheus`, `alertmanager` and `grafana`. That is the deploy
+these observations are taken after.
+
+| Step | Observed |
+|---|---|
+| 1 — rules loaded, no evaluation error | `/api/v1/rules` lists 9 rules where it listed 7. `TLSCertificateExpiringSoon` and `CertificateExpiryNotObserved` both `health=ok`, both `state=inactive` |
+| 2 — expression widened to 200 days | one series per certificate, each carrying `cn`: `fuperia.shatynska.com` at 70.38 days, `test.shatynska.com` at 69.98 |
+| 3 — at the committed 21 days | empty, which is correct at ~70 days out |
+| 4 — the route | present, `group_by: ["alertname", "cn"]`, `repeat_interval` 1d; the Watchdog route unchanged |
+
+**What was not observed, and cannot be.** That a multi-certificate notification
+actually names each hostname. Observing it needs two certificates inside 21 days
+of expiry at once, which would mean waiting for a real renewal failure or
+provoking one. Step 4 confirms the grouping *as configuration* — the property
+Decision 4 argues from — and that is the whole of what is established. The
+mechanism connecting it to a rendered Slack message is Alertmanager's, reasoned
+about here and not exercised.
+
+Nor was a firing alert observed at all: both certificates are ~70 days out and
+the rule is correctly inactive. What step 2 establishes is that the expression
+matches real series and carries the label the annotation and the route depend
+on — which is what separates a working rule from one that is loaded and
+permanently empty. Those two are otherwise indistinguishable, which is why that
+step exists.
