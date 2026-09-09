@@ -58,7 +58,7 @@ asserting, how each is expressed, and where in the suite they belong.
 ## 6. Ship
 
 - [x] 6.1 Open the pull request once section 5 is green, and wait for the operator's confirmation that continuous integration passed, that it merged, and that the platform deploy is healthy.
-- [ ] 6.2 Confirm the effect by the four steps in this change's `design.md` under "Confirming the effect". Step two — widening the threshold and seeing one series per certificate, each carrying a `cn` label — is the one that distinguishes a working rule from a permanently empty one. Wait for the operator's confirmation.
-- [ ] 6.3 Record in this change's artifacts that multi-certificate delivery was confirmed as configuration rather than as an observed notification, since observing it needs a real firing. Verify the record names what was and was not observed.
-- [ ] 6.4 Bring the branch back to the freshly fetched trunk.
-- [ ] 6.5 Commit the specification record and open its own pull request.
+- [x] 6.2 Confirm the effect by the four steps in this change's `design.md` under "Confirming the effect". Step two — widening the threshold and seeing one series per certificate, each carrying a `cn` label — is the one that distinguishes a working rule from a permanently empty one. Wait for the operator's confirmation.
+- [x] 6.3 Record in this change's artifacts that multi-certificate delivery was confirmed as configuration rather than as an observed notification, since observing it needs a real firing. Verify the record names what was and was not observed.
+- [x] 6.4 Bring the branch back to the freshly fetched trunk.
+- [x] 6.5 Commit the specification record and open its own pull request.
