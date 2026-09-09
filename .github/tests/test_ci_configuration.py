@@ -8885,5 +8885,984 @@ class TestTheWorkingTreeRootsAreIgnored(unittest.TestCase):
             )
 
 
+# --------------------------------------------------------------------------
+# iac-cicd-pipeline / Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge -- its instance-name and host-name clauses.
+# iac-repo-foundations / Verification Writing to Shared State Is Namespaced
+# per Working Tree -- its "The binding is stated, not merely implied" scenario.
+#
+# Derived from the delta specs of the OpenSpec change
+# `namespace-the-molecule-suite-per-working-tree`, before any implementation of
+# that change existed. See that change's test-plan.md for the
+# scenario-to-test mapping, the baseline, and the scenarios deliberately left
+# uncovered. Several of that change's run-time scenarios are properties of TWO
+# working trees at once, or of state left on the machine between sessions.
+# Neither this suite nor a Molecule scenario can observe those: this suite may
+# not start a container, and a Molecule scenario runs inside one container in
+# one working tree and cannot observe Molecule's own `create` refusing. They
+# are recorded as gaps in that manifest rather than covered here by something
+# weaker wearing their name.
+#
+# What IS here is the static half, and it belongs here for the reason AGENTS.md
+# ("Testing") gives: a property of a `molecule.yml` is a static read of a
+# committed file, while the behaviour that scenario exercises is Molecule's.
+# These read the same scenario definitions the digest-pinning checks above
+# already read, through the same `authored_scenario_files()`, so a scenario
+# added later is covered without an edit here and installed Galaxy content is
+# excluded by the same manifest-derived rule rather than by a second list.
+#
+# Nothing below needs a network call, a credential, a container runtime or a
+# Terraform binary, and nothing below adds an import.
+# --------------------------------------------------------------------------
+
+# Molecule's own interpolation, in the forms `molecule/interpolation.py`
+# actually resolves: `${VAR}`, `${VAR:-default}` and `${VAR-default}`. There is
+# no `:?` error form, so an unset variable substitutes EMPTY rather than
+# failing -- which is why the DEFAULT's own form is what has to fail closed
+# (design.md Decision 4) and why the check below reads it.
+SCENARIO_INTERPOLATION = re.compile(
+    r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::?-(?P<default>[^}]*))?\}"
+)
+
+# Docker's container-name grammar. A string matching it in FULL is one Docker
+# will accept, which is exactly what a name resolved with the namespace unset
+# must not be: a default that creates an instance successfully reinstates the
+# shared literal under a different spelling.
+DOCKER_CONTAINER_NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
+
+# Linux caps a host name at 64 bytes, and the docker driver derives a
+# container's host name from its instance name where the scenario declares
+# none. Verified by running, against this change's own working tree: a
+# 70-character instance name fails at `create` with
+# `Bad Request ("hostname is too long (maximum 64 bytes)")`, and the same name
+# creates once a short explicit `hostname` is declared (design.md Decision 3a).
+HOSTNAME_BYTE_LIMIT = 64
+
+# Stands in for whatever the namespace resolves to, so that two scenarios which
+# differ ONLY inside their interpolation are seen to collide: within one
+# working tree the namespace is one value, so they would resolve to one name.
+NAMESPACE_PLACEHOLDER = "<namespace>"
+
+
+def scenario_platform_declarations(root: Path | None = None):
+    """Yield (scenario, platform, declaration) over every authored scenario.
+
+    `declaration` is the platform's own mapping, or None where the document
+    cannot be parsed, declares no `platforms:`, declares an empty one, or
+    declares an entry that is not a mapping. None is yielded rather than the
+    entry being passed over, for the reason `scenario_platform_images()` gives:
+    a scenario silently exempted from a check is indistinguishable from one
+    that satisfies it.
+    """
+    base = ROOT if root is None else root
+    for path in authored_scenario_files(base):
+        label = path.relative_to(base).as_posix()
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as error:
+            yield label, f"<unparseable: {error.__class__.__name__}>", None
+            continue
+        platforms = document.get("platforms") if isinstance(document, dict) else None
+        if not isinstance(platforms, list) or not platforms:
+            yield label, "<no platforms declared>", None
+            continue
+        for index, platform in enumerate(platforms):
+            if not isinstance(platform, dict):
+                yield label, f"platforms[{index}]", None
+                continue
+            name = platform.get("name")
+            suffix = f" ({name})" if isinstance(name, str) and name.strip() else ""
+            yield label, f"platforms[{index}]{suffix}", platform
+
+
+def declared_field(declaration: object, field: str) -> str | None:
+    """The platform's `field`, or None where it is absent, empty, or not a
+    string."""
+    if not isinstance(declaration, dict):
+        return None
+    value = declaration.get(field)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def name_with_the_namespace_unset(name: str) -> str:
+    """The name Molecule hands the driver when nothing supplies the namespace:
+    every interpolation replaced by its declared default, or by the empty
+    string where it declares none."""
+    return SCENARIO_INTERPOLATION.sub(lambda match: match.group("default") or "", name)
+
+
+def name_with_the_namespace_elided(name: str) -> str:
+    return SCENARIO_INTERPOLATION.sub(NAMESPACE_PLACEHOLDER, name)
+
+
+def scenario_names_carrying_no_namespace(root: Path | None = None) -> list[str]:
+    """Report each platform whose instance name is a bare literal -- shared by
+    every working tree on the machine -- or which declares no name at all."""
+    offenders = []
+    for scenario, platform, declaration in scenario_platform_declarations(root):
+        name = declared_field(declaration, "name")
+        if name is None:
+            offenders.append(f"{scenario}: {platform} declares no instance name to read")
+        elif not SCENARIO_INTERPOLATION.search(name):
+            offenders.append(f"{scenario}: {platform} -> {name}")
+    return offenders
+
+
+def scenario_names_whose_unset_default_names_a_container(
+    root: Path | None = None,
+) -> list[str]:
+    """Report each interpolated instance name that STILL names a container when
+    the namespace is unset.
+
+    Names carrying no interpolation are left to the check above rather than
+    reported twice; the two properties are distinct and read better apart.
+    """
+    offenders = []
+    for scenario, platform, declaration in scenario_platform_declarations(root):
+        name = declared_field(declaration, "name")
+        if name is None or not SCENARIO_INTERPOLATION.search(name):
+            continue
+        resolved = name_with_the_namespace_unset(name)
+        if DOCKER_CONTAINER_NAME.fullmatch(resolved):
+            offenders.append(
+                f"{scenario}: {platform} -> {name} resolves to {resolved!r} with the "
+                f"namespace unset, which Docker accepts as a container name"
+            )
+    return offenders
+
+
+def scenario_namespace_variables(root: Path | None = None) -> dict[str, list[str]]:
+    """Every variable the authored instance names interpolate, and where."""
+    found: dict[str, list[str]] = {}
+    for scenario, platform, declaration in scenario_platform_declarations(root):
+        name = declared_field(declaration, "name")
+        if name is None:
+            continue
+        for match in SCENARIO_INTERPOLATION.finditer(name):
+            found.setdefault(match.group("name"), []).append(f"{scenario}: {platform}")
+    return found
+
+
+def scenario_names_colliding_within_one_working_tree(
+    root: Path | None = None,
+) -> list[str]:
+    """Report each resolved name more than one platform would take inside one
+    working tree, where the namespace is a single value."""
+    by_resolved: dict[str, list[str]] = {}
+    for scenario, platform, declaration in scenario_platform_declarations(root):
+        name = declared_field(declaration, "name")
+        if name is None:
+            continue
+        by_resolved.setdefault(name_with_the_namespace_elided(name), []).append(
+            f"{scenario}: {platform}"
+        )
+    return sorted(
+        f"{resolved} is declared by {sorted(where)}"
+        for resolved, where in by_resolved.items()
+        if len(where) > 1
+    )
+
+
+def scenarios_declaring_no_explicit_host_name(root: Path | None = None) -> list[str]:
+    offenders = []
+    for scenario, platform, declaration in scenario_platform_declarations(root):
+        if declared_field(declaration, "hostname") is None:
+            offenders.append(f"{scenario}: {platform}")
+    return offenders
+
+
+def host_names_not_bounded_independently_of_the_instance_name(
+    root: Path | None = None,
+) -> list[str]:
+    """Report each declared host name the 64-byte limit is not known to hold
+    for: one carrying an interpolation, whose length is therefore decided by
+    the working tree rather than by the scenario, or one already over it."""
+    offenders = []
+    for scenario, platform, declaration in scenario_platform_declarations(root):
+        hostname = declared_field(declaration, "hostname")
+        if hostname is None:
+            continue
+        if "$" in hostname:
+            offenders.append(
+                f"{scenario}: {platform} -> hostname {hostname!r} is interpolated, so "
+                f"its length is decided by the working tree rather than by the scenario"
+            )
+            continue
+        size = len(hostname.encode("utf-8"))
+        if size > HOSTNAME_BYTE_LIMIT:
+            offenders.append(
+                f"{scenario}: {platform} -> hostname {hostname!r} is {size} bytes, over "
+                f"the {HOSTNAME_BYTE_LIMIT}-byte limit `create` enforces"
+            )
+    return offenders
+
+
+# The variable name below is a FIXTURE's, not a constraint on the
+# implementation: nothing here reads it, and every check above reads whatever
+# variable a scenario names. design.md Decision 5 rules out a
+# `MOLECULE_`-prefixed one, which is why this fixture does not use one either.
+FIXTURE_NAMESPACE_VARIABLE = "WORKTREE_NAMESPACE"
+
+# A default containing a character Docker forbids in a container name, so a run
+# with nothing set fails at `create` and the message says what to set.
+FIXTURE_REFUSING_DEFAULT = "unset:run-molecule-through-the-entry-point"
+
+
+def namespaced_scenario_document(
+    name: str,
+    hostname: str | None = "instance",
+    image: str | None = PINNED_IMAGE,
+) -> str:
+    """A structurally real scenario definition whose instance name and host name
+    a fixture chooses. `scenario_document()` above builds the same shape for the
+    pinning checks; this one adds the two fields these checks read."""
+    body = f'---\ndriver:\n  name: docker\nplatforms:\n  - name: "{name}"\n'
+    if hostname is not None:
+        body += f'    hostname: "{hostname}"\n'
+    if image is not None:
+        body += f"    image: {image}\n"
+    return body
+
+
+class TestEveryAuthoredScenarioNamesItsInstancePerWorkingTree(
+    ScenarioTreeFixtureMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge -- the clause obliging every scenario to
+    declare an instance name resolving per working tree, a default that cannot
+    name a container at all, and an explicit host name.
+
+    Read against the real tree. The class below runs the same checks against
+    fixture trees, which is what establishes that they discriminate.
+    """
+
+    def test_every_authored_scenarios_instance_name_carries_the_namespace(self) -> None:
+        """SPECIFIED -- scenario "Every authored scenario's instance name carries
+        the namespace": "every declared instance name SHALL carry the
+        working-tree namespace ... a scenario declaring a bare literal name ...
+        SHALL fail those checks".
+
+        WHICH variable carries it is deliberately not asserted: the requirement
+        obliges the name to resolve per working tree, not to spell one
+        identifier, and pinning a spelling here would oblige an implementation
+        to a name no artifact of this change fixes.
+        """
+        offenders = scenario_names_carrying_no_namespace()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these instance names are literals shared by every working tree on the "
+            f"machine, so two sessions running the role drive one container: "
+            f"{offenders}",
+        )
+
+    def test_every_authored_scenarios_unset_default_cannot_name_a_container(self) -> None:
+        """SPECIFIED -- the second half of the same scenario: "its default SHALL
+        be one that cannot name a container at all rather than one that merely
+        looks wrong; ... a default that would successfully create a shared
+        instance, SHALL fail those checks".
+
+        Molecule substitutes EMPTY for an unset variable and has no error form,
+        so a name spelled `${VAR}` fails OPEN -- it resolves to the old shared
+        literal with an empty tail. This check reads the RESOLVED string, which
+        catches that alongside a benign `-unset` default.
+
+        Guarded against reading nothing: a tree whose names interpolate nothing
+        has no default to inspect, and this assertion would pass over it in
+        silence -- which is how it would read on the arrangement before this
+        change, and on any later one that removed the namespace outright.
+        """
+        self.assertTrue(
+            scenario_namespace_variables(),
+            "no authored instance name interpolates anything, so there is no "
+            "default for this assertion to read and its silence establishes "
+            "nothing",
+        )
+        offenders = scenario_names_whose_unset_default_names_a_container()
+        self.assertEqual(
+            [],
+            offenders,
+            f"a run started with no namespace would create these instances rather "
+            f"than refusing, which reinstates the shared name under another "
+            f"spelling: {offenders}",
+        )
+
+    def test_the_authored_scenarios_agree_on_one_namespace_variable(self) -> None:
+        """DERIVED -- no scenario states it. The requirement says "the
+        working-tree namespace", singular, and a session sets one variable
+        before running the suite; a scenario reading a second one would be
+        namespaced only for a session that happened to know about it, and would
+        silently keep a shared name for every other.
+        """
+        variables = scenario_namespace_variables()
+        self.assertTrue(
+            variables,
+            "no authored scenario interpolates anything into its instance name, so "
+            "there is no namespace for this assertion to read",
+        )
+        self.assertEqual(
+            1,
+            len(variables),
+            f"the authored scenarios interpolate more than one variable into their "
+            f"instance names, so setting the one a session knows about leaves the "
+            f"others on a shared name: "
+            f"{ {name: sorted(where) for name, where in variables.items()} }",
+        )
+
+    def test_no_two_authored_scenarios_resolve_to_one_name_within_a_working_tree(
+        self,
+    ) -> None:
+        """DERIVED -- tasks.md 2.2 ("no two names collide within one working
+        tree"); no scenario states it. Within one working tree the namespace is
+        a single value, so two scenarios differing only inside their
+        interpolation resolve to one container -- the collision this change
+        exists to remove, reproduced inside a single session.
+        """
+        offenders = scenario_names_colliding_within_one_working_tree()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these scenarios resolve to one instance name inside a working tree, so "
+            f"a sibling's live container collides with them on `create`: {offenders}",
+        )
+
+    def test_every_authored_scenario_declares_an_explicit_host_name(self) -> None:
+        """SPECIFIED -- scenario "Every authored scenario bounds its instance's
+        host name": "every scenario SHALL declare an explicit host name for its
+        instance, and a scenario declaring none SHALL fail those checks"."""
+        offenders = scenarios_declaring_no_explicit_host_name()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these platforms declare no `hostname`, so the docker driver derives one "
+            f"from the namespaced instance name and `create` fails once a working "
+            f"tree's own name grows past {HOSTNAME_BYTE_LIMIT} bytes: {offenders}",
+        )
+
+    def test_every_declared_host_name_is_bounded_by_the_scenario_itself(self) -> None:
+        """SPECIFIED -- the same scenario's "bounded independently of the
+        instance name". A host name interpolating the namespace would be bounded
+        by the working tree's own name again, which is the thing the `hostname`
+        field exists to stop being true.
+
+        This establishes the limit is respected by what the file DECLARES. That
+        the docker driver then creates the instance is a run-time property of a
+        container this suite may not start -- see test-plan.md.
+
+        Guarded against reading nothing, for the reason its sibling above gives:
+        a tree declaring no `hostname` anywhere leaves this check inspecting an
+        empty set, which passes while establishing nothing.
+        """
+        self.assertEqual(
+            [],
+            scenarios_declaring_no_explicit_host_name(),
+            "some scenario declares no `hostname`, so this assertion is reading a "
+            "partial set; the sibling assertion above names them",
+        )
+        offenders = host_names_not_bounded_independently_of_the_instance_name()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these host names are not bounded by the scenario that declares them: "
+            f"{offenders}",
+        )
+
+
+class TestTheInstanceNameChecksAreARealReadOfTheFile(
+    ScenarioTreeFixtureMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Ansible Configuration Is Verified in Continuous
+    Integration and Gates the Merge.
+
+    The class above would pass identically if every check returned an empty list
+    unconditionally. These run the same checks against fixture trees carrying
+    each defect the requirement names, so that a green result there means the
+    checks discriminate rather than that they read nothing.
+    """
+
+    NAMESPACED = f"instance-${{{FIXTURE_NAMESPACE_VARIABLE}:-{FIXTURE_REFUSING_DEFAULT}}}"
+
+    def test_a_bare_literal_name_is_reported(self) -> None:
+        """SPECIFIED -- "a scenario declaring a bare literal name ... SHALL fail
+        those checks". This is the shape of every scenario's name before this
+        change."""
+        root = self.scratch_tree(
+            {
+                ("literal", "default"): namespaced_scenario_document("swap-role-instance"),
+                ("namespaced", "default"): namespaced_scenario_document(self.NAMESPACED),
+            }
+        )
+        offenders = scenario_names_carrying_no_namespace(root)
+        self.assertEqual(1, len(offenders), f"expected exactly the literal: {offenders}")
+        self.assertIn("ansible/roles/literal/molecule/default/molecule.yml", offenders[0])
+        self.assertIn("swap-role-instance", offenders[0])
+
+    def test_a_benign_default_that_would_still_create_an_instance_is_reported(self) -> None:
+        """SPECIFIED -- "its default SHALL be one that cannot name a container at
+        all rather than one that merely looks wrong".
+
+        `-unset` is the alternative design.md Decision 4 rejects by name: it
+        makes the mistake visible in `docker ps` while still letting two
+        forgetful sessions collide, which is the same fail-open wearing a label.
+        A check looking only for the PRESENCE of an interpolation would pass it.
+        """
+        root = self.scratch_tree(
+            {
+                ("benign", "default"): namespaced_scenario_document(
+                    f"instance-${{{FIXTURE_NAMESPACE_VARIABLE}:-unset}}"
+                ),
+            }
+        )
+        self.assertEqual(
+            [],
+            scenario_names_carrying_no_namespace(root),
+            "a benign default was reported as carrying no namespace at all, which is "
+            "not the defect it has",
+        )
+        offenders = scenario_names_whose_unset_default_names_a_container(root)
+        self.assertEqual(
+            1, len(offenders), f"the benign default was not reported: {offenders}"
+        )
+        self.assertIn("instance-unset", offenders[0])
+
+    def test_an_interpolation_declaring_no_default_at_all_is_reported(self) -> None:
+        """SPECIFIED -- the same clause, reached by the route design.md Decision 4
+        says is the naive one: Molecule substitutes EMPTY for an unset variable,
+        so `${VAR}` resolves to the old shared literal with an empty tail and
+        creates it."""
+        root = self.scratch_tree(
+            {
+                ("no_default", "default"): namespaced_scenario_document(
+                    f"swap-role-instance-${{{FIXTURE_NAMESPACE_VARIABLE}}}"
+                ),
+            }
+        )
+        offenders = scenario_names_whose_unset_default_names_a_container(root)
+        self.assertEqual(
+            1, len(offenders), f"the empty substitution was not reported: {offenders}"
+        )
+        self.assertIn("swap-role-instance-", offenders[0])
+
+    def test_a_default_that_cannot_name_a_container_is_accepted(self) -> None:
+        """SPECIFIED -- the positive half. Without it the two checks above would
+        be satisfied by one rejecting every default, which would leave no name
+        able to pass."""
+        root = self.scratch_tree(
+            {("ok", "default"): namespaced_scenario_document(self.NAMESPACED)}
+        )
+        self.assertEqual([], scenario_names_carrying_no_namespace(root))
+        self.assertEqual([], scenario_names_whose_unset_default_names_a_container(root))
+        self.assertEqual([], scenarios_declaring_no_explicit_host_name(root))
+        self.assertEqual([], host_names_not_bounded_independently_of_the_instance_name(root))
+
+    def test_a_scenario_declaring_no_platform_is_reported_rather_than_passed_over(
+        self,
+    ) -> None:
+        """SPECIFIED -- the same reason its sibling pinning check gives: a
+        scenario silently exempted from a check is indistinguishable from one
+        that satisfies it. Three shapes leave nothing to read."""
+        root = self.scratch_tree(
+            {
+                ("no_platforms", "default"): "---\ndriver:\n  name: docker\n",
+                ("empty_platforms", "default"): "---\ndriver:\n  name: docker\nplatforms: []\n",
+                ("no_name", "default"): (
+                    "---\ndriver:\n  name: docker\nplatforms:\n  - hostname: instance\n"
+                ),
+                ("ok", "default"): namespaced_scenario_document(self.NAMESPACED),
+            }
+        )
+        offenders = scenario_names_carrying_no_namespace(root)
+        self.assertEqual(3, len(offenders), f"expected three scenarios reported: {offenders}")
+        for role in ("no_platforms", "empty_platforms", "no_name"):
+            self.assertTrue(
+                any(f"ansible/roles/{role}/molecule/default/" in entry for entry in offenders),
+                f"the scenario under {role}/ was passed over rather than identified: "
+                f"{offenders}",
+            )
+        self.assertFalse(any("/ok/" in entry for entry in offenders))
+
+    def test_a_scenario_declaring_no_host_name_is_reported(self) -> None:
+        """SPECIFIED -- "a scenario declaring none SHALL fail those checks"."""
+        root = self.scratch_tree(
+            {
+                ("bare", "default"): namespaced_scenario_document(
+                    self.NAMESPACED, hostname=None
+                ),
+                ("ok", "default"): namespaced_scenario_document(self.NAMESPACED),
+            }
+        )
+        offenders = scenarios_declaring_no_explicit_host_name(root)
+        self.assertEqual(1, len(offenders), f"expected exactly the bare scenario: {offenders}")
+        self.assertIn("ansible/roles/bare/molecule/default/molecule.yml", offenders[0])
+
+    def test_a_host_name_interpolating_the_namespace_is_reported(self) -> None:
+        """SPECIFIED -- "bounded independently of the instance name". A
+        `hostname` carrying the namespace would be back under the working tree's
+        own length, which is precisely the failure the field exists to prevent
+        -- and a check testing only for the field's PRESENCE would pass it."""
+        root = self.scratch_tree(
+            {
+                ("derived", "default"): namespaced_scenario_document(
+                    self.NAMESPACED,
+                    hostname=f"instance-${{{FIXTURE_NAMESPACE_VARIABLE}}}",
+                ),
+            }
+        )
+        offenders = host_names_not_bounded_independently_of_the_instance_name(root)
+        self.assertEqual(
+            1, len(offenders), f"the interpolated host name was not reported: {offenders}"
+        )
+        self.assertIn("interpolated", offenders[0])
+
+    def test_a_host_name_over_the_byte_limit_is_reported(self) -> None:
+        """SPECIFIED -- the limit itself. 65 bytes is one past what `create`
+        accepted in the run design.md Decision 3a records; the sibling at
+        exactly the limit is asserted NOT to be reported, so the boundary is
+        established rather than assumed."""
+        root = self.scratch_tree(
+            {
+                ("long", "default"): namespaced_scenario_document(
+                    self.NAMESPACED, hostname="a" * (HOSTNAME_BYTE_LIMIT + 1)
+                ),
+                ("at_limit", "default"): namespaced_scenario_document(
+                    self.NAMESPACED, hostname="b" * HOSTNAME_BYTE_LIMIT
+                ),
+            }
+        )
+        offenders = host_names_not_bounded_independently_of_the_instance_name(root)
+        self.assertEqual(1, len(offenders), f"expected exactly the over-long name: {offenders}")
+        self.assertIn("ansible/roles/long/molecule/default/molecule.yml", offenders[0])
+        self.assertIn(str(HOSTNAME_BYTE_LIMIT + 1), offenders[0])
+
+    def test_two_scenarios_resolving_to_one_name_are_reported(self) -> None:
+        """DERIVED -- tasks.md 2.2. Two scenarios whose literal parts agree
+        resolve to one container inside any single working tree, however well
+        namespaced they are against another tree."""
+        root = self.scratch_tree(
+            {
+                ("role_a", "default"): namespaced_scenario_document(self.NAMESPACED),
+                ("role_b", "default"): namespaced_scenario_document(self.NAMESPACED),
+                ("role_c", "default"): namespaced_scenario_document(f"other-{self.NAMESPACED}"),
+            }
+        )
+        offenders = scenario_names_colliding_within_one_working_tree(root)
+        self.assertEqual(1, len(offenders), f"expected exactly the shared name: {offenders}")
+        self.assertIn("role_a", offenders[0])
+        self.assertIn("role_b", offenders[0])
+        self.assertNotIn("role_c", offenders[0])
+
+    def test_scenarios_disagreeing_on_the_namespace_variable_are_reported(self) -> None:
+        """DERIVED -- see the real-tree assertion of the same property."""
+        root = self.scratch_tree(
+            {
+                ("role_a", "default"): namespaced_scenario_document(
+                    f"a-${{{FIXTURE_NAMESPACE_VARIABLE}:-{FIXTURE_REFUSING_DEFAULT}}}"
+                ),
+                ("role_b", "default"): namespaced_scenario_document(
+                    f"b-${{ANOTHER_NAMESPACE:-{FIXTURE_REFUSING_DEFAULT}}}"
+                ),
+            }
+        )
+        self.assertEqual(
+            {FIXTURE_NAMESPACE_VARIABLE, "ANOTHER_NAMESPACE"},
+            set(scenario_namespace_variables(root)),
+            "the two variables the fixture scenarios interpolate were not both read",
+        )
+
+    def test_the_checks_reach_a_scenario_at_a_role_path_they_do_not_name(self) -> None:
+        """SPECIFIED -- "A scenario SHALL NOT be exempt from this by being newly
+        added" and "A scenario added later SHALL be covered without an edit to
+        the check". A scenario is placed at a role path appearing nowhere in
+        this file and each check is asserted to reach it."""
+        root = self.scratch_tree(
+            {
+                ("ok", "default"): namespaced_scenario_document(self.NAMESPACED),
+                ("a_role_added_later", "a_scenario_added_later"): namespaced_scenario_document(
+                    "a-literal-instance", hostname=None
+                ),
+            }
+        )
+        added = "ansible/roles/a_role_added_later/molecule/a_scenario_added_later/molecule.yml"
+        self.assertIn(added, self.discovered(root))
+        self.assertTrue(
+            any(added in entry for entry in scenario_names_carrying_no_namespace(root)),
+            "a scenario added later with a bare literal name was passed over",
+        )
+        self.assertTrue(
+            any(added in entry for entry in scenarios_declaring_no_explicit_host_name(root)),
+            "a scenario added later declaring no host name was passed over",
+        )
+
+    def test_installed_galaxy_content_is_not_held_to_these_obligations(self) -> None:
+        """SPECIFIED -- "The obligation SHALL NOT extend to scenarios shipped by
+        Galaxy content installed from `ansible/requirements.yml`", and the clause
+        requiring the exclusion be derived from that manifest.
+
+        The Galaxy scenario here carries every defect the checks look for. It is
+        excluded because the fixture manifest names its directory, not because
+        anything here names it -- and with the manifest emptied, the identical
+        scenario IS reported, which is what shows the exclusion is derived
+        rather than hardcoded.
+        """
+        excluded = self.scratch_tree(
+            {
+                ("ok", "default"): namespaced_scenario_document(self.NAMESPACED),
+                ("geerlingguy.docker", "default"): namespaced_scenario_document(
+                    "instance", hostname=None
+                ),
+            }
+        )
+        self.assertEqual([], scenario_names_carrying_no_namespace(excluded))
+        self.assertEqual([], scenarios_declaring_no_explicit_host_name(excluded))
+        self.assertEqual([], scenario_names_whose_unset_default_names_a_container(excluded))
+        unbounded = self.scratch_tree(
+            {
+                ("ok", "default"): namespaced_scenario_document(self.NAMESPACED),
+                ("geerlingguy.docker", "default"): namespaced_scenario_document(
+                    "instance", hostname=None
+                ),
+            },
+            manifest="roles: []\n",
+        )
+        self.assertTrue(
+            scenario_names_carrying_no_namespace(unbounded),
+            "with the manifest naming no installed content, the same scenario was "
+            "still excluded -- so the exclusion is not derived from the manifest",
+        )
+
+
+# --------------------------------------------------------------------------
+# iac-repo-foundations / Verification Writing to Shared State Is Namespaced per
+# Working Tree -- "`AGENTS.md` SHALL carry a section binding this requirement
+# to each service it governs, naming the state, the namespace, and how a
+# session takes one", and its scenario "The binding is stated, not merely
+# implied": "the pipeline's own configuration checks SHALL fail where that
+# statement is absent".
+#
+# The sibling of TestTheConventionsFileStatesTheMoleculeSharedStateHazard
+# above, and deliberately separate from it. That class asserts the hazard is
+# DESCRIBED, so a session can recognise a collision. This one asserts the rule
+# is BOUND, so the hazard is removed rather than merely recognisable. A file can
+# satisfy the first and not the second -- which is exactly the state this
+# repository has been in, and what this change closes.
+#
+# Matched on load-bearing words rather than on a heading, for the reason that
+# class gives. The fragments are ones a description of the hazard alone does not
+# already satisfy: `collections` and `ansible-galaxy` appear nowhere below the
+# generated block before this change, so this cannot pass on the pre-change
+# file.
+# --------------------------------------------------------------------------
+
+MOLECULE_BINDING_ANCHOR = "ANSIBLE_HOME"
+MOLECULE_BINDING_FRAGMENTS = (
+    "Molecule",
+    "namespace",
+    "ephemeral directory",
+    "collections",
+    "ansible-galaxy",
+)
+MOLECULE_BINDING_LOCALITY = 2500
+COORDINATION_IS_THE_WHOLE_SAFEGUARD = "coordination between sessions is the whole safeguard"
+
+BACKTICKED = re.compile(r"`([^`\n]+)`")
+NOT_IN_A_PATH = set(" \t*<>~$|()[]{}")
+
+
+def conventions_below_the_generated_block(text: str) -> str:
+    """The project's own conventions, flattened, with the generated workflow
+    block dropped. A statement inside that block is one the next regeneration
+    deletes, so it does not count as stated."""
+    end = text.find(MANAGED_BLOCK_END)
+    if end == -1:
+        raise AssertionError(
+            f"AGENTS.md carries no {MANAGED_BLOCK_END!r} marker, so this check cannot "
+            f"tell the generated block from the project's own conventions"
+        )
+    return flattened(text[end + len(MANAGED_BLOCK_END) :])
+
+
+def binding_spans(text: str) -> list[str]:
+    """Every neighbourhood of the conventions in which the binding could be
+    stated: a window either side of each mention of the lever it turns on."""
+    below = conventions_below_the_generated_block(text)
+    spans = []
+    start = below.find(MOLECULE_BINDING_ANCHOR)
+    while start != -1:
+        spans.append(
+            below[max(0, start - MOLECULE_BINDING_LOCALITY) : start + MOLECULE_BINDING_LOCALITY]
+        )
+        start = below.find(MOLECULE_BINDING_ANCHOR, start + 1)
+    return spans
+
+
+def binding_fragments_missing(text: str) -> list[str]:
+    """What the closest thing to a binding section still lacks, or [] where some
+    one neighbourhood carries every fragment.
+
+    Order is not asserted: the requirement obliges the section to NAME three
+    things, not to name them in a sequence, and a check pinning one would fail a
+    correct file.
+    """
+    spans = binding_spans(text)
+    if not spans:
+        return [MOLECULE_BINDING_ANCHOR, *MOLECULE_BINDING_FRAGMENTS]
+    closest = None
+    for span in spans:
+        folded = span.casefold()
+        missing = [
+            fragment
+            for fragment in MOLECULE_BINDING_FRAGMENTS
+            if fragment.casefold() not in folded
+        ]
+        if not missing:
+            return []
+        if closest is None or len(missing) < len(closest):
+            closest = missing
+    return closest or []
+
+
+def entry_points_named_by_the_binding(text: str, root: Path | None = None) -> list[str]:
+    """Repository paths the binding names that resolve to a runnable file.
+
+    "How a session takes one" is not satisfied by prose alone: a session needs
+    something to run. A backticked token is read as an entry point where it
+    resolves to a committed file that is executable or opens with a shebang --
+    which no file this repository commits did before this change.
+    """
+    base = ROOT if root is None else root
+    found = set()
+    for span in binding_spans(text):
+        for token in BACKTICKED.findall(span):
+            candidate = token.strip()
+            if candidate.startswith("./"):
+                candidate = candidate[2:]
+            if not candidate or candidate.startswith("/"):
+                continue
+            if set(candidate) & NOT_IN_A_PATH:
+                continue
+            path = base / candidate
+            if not path.is_file():
+                continue
+            with path.open("rb") as handle:
+                shebang = handle.read(2) == b"#!"
+            if shebang or os.access(path, os.X_OK):
+                found.add(candidate)
+    return sorted(found)
+
+
+class TestTheConventionsFileBindsTheSharedStateRuleToMolecule(unittest.TestCase):
+    """ADDED requirement: Verification Writing to Shared State Is Namespaced per
+    Working Tree.
+
+    Read against the real file. Every assertion reads the conventions BELOW the
+    generated workflow block, so a binding stated inside that block -- which the
+    next regeneration replaces -- satisfies none of them.
+    """
+
+    def setUp(self) -> None:
+        self.text = read_text(AGENTS_FILE)
+
+    def test_the_conventions_file_carries_the_binding_section(self) -> None:
+        """SPECIFIED -- "`AGENTS.md` SHALL carry a section binding this
+        requirement to each service it governs, naming the state, the namespace,
+        and how a session takes one", and scenario "The binding is stated, not
+        merely implied".
+
+        DERIVED in its fragments: `collections` and `ansible-galaxy` trace to
+        design.md Decision 2, which records that a fresh namespace fails at
+        `create` until the shared collections path is supplied and that the
+        binding section names that one-time install. They are the fragments a
+        statement of the hazard alone does not already carry.
+        """
+        missing = binding_fragments_missing(self.text)
+        self.assertEqual(
+            [],
+            missing,
+            f"AGENTS.md states the Molecule shared-state hazard but binds no mechanism "
+            f"to it: {missing} not found near {MOLECULE_BINDING_ANCHOR!r} below the "
+            f"generated block. A stated rule with nothing bound to it is not "
+            f"enforceable by a reviewer, which is the state this repository ran in "
+            f"for months",
+        )
+
+    def test_the_binding_names_an_entry_point_committed_to_this_repository(self) -> None:
+        """SPECIFIED -- "how a session takes one". A session takes a namespace by
+        running something; naming no runnable thing leaves the mechanism a ritual
+        each session reconstructs, which design.md Decision 6 is written against.
+
+        DERIVED in what counts as runnable: a committed file that is executable
+        or opens with a shebang. No file this repository commits satisfied that
+        before this change, so this cannot pass vacuously.
+        """
+        found = entry_points_named_by_the_binding(self.text)
+        self.assertTrue(
+            found,
+            "the binding names no committed, runnable entry point, so a session is "
+            "left to reconstruct the invocation -- and a reconstruction that omits "
+            "the ephemeral directory looks identical to one that does not",
+        )
+
+    def test_the_conventions_file_no_longer_says_coordination_is_the_whole_safeguard(
+        self,
+    ) -> None:
+        """DERIVED -- tasks.md 5.4; no scenario states it. AGENTS.md currently
+        tells a session that "coordination between sessions is the whole
+        safeguard". Once the binding exists that is false, and a session
+        believing it would coordinate by hand instead of using the mechanism --
+        leaving the change's whole benefit unclaimed while the file says the old
+        thing.
+        """
+        below = conventions_below_the_generated_block(self.text)
+        self.assertNotIn(
+            COORDINATION_IS_THE_WHOLE_SAFEGUARD,
+            below,
+            "AGENTS.md still tells a session that coordination between sessions is "
+            "the whole safeguard, which the binding this change adds makes untrue",
+        )
+
+
+class TestTheBindingCheckIsARealReadOfTheFile(unittest.TestCase):
+    """ADDED requirement: Verification Writing to Shared State Is Namespaced per
+    Working Tree -- the discriminating half of scenario "The binding is stated,
+    not merely implied": the checks "SHALL fail where that statement is absent".
+
+    The class above would pass identically against a check that read nothing.
+    These run it over synthetic conventions files, which is what establishes it
+    fails on a tree with the section removed rather than only passing on one
+    with it present.
+    """
+
+    BOUND = (
+        "## Testing\n\n"
+        "Molecule is the one shared service this repository's verification writes "
+        "to. Each working tree takes its own namespace, computed deterministically "
+        "from the tree, and both live handles carry it: the instance name in each "
+        "platform's name field, and the ephemeral directory under a relocated "
+        "`ANSIBLE_HOME`. Run the suite through `scripts/molecule-run`, which "
+        "computes both and execs Molecule. Collections stay shared and are "
+        "installed once per machine with `ansible-galaxy`.\n"
+    )
+
+    def conventions(self, body: str, above: str = "") -> str:
+        return (
+            "<!-- ai-toolkit:development-workflow v3 -->\n"
+            f"{above}\n"
+            f"{MANAGED_BLOCK_END}\n\n"
+            "## Project conventions\n\n"
+            f"{body}"
+        )
+
+    def tree_carrying(self, files: dict, executable: tuple = ()) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="molecule-binding-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for name, content in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            if name in executable:
+                path.chmod(0o755)
+        return root
+
+    def test_a_bound_conventions_file_raises_no_offence(self) -> None:
+        self.assertEqual([], binding_fragments_missing(self.conventions(self.BOUND)))
+
+    def test_a_conventions_file_that_only_describes_the_hazard_is_reported(self) -> None:
+        """The pre-change state, in miniature: the hazard is stated, the lever is
+        named, and nothing is bound to it."""
+        described = (
+            "## Testing\n\nMolecule's state is shared across working trees. The "
+            "ephemeral directory is `$ANSIBLE_HOME/tmp/molecule.<id>.<scenario>` and "
+            "Molecule does not remove it. Until these handles are namespaced per "
+            "working tree, coordination between sessions is the whole safeguard.\n"
+        )
+        missing = binding_fragments_missing(self.conventions(described))
+        self.assertEqual(
+            ["collections", "ansible-galaxy"],
+            missing,
+            f"a file that only describes the hazard was not reported as unbound: "
+            f"{missing}",
+        )
+
+    def test_a_binding_stated_inside_the_generated_block_does_not_count(self) -> None:
+        """The generated workflow block is replaced on update, so a statement
+        inside it is one the next regeneration deletes -- the disappearance this
+        assertion exists to prevent, reached by another route."""
+        missing = binding_fragments_missing(
+            self.conventions("## Testing\n\nNothing.\n", above=self.BOUND)
+        )
+        self.assertEqual(
+            [MOLECULE_BINDING_ANCHOR, *MOLECULE_BINDING_FRAGMENTS],
+            missing,
+            f"a binding stated inside the generated block was accepted: {missing}",
+        )
+
+    def test_a_conventions_file_with_no_marker_fails_rather_than_reading_nothing(
+        self,
+    ) -> None:
+        """An absent marker means the check cannot tell the generated block from
+        the project's own conventions. It refuses rather than reading the whole
+        file, which would accept a binding stated inside the block."""
+        with self.assertRaises(AssertionError):
+            binding_fragments_missing("## Testing\n\n" + self.BOUND)
+
+    def test_the_statement_this_change_retires_is_detected(self) -> None:
+        """The negative assertion's own discrimination: it has to see the
+        sentence where it is present, or its silence establishes nothing."""
+        described = self.conventions(
+            "## Testing\n\nUntil these handles are namespaced per working tree, "
+            "coordination between sessions is the whole safeguard.\n"
+        )
+        self.assertIn(
+            COORDINATION_IS_THE_WHOLE_SAFEGUARD,
+            conventions_below_the_generated_block(described),
+        )
+        self.assertNotIn(
+            COORDINATION_IS_THE_WHOLE_SAFEGUARD,
+            conventions_below_the_generated_block(self.conventions(self.BOUND)),
+        )
+
+    def test_a_named_entry_point_that_is_committed_and_runnable_is_found(self) -> None:
+        root = self.tree_carrying(
+            {"scripts/molecule-run": '#!/usr/bin/env bash\nexec molecule "$@"\n'}
+        )
+        self.assertEqual(
+            ["scripts/molecule-run"],
+            entry_points_named_by_the_binding(self.conventions(self.BOUND), root),
+        )
+
+    def test_an_entry_point_named_but_not_committed_is_not_found(self) -> None:
+        """A binding may name a script the change forgot to add. Prose alone is
+        not a mechanism, so the check reads the tree rather than the sentence."""
+        self.assertEqual(
+            [],
+            entry_points_named_by_the_binding(
+                self.conventions(self.BOUND),
+                self.tree_carrying({"README.md": "nothing here\n"}),
+            ),
+        )
+
+    def test_a_configuration_file_the_binding_mentions_is_not_read_as_an_entry_point(
+        self,
+    ) -> None:
+        """The binding will name files that are not entry points -- a manifest, a
+        workflow. Neither is runnable, and reading one as the mechanism would let
+        this pass with no entry point at all."""
+        body = self.BOUND.replace("`scripts/molecule-run`", "`ansible/requirements.yml`")
+        root = self.tree_carrying({"ansible/requirements.yml": "roles: []\n"})
+        self.assertEqual([], entry_points_named_by_the_binding(self.conventions(body), root))
+
+    def test_an_entry_point_carrying_the_executable_bit_and_no_shebang_is_found(self) -> None:
+        """DERIVED -- either signal is accepted. Requiring both would fail a
+        correct entry point for a reason no artifact of this change states."""
+        root = self.tree_carrying(
+            {"scripts/molecule-run": 'exec molecule "$@"\n'},
+            executable=("scripts/molecule-run",),
+        )
+        self.assertEqual(
+            ["scripts/molecule-run"],
+            entry_points_named_by_the_binding(self.conventions(self.BOUND), root),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

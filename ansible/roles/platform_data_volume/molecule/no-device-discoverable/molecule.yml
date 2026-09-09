@@ -48,7 +48,13 @@ platforms:
   # `multiple-devices-discoverable` scenario: two scenarios of one role
   # sharing an instance name collide on `create` whenever a sibling's
   # container is still up.
-  - name: platform-data-volume-no-device-instance
+  # Instance name namespaced per working tree, with a default Docker refuses,
+  # and an explicit `hostname` because the driver would otherwise derive one
+  # from the name and cross the 64-byte limit. See
+  # ansible/roles/docker/molecule/default/molecule.yml for the full account --
+  # every scenario must agree on the variable.
+  - name: platform-data-volume-no-device-instance-${INFRA_WORKTREE_NS:-unset:run-via-ansible/scripts/run-molecule}
+    hostname: platform-data-volume-no-device
     # Digest-pinned, and the SAME digest every other scenario in this
     # repository names -- iac-cicd-pipeline requires it and
     # .github/tests/test_ci_configuration.py asserts it. See

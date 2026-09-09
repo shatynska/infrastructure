@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+#
+# Run Molecule with this working tree's own namespace.
+#
+# Molecule shares two handles across every working tree on the machine, and both
+# are stable per role: the instance name, a literal in each scenario's
+# `platforms[].name`, and the ephemeral directory, whose id is a checksum of the
+# ROLE DIRECTORY'S BASENAME rather than of its path. Two sessions running one
+# role therefore drive the same container and inherit each other's directory.
+# Such a run can equally PASS against a container the other session converged as
+# fail against it. AGENTS.md's "Namespacing Molecule per working tree" section
+# is the binding; its Testing section carries the hazard in full.
+#
+# This script is how a session takes its namespace. Everything it does is
+# deterministic from the working tree, so a later session in the same tree
+# resolves the same names and can destroy what an earlier run left behind.
+#
+# Usage:
+#   ansible/scripts/run-molecule test --all          # from a role directory
+#   ansible/scripts/run-molecule --print-namespace   # compute only, run nothing
+#
+# `--print-namespace` exists so the namespace can be read without starting a
+# container -- by a session diagnosing a stray container, and by
+# .github/tests, which may not spawn one.
+
+set -euo pipefail
+
+repository_root() {
+	# The working tree's own root, not the main checkout's: `--show-toplevel`
+	# resolves to the worktree in a linked working tree, which is the whole
+	# point. Failing here rather than falling back is deliberate; an empty
+	# namespace would restore the shared name this script exists to replace.
+	local root
+	if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
+		printf 'run-molecule: not inside a git working tree, so no namespace can be derived\n' >&2
+		return 1
+	fi
+	printf '%s\n' "$root"
+}
+
+namespace_for() {
+	# `<sanitised basename>-<6 hex of the absolute path>`.
+	#
+	# The basename answers the question a session actually asks when it meets an
+	# unexpected container -- whose is this -- and in this repository it is the
+	# change's own name, because AGENTS.md puts every working tree at
+	# .claude/worktrees/<name>. The digest covers what the basename cannot: two
+	# clones of this repository on one machine, whose worktree names are drawn
+	# from the same pool.
+	#
+	# Bounded on purpose. The instance name it lands in is capped at nothing,
+	# but every scenario declares its own short `hostname`, so the 64-byte host
+	# name limit is not this value's problem. The cap here keeps `docker ps`
+	# readable rather than enforcing a limit.
+	local root="$1" basename digest
+	basename=$(basename "$root")
+	basename=$(printf '%s' "$basename" | tr -c 'a-zA-Z0-9' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')
+	basename=${basename:0:40}
+	digest=$(printf '%s' "$root" | sha256sum | cut -c1-6)
+	if [ -z "$basename" ]; then
+		# A working tree whose name sanitises away entirely still gets a
+		# namespace, rather than one beginning with a stray separator.
+		printf 'wt-%s\n' "$digest"
+		return 0
+	fi
+	printf '%s-%s\n' "$basename" "$digest"
+}
+
+collections_path() {
+	# Collections are shared rather than namespaced: they are read-only content
+	# pinned by ansible/requirements.yml, so two sessions reading them cannot
+	# interfere -- which is exactly what is not true of a container or an
+	# inventory. They have to be named explicitly all the same, because
+	# relocating ANSIBLE_HOME relocates $ANSIBLE_HOME/collections with it and
+	# the docker driver finds community.docker there.
+	printf '%s\n' "${ANSIBLE_COLLECTIONS_PATH:-${HOME}/.ansible/collections}"
+}
+
+main() {
+	local root namespace collections home
+	root=$(repository_root)
+	namespace=$(namespace_for "$root")
+
+	if [ "${1:-}" = "--print-namespace" ]; then
+		printf '%s\n' "$namespace"
+		return 0
+	fi
+
+	collections=$(collections_path)
+	if [ ! -d "$collections" ]; then
+		# Without this the run fails deep inside `create` with `couldn't resolve
+		# module/action 'community.docker.docker_login'` -- the same message an
+		# ANSIBLE_HOME misconfiguration produces, which sends diagnosis the
+		# wrong way at the worst moment.
+		printf 'run-molecule: no Ansible collections at %s\n' "$collections" >&2
+		printf 'run-molecule: install them once with:\n' >&2
+		printf '  ansible-galaxy collection install community.docker ansible.posix\n' >&2
+		return 1
+	fi
+
+	# ANSIBLE_HOME rather than MOLECULE_EPHEMERAL_DIRECTORY. The latter names ONE
+	# directory outright -- Molecule appends no per-scenario suffix -- so a
+	# single value collapses every scenario of every role into it, reintroducing
+	# the shared state inside a single `molecule test --all`. ANSIBLE_HOME moves
+	# the tree and leaves the `molecule.<id>.<scenario>` split intact.
+	home="${root}/.molecule-home"
+	mkdir -p "$home"
+
+	INFRA_WORKTREE_NS="$namespace" \
+		ANSIBLE_HOME="$home" \
+		ANSIBLE_COLLECTIONS_PATH="$collections" \
+		exec molecule "$@"
+}
+
+main "$@"

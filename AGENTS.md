@@ -166,6 +166,66 @@ So two of the three end at a reviewer, and the wording below is what they review
 
 **Work not performed is disclosed, not deleted and not ticked.** Put it under a `## Not performed` heading as a list item naming the task, with its reason on a following line introduced by a `Reason:` label. This covers work not performed for *any* reason — declined on judgment, unreachable in the authoring environment, or never captured and no longer recoverable. Ticking a box for work that was not done makes a ticked box mean either that the work happened or that it did not, which is no signal at all. The `Reason:` label is what the pipeline checks and it only checks for silence; whether the reason is a *good* one is a question for review.
 
+### Namespacing Molecule per working tree
+
+This is the binding the shared-service rule above promises. Molecule is the one
+shared service this project's verification writes to, and it shares **two**
+handles across every working tree on the machine, both stable per role:
+
+- **The instance name**, a literal in each scenario's `platforms[].name`.
+- **The ephemeral directory**, `$ANSIBLE_HOME/tmp/molecule.<id>.<scenario>`,
+  whose `<id>` is a checksum of the role directory's **basename** rather than of
+  its path — so it is identical across working trees by construction, and moving
+  a working tree does not escape it.
+
+`~/.cache/molecule/<role>` is **not** a third handle under the pinned
+`molecule==26.8.0`, whatever an older note may say.
+
+**Run the suite through `ansible/scripts/run-molecule`.** It derives this
+working tree's namespace deterministically from the tree's own path, points
+`ANSIBLE_HOME` at `.molecule-home/` inside the tree, and names the shared
+`collections` path explicitly. `ansible/scripts/run-molecule --print-namespace`
+computes it and runs nothing.
+
+    ansible/scripts/run-molecule test --all      # from a role directory
+
+`ANSIBLE_HOME` rather than `MOLECULE_EPHEMERAL_DIRECTORY`, and the difference
+matters: the latter names *one* directory outright, with no per-scenario suffix,
+so a single exported value collapses every scenario of every role into it —
+reintroducing the shared state inside a single `molecule test --all`. The former
+moves the tree and leaves the `molecule.<id>.<scenario>` split intact.
+
+Collections are shared rather than namespaced, being read-only content pinned by
+`ansible/requirements.yml`. They must be named explicitly all the same, because
+relocating `ANSIBLE_HOME` relocates `$ANSIBLE_HOME/collections` with it. On a
+machine that has never installed them, the entry point says so and stops; the
+one-time install is `ansible-galaxy collection install community.docker
+ansible.posix`. Without that check the run fails deep inside `create` with
+`couldn't resolve module/action 'community.docker.docker_login'`, which reads as
+a broken mechanism rather than an unprovisioned machine.
+
+**Bringing your namespace to the project's initial state**, which the rule above
+requires as much as taking one: `ansible/scripts/run-molecule destroy` removes
+this tree's containers, and its ephemeral directories are `.molecule-home/tmp/`
+inside the tree — removable wholesale, since nothing outside the tree reads
+them. Molecule does not clear that directory itself, even after a run that
+exits 0, so a tree resumed after a crashed run starts from whatever the crash
+left. Nothing reclaims the namespace of a working tree that has been removed;
+its `.molecule-home/` goes with the tree, and any container it left is named
+after it and can be removed by name.
+
+**A run that supplies no namespace refuses.** Each scenario's name defaults to a
+value carrying a colon, which Docker forbids in a container name, so `create`
+fails and echoes the name back. That is deliberate and load-bearing: Molecule's
+interpolator substitutes *empty* for an unset `${VAR}` and has no `:?` error
+form, so without a refusing default a forgotten variable would silently restore
+the shared name. `.github/tests` fails the build on a default Docker would
+accept, and on a scenario whose name carries no namespace at all.
+
+Each platform also declares an explicit short `hostname`. The driver otherwise
+derives one from the instance name, and Linux caps a host name at 64 bytes — a
+namespaced name crosses it on this repository's own working-tree names.
+
 ### Testing
 
 There is no traditional unit-test layer for the Terraform code yet. Verification is static analysis (`terraform fmt`, `terraform validate`, `tflint`, Trivy, `gitleaks`) plus mandatory human review of an exact `terraform plan`.
@@ -188,7 +248,7 @@ Two things about `molecule test --all` that a verification claim depends on. It 
 
 **Molecule's state is shared across working trees, and two of its handles are stable per role.** The instance name is a literal in each scenario's `platforms[].name`, so two working trees running the same role create, converge and destroy *the same container*. The ephemeral directory is `$ANSIBLE_HOME/tmp/molecule.<id>.<scenario>` (`~/.ansible/tmp/` by default), and `<id>` is a checksum of the role directory's **basename** rather than of its path — so it is identical across working trees by construction, and relocating a working tree does not escape it. Molecule does not remove that directory when a run finishes, so inheriting one another tree left behind is the default rather than the exception, and `flock` does not help: serialising two runs in time does nothing about a run inheriting a directory left earlier.
 
-One cause, three presentations, which is what makes it read as three unrelated defects: a `create` that fails reading a `molecule.yml` a concurrent `destroy` has just pruned; a `prepare` whose container is torn down under a running play (`UNREACHABLE ... Failed to create temporary directory`); or a `verify` task dying with **rc 137** far into the run. The last is the one most often misread — what identifies it is the pairing of SIGKILL with **empty** stdout and stderr, which Ansible reports as `Module result deserialization failed: No start of json char found`. That reads like a module bug and is not one. `molecule test --all` compounds it, by the rule above: a collision in the first scenario leaves the rest neither executed nor listed. **The danger is not the red runs.** A colliding run can equally pass against a container the other session converged, which reads as evidence that the change under test is sound. Until these handles are namespaced per working tree, coordination between sessions is the whole safeguard — and a session's report that it left nothing behind is worth checking against `~/.ansible/tmp/` and `docker ps` rather than believing.
+One cause, three presentations, which is what makes it read as three unrelated defects: a `create` that fails reading a `molecule.yml` a concurrent `destroy` has just pruned; a `prepare` whose container is torn down under a running play (`UNREACHABLE ... Failed to create temporary directory`); or a `verify` task dying with **rc 137** far into the run. The last is the one most often misread — what identifies it is the pairing of SIGKILL with **empty** stdout and stderr, which Ansible reports as `Module result deserialization failed: No start of json char found`. That reads like a module bug and is not one. `molecule test --all` compounds it, by the rule above: a collision in the first scenario leaves the rest neither executed nor listed. **The danger is not the red runs.** A colliding run can equally pass against a container the other session converged, which reads as evidence that the change under test is sound. These handles are namespaced per working tree — see *Namespacing Molecule per working tree* above, which is how you take yours. What is written here is what a run outside that mechanism still meets, and it is worth knowing rather than forgetting: a session's report that it left nothing behind is still worth checking against `docker ps` rather than believing.
 
 ### Citing this repository's own specifications and change records
 

@@ -38,6 +38,11 @@ secrets.auto.tfvars
 .worktrees/
 .claude/worktrees/
 
+# The per-working-tree ANSIBLE_HOME that ansible/scripts/run-molecule points
+# Molecule at, holding this tree's own ephemeral directories. Machine state, not
+# repository content — and it must not be shared, which is the whole point.
+.molecule-home/
+
 # Ansible: Galaxy-installed role content, pinned by exact version in that
 # file, not committed itself. Fetched via:
 #   ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles

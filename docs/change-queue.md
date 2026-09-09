@@ -119,6 +119,12 @@ unavailable here: `--continue-on-failure` applies only with `--workers`, and
 `--workers > 1` refuses with `only supported in collection mode (galaxy.yml
 required)` — these are plain roles, not a collection (observed 2026-09-07).
 
+Not to be confused with the shared-state hazard, which was a different cause
+with an overlapping symptom and is now closed: instance names and the ephemeral
+directory are namespaced per working tree, and `AGENTS.md`'s *Namespacing
+Molecule per working tree* is the binding. What remains here is Molecule's own
+stop-at-first-failure behaviour, which namespacing does not touch.
+
 The remedy that works is a continuous-integration matrix over **scenarios**
 rather than roles. Each scenario becomes its own job, so one failing scenario
 stops only itself and the rest still report. It also parallelises the suite's
@@ -176,122 +182,13 @@ Both noticed during `close-ci-verification-gaps`, neither a verification gap:
   for the next person when `ansible-lint` failed on pre-existing violations,
   and it wants its own decision rather than being folded in.
 
-## 8. namespace-the-molecule-suite-per-working-tree
-
-**Not blocked; recorded because it is a gap in this project's own verification
-rules rather than a defect in any change, and because it silently invalidates
-results.** Observed 2026-09-07 by two sessions at once —
-`decide-archived-change-reference-policy` and `reclaim-superseded-app-images` —
-which is why the evidence below spans two working trees.
-
-`AGENTS.md:27` already names the hazard — *"Where verification writes to a
-shared service, take your own namespace within it, named deterministically from
-your working tree"* — and `AGENTS.md:29` says that where this project binds that
-rule to a particular service, the binding is an adjacent section of the file.
-**No such section exists, for any service.** The rule is stated and nothing is
-bound to it, while Molecule is the one shared service this project's
-verification actually writes to.
-
-Three handles are shared across every working tree on the machine, and none is
-derived from the working tree:
-
-- **The container name** — every scenario's `molecule.yml` sets
-  `platforms[0].name` to a literal, e.g. `deploy_user-role-instance` in
-  `ansible/roles/deploy_user/molecule/default/molecule.yml`. Two working trees
-  running the same role create, converge and destroy *the same container*.
-  **This is the collision that matters**, and no environment variable reaches
-  it. (Named by key rather than by line: an earlier draft of this entry cited
-  `molecule.yml:40`, which was already wrong when written and which this very
-  change shifted by one — a line citation rotting inside the change whose
-  subject is citations that rot.)
-- **Molecule's ephemeral directory**, `~/.ansible/tmp/molecule.<id>.<scenario>`.
-  The `<id>` is **derived from the role, not from the path**, so it is identical
-  across working trees by construction: on 2026-09-07 every `deploy_user` run
-  from either working tree resolved to `molecule.dnU2.*`, while the other roles
-  each held their own — `1UjF` `docker`, `Dp-1` `platform_data_volume`, `E127`
-  `ops_user`, `HeLe` `hardening`. Relocating a working tree therefore does not
-  escape it. `MOLECULE_EPHEMERAL_DIRECTORY` is not the only lever, as the
-  next bullet records.
-- **Molecule's cache**, `~/.cache/molecule/<role>` — keyed by role name alone.
-  **Checked again 2026-09-09 and no longer live**: under the pinned toolchain
-  (`molecule==26.8.0`) the ephemeral tree is the only one written, and the
-  `~/.cache/molecule/ops_user` still on this machine is dated 2026-09-01 and
-  holds an older layout. Two handles, not three — confirm before the proposal
-  enshrines a third. The ephemeral one is reachable by `ANSIBLE_HOME` as well
-  as by `MOLECULE_EPHEMERAL_DIRECTORY`, and the two are not equivalent:
-  `MOLECULE_EPHEMERAL_DIRECTORY` names one directory outright, so a single
-  exported value collapses every scenario of every role into it, while
-  `ANSIBLE_HOME` moves the tree and leaves the per-scenario
-  `molecule.<id>.<scenario>` split intact. Only the second composes with
-  `molecule test --all`.
-
-Because the ephemeral id is stable per role rather than per run, **inheriting
-another working tree's directory is the default rather than the exception**.
-Molecule does not remove the directory when a run finishes — verified after a
-clean `exit 0` run, which left all three of its scenario directories in place —
-so clearing before a run is a standing requirement, not something owed only
-after a crash.
-
-The failure presents at three different stages, which is what makes it read as
-three unrelated defects rather than one cause. One session hit them in this
-order — progressively later in the run — which is the point: the window is not
-one moment but anywhere the other party touches a shared handle.
-
-| Stage | Symptom |
-|---|---|
-| `create` | `lookup plugin 'file' failed: Unable to access .../molecule.dnU2.default/molecule.yml` — a `destroy` pruned the ephemeral directory a later `create` then read |
-| `prepare` | the container torn down under a running play; `UNREACHABLE ... Failed to create temporary directory` |
-| `verify` | 18 tasks in, after five `All assertions passed`, a task unrelated to the change dies with **rc 137** |
-
-The `verify` symptom is the one most likely to be misread, so it is worth
-naming precisely. What makes it diagnosable is the *pairing*: SIGKILL together
-with **empty** stdout and stderr. A module that fails prints something; a module
-that is killed prints nothing, and Ansible then reports `Module result
-deserialization failed: No start of json char found` — which reads like a module
-bug, and is not.
-
-**Serialising is necessary but not sufficient, and neither is the environment
-variable.** `flock` on a shared lock file stops two runs overlapping in time; it
-does nothing about a run inheriting a directory the previous session left
-behind. Observed directly: a locked run, with no concurrent process anywhere on
-the machine, still failed at `create` on an ephemeral directory another working
-tree had created earlier.
-
-That is contention across *time*, not a standalone defect in the suite — the
-same `destroy`-then-`create` sequence runs clean on a directory the working tree
-owns, as four other roles demonstrated in the same session. The distinction
-matters: the suite is not broken on its own, so the fix is separating the
-handles rather than reworking the test sequence.
-
-It also means clearing the shared state is part of the safeguard and not merely
-tidying, and that a session reporting it left nothing behind should be checked
-rather than believed — on 2026-09-07 one did, and `molecule.dnU2.default` was
-still there.
-
-`MOLECULE_EPHEMERAL_DIRECTORY` and a cache override stop a run inheriting stale
-state, but leave both runs fighting over one container. Only separating all
-three handles makes a concurrent-worktree result mean anything; until then,
-coordination between sessions is the whole safeguard.
-
-`molecule test --all` compounds it. It stops at the first failing scenario, so a
-collision in `default` — which sorts first for `deploy_user` — leaves
-`ghcr-credential-absent` and `ghcr-credential-rejected` neither executed nor
-listed in the recap, while the recap still looks complete.
-
-The danger is not the red runs. A colliding run can equally **pass** against a
-container the other session converged, which reads as evidence the change under
-test is sound.
-
-The fix is one decision covering both live handles: a per-working-tree instance name —
-which means templating it in every `molecule.yml`, with `.github/tests`
-asserting that each one does — plus the ephemeral-directory
-override, and a binding section in `AGENTS.md` that ties `AGENTS.md:27` to
-Molecule the way it was always meant to be tied to something.
-
 ## 8a. a review agent's mutation check writes to the tree it is reviewing
 
-**Not blocked; recorded next to entry 8 because it is the same class of hazard —
-a shared handle nobody namespaced — and was found the same day.**
+**Not blocked. Recorded beside the Molecule shared-state entry, since deleted by
+`namespace-the-molecule-suite-per-working-tree`, because it is the same class of
+hazard — a shared handle nobody namespaced — and was found the same day. This
+one is untouched by that change: the shared handle here is the working tree
+itself, between a session and its own review agent.**
 
 The `code-review` skill performs mutation checks against the **live working
 tree**: it appends a violation to a real file, confirms the gate goes red, then
@@ -1051,3 +948,23 @@ Note this is the second entry recorded from the same edge: entry 42 is about
 derived tests arriving as a new file and being folded, and this one is about
 what happens when they are not folded. Whichever way that question is settled,
 both should be settled with it.
+
+## 46. lint-the-repository's-shell-scripts
+
+**Not blocked; recorded rather than folded into
+`namespace-the-molecule-suite-per-working-tree`**, which added the script that
+makes this worth doing.
+
+`ansible/scripts/run-molecule` is this repository's first committed shell
+script, and nothing checks it. `.pre-commit-config.yaml` carries hooks for
+Terraform, Ansible, secrets and commit messages, and none for shell. That
+change's own test-authoring step declined to verify the script with ShellCheck
+for the reason `AGENTS.md` gives about unpinned tools: an ad-hoc invocation of a
+linter this repository does not pin is unrepeatable, and a check that cannot be
+reached is indistinguishable from one that passed. Its `tasks.md` discloses the
+refusal under `## Not performed`.
+
+The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a
+decision about whether `.github/tests` should assert that the hook exists — the
+same shape as the pins that suite already reads. Small, and worth doing before
+there is a second script.
