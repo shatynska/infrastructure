@@ -311,10 +311,103 @@ is operational rather than structural. It read the live host as well as the
 tree, so where an entry cites a host fact, that is what `main-server` showed on
 2026-09-08, not an inference from the code.
 
+## 24. make-the-pipeline-environment-agnostic
+
+**Not blocked, and first of three: it is the enabler for a staging environment
+(49) and, through it, for the gated host-config workflow (23).**
+
+`apply.yml`, `drift.yml` and `pr-validation.yml`'s plan step each pin
+`working-directory: terraform/environments/prod`. The idiom that replaces it
+is already in this repository -- `pr-validation.yml`'s `fmt` and `validate`
+steps loop over `terraform/modules/*/ terraform/environments/*/` -- so this
+extends a discovery loop that exists rather than inventing one, to plan, apply
+and drift.
+
+The layers underneath need nothing. `modules/server`'s `delete_protection`
+variable names "a future staging environment" as its own reason for being
+parameterised. `ansible/inventory/hcloud.yml` keys groups on the `environment`
+Hetzner label and its comment already says adding staging "is a label value,
+not an inventory rewrite". On the Ansible side this is `hosts: prod` in
+`host-baseline.yml` becoming a parameter, and a `group_vars/<env>.yml` -- that
+is the whole of it.
+
+**Verifiable at N=1, which is why it goes first.** The generalisation runs with
+a matrix of one element and its acceptance test is that prod plans, applies and
+drifts exactly as before: no new infrastructure, nothing deployed, fully
+reversible. Building it before staging exists is therefore not speculative
+generality -- it is what lets staging's very first `terraform apply` go through
+the pipeline instead of a workstation, and staging is then this change's second
+acceptance test.
+
+**The decision it carries**, and the only part that is not mechanical: whether
+staging shares prod's Hetzner project. One project means one read-write token,
+so staging's apply must be gated behind an approver too -- otherwise any push to
+`main` reaches a prod-capable credential. A second Hetzner project isolates the
+token and lets staging be ungated, which is most of the point of staging: an
+approved staging deploy is as slow as prod and stops being used.
+
+A second project also settles a naming collision. `platform/docker-compose.yml`
+hardcodes `/mnt/main-data/prometheus` and `/mnt/main-data/grafana`. The Ansible
+role's `platform_data_volume_mount_path` is overridable per `group_vars`; those
+Compose bind mounts are not. Hetzner volume names are unique per project, so
+within a single project staging cannot also be `main-data`, and a different name
+gives a different mount path -- staging's Prometheus and Grafana would come up
+writing nowhere, silently. A second project frees the name; staying in one means
+parameterising the Compose paths. **Recommendation: a second Hetzner project.**
+It is a recommendation, not a decided thing.
+
+## 49. add-a-staging-environment
+
+**Blocked on 24.** Recorded 2026-09-09, and it supersedes the reading in
+`docs/review-2026-09-08-host-readiness.md` that the company needed a
+single-environment copy of this shape. It needs two environments, so this
+repository is where that is rehearsed rather than discovered on a deadline.
+
+Two purposes must not be conflated, because they have different requirements:
+
+- **a place to rehearse infrastructure changes** -- a PostgreSQL major upgrade
+  (38), a hardening change. Ephemeral, no consumers, no DNS, no certificates.
+- **a place applications deploy to** -- `commerce-ops` and the applications
+  after it need somewhere a pre-release build can be looked at before prod.
+  Permanent, own hostnames and certificates, own per-app deploy keys, and a
+  deploy path in each application's own repository.
+
+**It is the second.** The second contains the first imperfectly: rehearsing
+something destructive breaks the application environment at the same time, which
+is a scheduling problem for the company and a non-problem here.
+
+Shape: a 2-vCPU Hetzner instance, roughly half prod's bill, same modules, same
+roles, same platform stack. It carries `terraform/environments/staging/`, a
+second HCP workspace with Execution Mode set to Local (as prod's `versions.tf`
+records for `infrastructure-prod`), a `staging` GitHub Environment and its own
+secret set -- the Vault password, the tailnet OAuth client, and platform's
+eight -- a `group_vars/staging.yml`, and DNS records for the staging hostnames.
+Those records are manual: DNS is in no repository (`docs/deferred-work.md`,
+"Managing DNS in Terraform").
+
+Three things it will find, which is the reason to do it here:
+
+- the volume-name and Compose-path coupling 24 describes;
+- memory. Eight platform containers plus `commerce-ops` and its own PostgreSQL
+  on the 2-vCPU tier is tight, which makes this the forcing function for
+  container resource limits (7);
+- **the first converge of a new host cannot come from CI, and never will.** CI
+  reaches a host over the tailnet, and tailnet membership is created *by* the
+  converge (`ansible/roles/tailscale`); before it the host answers only on
+  public SSH, which the cloud firewall restricts to one ISP `/24`. That first
+  run is local, exactly as `docs/bootstrap-a-new-host.md` §6.3 documents for
+  prod. It is genesis rather than an exception to the never-apply-locally rule,
+  and it is a step the company server will need too.
+
+Its `terraform apply`, unlike its first converge, goes through `apply.yml` from
+the very first one.
+
 ## 23. apply-host-configuration-through-a-gated-workflow
 
-**Not blocked; recorded because it is the one path to production this
-repository still leaves to a workstation.**
+**Blocked on 49** -- not because it cannot be built against prod, but because it
+should not be. It was recorded unblocked on 2026-09-06; the block was added on
+2026-09-09 when staging was identified. It is the one path to production this
+repository still leaves to a workstation.
 
 `ansible/playbooks/host-baseline.yml` is applied by hand: no workflow runs
 `ansible-playbook` against prod, the Vault password lives only on the
@@ -324,36 +417,51 @@ credentials are for reading, and the Terraform and platform layers honour it;
 the host layer does not, and a converge that changes UFW rules or authorized
 keys is at least as consequential as a Compose change.
 
+It is not a dormant layer: 41 commits touched `ansible/` in the 60 days to
+2026-09-09. And the Vault password exists on exactly one machine -- lose it and
+the host cannot be converged at all, by anyone. The company server needs a
+second operator on day one, which today would mean handing over that password
+and a root key.
+
 The shape already exists twice in `.github/workflows/`: a credential-less job
-that shows the reviewer what will change (`ansible-playbook --check --diff`
-against prod, over the tailnet, with the read-only Hetzner token for
-inventory), then a `production`-gated job that applies it. It needs the Vault
-password and the tailnet auth key as Environment secrets, an SSH identity
-for `root` that is not the operator's personal key, and a decision about
-whether `--check` output is reviewable enough to approve on. That last is the
-part worth thinking about; the rest is plumbing.
+that shows the reviewer what will change, then a `production`-gated job that
+applies it. Three things in it are not plumbing.
 
-## 24. make-the-pipeline-environment-agnostic-before-adding-staging
+**`--check --diff` is not the safety net it looks like.**
+`docs/bootstrap-a-new-host.md` §6.3 already says not to rely on `--check` for a
+first run. Beyond that, `command` tasks skip in check mode -- `ops_user`'s three
+and `swap`'s four -- and `geerlingguy.docker` carries
+`ignore_errors: "{{ ansible_check_mode }}"` on five tasks, so check-mode
+failures there are swallowed. The diff is honest about files and packages and
+blind to anything a command drives. The safety net for *behaviour* is Molecule,
+which is already a required check and converges a real host per role. What
+`--check --diff` against the live host adds is **drift**, not a plan: frame it
+as the host layer's `drift.yml` rather than its `terraform plan`, and the
+question of whether it is reviewable enough to approve on mostly dissolves.
 
-**Not blocked; recorded because the README's "anticipated next environment"
-is further away than it reads.**
+**The credential is a genuine widening.** CI would hold a key that logs in as
+`root@prod` -- strictly more powerful than `PLATFORM_DEPLOY_SSH_KEY`, which is
+pinned to a forced command, and than `HCLOUD_TOKEN`, which can destroy the
+server but cannot read it. Decide a dedicated `ansible-ci` key, rotatable and
+distinct from the operator's personal one. Chicken-and-egg, as in 49: the role
+that installs it is the role CI runs, so its first installation is manual.
 
-`terraform/modules/` are parameterised for a second environment, and the
-README says staging is "a second `terraform/environments/<name>/` folder
-reusing the same modules". The pipeline does not agree. `apply.yml`,
-`drift.yml` and `pr-validation.yml` each hardcode
-`working-directory: terraform/environments/prod`; `host-baseline.yml` runs
-against `hosts: prod`; `group_vars/prod.yml` carries the host's CIDRs and
-application list by name. A second folder would be validated by `terraform
-validate`'s discovery loop and applied by nothing.
+**One of the two secrets probably need not move at all.**
+`tailscale_auth_key` is consumed only by the `tailscale up` task, whose `when:`
+is false on an already-joined host, so on a normal converge it is never
+templated. Do not lean on that -- an expired node would abort mid-play on an
+undefined variable at the worst possible moment -- but no new long-lived secret
+is needed either: `platform-deploy.yml` already authenticates with
+`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`, and minting a key
+from that same client leaves the Vault password as the only genuinely new
+secret.
 
-The work is a matrix or a discovery loop over `terraform/environments/*/` in
-the three workflows, a per-environment `production`-style GitHub Environment
-so staging can be applied without prod's approver and prod's token, and the
-same for the playbook. It also needs a decision on whether staging is a second
-Hetzner server (a second `server_type` line and a second bill) or a second
-project. Worth doing before the first change that would benefit from being
-rehearsed -- a PostgreSQL major upgrade is the obvious one.
+**Why staging first, and why 25 waits on this.** This is the riskiest work in
+the region: a converge that wedges UFW or `tailscaled` locks CI out of the very
+host it converges. Developed against staging it costs nothing, and is pointed at
+prod once it works. In the other direction, 25 closes public SSH and would
+remove the ISP `/24` fallback that makes an unproven CI converge survivable, so
+it should not precede this.
 
 ## 25. close-public-ssh-and-manage-sshd-explicitly
 

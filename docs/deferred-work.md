@@ -273,7 +273,7 @@ written down. The table above is the mitigation for the moment: the records are
 now recorded somewhere, which is most of what the entry was protecting against.
 
 **Revisit when** a staging environment exists to rehearse the migration against
-(`docs/change-queue.md` entry 24), or when mail moves off this zone, or when a
+(`docs/change-queue.md` entry 49), or when mail moves off this zone, or when a
 second hostname makes the manual edits frequent enough to be worth the risk.
 Cloudflare and Hetzner DNS were the two candidates considered; neither was
 chosen, and that choice is still open.
@@ -351,7 +351,7 @@ changed shape since it was written. The first host where either could bite is a
 where the ordering decision depends on it, and that comment is the mitigation:
 the role placed last is placed there because a refusal ahead of it is possible.
 
-**Revisit when** a second environment exists (`docs/change-queue.md` entry 24)
+**Revisit when** a second environment exists (`docs/change-queue.md` entry 49)
 or another host is bootstrapped — the first moment a `group_vars` is written
 from scratch rather than inherited, and so the first moment either gap has a
 real case rather than a constructed one.
