@@ -164,7 +164,7 @@ One thing the label does **not** cover: a value the config interpolates
 from `.env`, such as Alertmanager's Slack webhook. Rotating that secret
 changes nothing the checksum can see, so the container is not replaced and
 keeps the old value — force a replacement by hand when you rotate one.
-`docs/change-queue.md` entry 47 covers closing this properly.
+`docs/change-queue.md` entry 48 covers closing this properly.
 
 ### One-time manual step: postgres-exporter's monitoring role
 

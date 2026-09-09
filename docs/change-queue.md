@@ -1007,12 +1007,12 @@ a hash computed anywhere without the host's real `.env` does not match the
 host's. This check must run **on the host**, where that file is, or it will
 report mismatches that are artefacts of where it ran.
 
-It also does **not** catch entry 47's case, despite looking as though it should:
+It also does **not** catch entry 48's case, despite looking as though it should:
 where a secret interpolated *inside* an embedded config is rotated, both sides
 of this comparison compute the same unchanged value, so it passes while the
 running container holds the superseded secret.
 
-## 47. replace-a-service-when-a-secret-inside-its-config-rotates
+## 48. replace-a-service-when-a-secret-inside-its-config-rotates
 
 **Not blocked; found in code review of `apply-shipped-config-on-deploy`, which
 is structurally unable to close it.**
@@ -1027,7 +1027,7 @@ replaced. **The revoked webhook stays live until something unrelated replaces
 that container**, and every alert in the meantime goes to an endpoint the
 rotation was meant to retire.
 
-Nothing currently reports this. Entry 46's deploy-time hash comparison does not:
+Nothing currently reports this. Entry 47's deploy-time hash comparison does not:
 both sides compute the same unchanged value, so it passes. The checksum label
 cannot: the value that changed is deliberately not in the repository, which is
 the whole point of it being a secret.

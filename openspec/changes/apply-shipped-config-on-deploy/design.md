@@ -214,7 +214,7 @@ into `.env` from GitHub secrets — so rotating the Slack webhook changes what
 Alertmanager would run with, while the committed text, the label derived from
 it, and Compose's own digest all stay exactly where they were. The container is
 not replaced and keeps the revoked webhook until something unrelated replaces
-it. Queue entry 46's deploy-time comparison does not catch it either: both sides
+it. Queue entry 47's deploy-time comparison does not catch it either: both sides
 of that comparison compute the same unchanged value.
 
 No committed checksum can close this, because the value that changed is
@@ -225,7 +225,7 @@ being weighed, and it is recorded here rather than quietly left out, because it
 is the case a future reader reopening Decision 1 should weigh first. It is not
 acted on here: the requirement is scoped to the committed configuration and says
 so, and secret rotation is rare enough and manual enough that a deliberate
-replace is a reasonable interim. Queue entry 47 records it.
+replace is a reasonable interim. Queue entry 48 records it.
 
 **A local hash cannot in general be compared with the host's.** → Found while
 verifying this change: four of the eight services — `grafana`, `postgres`,
