@@ -18,22 +18,12 @@
         update_cache: true
         cache_valid_time: 0
 
-    - name: Ensure /etc/docker exists before writing the daemon config
-      ansible.builtin.file:
-        path: /etc/docker
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Configure dockerd for nested containers before it is installed
-      ansible.builtin.copy:
-        dest: /etc/docker/daemon.json
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          {
-            "storage-driver": "vfs",
-            "features": {"containerd-snapshotter": false}
-          }
+    # THE vfs STORAGE-DRIVER FIXTURE USED TO BE WRITTEN HERE, as
+    # /etc/docker/daemon.json. It now travels as `docker_daemon_extra_options`
+    # in this scenario's converge.yml.
+    #
+    # It had to move: the `docker` role now supplies daemon options of its own
+    # (a log ceiling), and geerlingguy.docker renders that file with `copy:` --
+    # an overwrite, not a merge -- gated on its options dictionary being
+    # non-empty. That gate used to be false, which is the only reason a file
+    # written here survived the converge.

@@ -1,0 +1,209 @@
+## Why
+
+Two of this host's finite resources are unbounded, and nothing between normal
+operation and the outage warns about either. Both were read live from
+`main-server` on 2026-09-08; neither is inferred from the tree.
+
+**Container logs have no ceiling.** `/etc/docker` holds no `daemon.json`,
+`docker info` reports the `json-file` driver, and `docker inspect` reports
+`LogConfig.Type=json-file` with an empty `Config` map on all eleven running
+containers — platform's nine and `commerce-ops`'s two. `json-file` with no
+`max-size` grows without limit, on the root filesystem, in the same 75 GB
+device that holds both Postgres data directories. The only signal is
+`HostDiskPressure`, which fires at 90% full: for a log filling a disk that is a
+report of the outage, not a warning of it.
+
+**The host has no swap.** `swapon --show` returns nothing on a machine with
+7.6 GiB of RAM and — until queue entry 7 has the data it is blocked on — no
+container memory limits. The first service to leak is therefore stopped by the
+OOM killer, which chooses by badness score rather than by who leaked: the
+largest resident processes here are Postgres and Prometheus, so the likeliest
+victim is not the culprit. Swap does not fix a leak. It converts a hard kill
+into a slowdown, which `HostMemoryPressure` — RAM-based, so unaffected by swap
+being present — has ten minutes to report.
+
+Neither is urgent today: root is 11% full, memory 1.5 GiB of 7.6 GiB used, and
+the host has been up four days. Both are cheap to close now and expensive to
+close during the incident they cause.
+
+**Why one change and not two.** Not to save an interruption. Rendering
+`daemon.json` notifies `geerlingguy.docker`'s `restart docker` handler, and with
+`live-restore` unset a daemon restart stops every container on the host for a
+few seconds before their `restart: unless-stopped` policies bring them back —
+but the swap half notifies no handler and restarts nothing, so that interruption
+is paid exactly once whether these ship together or apart. It is a cost of the
+log half, not an argument about scope.
+
+The argument about scope is `AGENTS.md`'s own: split a change that covers
+multiple **independent** concerns. These are one concern reached by one
+mechanism — a single-host deployment with no headroom on either of two finite
+resources, closed by one hand-run converge of one playbook. Landing them apart
+buys nothing and costs a second full plan-build-ship cycle, a second review
+pair, a second confirm gate and a second operational converge of the whole
+playbook against prod, for work that is a day's on each side.
+
+## What Changes
+
+**Container logs are bounded by the host's daemon configuration, not by each
+application's Compose file.** The `docker` role gains a two-variable interface
+of its own — a maximum size per log file and a maximum number of files — with
+safe defaults, and passes them to the pinned external role as
+`docker_daemon_options`. The rendered `/etc/docker/daemon.json` sets a
+`json-file` driver with `max-size` and `max-file`, so every container the
+daemon subsequently creates inherits a ceiling unless it declares its own
+logging options — a daemon default is a default, and the obligation is that the
+default is bounded, not that no container may choose otherwise.
+
+Placing this at the daemon rather than per-service is what makes it reach
+`commerce-ops`, whose Compose file lives in a different repository that this
+one cannot edit. A per-service `logging:` block can only ever bound the
+services the author remembered.
+
+The limits are chosen to be a **ceiling, not a diet**. There is no log
+aggregation on this host — queue entry 28 is still queued — so `json-file` is
+the only history an incident has to read. `max-size: 50m` with `max-file: 3`
+caps each container at 150 MB and the current eleven at about 1.7 GB, against
+65 GB free.
+
+**The host gets a swap file and a swappiness policy.** A new single-purpose
+`swap` role creates a 4 GiB file at `/swapfile`, mode `0600` and owned by
+`root`, formats it, records it in `/etc/fstab` so it survives a reboot, and
+sets `vm.swappiness` to `10` through a file under `/etc/sysctl.d/`. Swappiness
+of 10 keeps swap an emergency buffer rather than a routine tier: the kernel
+still swaps under real pressure, but does not page out a working set the host
+has room for.
+
+**Both values are safe defaults living in their roles**, not environment
+facts living only in `ansible/inventory/group_vars/prod.yml`. A bounded log
+and a swap file are safe for any host this project configures, which is not
+true of the CIDR lists `ansible/roles/hardening/defaults/main.yml` deliberately
+refuses to default. Leaving them in prod's `group_vars` alone would hand
+unbounded logs to the anticipated staging environment (queue entry 24) and to
+any second host built from this repository. `prod.yml` is not edited by this
+change; it overrides only if prod ever needs to differ.
+
+## Capabilities
+
+### New Capabilities
+
+None.
+
+### Modified Capabilities
+
+- `iac-host-configuration`: two ADDED requirements — one obliging the host's
+  container logs to be bounded by the daemon's own configuration, one obliging
+  the host to carry swap that persists across a reboot — and one MODIFIED.
+
+  The MODIFIED one is "Configuration Scope Stops at the Container Runtime". Its
+  scenario reads *"no application container SHALL have been started as a result
+  of that run"*, and a daemon restarted to adopt new configuration stops every
+  container and lets each restart policy return it — which on that scenario's
+  plain text is a violation. It is not a violation of the requirement's prose,
+  which forbids Ansible **invoking** an application-lifecycle command, and
+  Ansible invokes none. The gap is between the prose and the scenario, and it
+  predates this change: installing or upgrading Docker already notifies the same
+  restart handler, so a converge has always been able to do this. This change is
+  what makes it routine and documented, so it is the change that owes the
+  reconciliation. The delta narrows the scenario to what the prose always meant
+  and adds a second, stricter scenario — that the set of running applications
+  afterwards is exactly the set from before.
+
+## Impact
+
+- **Spec**: `iac-host-configuration` gains two ADDED requirements and one
+  MODIFIED, as above.
+- **Code**: `ansible/roles/docker/` gains `defaults/main.yml`, two dependency
+  parameters in `meta/main.yml`, and its first `README.md` — it has had none
+  because it had no interface, and it has one now. A new `ansible/roles/swap/`
+  (tasks, defaults, meta, README, one Molecule scenario). One role entry in
+  `ansible/playbooks/host-baseline.yml`. One new entry in
+  `docs/change-queue.md`, for the swap-utilisation alert this change does not
+  fold in. Nothing in `platform/`, `terraform/`, or `.github/workflows/`.
+- **Inputs**: no new inventory variable, no new secret, nothing to render into
+  a file on the host. Every input has a safe default, so neither role owes an
+  assertion under "A Role's Absent Required Input Is Reported by Name"
+  (`openspec/specs/iac-host-configuration/spec.md`) — that requirement reaches
+  inputs with no safe default, and both of these have one.
+- **Tests**: the `docker` role's existing `molecule/default` scenario gains
+  assertions on the rendered `daemon.json`. The `swap` role brings one new
+  scenario, whose `molecule.yml` must pin the same image digest as every other
+  authored scenario — `.github/tests/test_ci_configuration.py` fails the build
+  on a partial refresh — and is discovered by `ansible-verify.yml` without a
+  workflow edit.
+- **What Molecule cannot establish, and what does.** `vm.swappiness` is not a
+  namespaced sysctl and `swapon` registers with the host kernel, so a scenario
+  that activated swap inside a privileged container would mutate the CI
+  runner's own kernel rather than the instance's. (This bullet originally added
+  that it would also leave a reference to a deleted file behind. Tested during
+  implementation by removing the role's gate: `swapon` fails outright on this
+  suite's overlayfs-backed rig with `Invalid argument`, so the file half is
+  unreachable there rather than merely guarded — it would land on a rig where
+  activation can succeed. The `vm.swappiness` half is untouched by that and
+  reaches the runner's kernel unconditionally. `design.md` Decision 7 carries
+  the correction; the separation the delta obliges does not rest on the
+  falsified half.) The role therefore separates *configuring* swap from
+  *activating* it behind a documented variable, the scenario asserts the
+  configuration and skips the activation, and the change's artifacts say so
+  rather than implying full coverage. Activation is established at the
+  `ship:confirm` gate by `swapon --show` and `sysctl vm.swappiness` on prod.
+
+  **Reboot persistence is a second thing no test establishes, and it is weaker
+  than activation.** A container has no boot to observe, and this change does
+  not reboot prod. What it does instead is exercise the boot-time records
+  through the same mechanisms boot uses — `swapon --all` after a `swapoff`, and
+  `sysctl --system` — which catches a malformed `fstab` line or a misplaced
+  `sysctl.d` file, the two ways this half realistically fails. That is a
+  weaker claim than observing a boot, and the delta and `test-plan.md` say
+  which of the two was made rather than letting the stronger one be assumed.
+- **Host**: after a converge, `/etc/docker/daemon.json` exists and the daemon
+  restarts once. The nine platform services come back under
+  `restart: unless-stopped`, which this repository can read in its own Compose
+  file; `commerce-ops`'s two are *assumed* to do the same, on a file that lives
+  in that application's repository and cannot be read from here. That assumption
+  is observed rather than asserted: the running set is captured before the
+  converge and compared afterwards, which is also the delta's own MODIFIED
+  scenario.
+
+  Existing containers keep an empty `LogConfig` — Docker resolves log options at
+  container *creation*, so the eleven now running inherit the ceiling at their
+  next deploy, not at the restart: platform's nine at the next platform deploy,
+  `commerce-ops`'s two at a deploy from that application's own repository, which
+  this one neither triggers nor waits for. Confirming the bound therefore needs
+  a container this change makes on purpose — `docker create` resolves log
+  options and starts no process, so a throwaway container built from an image
+  already on the host answers the question at no cost and is then removed.
+  `/swapfile` appears and `swapon --show` reports 4 GiB.
+- **Reaching the host**: `ansible/playbooks/host-baseline.yml` is still applied
+  by hand from a workstation. Merging this change does not put either half on
+  prod; queue entry 23 is the change that would fix that, and this one does not
+  anticipate it.
+- **Rollback**: removing `daemon.json` and re-running restores the previous
+  behaviour at the cost of one more restart. `swapoff /swapfile`, removing the
+  `fstab` line and deleting the file restores the previous behaviour with no
+  restart and no data at risk.
+
+## Non-goals
+
+- **Container memory and CPU limits.** Queue entry 7, blocked on the
+  observation data the monitoring stack is still collecting. Entry 22 names it
+  this change's companion, and it stays a `platform/` change deployed through
+  the platform pipeline. Swap is worth having before that data is in, which is
+  why this does not wait for it.
+- **An alert on swap utilisation.** Once swap exists, "swap is 80% consumed" is
+  the signal that a leak is underway and the OOM killer is next.
+  `node_memory_SwapFree_bytes` is already scraped, so the rule is a few lines —
+  but they belong in `platform/docker-compose.yml`, a different layer reached by
+  a different pipeline, and folding them in would make this change need two
+  deploys. Recorded in `docs/change-queue.md` instead. `HostMemoryPressure` is
+  RAM-based and still fires as a leak grows, so this change does not leave the
+  condition unobserved, only under-explained.
+- **Log aggregation.** Queue entry 28. Its absence is why the limits here are
+  generous rather than tight, and it is the reason to revisit them, not a task
+  for this change.
+- **`live-restore`.** It would let a future daemon-configuration change avoid
+  the interruption this one pays, but enabling it needs a restart of its own, so
+  it cannot spare this change anything. It also interacts with how the daemon
+  handles containers it did not start, which deserves its own decision rather
+  than being smuggled in beside a log ceiling.
+- **Applying host configuration through a gated workflow.** Queue entry 23.
+  This change is applied the same way every prior host change was.

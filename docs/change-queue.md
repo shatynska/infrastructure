@@ -1050,3 +1050,92 @@ run them.
 Worth doing before the coupling is next relied on — a volume that survived its
 server would be an orphaned resource with no location, which is the failure the
 coupling exists to prevent and which nothing has yet observed being prevented.
+## 40. alert-on-swap-utilisation
+
+**Not blocked; recorded rather than folded into
+`bound-host-log-growth-and-add-swap`, which is the change that gives this host
+swap in the first place.** That change is host-level Ansible; this one is a
+`platform/` Compose change reached by a different pipeline, and folding it in
+would have made a single change need two deploys.
+
+Once swap exists, "swap is 80% consumed" is the signal that a leak is underway
+and the OOM killer is next. Nothing says it. `node_memory_SwapFree_bytes` and
+`node_memory_SwapTotal_bytes` are already scraped -- node-exporter has been
+running since `add-platform-monitoring` -- so the rule is a few lines beside
+the seven already inline in `platform/docker-compose.yml`.
+
+**What this adds is the explanation, not the detection.** `HostMemoryPressure`
+is computed from `MemAvailable / MemTotal`, which is RAM only and unaffected by
+swap existing, so a leak still drives it over 90% and still fires after ten
+minutes. What that alert cannot say is *why*, and on a host that now has a
+last-resort tier the difference between "memory is tight" and "the reserve is
+being consumed and there is nothing after it" is the difference between a
+warning and a countdown.
+
+Worth deciding at the same time whether the threshold is a level (swap above
+some fraction) or a rate (swap consumed per unit time). A level fires late on a
+slow leak and a rate fires spuriously on a legitimate burst; this host has no
+history of either yet, which is a reason to pick the simpler one and revisit.
+
+**Do not size it before entry 7.** Container memory limits change what swap is
+ever asked to absorb, so a threshold chosen now describes a host that is about
+to change.
+
+## 41. assert-every-role-has-a-mock_roles-entry
+
+**Not blocked; recorded rather than folded into
+`bound-host-log-growth-and-add-swap`, which is the change that hit it.** Adding
+the missing entry belonged to that change; asserting the invariant is a
+different concern, and the `.github/tests` suite is not that change's subject.
+
+`.ansible-lint`'s `mock_roles:` hand-enumerates every role referenced by name,
+because ansible-lint does not resolve role references through
+`ansible/ansible.cfg`'s `roles_path` the way `ansible-playbook` does. The file's
+own comment says so. What it does not say, and what nothing enforces, is that
+the list must be complete: a role added under `ansible/roles/` and referenced
+from `ansible/playbooks/host-baseline.yml` without a matching entry fails
+`ansible-lint` with a false-positive "role not found" -- twice, once for the
+playbook and once for the role's own `converge.yml`.
+
+Observed 2026-09-08 while adding the `swap` role. The diagnostic names a
+search path that does not include `ansible/roles/`, which reads as a
+configuration problem rather than as a missing line in a list, so the time is
+spent in the wrong file.
+
+This is a **static read of a committed file** -- the set of directories under
+`ansible/roles/` minus the gitignored external role, against the `mock_roles`
+list in `.ansible-lint` -- so it fits the `.github/tests` row exactly: no
+network, no credential, no container runtime, no Terraform binary. It is the
+same shape as the existing "every lockfile-bearing directory is covered" check.
+
+Worth doing because the cost is paid by whoever adds the *next* role, not by
+whoever left the list short, and because the failure arrives as a message
+pointing somewhere else.
+
+## 42. commit-derived-tests-before-folding-them
+
+**Not blocked; small, and about the workflow rather than about any code.**
+Recorded by `bound-host-log-growth-and-add-swap`, whose code review found it.
+
+`AGENTS.md` has an author other than the implementer derive tests from the
+approved delta specs. That author may not edit an existing test file, so when
+the tests a change needs belong in one, they arrive as a new file instead --
+in that change, a whole `molecule/log-bound/` scenario whose `converge.yml` was
+character-for-character the existing `default`'s.
+
+The implementer then folded them into the existing scenario and deleted the
+new one, which was the right call on its merits: two identical converges of the
+suite's slowest role, on every pull request, to read one file. But the folded
+scenario was **never committed**, so the derived assertions exist nowhere but
+inside the implementer's edit. No reviewer can diff what the independent author
+wrote against what survived, and the claim "every assertion moved verbatim"
+rests on the implementer's word -- which is exactly the separation the
+derive-tests step exists to create.
+
+The fix is ordering, not policy: **commit the derived tests as authored, then
+fold in a second commit.** The fold becomes a reviewable diff and costs one
+extra commit on a branch that is squashed anyway.
+
+Worth writing into `AGENTS.md`'s derive-tests paragraph rather than leaving it
+as a queue entry, since the next change hits it the same way and the cost is
+invisible until review.

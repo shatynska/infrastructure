@@ -9,9 +9,82 @@
 #    Engine (derived: not a literal spec scenario, but the behavior the
 #    "pinned Docker runtime install" goal in proposal.md/design.md commits
 #    to, and the reason this role exists).
+#  - iac-host-configuration's "Container Logs Are Bounded by the Host's Daemon
+#    Configuration", scenario "The daemon's configuration is what carries the
+#    bound" (specified) -- the second block below.
+#
+# WHY THE LOG-BOUND ASSERTIONS ARE HERE AND NOT IN A SCENARIO OF THEIR OWN.
+# They were derived into a separate `log-bound` scenario, whose converge was
+# character-for-character this one -- `role: docker`, no variables supplied --
+# because the author deriving them may not edit an existing test file. Keeping
+# both would have paid a second full converge of the slowest role in this
+# suite, on every pull request, to read one file. Every assertion moved here
+# verbatim; none was dropped, relaxed or reworded (the change
+# bound-host-log-growth-and-add-swap, design.md Decision 11).
+#
+# THE CONVERGE SUPPLYING NO VARIABLES IS THE POINT, not an omission. The
+# requirement's obligation is that a container which says nothing about its
+# logging is bounded rather than unlimited, on any host this repository
+# configures -- and this project's decision is that the bound is a safe default
+# the role ships, never an environment fact set from inventory. A converge that
+# supplied the bounds would check only that the role passes through what it is
+# given, and would leave the shipped defaults -- what prod and any second host
+# actually inherit -- unchecked.
+#
+# WHAT THIS SCENARIO DOES NOT ANSWER, AND WHY -- READ THIS BEFORE ADDING A
+# CONTAINER HERE. Two of that requirement's scenarios need a container on the
+# instance's own nested daemon: "A container created after configuration has a
+# bounded log" and "Containers predating the configuration are not claimed as
+# bounded". Neither is asserted, and the reason is not that they were
+# overlooked.
+#
+# This scenario's daemon runs on the containerd overlayfs snapshotter, because
+# /etc/docker/daemon.json is the very thing under test: `prepare.yml` may not
+# write it, and the external role this wrapper depends on renders that file
+# from `docker_daemon_options` with `copy`, overwriting whatever is there
+# rather than merging into it. The sibling scenarios that DO run nested
+# containers (image_prune's two, deploy_user's default) select the vfs storage
+# driver through `docker_daemon_extra_options` -- an option not available here,
+# since it would change the file being asserted on.
+#
+# Under the snapshotter this scenario is therefore left with, creating a
+# container fails. Reproduced inside a converged instance on 2026-09-08, with
+# the image obtained offline (`tar -cf - -T /dev/null | docker import -`, which
+# succeeds):
+#
+#   docker create --name probe molecule-log-bound-fixture:1 /bin/true
+#   Error response from daemon: failed to mount /tmp/containerd-mount...:
+#   mount source: "overlay", ... fstype: overlay, ... err: invalid argument
+#
+# So both scenarios rest on the hand-run converge against production, which
+# creates a throwaway container on the real daemon and inspects one of the
+# pre-existing containers. Both have rows of their own in that change's
+# `test-plan.md`.
+#
+# Do not close that gap by asserting something weaker here that passes. An
+# assertion that the daemon COULD bound a container, made without a container,
+# is the tautology the whole verification story of that change is written to
+# avoid.
+#
+# PROVENANCE OF THE EXPECTED VALUES. The requirement fixes neither number: it
+# asks for "a maximum size per log file and a maximum number of retained
+# files", and states the bound is a ceiling rather than a retention target. The
+# literals 50m and 3 are DERIVED, from that change's `design.md` Decision 3 and
+# `tasks.md` 1.1, which choose them against this host's actual free space and
+# against the absence of log aggregation. They are asserted as literals rather
+# than read back out of the role's own defaults on purpose: reading them from
+# the role under test would make whatever it shipped correct by construction.
+# Changing either is a change to that decision AND to this file, together and
+# visibly.
 - name: Verify
   hosts: all
   become: true
+  vars:
+    docker_daemon_config_path: /etc/docker/daemon.json
+    # DERIVED (design.md Decision 3 / tasks.md 1.1), per the header above.
+    docker_expected_log_driver: json-file
+    docker_expected_max_size: "50m"
+    docker_expected_max_files: "3"
   tasks:
     # --- "External role version is pinned" (specified) ---
     - name: Read the committed requirements.yml from the repository (not the managed node)
@@ -65,3 +138,174 @@
       ansible.builtin.assert:
         that:
           - docker_info.rc == 0
+
+    # ================================================================
+    # Container logs are bounded by the host's daemon configuration.
+    # Moved here verbatim from the derived `log-bound` scenario; see this
+    # file's header for why, and for what these do not establish.
+    # ================================================================
+    - name: Stat the daemon configuration file
+      ansible.builtin.stat:
+        path: "{{ docker_daemon_config_path }}"
+      register: docker_daemon_config
+
+    # SPECIFIED -- "both recorded in the daemon's own configuration file on the
+    # host", and "The bound SHALL be a property of the daemon, not of any
+    # application's service-definition file". A bound placed anywhere else --
+    # a `logging:` stanza in a Compose file this repository can edit -- would
+    # leave this file absent and would not reach the applications whose
+    # Compose files this repository cannot edit.
+    - name: Assert the daemon configuration file exists
+      ansible.builtin.assert:
+        that:
+          - docker_daemon_config.stat.exists
+          - docker_daemon_config.stat.isreg
+        fail_msg: >-
+          No file at {{ docker_daemon_config_path }} after the docker role
+          converged with no variables supplied. The bound has to be a property
+          of the daemon: an application's own service-definition file can only
+          bound the services its author remembered to annotate, and only for
+          applications whose files this repository is able to edit -- which
+          excludes every application deployed here from its own repository.
+        success_msg: "{{ docker_daemon_config_path }} exists."
+        quiet: true
+
+    - name: Read the daemon configuration file
+      ansible.builtin.slurp:
+        src: "{{ docker_daemon_config_path }}"
+      register: docker_daemon_config_raw
+
+    - name: Report the daemon configuration file as rendered
+      ansible.builtin.debug:
+        var: docker_daemon_config_raw.content | b64decode
+
+    # SPECIFIED -- "so that the guarantee is verifiable from the host's own
+    # configuration": a file the daemon cannot parse carries no guarantee, and
+    # dockerd refuses to start on one.
+    - name: Assert the daemon configuration file parses as JSON
+      vars:
+        docker_daemon_text: "{{ docker_daemon_config_raw.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - (docker_daemon_text | from_json) is mapping
+        fail_msg: >-
+          {{ docker_daemon_config_path }} does not parse as a JSON object.
+          Its contents are:
+          {{ docker_daemon_text }}
+        success_msg: "{{ docker_daemon_config_path }} parses as a JSON object."
+        quiet: true
+
+    # SPECIFIED -- "it SHALL name the logging driver and both bounds". The
+    # driver is asserted although json-file is already the runtime's default,
+    # because the requirement asks the file to state the whole contract rather
+    # than rely on a default that a future daemon version may change.
+    - name: Assert the daemon configuration names the logging driver
+      vars:
+        docker_daemon_config_parsed: "{{ docker_daemon_config_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'log-driver' in docker_daemon_config_parsed"
+          - docker_daemon_config_parsed['log-driver'] == docker_expected_log_driver
+        fail_msg: >-
+          {{ docker_daemon_config_path }} does not name
+          '{{ docker_expected_log_driver }}' as its log-driver. It carries:
+          {{ docker_daemon_config_parsed }}
+        success_msg: "The daemon configuration names the logging driver explicitly."
+        quiet: true
+
+    # SPECIFIED -- "a maximum size per log file and a maximum number of
+    # retained files", both in the daemon's configuration file. The exact
+    # values are derived; see the header. Asserting the values rather than the
+    # keys alone is what makes a typo fail here rather than on a host: a
+    # malformed max-size is rejected at container creation, which is a long way
+    # from this file.
+    - name: Assert the daemon configuration carries both bounds, with the configured values
+      vars:
+        docker_daemon_config_parsed: "{{ docker_daemon_config_raw.content | b64decode | from_json }}"
+        docker_log_opts: "{{ docker_daemon_config_parsed['log-opts'] | default({}) }}"
+      ansible.builtin.assert:
+        that:
+          - "'log-opts' in docker_daemon_config_parsed"
+          - "'max-size' in docker_log_opts"
+          - "'max-file' in docker_log_opts"
+          - docker_log_opts['max-size'] == docker_expected_max_size
+          - docker_log_opts['max-file'] == docker_expected_max_files
+        fail_msg: >-
+          {{ docker_daemon_config_path }}'s log-opts are {{ docker_log_opts }},
+          not max-size {{ docker_expected_max_size }} and max-file
+          {{ docker_expected_max_files }}. Both bounds have to be present: a
+          maximum size with no file count bounds each file and not the set, and
+          a file count with no maximum size bounds nothing at all.
+        success_msg: >-
+          The daemon configuration carries max-size
+          {{ docker_expected_max_size }} and max-file
+          {{ docker_expected_max_files }}.
+        quiet: true
+
+    # SPECIFIED that the bounds be recorded in the daemon's configuration file;
+    # DERIVED that they must be recorded as JSON STRINGS. `to_nice_json`
+    # renders an unquoted YAML 3 as the JSON number 3, and Docker rejects a
+    # non-string max-file.
+    #
+    # THIS ASSERTION ADDS NO DISCRIMINATION TODAY, and is kept anyway. Verified
+    # on 2026-09-08 against a hand-built daemon.json carrying `"max-file": 3`:
+    # the assertion above already fails on it, because from_json yields the
+    # integer 3 and 3 does not compare equal to "3", so this one is never
+    # reached. What it guards is the reading, not the file -- if the assertion
+    # above is ever relaxed to compare `| string`, or the file comes to be read
+    # some other way, the number/string distinction the plan's own task 1.2
+    # calls out would stop being checked anywhere, silently. Its failure
+    # message is also the one that names the trap directly.
+    - name: Assert both bounds are recorded as JSON strings, not as JSON numbers
+      vars:
+        docker_daemon_text: "{{ docker_daemon_config_raw.content | b64decode }}"
+        docker_max_file_pattern: '"max-file"[ \t]*:[ \t]*"{{ docker_expected_max_files }}"'
+        docker_max_size_pattern: '"max-size"[ \t]*:[ \t]*"{{ docker_expected_max_size }}"'
+      ansible.builtin.assert:
+        that:
+          - docker_daemon_text is search(docker_max_file_pattern)
+          - docker_daemon_text is search(docker_max_size_pattern)
+        fail_msg: >-
+          {{ docker_daemon_config_path }} does not record both bounds as
+          quoted JSON strings. Its contents are:
+          {{ docker_daemon_text }}
+          Docker rejects a non-string max-file, and a YAML value written
+          without quotes reaches to_nice_json as an integer and is rendered as
+          an unquoted JSON number.
+        success_msg: "Both bounds are recorded as JSON strings."
+        quiet: true
+
+    # DERIVED -- no scenario states it. What it establishes is narrow and worth
+    # stating exactly: the daemon is up and reachable AFTER the converge
+    # rendered this file and restarted it. dockerd refuses to start on a
+    # configuration file it cannot parse or accept, so a file that is valid
+    # JSON but that Docker rejects leaves the daemon down -- a state the
+    # assertions above would not distinguish from a healthy one, since they
+    # read the file rather than the runtime.
+    #
+    # It does NOT establish that the bounds are in effect for a container. Only
+    # a created container establishes that, and this scenario cannot create
+    # one; see the header.
+    - name: Confirm the daemon is reachable after adopting the configuration
+      ansible.builtin.command: docker info --format {{ '{{' }}.LoggingDriver{{ '}}' }}
+      register: docker_info_logging_driver
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the daemon came back up with the configured logging driver
+      ansible.builtin.assert:
+        that:
+          - docker_info_logging_driver.rc == 0
+          - docker_info_logging_driver.stdout | trim == docker_expected_log_driver
+        fail_msg: >-
+          `docker info` reports rc={{ docker_info_logging_driver.rc }} and
+          logging driver '{{ docker_info_logging_driver.stdout | trim }}'
+          after the converge. stderr: {{ docker_info_logging_driver.stderr }}
+          The daemon is restarted to adopt {{ docker_daemon_config_path }};
+          if it cannot start on that file, every container on a real host stays
+          down until someone notices.
+        success_msg: >-
+          The daemon is up after adopting the configuration and reports
+          '{{ docker_info_logging_driver.stdout | trim }}' as its logging
+          driver.
+        quiet: true

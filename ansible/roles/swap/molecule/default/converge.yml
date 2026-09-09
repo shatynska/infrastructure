@@ -1,0 +1,55 @@
+---
+# Converges the `swap` role with activation disabled.
+#
+# TWO VARIABLES ARE OVERRIDDEN HERE, AND NOTHING ELSE IS, DELIBERATELY.
+#
+#   swap_activate: false
+#     The role's own test affordance, documented as one in its defaults and
+#     its README (this change's `tasks.md`, section 1). It is what makes this
+#     scenario possible at all: `swapon` registers with the runner's kernel
+#     and `vm.swappiness` is not a namespaced sysctl, so a converge with
+#     activation on would write state this run does not own and would leave a
+#     runner's kernel on a rig where it can succeed -- on this overlayfs-backed
+#     one it fails outright (tested 2026-09-08); the live `vm.swappiness` write
+#     reaches that kernel either way, not being namespaced. See
+#     molecule.yml's header.
+#
+#   swap_size_mb: 16
+#     A defaulted converge would `dd` 4 GiB inside a CI container on every
+#     run, and on every re-run the `idempotence` action performs. The
+#     requirement's assertion is against the CONFIGURED size, which a small
+#     value satisfies exactly as well -- and overriding it is what proves the
+#     variable is plumbed through to the file the role creates, rather than
+#     the size being hardcoded. 16 MiB is comfortably above `mkswap`'s
+#     ten-page minimum.
+#
+#   * `swap_file_path`, and this one is forced on the scenario rather than
+#     chosen. /proc/swaps is NOT namespaced, so the table this container reads
+#     is the RUNNER's -- and GitHub's Ubuntu runners swap to `/swapfile`, which
+#     is exactly the role's default. Observed on ubuntu-24.04 image
+#     20260831.293.1 in CI on 2026-09-09, where the scenario's own collision
+#     guard in prepare.yml caught it. Left at the default, the role would read
+#     the RUNNER's swap file as "my file is already active", skip `mkswap`, and
+#     the run would fail at the signature assertion for a reason that is the
+#     rig's and not the role's.
+#
+#     Overriding the path does not leave the shipped default unchecked: verify.yml
+#     reads `ansible/roles/swap/defaults/main.yml` from the repository and
+#     asserts the approved literals there directly, which is a stronger check
+#     than inferring them from a converge -- it fails whether or not a scenario
+#     happens to exercise them.
+#
+# The swap tendency and the kernel-parameter file's path are left at the role's
+# own defaults ON PURPOSE. This project does not set them from inventory (this
+# change's `design.md`, Decision 4 draws the same line for the logging bound),
+# so the defaults are what a host built from this repository inherits, and they
+# are therefore what is worth asserting through a real converge.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    swap_activate: false
+    swap_size_mb: 16
+    swap_file_path: /opt/molecule-swapfile
+  roles:
+    - role: swap

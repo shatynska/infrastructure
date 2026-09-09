@@ -18,32 +18,21 @@
         update_cache: true
         cache_valid_time: 0
 
-    # Written BEFORE the docker role installs and first starts dockerd, so the
-    # daemon comes up with it already in place. This scenario runs real
-    # containers INSIDE the Molecule instance (two stopped fixture holders and a
-    # local registry). Under the default overlayfs snapshotter that fails with
-    # "failed to mount ... fstype: overlay ... invalid argument" -- Docker-in-
-    # Docker cannot stack another overlay here. vfs is slower but mounts
-    # anywhere, which is the right trade for a fixture.
-    - name: Ensure /etc/docker exists before writing the daemon config
-      ansible.builtin.file:
-        path: /etc/docker
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Configure dockerd for nested containers before it is installed
-      ansible.builtin.copy:
-        dest: /etc/docker/daemon.json
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          {
-            "storage-driver": "vfs",
-            "features": {"containerd-snapshotter": false}
-          }
+    # THE vfs STORAGE-DRIVER FIXTURE USED TO BE WRITTEN HERE, as
+    # /etc/docker/daemon.json, before the docker role installed and first
+    # started dockerd. It now travels as `docker_daemon_extra_options` in this
+    # scenario's converge.yml instead.
+    #
+    # It had to move. The `docker` role now supplies daemon options of its own
+    # (a log ceiling), and geerlingguy.docker renders /etc/docker/daemon.json
+    # with `copy:` -- an overwrite, not a merge -- gated on its options
+    # dictionary being non-empty. That gate used to be false, which is the only
+    # reason a file written here survived the converge. It no longer is, so a
+    # file written here would be silently replaced and this scenario's nested
+    # containers would fail on overlay-on-overlay again.
+    #
+    # The rationale itself is unchanged and now lives beside the variable in
+    # converge.yml.
 
     # ================================================================
     # The digest-pin fixture's registry image, obtained ON THE CONTROLLER and

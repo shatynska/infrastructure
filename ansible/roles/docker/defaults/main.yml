@@ -1,0 +1,47 @@
+---
+# This role's own interface. Until the change bound-host-log-growth-and-add-swap
+# it had none -- it was a pure dependency wrapper with no variables of its own,
+# which is why it also had no README.
+#
+# WHY THE CEILING IS A ROLE DEFAULT AND NOT A prod.yml VALUE. An unbounded
+# container log is unsafe on any host this repository configures, not just on
+# this one, so a safe value exists and belongs here. That is the same line
+# ansible/roles/hardening/defaults/main.yml already draws from the other side:
+# it refuses to default hardening_ssh_allowed_cidrs because no source CIDR is
+# safe in general, and it does default hardening_web_allowed_cidrs closed
+# because closed is. Setting these two from
+# ansible/inventory/group_vars/prod.yml instead would hand unbounded logs to
+# the next host built from this repository, silently.
+#
+# WHY THE VALUES ARE GENEROUS RATHER THAN MINIMAL. 50m x 3 caps each container
+# at 150 MB -- about 1.7 GB across the eleven containers prod runs today,
+# against 65 GB free on its 75 GB root device. The reflex 10m x 3 was rejected
+# because this host has no log aggregation, so these files ARE the log history
+# an incident has to read, and on a Traefik fronting a public site 30 MB is
+# plausibly an hour. The requirement these serve
+# (openspec/specs/iac-host-configuration/spec.md, "Container Logs Are Bounded
+# by the Host's Daemon Configuration") asks for a ceiling, not a diet.
+#
+# REVISIT WHEN log aggregation lands -- docs/change-queue.md entry 28. That is
+# the event that makes small local retention harmless; until then, shrinking
+# these buys disk this host is not short of and costs history it cannot
+# replace.
+#
+# Strings, both of them, and not by accident: the external role renders this
+# through `to_nice_json`, which writes an unquoted 3 as a JSON number, and the
+# Docker daemon rejects a non-string max-file.
+docker_log_max_size: "50m"
+docker_log_max_files: "3"
+
+# Anything else that belongs in /etc/docker/daemon.json. Merged UNDER the log
+# ceiling by meta/main.yml, so this can add any daemon option and cannot remove
+# the bound -- see that file for why the polarity matters.
+#
+# It exists because the external role renders daemon.json with `copy:`, which
+# overwrites rather than merges, and three Molecule scenarios in this
+# repository (image_prune's two and deploy_user's default) need a storage
+# driver of `vfs` for their nested-container fixtures. Before this role
+# supplied any daemon options at all, those scenarios could write the file
+# themselves in `prepare.yml` and have it survive. They no longer can, so they
+# pass it here instead.
+docker_daemon_extra_options: {}

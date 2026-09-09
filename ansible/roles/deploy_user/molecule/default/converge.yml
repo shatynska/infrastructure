@@ -40,6 +40,34 @@
           commerce-ops-molecule@ci
     ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true) }}"
     ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('', true) }}"
+    # FIXTURE ONLY. This scenario is the only one that runs a real container
+    # INSIDE the Molecule instance: deploy-receive triggers app-deploy, which
+    # runs `docker compose up -d --wait`, and the requirement scenario "A
+    # single SSH session delivers content and triggers deploy" is only
+    # demonstrated if that actually succeeds. Under the default overlayfs
+    # snapshotter it fails with "failed to mount ... fstype: overlay ...
+    # invalid argument" -- docker-in-docker cannot stack another overlay here.
+    # vfs is slower but mounts anywhere, which is the right trade for a
+    # fixture. (repair-ansible-test-harness, task 6b.4.)
+    #
+    # Supplied to the `docker` role rather than written to
+    # /etc/docker/daemon.json in prepare.yml, where it used to live: that file
+    # is now rendered by the role itself and a copy written beforehand does not
+    # survive. These options are merged UNDER the role's log ceiling, so this
+    # fixture cannot unset the thing the role exists to guarantee.
+    #
+    # ONE TIMING DIFFERENCE FROM THE OLD ARRANGEMENT, recorded because a later
+    # author could be caught by it. Writing the file in `prepare.yml` put vfs in
+    # place before dockerd ever started. Supplying it as a role variable means
+    # dockerd starts once on the default snapshotter and is then restarted onto
+    # vfs by the external role's own `meta: flush_handlers`. Nothing in this
+    # scenario pulls or builds inside that window, so it is safe as written --
+    # but a step added to `prepare.yml` that pulled an image would land it on
+    # the wrong graphdriver and it would be invisible afterwards.
+    docker_daemon_extra_options:
+      storage-driver: vfs
+      features:
+        containerd-snapshotter: false
   roles:
     - role: docker
     - role: deploy_user

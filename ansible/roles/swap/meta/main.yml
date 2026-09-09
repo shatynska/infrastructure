@@ -1,0 +1,25 @@
+---
+# `galaxy_info` exists only to give this role a resolvable fully-qualified
+# name, and is not a step towards publishing it anywhere. Molecule's bundled
+# ansible-compat resolves an FQRN for any role carrying a meta/main.yml before
+# it will install it locally, and without these two keys it refuses the whole
+# scenario. The `docker` role's own meta/main.yml carries the full diagnosis.
+galaxy_info:
+  namespace: shatynska
+  role_name: swap
+  author: shatynska
+  description: >-
+    Gives the host a swap file and a swap-tendency policy that survive a
+    reboot, without making swap a routine memory tier.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+
+# None. This role depends on nothing and nothing depends on it, which is why
+# ansible/playbooks/host-baseline.yml is free to place it where it does rather
+# than where an ordering constraint would force it.
+dependencies: []

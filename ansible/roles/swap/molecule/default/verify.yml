@@ -1,0 +1,471 @@
+---
+# Verifies what a converge with activation disabled left on the instance.
+#
+# The requirement under test is "The Host Carries Swap That Survives a Reboot"
+# in openspec/specs/iac-host-configuration/spec.md. The scenario this file
+# answers in full is "Configuration is established without activation"; it also
+# carries the whole of "The swap file is not readable by an unprivileged
+# account", and the file half -- and only the file half -- of "The boot-time
+# records are what carry persistence" and of "Swap tendency is set and
+# persists".
+#
+# It answers NEITHER "Swap is active after a converge" NOR "Swap survives a
+# reboot" NOR "A re-converge leaves active swap intact". A container has no
+# boot and shares the runner's kernel; those three are closed by the hand-run
+# converge against production, and each has a row of its own in the change
+# `bound-host-log-growth-and-add-swap`'s `test-plan.md` naming what closes it.
+#
+# PROVENANCE OF THE EXPECTED VALUES BELOW. The requirement fixes none of them
+# by name -- it says "a file on the host's root filesystem", "readable and
+# writable only by root", "the boot-time mount table and the kernel-parameter
+# directory". The literal path, tendency and filename are DERIVED, from that
+# change's `design.md` Decision 6 and its `tasks.md` section 1, which choose
+# `/swapfile`, `vm.swappiness = 10` and
+# `/etc/sysctl.d/60-swappiness.conf`. They are asserted as literals rather than
+# read back out of the role's own defaults on purpose: reading them from the
+# role under test would make any value the role happened to ship correct by
+# construction, and would assert nothing about the decision that was actually
+# approved. Changing one of them is a change to that decision AND to this file,
+# together and visibly.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    # DERIVED (design.md Decision 6 / tasks.md 1.4), per the header above.
+    # The scenario overrides swap_file_path -- see converge.yml for why it has
+    # to. The role's SHIPPED default is asserted separately, below, by reading
+    # defaults/main.yml from the repository.
+    swap_expected_file_path: /opt/molecule-swapfile
+    swap_expected_swappiness: "10"
+    swap_expected_sysctl_file: /etc/sysctl.d/60-swappiness.conf
+    # SPECIFIED BY THE SCENARIO'S OWN CONVERGE: converge.yml sets
+    # `swap_size_mb: 16`, so 16 MiB is the "configured size" the requirement
+    # speaks of for this run.
+    swap_expected_size_bytes: 16777216
+    swap_capture_path: /var/tmp/molecule-swap-prepare-capture.json
+    # DERIVED (design.md Decision 6): the requirement forbids the host's
+    # dedicated data volume; this repository mounts that volume at
+    # /mnt/main-data (ansible/roles/platform_data_volume/defaults/main.yml).
+    swap_forbidden_prefix: /mnt/main-data
+  tasks:
+    # ------------------------------------------------------------------
+    # THE ROLE'S SHIPPED DEFAULTS, read from the committed file rather than
+    # from a converge.
+    #
+    # This scenario cannot converge with the default swap_file_path (converge.yml
+    # says why: GitHub's runners swap to that exact path and /proc/swaps is not
+    # namespaced), so the approved literals are checked here instead. Reading
+    # the committed defaults is the STRONGER check of the two: it fails whether
+    # or not any scenario happens to exercise the value, and it is the value a
+    # host built from this repository actually inherits -- this project sets
+    # none of these from inventory.
+    #
+    # The literals come from the change `bound-host-log-growth-and-add-swap`,
+    # `design.md` Decision 6. Changing one is a change to that decision AND to
+    # this file, together and visibly. Same technique as the `docker` role's
+    # scenario, which reads the committed requirements.yml to assert the
+    # external role's pin.
+    # ------------------------------------------------------------------
+    - name: Read the role's committed defaults from the repository (not the managed node)
+      ansible.builtin.set_fact:
+        swap_shipped_defaults: "{{ lookup('file', playbook_dir + '/../../defaults/main.yml') | from_yaml }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Report the shipped defaults
+      ansible.builtin.debug:
+        var: swap_shipped_defaults
+
+    - name: Assert the role ships the approved defaults
+      delegate_to: localhost
+      become: false
+      ansible.builtin.assert:
+        that:
+          - swap_shipped_defaults.swap_file_path == '/swapfile'
+          - swap_shipped_defaults.swap_size_mb == 4096
+          - swap_shipped_defaults.swap_swappiness == 10
+          - swap_shipped_defaults.swap_sysctl_file == '/etc/sysctl.d/60-swappiness.conf'
+          - swap_shipped_defaults.swap_activate is true
+        fail_msg: >-
+          ansible/roles/swap/defaults/main.yml does not ship the approved
+          values. It has: {{ swap_shipped_defaults }}.
+          Expected swap_file_path /swapfile, swap_size_mb 4096,
+          swap_swappiness 10, swap_sysctl_file
+          /etc/sysctl.d/60-swappiness.conf, swap_activate true. These are what
+          a host built from this repository inherits -- nothing sets them from
+          inventory -- so a wrong default here is a wrong production host, not
+          a test detail. swap_activate in particular is a test affordance and
+          must ship enabled.
+        success_msg: "The role ships the approved defaults."
+        quiet: true
+
+    # ------------------------------------------------------------------
+    # WHERE THE ROLE PUT IT. This block runs FIRST, before anything stats the
+    # path this file expects, and the order is the point. A role reconfigured
+    # onto the data volume writes nothing at /swapfile, so a stat of that
+    # hardcoded path aborts the run before any reason-shaped assertion is
+    # reached -- and the operator is told "no file at /swapfile" rather than
+    # "the swap file is on the data volume". Reading the role's own recorded
+    # path first is what makes the diagnosis available at all.
+    # ------------------------------------------------------------------
+    # DERIVED -- the requirement names no path; it forbids the data volume.
+    # Stated as its own assertion so that a role reconfigured onto the volume
+    # fails on the reason rather than on a stat.
+    #
+    # IT MUST READ THE PATH THE ROLE ACTUALLY USED, not the literal this file
+    # expects, and it must run before anything stats that literal. Comparing two
+    # literals from the vars block above would be constant-true: it would pass
+    # unchanged for a role reconfigured onto the volume, which is the one case
+    # it exists to catch. And placed after the stat of the hardcoded path below,
+    # it would never be reached in that case at all -- the run would abort on
+    # "no file at /swapfile" instead of naming the volume. The boot-time mount
+    # record is where the role's own choice of path is legible, so that is what
+    # is read, and it is read first.
+    - name: Read the boot-time mount table to recover the path the role chose
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: swap_fstab_for_path
+
+    - name: Assert the backing file is not on the host's dedicated data volume
+      vars:
+        swap_recorded_paths: >-
+          {{ (swap_fstab_for_path.content | b64decode)
+             | regex_findall('(?m)^[ \t]*(\S+)[ \t]+\S+[ \t]+swap[ \t]') }}
+      ansible.builtin.assert:
+        that:
+          - swap_recorded_paths | length > 0
+          - swap_recorded_paths | select('search', '^' ~ (swap_forbidden_prefix | regex_escape)) | list | length == 0
+        fail_msg: >-
+          The swap path(s) the role recorded for boot are
+          {{ swap_recorded_paths }}; at least one is under
+          {{ swap_forbidden_prefix }}, the mount point of this host's attached
+          data volume (or none was recorded at all). The requirement forbids
+          that volume in particular: it is a network block device, and it is
+          the volume the platform's Postgres, Prometheus and Grafana
+          bind-mount.
+        success_msg: >-
+          The swap path the role recorded ({{ swap_recorded_paths }}) is not on
+          the data volume.
+        quiet: true
+
+    # ------------------------------------------------------------------
+    # The backing file itself.
+    # ------------------------------------------------------------------
+    - name: Stat the backing file the role was asked to establish
+      ansible.builtin.stat:
+        path: "{{ swap_expected_file_path }}"
+      register: swap_file
+
+    - name: Report what the converge left at that path
+      ansible.builtin.debug:
+        var: swap_file.stat
+
+    # SPECIFIED -- "Swap SHALL be backed by a file on the host's root
+    # filesystem rather than by a partition or an attached volume", and
+    # "Configuration is established without activation" requires the swap file
+    # to have been established.
+    - name: Assert the backing file exists and is a regular file
+      ansible.builtin.assert:
+        that:
+          - swap_file.stat.exists
+          - swap_file.stat.isreg
+        fail_msg: >-
+          No regular file at {{ swap_expected_file_path }} after the converge.
+          The requirement asks for swap backed by a file on the root
+          filesystem -- a partition cannot be added to an already provisioned
+          host, and an attached network volume would put the kernel's
+          last-resort memory tier on the component least able to tolerate the
+          pressure that makes swap necessary. Establishing the file is
+          separable from activating it, and this converge disabled only the
+          activation.
+        success_msg: "{{ swap_expected_file_path }} exists and is a regular file."
+        quiet: true
+
+    # SPECIFIED -- "the host SHALL report active swap of the configured size"
+    # is about activation, which this scenario cannot reach; what IS reachable,
+    # and what this asserts, is that the file the role established is the
+    # configured size. A role that ignored swap_size_mb would produce a file of
+    # some other size and fail here.
+    - name: Assert the backing file is the configured size
+      ansible.builtin.assert:
+        that:
+          - swap_file.stat.size == swap_expected_size_bytes
+        fail_msg: >-
+          {{ swap_expected_file_path }} is {{ swap_file.stat.size }} bytes;
+          this converge configured {{ swap_expected_size_bytes }}
+          (swap_size_mb: 16). Either the size variable is not reaching the
+          task that creates the file, or the file was created with a hardcoded
+          size, or a partially written file from an interrupted run was left in
+          place and adopted.
+        success_msg: "The backing file is the configured size."
+        quiet: true
+
+    # SPECIFIED -- "The swap file is not readable by an unprivileged account":
+    # "its ownership and permissions SHALL admit only `root`".
+    - name: Assert the backing file admits only root by ownership and mode
+      ansible.builtin.assert:
+        that:
+          - swap_file.stat.pw_name == "root"
+          - swap_file.stat.gr_name == "root"
+          - swap_file.stat.mode == "0600"
+        fail_msg: >-
+          {{ swap_expected_file_path }} is
+          {{ swap_file.stat.mode }} {{ swap_file.stat.pw_name }}:{{ swap_file.stat.gr_name }},
+          not 0600 root:root. Its contents are whatever the kernel evicted from
+          process memory, so it can hold any secret any process on this host
+          held -- and this host has an unprivileged interactive account. The
+          permissions must be enforced on every run, not only on the run that
+          created the file.
+        success_msg: "The backing file is 0600 root:root."
+        quiet: true
+
+    # SPECIFIED -- the same scenario, asserted as behaviour rather than as
+    # metadata: "an unprivileged account with a login on this host cannot read
+    # evicted memory". The mode assertion above and this one are not
+    # redundant -- this one is what fails if the file is reachable by some
+    # route the mode bits do not describe (an ACL, or a permissive parent).
+    - name: Attempt to read the backing file as an unprivileged account
+      ansible.builtin.command: runuser -u nobody -- head -c 1 {{ swap_expected_file_path }}
+      register: swap_unprivileged_read
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the unprivileged read was refused
+      ansible.builtin.assert:
+        that:
+          - swap_unprivileged_read.rc != 0
+        fail_msg: >-
+          An unprivileged account read the first byte of
+          {{ swap_expected_file_path }} successfully (rc=0). The swap file
+          holds evicted process memory; a login account able to read it can
+          read anything any process on the host held.
+        success_msg: >-
+          An unprivileged account could not read the swap file
+          (rc={{ swap_unprivileged_read.rc }}).
+        quiet: true
+
+    # ------------------------------------------------------------------
+    # The swap signature. `mkswap` writes to the file only -- it touches no
+    # kernel state -- so this is inside what a container can safely establish.
+    # ------------------------------------------------------------------
+    - name: Probe the backing file for a filesystem signature
+      ansible.builtin.command: blkid -p -s TYPE -o value {{ swap_expected_file_path }}
+      register: swap_signature
+      changed_when: false
+      failed_when: false
+
+    # SPECIFIED -- "Configuration is established without activation" lists the
+    # swap file among what SHALL be established, and a file with no swap
+    # signature is not swap: `swapon` at boot would refuse it, so the fstab
+    # record alone would not produce active swap.
+    - name: Assert the backing file carries a swap signature
+      ansible.builtin.assert:
+        that:
+          - swap_signature.rc == 0
+          - swap_signature.stdout | trim == "swap"
+        fail_msg: >-
+          blkid reports the type of {{ swap_expected_file_path }} as
+          '{{ swap_signature.stdout | trim }}' (rc={{ swap_signature.rc }}),
+          not 'swap'. The file exists but has never been formatted, so a boot
+          reading the fstab record would find nothing to activate. A run
+          interrupted between creating the file and formatting it leaves
+          exactly this state, which is why the role has to establish the
+          file's actual state rather than guard on its absence.
+        success_msg: "The backing file carries a swap signature."
+        quiet: true
+
+    # ------------------------------------------------------------------
+    # The two records the host reads at boot. Reading them is the weaker of
+    # the two claims the requirement distinguishes -- it establishes that the
+    # records exist and say the right thing, NOT that a boot acts on them.
+    # ------------------------------------------------------------------
+    - name: Read the boot-time mount table
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: swap_fstab_raw
+
+    - name: Report the boot-time mount table
+      ansible.builtin.debug:
+        var: swap_fstab_raw.content | b64decode
+
+    # SPECIFIED -- "The boot-time records are what carry persistence": "they
+    # SHALL name the swap file". The fstype field is asserted alongside the
+    # path because a line naming the right file with the wrong fstype is the
+    # realistic failure, and it is one a substring match on the path alone
+    # would pass.
+    - name: Assert the boot-time mount table names the swap file with fstype swap
+      vars:
+        swap_fstab_text: "{{ swap_fstab_raw.content | b64decode }}"
+        swap_fstab_pattern: "(?m)^[ \t]*{{ swap_expected_file_path | regex_escape }}[ \t]+[^ \t]+[ \t]+swap[ \t]+"
+      ansible.builtin.assert:
+        that:
+          - swap_fstab_text is search(swap_fstab_pattern)
+        fail_msg: >-
+          /etc/fstab carries no entry naming {{ swap_expected_file_path }} with
+          fstype 'swap'. This is the record the host reads at boot; without it
+          swap is a one-off that disappears at the next reboot, and the
+          requirement asks for swap that is active again after a reboot without
+          a manual step. Note that reading this record is a WEAKER claim than
+          observing a boot -- see this scenario's molecule.yml.
+        success_msg: "The boot-time mount table names the swap file as swap."
+        quiet: true
+
+    - name: Stat the kernel-parameter file
+      ansible.builtin.stat:
+        path: "{{ swap_expected_sysctl_file }}"
+      register: swap_sysctl_file
+
+    # SPECIFIED -- "Swap tendency is set and persists": "the setting SHALL be
+    # recorded in a file the kernel reads at boot". The directory is the
+    # requirement's; the filename is derived (see the header).
+    - name: Assert the kernel-parameter file exists in the directory the kernel reads at boot
+      ansible.builtin.assert:
+        that:
+          - swap_sysctl_file.stat.exists
+          - swap_sysctl_file.stat.isreg
+        fail_msg: >-
+          No file at {{ swap_expected_sysctl_file }}. The swap tendency has to
+          be recorded where the kernel reads it at boot; a value applied only
+          to the running kernel is gone at the next reboot.
+        success_msg: "{{ swap_expected_sysctl_file }} exists."
+        quiet: true
+
+    - name: Read the kernel-parameter file
+      ansible.builtin.slurp:
+        src: "{{ swap_expected_sysctl_file }}"
+      register: swap_sysctl_raw
+
+    - name: Report the kernel-parameter file
+      ansible.builtin.debug:
+        var: swap_sysctl_raw.content | b64decode
+
+    # SPECIFIED for the fact that the file names the tendency; DERIVED for the
+    # value 10 (design.md Decision 6). The requirement's own wording -- "the
+    # configured overflow-reserve value rather than the distribution default"
+    # -- is what makes the exact number worth asserting: a file setting 60
+    # would satisfy "the file exists and names vm.swappiness" and would leave
+    # the kernel exactly where it started.
+    - name: Assert the kernel-parameter file sets the configured swap tendency
+      vars:
+        swap_sysctl_text: "{{ swap_sysctl_raw.content | b64decode }}"
+        swap_sysctl_pattern: "(?m)^[ \t]*vm\\.swappiness[ \t]*=[ \t]*{{ swap_expected_swappiness }}[ \t]*$"
+      ansible.builtin.assert:
+        that:
+          - swap_sysctl_text is search(swap_sysctl_pattern)
+        fail_msg: >-
+          {{ swap_expected_sysctl_file }} does not set vm.swappiness to
+          {{ swap_expected_swappiness }}. Its contents are:
+          {{ swap_sysctl_text }}
+          Swap here is an overflow reserve, not a routine memory tier: at the
+          distribution default of 60 the kernel pages out a working set the
+          host has room for, which serves neither the alerting window this
+          change is buying nor the out-of-memory kill it is trying to avoid.
+        success_msg: >-
+          {{ swap_expected_sysctl_file }} sets vm.swappiness to
+          {{ swap_expected_swappiness }}.
+        quiet: true
+
+    # ------------------------------------------------------------------
+    # The negative half: no kernel state outside this run's ownership was
+    # written. Both readings below are of the RUNNER's kernel -- see
+    # prepare.yml for why they are compared rather than asserted absolutely.
+    # ------------------------------------------------------------------
+    - name: Read back what prepare.yml captured before the converge
+      ansible.builtin.slurp:
+        src: "{{ swap_capture_path }}"
+      register: swap_capture_raw
+
+    - name: Read the kernel's swap table after the converge
+      ansible.builtin.command: cat /proc/swaps
+      register: swap_proc_swaps_after
+      changed_when: false
+
+    - name: Read the kernel's live swap tendency after the converge
+      ansible.builtin.command: cat /proc/sys/vm/swappiness
+      register: swap_swappiness_after
+      changed_when: false
+
+    # SPECIFIED -- "Configuration is established without activation": "no
+    # kernel state outside the run's ownership SHALL be written".
+    #
+    # The comparison is over the LIST OF ACTIVE SWAP AREAS, not over the text
+    # of /proc/swaps: the table's `Used` column is live accounting that drifts
+    # on any busy machine, so comparing the text would fail for reasons that
+    # have nothing to do with this role. See prepare.yml.
+    #
+    # WHAT THIS ASSERTS, AND WHY IT IS NARROWER THAN IT FIRST WAS. As authored,
+    # this compared the WHOLE set of active areas before and after and required
+    # it unchanged. That form was observed to fail on 2026-09-08 for a reason
+    # that is not the role's: the developer machine is WSL2, whose own swap
+    # partition activates lazily under memory pressure, so `/dev/sdc` appeared
+    # in the shared /proc/swaps during the converge -- captured `[]`, read back
+    # `['/dev/sdc']` -- while `/swapfile` was correctly left inactive. That is
+    # a false positive, and a test that fails on the machine's own housekeeping
+    # is not evidence about the code.
+    #
+    # The narrowing is to the property the requirement states rather than to
+    # something more convenient. The state this run OWNS is the swap file it
+    # was configured with; whether the runner's kernel brings its own areas up
+    # or down mid-run is outside both the role's reach and the requirement's
+    # words.
+    #
+    # THIS RIG CANNOT DRIVE THIS ASSERTION RED, and that is stated rather than
+    # glossed. The mutation was performed on 2026-09-08 -- the `swap_activate`
+    # gate removed from the role's `swapon` task -- and the scenario went red
+    # one step earlier, at converge:
+    #
+    #   swapon: /swapfile: swapon failed: Invalid argument
+    #
+    # The instance's filesystem is an overlay, and the kernel refuses a swap
+    # file on overlayfs. So a role that ignored the gate is caught here, but by
+    # the converge failing rather than by this assertion. The assertion is kept
+    # anyway: it costs nothing, it is the check that would catch the same
+    # mutation on a rig where activation CAN succeed, and its absence would
+    # leave the property unstated. What it is not, is evidence -- and the
+    # scenario should not be read as if it were.
+    #
+    # The other half of the hazard is NOT neutralised by overlayfs: the live
+    # `vm.swappiness` write below reaches the runner's own kernel, because that
+    # sysctl is not namespaced and no filesystem is involved.
+    - name: Assert the converge did not activate the swap file it configured
+      vars:
+        swap_capture: "{{ swap_capture_raw.content | b64decode | from_json }}"
+        swap_areas_after: "{{ swap_proc_swaps_after.stdout | regex_findall('(?m)^(/\\S*)') | sort }}"
+      ansible.builtin.assert:
+        that:
+          - swap_expected_file_path not in swap_areas_after
+          - swap_expected_file_path not in swap_capture.swap_areas
+        fail_msg: >-
+          {{ swap_expected_file_path }} is listed in the kernel's active swap
+          areas after a converge that disabled activation.
+          Before: {{ swap_capture.swap_areas }}
+          After:  {{ swap_areas_after }}
+          Note whose kernel this is: every scenario here runs privileged with
+          cgroupns_mode: host, so `swapon` inside the instance registers with
+          the CI RUNNER's kernel wherever it can succeed at all -- on this
+          overlayfs-backed rig it fails outright instead, so reaching this
+          message means either the rig changed or something other than the role
+          activated the file. A gate on activation that does not actually gate
+          is a defect in the runner as well as in the role.
+        success_msg: >-
+          {{ swap_expected_file_path }} was not activated
+          (active areas: {{ swap_areas_after }}).
+        quiet: true
+
+    # SPECIFIED -- same clause. `vm.swappiness` is not namespaced, so writing
+    # it live from inside the instance changes the runner's own kernel.
+    - name: Assert the converge wrote no live swap-tendency value to the shared kernel
+      vars:
+        swap_capture: "{{ swap_capture_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - swap_swappiness_after.stdout | trim == swap_capture.live_swappiness
+        fail_msg: >-
+          The kernel's live vm.swappiness changed across the converge.
+          Before: '{{ swap_capture.live_swappiness }}'
+          After:  '{{ swap_swappiness_after.stdout | trim }}'
+          With activation disabled the role may write the sysctl FILE and must
+          not apply it. vm.swappiness is not a namespaced sysctl, so this
+          reading and this write are both of the CI runner's own kernel.
+        success_msg: "The kernel's live vm.swappiness is unchanged across the converge."
+        quiet: true

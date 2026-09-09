@@ -8537,5 +8537,90 @@ class TestTheArchivedRecordCorrectionRuleIsStated(unittest.TestCase):
         )
 
 
+# --------------------------------------------------------------------------
+# iac-host-configuration / Container Logs Are Bounded by the Host's Daemon
+# Configuration
+# --------------------------------------------------------------------------
+
+
+class TestDockerLogBoundCannotBeUnset(unittest.TestCase):
+    """The `docker` wrapper composes `/etc/docker/daemon.json` by merging a
+    caller-supplied `docker_daemon_extra_options` with its own log ceiling.
+
+    The ORDER of that merge is the whole guarantee. `combine` lets the
+    right-hand operand win, so the ceiling must be second: a caller can then add
+    any daemon option and cannot remove the bound. Reversed, a scenario or a
+    host adding an unrelated option could silently drop `max-size` -- and the
+    rendered file would look entirely reasonable.
+
+    Nothing else in this repository would notice. The `docker` role's Molecule
+    scenario supplies no variables by design, and the three scenarios that do
+    pass `docker_daemon_extra_options` pass only `storage-driver` and
+    `features`, which never collide with the log keys -- so the operands can be
+    swapped and every Molecule scenario stays green. That is why the check lives
+    here: it is a static read of a committed file, which is this suite's remit,
+    and it is the only place the polarity is observable at all.
+
+    Bounded claim: this checks the operands of the FIRST `combine`. A
+    re-application -- `extra | combine(bound) | combine(extra)` -- would put
+    `extra` on the left and the log keys after that first `combine(`, so both
+    assertions below would pass while the polarity was in fact broken. That
+    shape is contrived enough not to be worth parsing for; it is named so the
+    claim above is read as "the only place it is observed", not "the only way
+    it could be broken".
+    """
+
+    META = ROOT / "ansible" / "roles" / "docker" / "meta" / "main.yml"
+
+    def setUp(self) -> None:
+        self.dependencies = load_yaml(self.META).get("dependencies") or []
+        self.entry = next(
+            (
+                dep
+                for dep in self.dependencies
+                if isinstance(dep, dict) and dep.get("role") == "geerlingguy.docker"
+            ),
+            None,
+        )
+
+    def test_the_wrapper_supplies_daemon_options_to_the_external_role(self) -> None:
+        self.assertIsNotNone(
+            self.entry,
+            "ansible/roles/docker/meta/main.yml no longer depends on geerlingguy.docker",
+        )
+        self.assertIn(
+            "docker_daemon_options",
+            self.entry,
+            "the docker wrapper no longer passes docker_daemon_options, so nothing "
+            "renders /etc/docker/daemon.json and no container log is bounded",
+        )
+
+    def test_the_log_bound_is_merged_last_so_it_cannot_be_unset(self) -> None:
+        expression = str(self.entry["docker_daemon_options"])
+        combine = re.search(r"\|\s*combine\(", expression)
+        self.assertIsNotNone(
+            combine,
+            "docker_daemon_options is no longer composed with `combine`; if the "
+            "extra-options passthrough was removed, delete this test with it, and "
+            "if it was kept, the polarity below still has to hold",
+        )
+        before, after = expression[: combine.start()], expression[combine.end() :]
+        self.assertIn(
+            "docker_daemon_extra_options",
+            before,
+            "docker_daemon_extra_options is not the LEFT operand of `combine`. "
+            "Whatever is on the right wins, so a caller's extra options would "
+            "override the log ceiling -- exactly the silent unset this "
+            "arrangement exists to prevent.",
+        )
+        for key in ("log-driver", "max-size", "max-file"):
+            self.assertIn(
+                key,
+                after,
+                f"{key!r} is not in the RIGHT operand of `combine`, so it is not "
+                "what wins the merge. The log ceiling has to be applied last.",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
