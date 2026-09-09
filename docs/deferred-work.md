@@ -3,10 +3,18 @@
 What this project has deliberately not done, and why. An entry is deleted when
 it stops being true. See `AGENTS.md`, "A second change surfacing".
 
-These came out of the full-repository audit on 2026-09-06 (trunk at `245ef59`).
-Each was identified as a real observation and then deliberately **not** turned
-into a change. Work that is merely waiting on something else belongs in
-`docs/change-queue.md`, not here.
+The first entries came out of the full-repository audit on 2026-09-06 (trunk at
+`245ef59`); later ones arrived from `docs/change-queue.md`, having been recorded
+there as identified changes and then declined. Each is a real observation
+deliberately **not** turned into a change.
+
+Work that is merely waiting on something else belongs in
+`docs/change-queue.md`, not here. An entry moves in that direction when what it
+was waiting for turns out not to be an event but a decision — one nobody is
+positioned to take, because the case it would decide has never arisen. A queue
+entry in that state is not pending; it is declined and mislabelled, and it
+costs every reader who re-reads the queue a fresh judgement about work that is
+not going to be done.
 
 ---
 
@@ -259,3 +267,149 @@ now recorded somewhere, which is most of what the entry was protecting against.
 second hostname makes the manual edits frequent enough to be worth the risk.
 Cloudflare and Hetzner DNS were the two candidates considered; neither was
 chosen, and that choice is still open.
+
+## A hard failure when volume discovery matches more than one device
+
+Was `docs/change-queue.md` entry 3a, deleted from there and recorded here on
+2026-09-09. It was queued as a policy decision awaiting an operator's answer,
+and it has none to wait for: nothing is posing the question.
+
+`platform_data_volume` discovers its device by matching
+`/dev/disk/by-id/scsi-0HC_Volume_*`, sorting the matches and taking the
+lexicographically first. The alternative — refuse when the match is ambiguous,
+on the grounds that a wrong pick is worse than a stop — was considered in
+`fix-volume-discovery-and-consistency`'s `design.md` Decision 2 and rejected
+for that change rather than on the merits.
+
+It is not taken here either, and for a reason that entry did not state.
+Refusing makes the role's success depend on **what else is attached to the
+host**, which the role does not own. A second Hetzner Volume mounted for some
+unrelated purpose would break `host-baseline.yml` on every run thereafter, and
+a converge that stops is a worse failure than a mount that is merely arbitrary
+— particularly since the pick is not arbitrary. Two Molecule scenarios hold it
+deterministic: `multiple-devices-discoverable` and
+`multiple-devices-reverse-order`, one per directory-read arrangement, since
+either alone would pass a role selecting `files[0]` or `files | last`.
+
+The third arm — telling the role which device is `main-data` — is the
+`linux_device` hand-copying that `add-platform-monitoring` already considered
+and rejected. So all three are settled: the pick stays deterministic, inference
+stays, and the ambiguity stays tolerated.
+
+**Revisit when** a second volume is actually attached to a host in this
+project. That is the first moment the question has a live case to be right
+about, and the operator answering it is answering about something real rather
+than deciding a hypothetical. Prod has one volume today.
+
+## Two gaps in required-input validation that only the play could close
+
+Were `docs/change-queue.md` entries 3c and 3d, deleted from there and recorded
+here on 2026-09-09. They are one decision at two depths, and neither can be
+taken in the abstract.
+
+`iac-host-configuration`'s *A Role's Absent Required Input Is Reported by Name*
+is satisfied at **role** scope, which is the scope each role's Molecule
+scenarios verify. Two things sit outside it:
+
+- **Play scope.** `ansible/playbooks/host-baseline.yml` runs its roles in
+  order, so against a host whose `group_vars` omits `deploy_apps` a real run
+  installs Docker, runs the whole of `hardening` including `Enable UFW`, and
+  joins the tailnet before `deploy_user`'s assertion is reached. The
+  requirement's wording — "before any task that acts on the host has changed
+  it" — reads naturally as the play, and at that scope it is not met.
+- **Element shape.** The assertions check the container — defined, a sequence,
+  not a string, not a mapping — and nothing about the elements. So
+  `deploy_apps: ["platform"]` passes and then fails at `item.name`, after the
+  deploy group, the account and its `.ssh` directory already exist.
+
+Neither is closed, and the reason is the same for both. **What they produce is
+a partially-converged host, not a damaged one.** Every role in that play is
+idempotent, so the recovery is to correct `group_vars` and re-run — which is
+what an operator does on seeing the refusal anyway. Against that, the
+play-scope fix restates every role's required inputs in a second place that
+nothing keeps in step with the roles, so it buys an earlier refusal at the cost
+of a new drift class. The element-shape fix means either widening a
+requirement — a `MODIFIED` delta and the derived tests it owes — or adding a
+check the requirement does not ask for.
+
+The exposure is also narrower than it reads. Both need a `group_vars` that is
+incomplete or hand-edited to a wrong shape; prod's is neither, and has not
+changed shape since it was written. The first host where either could bite is a
+**new** one.
+
+`ansible/playbooks/host-baseline.yml` states the play-scope gap in a comment
+where the ordering decision depends on it, and that comment is the mitigation:
+the role placed last is placed there because a refusal ahead of it is possible.
+
+**Revisit when** a second environment exists (`docs/change-queue.md` entry 24)
+or another host is bootstrapped — the first moment a `group_vars` is written
+from scratch rather than inherited, and so the first moment either gap has a
+real case rather than a constructed one.
+
+## Asserting that the README agrees with the tree
+
+Was `docs/change-queue.md` entry 13, deleted from there and recorded here on
+2026-09-09.
+
+`refresh-readme-accuracy` found two README statements that had gone stale
+against committed files and that nothing noticed for weeks: the region, stated
+as `fsn1` while `terraform/environments/prod/terraform.tfvars` said `hel1`, and
+the Molecule scenario count, stated as eight against twelve in the tree. Both
+are inside what `.github/tests` can assert — a static read of two committed
+files, no network, no credential, no container runtime — and this repository
+already enforces a documentation convention that way.
+
+It is not done, because **the better fix has already been applied and
+generalises where an assertion does not.** That same change replaced the answer
+with the command that produces it wherever the useful content was a count or a
+list; the Repository layout section is now a `git ls-files` pipeline rather than
+an enumeration. A fact derived on read cannot go stale, so it needs no
+assertion. A fact that is asserted still has to be edited in the same commit as
+whatever it mirrors, or the build goes red — so an assertion converts a silent
+staleness into a standing editing obligation, which is a trade rather than a
+win. Rewriting the next stale fact as its own command is cheaper and leaves
+nothing behind.
+
+What remains genuinely duplicated after that pass is two facts. Buying a check
+for them costs a new requirement — this repository does not enforce a
+convention it has not recorded — plus the derived tests that requirement owes,
+plus a scope decision about whether the CI/CD section's workflow list is in or
+out. That is a poor trade for two assertions, and the scope decision is the
+part that cannot be taken well in the abstract.
+
+**Revisit when** a third README fact is found stale that genuinely cannot be
+rewritten as the command that produces it, or when `iac-repo-foundations` is
+being modified for another reason and the requirement can be widened without
+being paid for on its own.
+
+## The `terraform.tfvars` parenthetical that names labels
+
+Was `docs/change-queue.md` entry 14, deleted from there and recorded here on
+2026-09-09. It was recorded as a correction to batch into whatever change next
+touched `iac-repo-foundations`. No such change arrived, and a correction
+waiting for a carrier that may never come is a deferral rather than a queue
+entry.
+
+*Version Control Excludes State and Secrets*
+(`openspec/specs/iac-repo-foundations/spec.md`) describes
+`terraform/environments/<env>/terraform.tfvars` as holding "server type,
+region, image, labels, allowed CIDRs". The file holds no labels; the only
+`labels` block under `terraform/environments/prod/` is in `ssh_key.tf`.
+
+The disagreement is **factual, not normative**. The parenthetical is
+illustrative, the requirement's normative content is that the file is committed
+and non-secret, and labels genuinely are non-secret environment configuration —
+simply set on the resource rather than passed through this file. Nothing is
+permitted or forbidden differently because of it, and no reader is misled about
+what the requirement demands.
+
+Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the
+requirement's parenthetical agrees with `terraform.tfvars`" — precisely the
+cross-file assertion the entry above declines, and on the same reasoning.
+Paying for that machinery to fix an illustration that misleads nobody inverts
+the cost.
+
+**Revisit when** a change modifies *Version Control Excludes State and Secrets*
+for a substantive reason and can carry the correction — or if the parenthetical
+is ever read as an inventory rather than an illustration, which is the point at
+which the disagreement stops being factual and becomes normative.

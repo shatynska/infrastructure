@@ -42,7 +42,8 @@ Two properties of that discovery are specified requirements, not incidental:
   the difference only appears once a second volume is attached, which is
   exactly when a silent, run-to-run-varying pick would be worst. Whether an
   ambiguous match should instead be a hard failure is a policy question
-  recorded in `docs/change-queue.md`, not settled here.
+  declined in `docs/deferred-work.md`, under "A hard failure when volume
+  discovery matches more than one device", not settled here.
 - **Finding nothing is reported, not raised.** A host with the volume disabled
   in `terraform.tfvars`, or one where the volume is still attaching, matches
   nothing — the ordinary state of such a host, not an exotic one. The run

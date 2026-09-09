@@ -11,11 +11,13 @@ Three of the audit's findings were ready to act on and were **opened** instead
 of queued — they had branches and handoffs, not entries here:
 
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift.
-  **Archived 2026-09-07** (PR #66). Entries 3a, 3b, 3c and 3d below were opened
-  by it.
+  **Archived 2026-09-07** (PR #66). It opened entries 3a, 3b, 3c and 3d. Only
+  3b remains below: the other three were declined on their merits on
+  2026-09-09 and are now in `docs/deferred-work.md`.
 - `refresh-readme-accuracy` — README statements that are no longer true.
   **Archived 2026-09-08** (PR #76). It delivered the former entry 9, which is
-  gone with it; entries 13 and 14 below were recorded by it.
+  gone with it, and recorded entries 13 and 14 — both likewise declined on
+  2026-09-09 and moved to `docs/deferred-work.md`.
 
 `decide-archived-change-reference-policy` — the citation form live source uses
 for this repository's own change records, and a check that enforces it.
@@ -64,36 +66,6 @@ by `fix-volume-discovery-and-consistency`, which was editing that file anyway):
 The tailscale role is 48 comment lines against 90 non-blank; this is a style
 question with a real maintenance cost, not a cosmetic one.
 
-## 3a. decide-multiple-volume-selection-policy
-
-**Not blocked on anything; recorded rather than folded in, because it is a
-policy decision about the host rather than a defect.**
-
-`fix-volume-discovery-and-consistency` made `platform_data_volume`'s device
-discovery deterministic: where more than one `/dev/disk/by-id/scsi-0HC_Volume_*`
-device is attached, it now sorts and takes the first instead of taking whatever
-`find` returned first. That closes the nondeterminism, and a PAIR of Molecule scenarios holds it
-closed: `multiple-devices-discoverable` and `multiple-devices-reverse-order`, one per
-directory-read arrangement. Either alone is weaker than it looks — the first
-catches a role selecting `files[0]`, the second one selecting `files | last`.
-
-What it does **not** decide is whether a deterministic pick is the right
-behaviour at all. The alternative — fail when discovery matches more than one
-device, on the grounds that an ambiguous pick is worse than a refusal — was
-considered in that change's `design.md` Decision 2 and rejected *for that
-change*, not on the merits: the role does not own what else may be attached to
-the host, and a second Hetzner Volume mounted for a reason unrelated to
-`platform/` would then break `host-baseline.yml` for every host.
-
-Deciding it needs an answer to a question that is the operator's: is a second
-attached volume something this project ever expects, and if so, should the role
-be told which one is `main-data` rather than inferring it? Note that being told
-is close to the `linux_device` hand-copying that `add-platform-monitoring`
-already considered and rejected, so this is not a free choice either.
-
-Today the question is academic — prod has one volume attached — which is why it
-is queued rather than opened.
-
 ## 3b. report-an-absent-tailscale-auth-key
 
 **Not blocked on another change; recorded because doing it well is a larger
@@ -129,50 +101,6 @@ Three things make this its own change rather than a fold-in:
 
 Recorded by `fix-volume-discovery-and-consistency`, whose `design.md`
 Decision 3a carries the full reasoning.
-
-## 3c. decide-whether-required-input-checks-belong-to-the-play
-
-**Not blocked; recorded because it is a question about the playbook, not a
-defect in either role.**
-
-`fix-volume-discovery-and-consistency` gave `hardening` and `deploy_user` an
-assertion that fires before either role changes the host, satisfying
-`iac-host-configuration`'s *A Role's Absent Required Input Is Reported by Name*
-at **role** scope, which is the scope its Molecule scenarios verify.
-
-At **play** scope the guarantee is weaker, and the change's artifacts do not say
-so. `ansible/playbooks/host-baseline.yml` runs `docker`, `hardening`,
-`tailscale`, `deploy_user`, `ops_user`, `platform_data_volume` in that order.
-Against a host whose `group_vars` omits `deploy_apps`, a real run installs and
-starts Docker, runs the whole of `hardening` including `Enable UFW`, and joins
-the host to the tailnet before `deploy_user`'s assertion is reached. The
-requirement's wording — "before any task that acts on the host has changed it" —
-reads naturally as the play, and at that scope it is not met.
-
-The fix is not more per-role assertions: it is a `pre_tasks` block on the play,
-or a validation role placed first, checking every required input of every role
-the play is about to run. That is a different shape of change from the one
-`fix-volume-discovery-and-consistency` proposed, which is why it is here.
-
-Worth deciding explicitly rather than leaving the two readings ambiguous.
-
-## 3d. assert-the-shape-of-required-input-elements
-
-**Not blocked; small, and deliberately outside the requirement as written.**
-
-The assertions `fix-volume-discovery-and-consistency` added check the
-*container* — defined, a sequence, not a string, not a mapping — and nothing
-about the elements. So `deploy_apps: ["platform"]`, a list of strings rather
-than of `{name, public_key}` mappings, passes the assertion and then fails at
-`item.name` in `Render each application's sudoers.d NOPASSWD rule for
-app-deploy`, after the deploy group, the account and its `.ssh` directory
-already exist — the partial application the assertion exists to prevent.
-
-The requirement is scoped to an input that "was not supplied", and a
-wrongly-shaped one was supplied, so this sits just outside it rather than being
-a gap in it. Closing it means either widening the requirement to cover element
-shape or adding the check as a local nicety; that choice is the reason this is
-recorded rather than done.
 
 ## 11. matrix-the-molecule-suite-over-scenarios
 
@@ -408,73 +336,6 @@ meant to prevent. The monitoring stack now collects exactly the data needed —
 `container_memory_usage_bytes` by container, already on the "Container health"
 dashboard. Let it run long enough to show real steady-state and peak, then size
 from observation.
-
-## 13. assert-the-readme-agrees-with-the-tree
-
-**Not blocked; recorded rather than folded into `refresh-readme-accuracy`,
-which is the change that found it.** That change corrected eleven statements in
-`README.md` that had gone stale. Two of them are static reads of committed
-files, and nothing noticed either for weeks:
-
-- the region, which the README stated as `fsn1` while
-  `terraform/environments/prod/terraform.tfvars` said `hel1` — a reader
-  trusting it would look in the wrong Hetzner location;
-- the Molecule scenario count, stated as eight against twelve in the tree.
-
-Both are inside what `.github/tests` can assert — a static read of two
-committed files, no network, no credential, no container runtime — and this
-repository already enforces a documentation convention that way. The
-citation-form check exists because "no author or reviewer can catch a
-violation: the citation is correct when written, correct when reviewed, and
-wrong only once the change it cites has succeeded". A README fact that
-duplicates another file's value is the same shape.
-
-It was not folded in for two reasons, and the first is the binding one.
-**It needs a requirement.** This repository does not enforce a convention it
-has not recorded, and `refresh-readme-accuracy` declares no specification
-delta — adding one would have made a documentation truth pass into a change
-owing derived tests, with a different set of gates.
-
-**Its scope is a real question, not a detail.** The region pair is one
-assertion and the scenario count another, both cheap. Whether the CI/CD
-section's workflow list should also be checked against `ls .github/workflows/`
-is the interesting case, and it has a cost: the section would then have to be
-edited in the same commit as any new workflow, or the build goes red. Deciding
-that inside a documentation fix would have decided it badly. The same question
-applies to the Repository layout section, which that change made checkable by
-`git ls-files | grep / | sed 's|/.*||' | sort -u` without asserting it.
-
-Note that `refresh-readme-accuracy` reduced the surface deliberately: where the
-useful content was a count or a list of examples, it replaced the answer with
-the command that produces it. What remains to assert is the handful of facts
-that are genuinely duplicated rather than derived.
-
-## 14. The specification says `terraform.tfvars` holds labels; it does not
-
-**Not a change to open — a correction to batch into whatever change next
-touches `iac-repo-foundations`.** Recorded so the divergence is tracked rather
-than silent.
-
-*Version Control Excludes State and Secrets*
-(`openspec/specs/iac-repo-foundations/spec.md`) describes
-`terraform/environments/<env>/terraform.tfvars` as holding "server type,
-region, image, labels, allowed CIDRs". The file holds no labels; the only
-`labels` block under `terraform/environments/prod/` is in `ssh_key.tf`.
-`refresh-readme-accuracy` corrected the README's copy of that list and left
-this one, because correcting a requirement means a `MODIFIED` delta.
-
-The parenthetical is illustrative rather than an inventory — the requirement's
-normative content is that the file is committed and non-secret, and labels
-genuinely are non-secret environment configuration, simply set on the resource
-— in the module, or in `ssh_key.tf` — rather than passed through this file. So
-the two are in factual, not normative, disagreement.
-
-The reason not to take the delta then, rather than merely the cost: a
-`MODIFIED` delta owes derived tests, and the test it would owe is "the
-requirement's parenthetical agrees with `terraform.tfvars`" — precisely the
-cross-file assertion entry 13 defers as needing its own requirement and its own
-scope decision. Taking it would have settled that queued question in passing,
-by implication.
 
 ## 15. alert when the host prune stops working
 
