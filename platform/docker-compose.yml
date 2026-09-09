@@ -189,6 +189,32 @@ services:
   prometheus:
     image: prom/prometheus:v3.14.0
     restart: unless-stopped
+    labels:
+      # apply-shipped-config-on-deploy. This is not metadata; it is what makes a
+      # change to the configs below reach the host at all.
+      #
+      # Compose decides whether to replace a container by comparing a digest of
+      # the service definition, and that digest does NOT cover the content of
+      # inline `configs:` blocks. The content is copied INTO the container when
+      # it is created -- prometheus's only bind mount is /mnt/main-data -- so
+      # there is no reload path either. Without a property that moves when the
+      # content moves, editing a scrape target or an alert rule produced a
+      # deploy that replaced nothing, reported every container Running and
+      # Healthy, exited zero, and changed nothing. That is how it behaved until
+      # this label existed.
+      #
+      # The value is SHA-256, hex, first 12 characters, over the concatenation
+      # of "<config name>\n<content>\n" for each config THIS service mounts, in
+      # mount order, and over this service's configs alone -- so editing a
+      # Grafana dashboard does not replace Prometheus. The config name is in the
+      # input as a delimiter: without it, moving a block from prometheus_config
+      # into prometheus_rules leaves a bare concatenation byte-identical and the
+      # defect survives in its original shape.
+      #
+      # Editing either config below means regenerating this. The static check in
+      # .github/tests fails the pull request and names the value it should hold,
+      # so this is a paste rather than a calculation.
+      platform.config-checksum: "921a970cfbc8"
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -223,6 +249,13 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.34.0
     restart: unless-stopped
+    labels:
+      # apply-shipped-config-on-deploy -- see the prometheus service above for
+      # why this exists and how the value is computed. This one covers
+      # alertmanager_config alone, so editing the routing tree replaces this
+      # container and nothing else. Regenerate it when that config changes; the
+      # static check names the correct value.
+      platform.config-checksum: "076ba5edb811"
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
     configs:
@@ -242,6 +275,14 @@ services:
   grafana:
     image: grafana/grafana:13.2.1
     restart: unless-stopped
+    labels:
+      # apply-shipped-config-on-deploy -- see the prometheus service above for
+      # why this exists and how the value is computed. This one covers all five
+      # configs below: the datasource, the dashboard provider and the three
+      # dashboards. A change to any of them moves it, including the last, and a
+      # change to none of the others' configs does not. Regenerate it when any
+      # of the five changes; the static check names the correct value.
+      platform.config-checksum: "a30c32a2a7bc"
     environment:
       # Never left at its image default -- see iac-platform-services's
       # "The dashboard interface has no default credential" scenario.

@@ -136,6 +136,24 @@ See `add-platform-monitoring`'s design.md
 for the full rationale — network placement, why configuration is inline in
 `docker-compose.yml`, and the trade-offs accepted along the way.
 
+### Editing an inline config: regenerate the service's checksum
+
+**Every service mounting a `configs:` block carries a
+`platform.config-checksum` label, and editing that block means regenerating
+it.** This is not bookkeeping. Compose decides whether to replace a container by
+comparing a digest of the service definition, and that digest does not cover the
+content of inline configs — which are copied into the container when it is
+created, with no reload path. Before these labels existed, editing a scrape
+target, an alert rule, a routing rule or a dashboard produced a deploy that
+replaced nothing, reported every container healthy, exited zero and changed
+nothing on the host.
+
+You do not have to compute the value. The `.github/tests` suite recomputes it,
+fails the pull request when it disagrees, and names the value the label should
+hold — so this is a paste. Expect the edit to replace that service on the next
+deploy; that is the point. `apply-shipped-config-on-deploy`'s design.md carries
+the algorithm and the reasoning.
+
 **Grafana is reachable only over the private Tailscale tailnet** — not
 routed through Traefik, not on the public interface. From a device already
 on the tailnet, open `http://<tailnet-IP-or-MagicDNS-name>:3000` and sign in

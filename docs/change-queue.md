@@ -969,3 +969,39 @@ The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a
 decision about whether `.github/tests` should assert that the hook exists — the
 same shape as the pins that suite already reads. Small, and worth doing before
 there is a second script.
+## 47. verify-at-deploy-time-that-what-shipped-is-what-runs
+
+**Not blocked; recorded rather than folded into
+`apply-shipped-config-on-deploy`, which deliberately stops short of it.**
+
+That change makes a configuration-only edit *visible* to Compose, so the
+services whose configuration moved are replaced. What it does not do — and its
+added requirement says so in as many words — is establish that a deploy
+reporting success applied everything it shipped. A container can fail to be
+replaced for reasons no property of the stack definition can express, and
+nothing today compares a running container against the definition afterwards.
+
+The check is small: after `docker compose up -d --wait`, compare each running
+container's `com.docker.compose.config-hash` against `docker compose config
+--hash='*'` and fail the deploy on a mismatch. It would have caught the original
+defect on the day it happened rather than a day later, and it catches the whole
+class rather than the one member of it that a checksum label addresses.
+
+**It does not subsume the label, and adding it instead would have been wrong.**
+Without a label, a configuration-only change produces equal hashes on both
+sides — the file's and the container's — so this check passes while the
+configuration sits unapplied. It is a backstop for reasons nobody has thought
+of, not a replacement for making the change visible in the first place.
+
+Two things make it a change of its own rather than a rider. It edits
+`app-deploy`, which is generic across applications, so it changes deploy
+behaviour for `commerce-ops` and every future application, not just for
+`platform`. And it needs a decision about what a mismatch should do to a deploy
+that has already replaced some services and reported them healthy — failing
+after the fact is not the same as refusing to start.
+
+Note the comparison has a trap the sibling change documented: five of the
+platform stack's eight services interpolate `${...}` from `.env`, so a hash
+computed anywhere without the host's real `.env` does not match the host's. This
+check must run **on the host**, where that file is, or it will report mismatches
+that are artefacts of where it ran.

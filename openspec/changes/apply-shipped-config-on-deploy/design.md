@@ -206,6 +206,18 @@ recreated" — which no evidence available today can. And task 5.2 reads the
 deploy log for `Recreated`, so the alternative is falsified at the first deploy
 rather than left open.
 
+**A local hash cannot in general be compared with the host's.** → Found while
+verifying this change: five of the eight services interpolate `${...}` from
+`.env` into their service blocks, and `.env` is not in the repository, so a
+local `docker compose config --hash='*'` computes them from empty values. Their
+hashes differ from the running containers' for that reason alone, with nothing
+wrong. `prometheus` and `alertmanager` interpolate nothing and are genuinely
+comparable — both matched the host exactly before this change, which is what
+made the original diagnosis possible — but `grafana` is not. The sound
+comparison is the file against its own parent commit in one environment, which
+is what task 4.4 does. Worth recording because the confounded comparison is the
+obvious one to reach for, and it looks like evidence.
+
 **A recreated service may not come back healthy.** → These three containers have
 run continuously; this is the first cold start of their mounts, permissions and
 volumes in some time. Under
