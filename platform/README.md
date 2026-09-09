@@ -136,6 +136,12 @@ See `add-platform-monitoring`'s design.md
 for the full rationale — network placement, why configuration is inline in
 `docker-compose.yml`, and the trade-offs accepted along the way.
 
+**Grafana is reachable only over the private Tailscale tailnet** — not
+routed through Traefik, not on the public interface. From a device already
+on the tailnet, open `http://<tailnet-IP-or-MagicDNS-name>:3000` and sign in
+as `admin` with the credential in the `PLATFORM_GRAFANA_ADMIN_PASSWORD`
+GitHub Actions secret.
+
 ### Editing an inline config: regenerate the service's checksum
 
 **Every service mounting a `configs:` block carries a
@@ -154,11 +160,11 @@ hold — so this is a paste. Expect the edit to replace that service on the next
 deploy; that is the point. `apply-shipped-config-on-deploy`'s design.md carries
 the algorithm and the reasoning.
 
-**Grafana is reachable only over the private Tailscale tailnet** — not
-routed through Traefik, not on the public interface. From a device already
-on the tailnet, open `http://<tailnet-IP-or-MagicDNS-name>:3000` and sign in
-as `admin` with the credential in the `PLATFORM_GRAFANA_ADMIN_PASSWORD`
-GitHub Actions secret.
+One thing the label does **not** cover: a value the config interpolates
+from `.env`, such as Alertmanager's Slack webhook. Rotating that secret
+changes nothing the checksum can see, so the container is not replaced and
+keeps the old value — force a replacement by hand when you rotate one.
+`docs/change-queue.md` entry 47 covers closing this properly.
 
 ### One-time manual step: postgres-exporter's monitoring role
 

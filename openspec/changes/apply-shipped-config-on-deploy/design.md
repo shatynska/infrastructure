@@ -206,10 +206,32 @@ recreated" — which no evidence available today can. And task 5.2 reads the
 deploy log for `Recreated`, so the alternative is falsified at the first deploy
 rather than left open.
 
+**A rotated secret inside an embedded config moves nothing.** → Found in code
+review, and it is the one place the chosen mechanism is structurally unable to
+help. `alertmanager_config`'s content interpolates `${SLACK_WEBHOOK_URL}` and
+`${DEADMANSWITCH_URL}`, which `.github/workflows/platform-deploy.yml` renders
+into `.env` from GitHub secrets — so rotating the Slack webhook changes what
+Alertmanager would run with, while the committed text, the label derived from
+it, and Compose's own digest all stay exactly where they were. The container is
+not replaced and keeps the revoked webhook until something unrelated replaces
+it. Queue entry 46's deploy-time comparison does not catch it either: both sides
+of that comparison compute the same unchanged value.
+
+No committed checksum can close this, because the value that changed is
+deliberately not in the repository. **This is the strongest argument for the
+deploy-time computation Decision 1 rejects** — a digest computed on the host,
+after interpolation, would move. It did not surface while the alternatives were
+being weighed, and it is recorded here rather than quietly left out, because it
+is the case a future reader reopening Decision 1 should weigh first. It is not
+acted on here: the requirement is scoped to the committed configuration and says
+so, and secret rotation is rare enough and manual enough that a deliberate
+replace is a reasonable interim. Queue entry 47 records it.
+
 **A local hash cannot in general be compared with the host's.** → Found while
-verifying this change: five of the eight services interpolate `${...}` from
-`.env` into their service blocks, and `.env` is not in the repository, so a
-local `docker compose config --hash='*'` computes them from empty values. Their
+verifying this change: four of the eight services — `grafana`, `postgres`,
+`postgres-exporter` and `traefik` — interpolate `${...}` from `.env` into their
+service blocks, and `.env` is not in the repository, so a local
+`docker compose config --hash='*'` computes them from empty values. Their
 hashes differ from the running containers' for that reason alone, with nothing
 wrong. `prometheus` and `alertmanager` interpolate nothing and are genuinely
 comparable — both matched the host exactly before this change, which is what
@@ -256,9 +278,12 @@ once more, landing back on the previous configuration.
 **Confirming the effect.** This change's own confirmation is unusually direct,
 because the thing it fixes is observable as a difference between two deploys:
 
-1. Before merging, `docker compose config --hash='*'` against the branch shows
-   the three services' hashes differ from the values on the running containers
-   (`docker inspect … com.docker.compose.config-hash`), where today they match.
+1. Before merging, `docker compose config --hash='*'` over the branch's file and
+   over its parent commit's, in one environment, shows exactly `prometheus`,
+   `alertmanager` and `grafana` moved and the other five byte-identical. Not
+   against the running containers: that comparison is confounded by `.env`, per
+   the Risks entry above — an earlier version of this step prescribed it, and it
+   is not performable.
 2. The deploy's log shows `Recreated` for `prometheus`, `alertmanager` and
    `grafana`, and `Running` for the rest — the distinction that was absent from
    the deploy that exposed this.

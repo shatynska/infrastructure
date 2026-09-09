@@ -19,11 +19,21 @@ when any other service's does.
 Satisfying this by replacing every service on every deploy SHALL NOT be used,
 because it would replace stateful services whose configuration did not change.
 
+"Embedded configuration" here means the configuration **as committed**. Where a
+value inside it is interpolated at deploy time from outside the repository — a
+secret rendered into the deploy environment, say — this requirement does not
+reach it: the committed text is unchanged when such a value is rotated, so no
+property derived from the committed text can move. Changing a secret that an
+embedded configuration interpolates therefore does NOT cause the service to be
+replaced, and the running container keeps the previous value until something
+else replaces it.
+
 **What this requirement establishes, and what it does not.** It makes a
-configuration-only change visible to the comparison that decides replacement,
-which is what was absent. It does NOT establish that a deploy reporting success
-has applied everything it shipped: a container can fail to be replaced for
-reasons no property of the definition can express, and nothing here compares a
+change to the committed configuration visible to the comparison that decides
+replacement, which is what was absent. It does NOT establish that a deploy
+reporting success has applied everything it shipped: a container can fail to be
+replaced for reasons no property of the definition can express, an interpolated
+value can change with no committed text moving, and nothing here compares a
 running container against the definition after the deploy. That confirmation is
 a strictly wider guarantee, it is not implied by this requirement, and it is not
 to be read as discharged by it.

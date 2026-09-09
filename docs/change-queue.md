@@ -1000,8 +1000,46 @@ behaviour for `commerce-ops` and every future application, not just for
 that has already replaced some services and reported them healthy — failing
 after the fact is not the same as refusing to start.
 
-Note the comparison has a trap the sibling change documented: five of the
-platform stack's eight services interpolate `${...}` from `.env`, so a hash
-computed anywhere without the host's real `.env` does not match the host's. This
-check must run **on the host**, where that file is, or it will report mismatches
-that are artefacts of where it ran.
+Note the comparison has a trap the sibling change documented: four of the
+platform stack's eight services -- `grafana`, `postgres`, `postgres-exporter`
+and `traefik` -- interpolate `${...}` from `.env` into their service blocks, so
+a hash computed anywhere without the host's real `.env` does not match the
+host's. This check must run **on the host**, where that file is, or it will
+report mismatches that are artefacts of where it ran.
+
+It also does **not** catch entry 47's case, despite looking as though it should:
+where a secret interpolated *inside* an embedded config is rotated, both sides
+of this comparison compute the same unchanged value, so it passes while the
+running container holds the superseded secret.
+
+## 47. replace-a-service-when-a-secret-inside-its-config-rotates
+
+**Not blocked; found in code review of `apply-shipped-config-on-deploy`, which
+is structurally unable to close it.**
+
+`alertmanager_config`'s content interpolates `${SLACK_WEBHOOK_URL}` and
+`${DEADMANSWITCH_URL}`, and `.github/workflows/platform-deploy.yml` renders both
+into `.env` from GitHub secrets at deploy time. Rotate the Slack webhook and the
+effective Alertmanager configuration changes -- but the committed text does not,
+so the checksum label derived from it does not, and Compose's own digest never
+covered embedded config content in the first place. The container is not
+replaced. **The revoked webhook stays live until something unrelated replaces
+that container**, and every alert in the meantime goes to an endpoint the
+rotation was meant to retire.
+
+Nothing currently reports this. Entry 46's deploy-time hash comparison does not:
+both sides compute the same unchanged value, so it passes. The checksum label
+cannot: the value that changed is deliberately not in the repository, which is
+the whole point of it being a secret.
+
+**What would work is the deploy-time computation that change considered and
+rejected** -- a digest taken on the host, after interpolation, moves when the
+interpolated value moves. That change's design.md records this as the strongest
+argument against its own Decision 1, found after the decision was made. Deciding
+this entry means revisiting that trade with this case in hand, so it is a
+decision about the mechanism rather than a defect to patch.
+
+Bounded in the meantime by how rotation actually happens here: it is a manual
+act by the operator, who can force the replacement in the same session. Worth
+writing that into the rotation step of whatever runbook covers it, which is a
+smaller piece of work than this entry and does not wait on it.

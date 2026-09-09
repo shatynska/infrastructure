@@ -56,7 +56,7 @@ touches neither a Terraform module nor an Ansible role.
 - [x] 4.4 Confirm the labels move exactly the three services' hashes and no others, by computing `docker compose config --hash='*'` over this branch's file and over its parent commit's, in the same environment, and diffing. This is the pre-merge half of the confirmation and can only be taken before the deploy.
 
   It is deliberately a before/after comparison of the file against itself rather than against the running containers, because the latter is **not performable**: five of the eight services interpolate `${...}` from `.env`, which is not in the repository, so a local run computes them with empty values and their hashes differ from the host's for that reason alone. `prometheus` and `alertmanager` happen to be comparable — neither interpolates anything into its service block, and both matched the host exactly before this change — but `grafana` does interpolate, so the one comparison that would cover all three services is confounded. Computing on the host with the real `.env` would need read access to `/opt/platform`, which the operator account does not have.
-- [ ] 4.5 Dispatch the change's code review over the diff and record the verdict; fix and re-review until it clears.
+- [x] 4.5 Dispatch the change's code review over the diff and record the verdict; fix and re-review until it clears.
 
 ## 5. Ship
 

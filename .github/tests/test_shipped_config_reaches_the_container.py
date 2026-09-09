@@ -475,7 +475,11 @@ class TestEveryServiceMountingConfigurationCarriesTheChecksum(unittest.TestCase)
             services_mounting_configs(),
             "the set of services mounting embedded configuration has moved, so "
             "either a service gained configuration or the discovery no longer "
-            "reads the file",
+            "reads the file. If a service was added deliberately, give it a "
+            "`platform.config-checksum` label and add its name to "
+            "`SERVICES_MOUNTING_CONFIGS_TODAY` above -- this assertion pins the "
+            "live set on purpose, so adding a service is a two-line edit rather "
+            "than a silent widening of what these checks cover",
         )
 
 
@@ -599,12 +603,23 @@ class TestTheChecksumEqualsTheConfigurationItCovers(unittest.TestCase):
         )
         for service in covered:
             with self.subTest(service=service):
-                digest = expected_checksum(service)
+                # The COMMITTED label's length, not the recomputation's.
+                # `expected_checksum` returns `digest[:DIGEST_LENGTH]`, so
+                # asserting the length of what it returns cannot fail -- it was
+                # written that way and caught in code review. The committed
+                # value can be the wrong length: a hand-truncated 8 characters,
+                # or a full 64-character digest pasted whole. Either is already
+                # caught by the equality assertion above; this reports it as a
+                # length rather than as two long strings that differ.
+                committed = service_labels(service).get(CHECKSUM_LABEL)
+                if committed is None:
+                    continue  # absence is the missing-label class's to report
                 self.assertEqual(
                     DIGEST_LENGTH,
-                    len(digest),
-                    f"the recomputation for {service} did not produce a "
-                    f"{DIGEST_LENGTH}-character digest",
+                    len(committed),
+                    f"{service}'s `{CHECKSUM_LABEL}` is {len(committed)} characters, "
+                    f"not {DIGEST_LENGTH} -- it is not a digest of the length "
+                    f"that change's design.md Decision 3 fixes",
                 )
 
 
