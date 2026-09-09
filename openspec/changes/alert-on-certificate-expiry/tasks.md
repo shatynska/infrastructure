@@ -38,7 +38,7 @@ asserting, how each is expressed, and where in the suite they belong.
 
 ## 3. Documentation of the alert
 
-- [x] 3.1 Extend the existing prose in `platform/README.md`'s "Monitoring and alerting" section with a sentence naming the certificate-expiry alert, its threshold, and that it is routed to Slack separately so each hostname is named. That section names no individual rule today and this change does not start a rule inventory there — whether the README should list every rule is `docs/change-queue.md` entry 13's question, not this change's. Verify by reading the section: the new sentence sits in the prose without implying a complete list exists.
+- [x] 3.1 Extend the existing prose in `platform/README.md`'s "Monitoring and alerting" section with a sentence naming the certificate-expiry alert, its threshold, and that it is routed to Slack separately so each hostname is named. That section names no individual rule today and this change does not start a rule inventory there — whether the README should agree with the tree in that way was declined and is recorded under "Asserting that the README agrees with the tree" in `docs/deferred-work.md`, not this change's to reopen. Verify by reading the section: the new sentence sits in the prose without implying a complete list exists.
 
 ## 4. Queue and deferred-work bookkeeping
 
