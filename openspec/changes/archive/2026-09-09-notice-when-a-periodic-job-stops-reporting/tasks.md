@@ -22,15 +22,15 @@ scheduled run red, which is this change's own subject reproduced inside it. Task
 2.5 makes that failure legible if it happens anyway; the sequencing is what
 prevents it.
 
-- [ ] 1.1 At Healthchecks.io, in the same project the platform Watchdog uses,
+- [x] 1.1 At Healthchecks.io, in the same project the platform Watchdog uses,
   create a **project ping key** and add it as a **repository-scoped** GitHub
   Actions secret named `HEARTBEAT_PING_KEY`. Not an Environment secret — Decision 6
   says why, and task 4.4 asserts the job declares no `environment:`.
-- [ ] 1.2 Add the same value to `ansible/inventory/group_vars/prod.yml` as a
+- [x] 1.2 Add the same value to `ansible/inventory/group_vars/prod.yml` as a
   Vault-encrypted variable for the host reporter (task 3.1), keeping the plaintext
   out of version control per *Secrets Never Committed in Plaintext and Never Left
   World-Readable on Host* (`openspec/specs/iac-host-configuration/spec.md`).
-- [ ] 1.3 Configure the three checks' alert destination to Slack `#alerts`, and
+- [x] 1.3 Configure the three checks' alert destination to Slack `#alerts`, and
   confirm the existing Watchdog check still alerts to its separate out-of-band
   destination — Decision 10. Checks themselves need not be pre-created: Decision 5
   has the reporters create them on first ping, on **every** ping path.
@@ -266,20 +266,20 @@ commands apply; the Terraform row does not.
   `ansible-playbook --syntax-check` and `gitleaks` pass. `gitleaks` matters
   particularly here: this change adds a URL-shaped secret to two workflows and a
   role.
-- [ ] 6.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 6.2 and 6.3
+- [x] 6.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 6.2 and 6.3
   pass.
 - [ ] 6.5 Confirm tasks 1.1 and 1.2 are done before the pull request merges, then
   open it, let CI run, and wait for the operator's confirmation that it merged and
   that the deploy is healthy. Nothing here applies to production from a local
   machine.
-- [ ] 6.5a The host half does not reach the host by merging. No workflow converges
+- [x] 6.5a The host half does not reach the host by merging. No workflow converges
   `ansible/` — that is queue entry 23, which is not this change — so after the merge
   the operator runs `ansible-playbook playbooks/host-baseline.yml` against prod, as
   `docs/bootstrap-a-new-host.md` describes, supplying the Vault password and the new
   ping key of 1.2. Until that converge has happened, 6.6's host steps are testing
   the old unit and reporting nothing; do not read their silence as a defect in the
   observer.
-- [ ] 6.6 Confirm the effect, per `design.md`'s "How this change is confirmed": both
+- [x] 6.6 Confirm the effect, per `design.md`'s "How this change is confirmed": both
   workflows dispatched and reporting; a hand-sent `/fail` arriving in Slack
   `#alerts`; the host unit started manually and reporting; a scratch five-minute
   check left to lapse to prove the silence path alarms at all; and each check's
@@ -288,10 +288,10 @@ commands apply; the Terraform row does not.
 
 ## 7. Archive
 
-- [ ] 7.1 Once the effect is confirmed, bring the branch back to the freshly
+- [x] 7.1 Once the effect is confirmed, bring the branch back to the freshly
   fetched trunk and commit the specification record, then open the record's own
   pull request.
-- [ ] 7.2 In the same commit, delete `docs/change-queue.md` entries 32 and 15 — both
+- [x] 7.2 In the same commit, delete `docs/change-queue.md` entries 32 and 15 — both
   are delivered here — and leave entry 16 (*report refused removals in the host
   prune*) untouched: it is about what the prune's report says, not about whether
   anyone sees that the prune ran. Entry 17 (*the stubbed-runtime rig*) also stays:
@@ -301,3 +301,33 @@ commands apply; the Terraform row does not.
 Branch and working-tree removal happen after that pull request merges, which is
 after the commit this file lives in, so they are recorded here in prose rather
 than as tasks that could never be ticked.
+
+## Not performed
+
+- 6.5's pre-merge ordering: "Confirm tasks 1.1 and 1.2 are done before the pull
+  request merges". Pull request #116 merged on 2026-09-09 with neither done.
+  Reason: the pull request stated both as blockers in its own body and the
+  operator merged before setting them, which was their call to make; the
+  prerequisites were then supplied within the hour — the repository secret at
+  12:09 UTC and the Vault variable by pull request #117 at 16:45 UTC — and no
+  scheduled run fell due in between, so no reporter ever ran without its
+  credential. The remainder of 6.5 was performed: the pull request was opened,
+  continuous integration ran, and the merge was confirmed by the operator rather
+  than inferred.
+
+## Confirmation
+
+Recorded per 6.6, against `design.md`'s "How this change is confirmed".
+
+| Path | Observed | Evidence |
+|---|---|---|
+| A report reaches the observer, from CI | 2026-09-09 | Dispatched Drift Detection run 34350375759: `drift: success`, `report: success`. The reporting step fails on a non-2xx, so its passing establishes the ping was accepted and the check created |
+| A report reaches the observer, from the host | 2026-09-09 | `ansible-playbook playbooks/host-baseline.yml` converged `changed=3` and pruned nothing; a manual activation logged `prune-host-images: considered 16, removed 6` and `prune-host-images-report: Created` — the observer's own 201 response body — and the unit finished `Deactivated successfully` |
+| The installed reporting has the shape the requirement states | 2026-09-09 | On `main-server`: `ExecStopPost=-/usr/local/bin/prune-host-images-report`, script `0700 root`, `heartbeat.env` `0600 root`, timer active with its next activation on 2026-09-13 |
+| A failure reaches the routine alert destination | 2026-09-09 | A hand-sent `/fail` on `infrastructure-drift` arrived in Slack `#alerts`; a re-dispatch returned the check to green |
+| **Silence raises an alarm** | 2026-09-09 | A scratch check with a five-minute period was pinged once and left. Slack `#alerts` received *"scratch-delete-me is DOWN. Reason: success signal did not arrive on time, grace time passed."* — with nothing having failed anywhere. This is the claim the design rests on and the only one no test in this repository can make |
+| Period and grace match Decision 11 | 2026-09-09 | All three checks configured by the operator at the observer: `infrastructure-drift` 1 day / 12 hours; `infrastructure-pre-commit-autoupdate` and `main-server-prune-host-images` 7 days / 2 days |
+
+`infrastructure-pre-commit-autoupdate` was created by a dispatched run
+(34381738967, `autoupdate: success`, `report: success`), which opened no
+hook-update pull request — every pinned revision was already current.
