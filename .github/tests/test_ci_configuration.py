@@ -164,13 +164,48 @@ def gh_glob_matches(pattern: str, path: str) -> bool:
     return re.fullmatch(regex, path) is not None
 
 
-def terraform_lockfile_directories() -> set[str]:
-    """Every repository directory carrying a `.terraform.lock.hcl`, as `/a/b`."""
+def terraform_lockfile_directories(root: Path | None = None) -> set[str]:
+    """Every repository directory carrying a `.terraform.lock.hcl`, as `/a/b`.
+
+    Walks with `walked_files()` rather than with `rglob`, because AGENTS.md
+    requires every change to take a working tree -- at `.claude/worktrees/<name>`
+    under the Claude Code binding, or `.worktrees/<name>` generally -- and a
+    working tree is a FULL COPY of the repository. An `rglob` pruning only
+    `.git` therefore finds one phantom lockfile directory per worktree per real
+    one and reports each uncovered by Dependabot. That condition holds whenever
+    any change is in progress, which is most of the time.
+
+    Continuous integration never saw it, because a checkout carries tracked files
+    only; and it does not reproduce from INSIDE a worktree, because the walk
+    starts at that tree's own root. It failed from the repository's main working
+    tree -- exactly where a session runs the suite after leaving one. The cost
+    was a red suite a session had to learn to disbelieve, which is the habit this
+    repository refuses everywhere else.
+
+    `.gitignore` is not an alternative to this, and the two are not the same fix.
+    A filesystem walk does not consult git, so ignoring `.claude/worktrees/`
+    leaves this walk finding precisely what it found before. Both working-tree
+    roots are ignored for the other reason -- it stops a `git add -A` from the
+    main working tree staging a duplicate copy of the whole repository -- and
+    `TestTheWorkingTreeRootsAreIgnored` holds them there.
+
+    Takes `root` so the behaviour is exercisable against a fixture tree. The
+    forward reference to `walked_files()`, defined further down this file, is
+    resolved at call time.
+
+    Inherited from that walker, and accepted rather than discovered later: it
+    also prunes `openspec/` and `ansible/roles/geerlingguy.docker`, so a lockfile
+    under either is outside this assertion's reach. Neither is a Terraform root
+    Dependabot could update -- planning artifacts are not deployed, and the
+    Galaxy role is not committed here.
+    """
+    base = ROOT if root is None else root
     found = set()
-    for lockfile in ROOT.rglob(".terraform.lock.hcl"):
-        if ".git" in lockfile.parts:
+    for path in walked_files(base):
+        if path.name != ".terraform.lock.hcl":
             continue
-        found.add("/" + lockfile.parent.relative_to(ROOT).as_posix())
+        relative = path.parent.relative_to(base).as_posix()
+        found.add("/" if relative == "." else "/" + relative)
     return found
 
 
@@ -6076,12 +6111,14 @@ def compose_shaped_files(root: Path | None = None) -> tuple[Path, ...]:
     """Every file in the tree whose content is a stack definition.
 
     Walks with this suite's existing `walked_files()` rather than a fresh
-    `rglob`: it is the only walk here that prunes `.claude/worktrees`, and
-    AGENTS.md requires every change to take a working tree there. A naive walk
-    finds a phantom `<worktree>/platform` and reports it uncovered from the main
-    working tree -- `docs/change-queue.md` entry 34 records the `terraform`
-    assertion above already failing that way and owns the general fix
-    (design.md Decision 2, "Which walker").
+    `rglob`, because it prunes the working trees AGENTS.md requires every change
+    to take. A naive walk finds a phantom `<worktree>/platform` and reports it
+    uncovered from the main working tree (design.md Decision 2, "Which walker").
+
+    This was written while the `terraform` assertion above was still failing
+    exactly that way, from an `rglob` this one deliberately did not copy.
+    `terraform_lockfile_directories()` has since been moved onto this same
+    walker, so the two now agree; that function carries the full account.
 
     Two consequences of that walker are accepted rather than discovered later:
     it also prunes `openspec/` and `ansible/roles/geerlingguy.docker`, so a
@@ -8729,6 +8766,123 @@ class TestTheConventionsFileStatesTheMoleculeSharedStateHazard(unittest.TestCase
             "workflow block, so it sits where the next regeneration replaces it: "
             f"{missing} not found there",
         )
+
+
+# --------------------------------------------------------------------------
+# The suite stays green in the repository's MAIN working tree.
+#
+# The obligation was recorded in `docs/change-queue.md` until this change
+# deleted that entry, as the queue's own rule requires; the account below is
+# self-contained so that nothing here cites a note that no longer exists.
+#
+# Two fixes, deliberately separate, because the entry proposed the cheaper one
+# as though it were sufficient and it is not:
+#
+#   - `terraform_lockfile_directories()` now walks with `walked_files()`, whose
+#     prune list already carried `.worktrees` and `.claude/worktrees`. This is
+#     what turns the suite green; the assertion below fails against the `rglob`
+#     it replaces.
+#   - `.gitignore` now names both working-tree roots. This does NOTHING for the
+#     walk -- a filesystem walk does not consult git -- and is worth having for
+#     the entry's other reason: it stops a `git add -A` from the main working
+#     tree staging a duplicate copy of the whole repository.
+#
+# Both are asserted, because each would otherwise be undone without a red
+# check: the walker by someone reaching for `rglob` again, and the ignore line
+# by an editorial pass through a file nothing else reads.
+# --------------------------------------------------------------------------
+
+GITIGNORE_FILE = ROOT / ".gitignore"
+WORKING_TREE_ROOTS = (".worktrees/", ".claude/worktrees/")
+
+
+class TestLockfileDiscoveryPrunesWorkingTrees(unittest.TestCase):
+    """DERIVED -- this change declares no specification deltas. The requirement
+    the repaired assertion serves is unchanged (`iac-cicd-pipeline`'s Dependabot
+    coverage); what is asserted here is that discovery reads the repository and
+    not the copies of it that AGENTS.md requires to live inside it.
+    """
+
+    def tree_with_worktrees(self) -> Path:
+        """A fixture tree holding one real lockfile directory and one phantom
+        per working-tree root, arranged as a worktree actually arranges them:
+        a full copy of the repository nested inside it."""
+        root = Path(tempfile.mkdtemp(prefix="worktree-prune-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for relative in (
+            "terraform/environments/prod",
+            "terraform/modules/server",
+            ".claude/worktrees/some-change/terraform/environments/prod",
+            ".claude/worktrees/some-change/terraform/modules/server",
+            ".worktrees/another-change/terraform/environments/prod",
+        ):
+            directory = root / relative
+            directory.mkdir(parents=True)
+            (directory / ".terraform.lock.hcl").write_text("# fixture\n", encoding="utf-8")
+        return root
+
+    def test_discovery_ignores_lockfiles_inside_working_trees(self) -> None:
+        root = self.tree_with_worktrees()
+        self.assertEqual(
+            {"/terraform/environments/prod", "/terraform/modules/server"},
+            terraform_lockfile_directories(root),
+            "lockfile discovery reached inside a working tree, so every change in "
+            "progress adds a phantom directory that no Dependabot entry can ever "
+            "name -- a red suite whose redness means nothing",
+        )
+
+    def test_discovery_still_finds_the_repository_s_own_lockfiles(self) -> None:
+        """The failure mode of a prune is over-pruning, and it fails SILENTLY:
+        the assertion this feeds guards vacuity with `assertTrue(actual)`, so a
+        discovery returning nothing would be caught, but one returning a subset
+        would pass while covering less than it claims. Read against the real
+        tree, where the answer is known."""
+        found = terraform_lockfile_directories()
+        self.assertIn(
+            "/terraform/environments/prod",
+            found,
+            "lockfile discovery no longer finds the prod environment's own "
+            f"lockfile, so the Dependabot coverage check reads less than the "
+            f"repository holds: {sorted(found)}",
+        )
+
+
+class TestTheWorkingTreeRootsAreIgnored(unittest.TestCase):
+    """DERIVED -- no scenario states it. Both roots were untracked AND unignored,
+    so each showed up in `git status` from the main working tree and stood one
+    `git add -A` away from a full copy of the repository being committed into
+    it."""
+
+    def setUp(self) -> None:
+        self.lines = {
+            line.strip()
+            for line in read_text(GITIGNORE_FILE).splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+
+    def test_both_working_tree_roots_are_ignored(self) -> None:
+        missing = [root for root in WORKING_TREE_ROOTS if root not in self.lines]
+        self.assertEqual(
+            [],
+            missing,
+            f".gitignore does not ignore {missing}, so a working tree there is "
+            "untracked and unignored -- it shows up in `git status` and a "
+            "`git add -A` from the main working tree stages a full copy of the "
+            "repository",
+        )
+
+    def test_the_claude_directory_is_not_ignored_wholesale(self) -> None:
+        """`.claude/commands/` and `.claude/skills/` are committed. Ignoring
+        `.claude/` outright would satisfy the assertion above by removing them
+        from version control, which is the wrong fix arrived at by the right
+        words."""
+        for pattern in (".claude", ".claude/", "/.claude", "/.claude/"):
+            self.assertNotIn(
+                pattern,
+                self.lines,
+                f".gitignore ignores {pattern!r} wholesale, which would drop the "
+                "committed files under .claude/ from version control",
+            )
 
 
 if __name__ == "__main__":

@@ -24,6 +24,20 @@ secrets.auto.tfvars
 .DS_Store
 *.swp
 
+# Working trees. AGENTS.md requires every change to take one — at
+# `.worktrees/<name>` generally, or `.claude/worktrees/<name>` under the Claude
+# Code binding — and each is a full copy of the repository living inside it.
+# Untracked and unignored, they showed up in `git status` and stood one
+# `git add -A` from the main working tree away from being committed wholesale.
+#
+# This does NOT keep them out of the CI-configuration suite's walks: a
+# filesystem walk does not consult git. That is `walked_files()`'s prune list,
+# and `terraform_lockfile_directories()` explains why the two are separate
+# fixes. Only `.claude/worktrees/` is ignored, not `.claude/`, whose
+# `commands/` and `skills/` are committed.
+.worktrees/
+.claude/worktrees/
+
 # Ansible: Galaxy-installed role content, pinned by exact version in that
 # file, not committed itself. Fetched via:
 #   ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
