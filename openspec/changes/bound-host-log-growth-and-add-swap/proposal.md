@@ -133,8 +133,15 @@ None.
 - **What Molecule cannot establish, and what does.** `vm.swappiness` is not a
   namespaced sysctl and `swapon` registers with the host kernel, so a scenario
   that activated swap inside a privileged container would mutate the CI
-  runner's own kernel and leave a reference to a deleted file behind when the
-  container was destroyed. The role therefore separates *configuring* swap from
+  runner's own kernel rather than the instance's. (This bullet originally added
+  that it would also leave a reference to a deleted file behind. Tested during
+  implementation by removing the role's gate: `swapon` fails outright on this
+  suite's overlayfs-backed rig with `Invalid argument`, so the file half is
+  unreachable there rather than merely guarded — it would land on a rig where
+  activation can succeed. The `vm.swappiness` half is untouched by that and
+  reaches the runner's kernel unconditionally. `design.md` Decision 7 carries
+  the correction; the separation the delta obliges does not rest on the
+  falsified half.) The role therefore separates *configuring* swap from
   *activating* it behind a documented variable, the scenario asserts the
   configuration and skips the activation, and the change's artifacts say so
   rather than implying full coverage. Activation is established at the

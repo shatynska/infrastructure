@@ -1,0 +1,212 @@
+---
+# Gives the host swap and a swap-tendency policy, per
+# openspec/specs/iac-host-configuration/spec.md's "The Host Carries Swap That
+# Survives a Reboot". See this role's README for what it establishes and what
+# it deliberately leaves to the operator.
+#
+# THE ORDER BELOW IS A GUARD, NOT A STYLE. The three facts are established
+# BEFORE anything is created, because the decision `mkswap` needs cannot be
+# made from the file's existence alone -- see "Format the swap file".
+
+# ---------------------------------------------------------------------------
+# 1. Establish the current state, before acting on it.
+# ---------------------------------------------------------------------------
+- name: Stat the swap file
+  ansible.builtin.stat:
+    path: "{{ swap_file_path }}"
+    get_checksum: false
+  register: swap_file_state
+
+# ON A REAL HOST THIS IS THAT HOST'S TABLE, which is what the guard below
+# needs. Inside a container it is the RUNNER's -- /proc/swaps is not
+# namespaced -- so a machine whose own swap is a file at this role's default
+# path would read as "already active" although nothing exists at that path in
+# the instance. That is a hazard for the test rig, not for production, and the
+# scenario refuses to run on such a machine rather than reporting a result it
+# cannot stand behind; see this role's molecule/default/prepare.yml.
+- name: Read the kernel's table of active swap areas
+  ansible.builtin.slurp:
+    src: /proc/swaps
+  register: swap_proc_swaps
+
+# `-p` is low-level probing, which works on a regular file. A non-zero return
+# means "no recognisable signature", which is a legitimate state here (a file
+# created by a run that was interrupted before it could format), not an error.
+- name: Probe the swap file for an existing signature
+  ansible.builtin.command:
+    cmd: blkid -p -s TYPE -o value {{ swap_file_path }}
+  register: swap_signature_probe
+  changed_when: false
+  failed_when: false
+  when: swap_file_state.stat.exists
+
+- name: Establish whether the file is already active and already formatted
+  ansible.builtin.set_fact:
+    swap_file_is_active: >-
+      {{ swap_file_path in (
+           (swap_proc_swaps.content | b64decode)
+           | regex_findall('(?m)^(/\S*)')
+         ) }}
+    swap_file_has_signature: >-
+      {{ swap_file_state.stat.exists
+         and (swap_signature_probe.rc | default(1)) == 0
+         and (swap_signature_probe.stdout | default('') | trim) == 'swap' }}
+
+# ---------------------------------------------------------------------------
+# 2. The file itself.
+# ---------------------------------------------------------------------------
+# `dd`, not `fallocate`: fallocate on ext4 produces unwritten extents, which
+# swapon has historically refused. The write costs a few seconds once, and
+# `creates:` is what makes it once.
+- name: Create the swap file
+  ansible.builtin.command:
+    cmd: dd if=/dev/zero of={{ swap_file_path }} bs=1M count={{ swap_size_mb }}
+    creates: "{{ swap_file_path }}"
+
+# THE COMPANION TO `creates:` ABOVE. `creates:` gates on existence alone, so on
+# its own it adopts any file already at that path -- including a short one left
+# by a run interrupted mid-`dd` (4 GiB takes a moment on prod), which the next
+# converge would then format at the short size, record in fstab and swap on,
+# reporting `ok` throughout. The delta obliges "active swap of the configured
+# size", so a file of the wrong size is a refusal rather than a silent
+# adoption. It also catches the other direction: raising swap_size_mb is
+# otherwise a no-op with no diagnostic.
+#
+# Resizing deliberately is `swapoff`, delete, re-converge -- see this role's
+# README. This task refuses rather than truncating, because truncating a file
+# the kernel may be swapping to destroys the pages it holds.
+- name: Re-stat the swap file after the create step
+  ansible.builtin.stat:
+    path: "{{ swap_file_path }}"
+    get_checksum: false
+  register: swap_file_after_create
+
+# ON EVERY RUN, not only on the run that created the file. This file holds
+# whatever the kernel evicted from process memory, so it can hold any secret any
+# process on this host held -- and this host has an unprivileged interactive
+# account (ops_user), for which that is not academic.
+#
+# IT ALSO RUNS BEFORE THE SIZE REFUSAL BELOW, and that order is the point. A
+# host carrying an installer-made /swapfile of the wrong size fails that assert
+# and stops -- so with the two the other way round, the run would find a
+# world-readable swap file, decline to fix it, and abort. The delta's scenario
+# is unconditional on existence ("WHEN the swap file exists on the host"), and
+# `ops_user` has a login on this host, so that is not academic. Locking the file
+# down is cheap and correct whatever its size.
+#
+# The `when:` costs nothing of that. On a real run the file always exists by
+# this point, because `dd` above either created it or found it. The one case it
+# excludes is `--check` against a host with no swap file, where `command` does
+# not create anything and `ansible.builtin.file` then aborts the whole play with
+# "file (/swapfile) is absent, cannot continue" -- observed 2026-09-08 by
+# running `ansible-playbook --check` against a bare instance. There is nothing
+# to set permissions on in that case, and `ansible/roles/tailscale/tasks/
+# main.yml` records that a `--check` run of host-baseline.yml is something this
+# project deliberately keeps working.
+- name: Restrict the swap file to root
+  when: swap_file_after_create.stat.exists
+  ansible.builtin.file:
+    path: "{{ swap_file_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+# `when: ... .stat.exists` is not belt-and-braces, and this is not reasoning --
+# it was run. Under `--check`, `command` does not create anything, so the stat
+# above reports a file that is not there and carries no `size` key. With the
+# guard removed and `ansible-playbook --check` run against a bare instance on
+# 2026-09-08:
+#
+#   FAILED! ... Error while resolving value for 'fail_msg':
+#   object of type 'dict' has no attribute 'size'
+#
+# -- an expression error in place of the diagnosis written below, and it aborts
+# the play. A `--check` run of host-baseline.yml is an anticipated use here:
+# ansible/roles/tailscale/tasks/main.yml sets `check_mode: false` precisely so
+# one does not abort, and docs/change-queue.md entry 23 proposes `--check
+# --diff` as the reviewable artifact of a gated host-config workflow. In a real
+# run the guard costs no coverage, because a failed `dd` would already have
+# failed its own task.
+#
+# NOTE FOR ANYONE RE-TESTING THIS: `molecule check` cannot show it. Its
+# check_sequence runs a real `converge` BEFORE `check`, so check mode always
+# meets a host where the file already exists and the assertion passes either
+# way. Create the instance and run `ansible-playbook --check` against it
+# directly.
+- name: Fail if the swap file is not the configured size
+  when: swap_file_after_create.stat.exists
+  ansible.builtin.assert:
+    that:
+      - swap_file_after_create.stat.size == (swap_size_mb | int) * 1024 * 1024
+    fail_msg: >-
+      {{ swap_file_path }} is {{ swap_file_after_create.stat.size }} bytes;
+      swap_size_mb is {{ swap_size_mb }}, which is
+      {{ (swap_size_mb | int) * 1024 * 1024 }}. This role never truncates or
+      rewrites a file that already exists, because the kernel may be swapping
+      to it. Either a previous run was interrupted part-way through creating
+      it, or swap_size_mb was changed after the file was made. To resize:
+      `swapoff {{ swap_file_path }}`, delete it, then converge again.
+    success_msg: "{{ swap_file_path }} is the configured size."
+    quiet: true
+
+# THE GUARD THIS ROLE MOST NEEDS. Writing a fresh swap signature over a file
+# the kernel is currently swapping to corrupts the pages it holds, so an active
+# file is never formatted. Guarding on the file's ABSENCE instead would be
+# wrong in the other direction: a run interrupted between `dd` and `mkswap`
+# leaves a file that exists and is not formatted, which an absence guard would
+# skip forever, leaving an fstab record pointing at something no boot can
+# activate.
+- name: Format the swap file
+  ansible.builtin.command:
+    cmd: mkswap {{ swap_file_path }}
+  # Unconditionally true, and accurate: the `when:` above is what makes this
+  # task conditional, so on any run that reaches it a swap signature is written
+  # that was not there before. There is no idempotent form to fall back on --
+  # `mkswap` has no "only if needed" mode, which is precisely why the guard is
+  # expressed as a precondition rather than as a result.
+  changed_when: true
+  when:
+    - not swap_file_is_active | bool
+    - not swap_file_has_signature | bool
+
+# ---------------------------------------------------------------------------
+# 3. The records the host reads at boot.
+# ---------------------------------------------------------------------------
+# `state: present` writes /etc/fstab and does NOT activate; `state: mounted`
+# would activate, which belongs below the swap_activate gate. `path: none` is
+# the conventional placeholder for a swap entry, whose mount point field is
+# ignored.
+- name: Record the swap file in the boot-time mount table
+  ansible.posix.mount:
+    path: none
+    src: "{{ swap_file_path }}"
+    fstype: swap
+    opts: sw
+    state: present
+
+# One task, two behaviours. The FILE is always written -- that is the record
+# the kernel reads at boot, and it is inside what a run may establish anywhere.
+# The LIVE value is applied only when activating, because vm.swappiness is not
+# a namespaced sysctl: written from inside a container it changes the host
+# kernel's value, not the container's.
+- name: Record the swap tendency, and apply it unless activation is disabled
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "{{ swap_swappiness }}"
+    sysctl_file: "{{ swap_sysctl_file }}"
+    sysctl_set: "{{ swap_activate | bool }}"
+    reload: "{{ swap_activate | bool }}"
+    state: present
+
+# ---------------------------------------------------------------------------
+# 4. Activation -- the only step that writes state this run does not own.
+# ---------------------------------------------------------------------------
+- name: Activate the swap file
+  ansible.builtin.command:
+    cmd: swapon {{ swap_file_path }}
+  # Same reasoning as `mkswap` above: reaching this task means /proc/swaps did
+  # not list the file, so running it changes the kernel's swap table.
+  changed_when: true
+  when:
+    - swap_activate | bool
+    - not swap_file_is_active | bool

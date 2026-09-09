@@ -160,7 +160,7 @@ variable later if prod ever needs to differ from the default.
 `meta/main.yml`'s dictionary rather than beside it. Accepted — the wrapper
 owning daemon configuration is the point, not a side effect.
 
-### Decision 5: A new `swap` role, placed after the play's assertions
+### Decision 5: A new `swap` role, placed last in the play
 
 Swap gets its own role rather than tasks inside `hardening`. `hardening`'s
 charter is host-level *security* — its spec requirement is "Host-Level Security
@@ -169,17 +169,41 @@ policy, not a control. The repository already has two single-purpose non-securit
 host roles to model on, `platform_data_volume` and `image_prune`; `swap` takes
 the same shape (tasks, defaults, meta, README, `molecule/default`).
 
-It is placed in `host-baseline.yml` **after `deploy_user`**, not first. Order is
-immaterial to the role itself — it depends on nothing and nothing depends on it
-— so the placement is chosen for what it does *not* disturb. The play carries
-two pre-flight assertions, not one: `hardening` asserts its CIDR list and
-`deploy_user` asserts `deploy_apps`, both at role scope, and queue entry 3c
-records that no play-scope check exists and that a run missing `deploy_apps`
-therefore gets Docker, UFW and the tailnet before it stops. Inserting a
-host-changing role anywhere ahead of `deploy_user` adds to what that run does
-before refusing. Placing `swap` after both leaves the set of roles that can
-change a host before either assertion exactly as it is today, which is the most
-this change can do about entry 3c without becoming it.
+It is placed **last** in `host-baseline.yml`. Order is immaterial to the role
+itself — it depends on nothing and nothing depends on it — so the placement is
+chosen for what it does *not* disturb. The play carries **five** role-scope
+pre-flight assertions — `hardening`, `deploy_user`, `ops_user`,
+`platform_data_volume` and `image_prune` — and no play-scope check at all, which
+is what queue entry 3c records: a run missing a required input still changes the
+host with every role ahead of the one that refuses. Running after all five means
+this change adds nothing to that set, which is the most it can do about entry 3c
+without becoming it.
+
+**This decision was written wrong and is corrected here rather than quietly
+replaced.** It first placed the role after `deploy_user` and asserted the play
+carried *two* assertions. Code review counted five, three of which ran after
+`swap` at that position — so the stated property was false, and the concrete
+cost was real: a host with a malformed `ops_user_accounts` entry, or an
+undiscoverable data volume, would have had 4 GiB written, formatted and swapped
+on before the run refused. The count is checkable in one command, and anyone
+revisiting this should re-run it rather than trust the number written here:
+
+```
+grep -n "ansible.builtin.assert" ansible/roles/*/tasks/main.yml
+```
+
+That returns **six** lines, not five: `swap`'s own is the mid-run guard on the
+backing file's size, not a pre-flight check on a caller-supplied input, so it is
+not one of the five this decision is about. Said here because a self-check that
+disagrees with the prose it verifies recreates the confusion the paragraph
+exists to prevent.
+
+**One consequence of running last is worth stating.** The role refuses rather
+than adopting a `/swapfile` of the wrong size (Decision 8a), and at this
+position that refusal arrives after every other role has already applied. That
+is the correct trade — a wrong-sized file is not something to truncate under a
+running kernel — but it means the failure is late, and the role's README says so
+where an operator will meet it.
 
 ### Decision 6: A 4 GiB file at `/swapfile`, `vm.swappiness = 10`
 
@@ -221,12 +245,27 @@ mkswap                           ✓ safe, asserted (writes the file only)
 fstab entry                      ✓ safe, asserted
 /etc/sysctl.d/…  file written    ✓ safe, asserted
 ─────────────────────────────
-swapon                           ✗ registers with the RUNNER's kernel; the
-                                   container is destroyed with swap still on,
-                                   leaving a reference to a deleted file
+swapon                           ✗ fails on this rig (see below); would
+                                   register with the RUNNER's kernel elsewhere
 sysctl --system  (live value)    ✗ vm.swappiness is not a namespaced sysctl —
                                    it would change the runner's own kernel
 ```
+
+**One half of that hazard turned out to be narrower than this design first
+claimed, and the correction is recorded rather than quietly dropped.** The
+original text said a scenario that activated swap would leave a dangling
+reference in the runner's kernel after the instance was destroyed. Tested on
+2026-09-08 by removing the role's activation gate and converging: `swapon`
+fails outright with `Invalid argument`, because the instance's filesystem is an
+overlay and the kernel refuses a swap file on overlayfs. On this rig the file
+half of the hazard is unreachable, not merely guarded.
+
+The sysctl half is untouched by that: `vm.swappiness` is not namespaced and no
+filesystem is involved, so a live write from inside the instance does change the
+runner's own kernel. And the separation stands on its own footing regardless —
+the delta requires configuring to be separable from activating, for any host
+sharing a kernel, not because one particular container runtime happens to refuse
+the write today.
 
 The role therefore takes a variable — default `true` — that gates the two
 activating tasks, and the scenario converges with it `false`. Every artifact the
@@ -353,6 +392,82 @@ that did not come back. That is two `docker ps` calls, and it also turns a claim
 this design was otherwise making without evidence — that `commerce-ops`'s two
 containers return, which depends on restart policies in a Compose file this
 repository cannot read — into an observation.
+
+### Decision 10: The wrapper takes merged extra options, because three existing scenarios depend on `daemon.json` being absent
+
+Found while deriving this change's tests, and verified in the tree rather than
+predicted. Three scenarios — `image_prune/default`,
+`image_prune/abandon-paths` and `deploy_user/default` — write
+`/etc/docker/daemon.json` in their `prepare.yml`, selecting the `vfs` storage
+driver with `containerd-snapshotter` disabled, because their fixtures build and
+run nested containers. All three then converge `role: docker`.
+
+`geerlingguy.docker` renders that file with `copy:` from
+`docker_daemon_options` — an overwrite, not a merge — gated on the dictionary
+being non-empty. That gate is false today, which is the only reason those
+fixtures survive. Decision 4 makes it true, so as planned this change would
+silently wipe `vfs` from three scenarios that belong to other changes and break
+them.
+
+**The fix is not to special-case them.** The wrapper gains
+`docker_daemon_extra_options` (default `{}`), and `meta/main.yml` composes:
+
+```yaml
+docker_daemon_options: >-
+  {{ docker_daemon_extra_options | combine(<the log-bound dict>, recursive=True) }}
+```
+
+The log bound is applied **last**, so the escape hatch can add any daemon
+option and cannot silently remove the ceiling — which is the polarity that
+matters, since a scenario or a host that could unset the bound by adding an
+unrelated key is the failure this whole requirement exists to prevent.
+
+The three scenarios then pass their storage-driver settings as a role variable
+in `converge.yml` and drop the now-dead `prepare.yml` write. That is a better
+expression of what those files already say they are: `prepare.yml`'s own
+comment calls the write a fixture, and a fixture belongs in the scenario's
+parameters rather than in a file the role under test overwrites. No assertion
+in any of the three changes, and none is relaxed.
+
+*Alternative — let the scenarios override `docker_daemon_options` from
+`converge.yml`'s `vars:`.* Does not work: a dependency parameter in
+`meta/main.yml` is a role param, which outranks play vars in Ansible's
+precedence order, so the wrapper's value would win and the override would be
+silently ignored — the worst of the available failures.
+
+This does soften Decision 4's accepted risk, which said a future daemon option
+must go inside the wrapper's dictionary. It now has a documented way out. That
+is a fair trade for not breaking three scenarios, and the escape hatch is
+constrained in the one direction that counts.
+
+### Decision 11: The derived logging assertions move into the `docker` role's existing scenario
+
+The test author wrote them into a new `docker/molecule/log-bound/` scenario
+rather than extending `docker/molecule/default/verify.yml`, because appending
+to an existing test file is an edit its own rules forbid it. Its report names
+folding them back as a reasonable implementer call.
+
+They are folded. The two `converge.yml` files are identical — `role: docker`
+with no variables supplied — so the scenarios differ only in which assertions
+run, and keeping both would pay a second full converge of the slowest role in
+the suite on every pull request, to read one file.
+
+**Every assertion moves verbatim and none is dropped, relaxed or reworded.**
+That distinction is the whole of what makes this a relocation rather than the
+weakening this repository's testing rules refuse: the fold is legitimate
+because the converge it moves to is the same converge, and it would not be if
+the receiving scenario set up the host differently.
+
+**And that claim cannot be checked from the repository, which is a defect in
+how the fold was sequenced rather than in the fold.** The `log-bound` scenario
+was never committed, so no reviewer has a baseline to diff the folded
+assertions against — the independent test author's output survives only inside
+the implementer's edit, which is precisely the separation the derive-tests step
+exists to create. The right order is to commit the derived tests exactly as
+authored and then fold in a second commit, so the fold is reviewable as a diff.
+Recorded in `docs/change-queue.md` so the next change does it that way; not
+reconstructed here, because a reconstruction from memory would be a fabricated
+baseline and worse than an acknowledged gap.
 
 ## Risks / Trade-offs
 

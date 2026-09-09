@@ -31,5 +31,41 @@ galaxy_info:
         - jammy
         - noble
 
+# This role now owns the daemon's configuration as well as its installation
+# (the change bound-host-log-growth-and-add-swap, design.md Decision 4). The
+# external role's `docker_daemon_options` is named HERE and nowhere else --
+# never from ansible/inventory/group_vars/prod.yml -- which is the direct
+# reference to the external role this wrapper exists to prevent, and which
+# would also turn a value safe for every host into one host's fact. A future
+# daemon option is added to the dictionary below, or supplied through
+# `docker_daemon_extra_options` (see defaults/main.yml).
+#
+# ORDER OF THE MERGE IS LOAD-BEARING. The log ceiling is combined LAST, so
+# extra options can add any key and cannot unset the bound. Reversed, a caller
+# adding an unrelated daemon option could silently drop the ceiling -- which is
+# precisely the failure openspec/specs/iac-host-configuration/spec.md's
+# "Container Logs Are Bounded by the Host's Daemon Configuration" exists to
+# prevent, and it would leave no trace in the rendered file to notice.
+#
+# The external role renders this through `to_nice_json` with `copy:`, gated on
+# the dictionary being non-empty. It is now always non-empty, so every converge
+# of this role RENDERS /etc/docker/daemon.json -- which is why the three
+# scenarios that used to pre-write that file as a fixture now pass
+# `docker_daemon_extra_options` instead: their file no longer survives.
+#
+# `copy:` is idempotent, so only a converge that CHANGES the file notifies
+# `restart docker` and stops and returns every container on the host. In
+# practice that is the first converge after this change, and any later one that
+# alters a value here. A steady-state converge restarts nothing -- the docker
+# role's Molecule idempotence action passes, which it could not if every run
+# notified the handler.
 dependencies:
   - role: geerlingguy.docker
+    docker_daemon_options: >-
+      {{ docker_daemon_extra_options | combine({
+           'log-driver': 'json-file',
+           'log-opts': {
+             'max-size': docker_log_max_size,
+             'max-file': docker_log_max_files,
+           },
+         }, recursive=True) }}

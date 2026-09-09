@@ -19,10 +19,12 @@ collections:
     version: "9.5.0"
   # Needed by deploy_user for ansible.posix.authorized_key's key_options
   # (per-key restrict,command= forced-command entries -- add-per-app-
-  # deploy-keys). Pinned per convention; chosen without the ability to
-  # query Galaxy from this environment (no network access) -- confirm it
-  # resolves, or bump to whichever exact version does, before relying on
-  # this file in CI or locally.
+  # deploy-keys), and by swap for ansible.posix.mount and ansible.posix.sysctl
+  # (the boot-time swap record and the swap-tendency file -- the change
+  # bound-host-log-growth-and-add-swap). Pinned per convention; chosen
+  # without the ability to query Galaxy from this environment (no network
+  # access) -- confirm it resolves, or bump to whichever exact version does,
+  # before relying on this file in CI or locally.
   - name: ansible.posix
     version: "1.6.2"
   # Needed by deploy_user for community.docker.docker_login (GHCR pull

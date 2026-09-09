@@ -1,0 +1,80 @@
+---
+# Molecule scenario for the ADDED requirement "The Host Carries Swap That
+# Survives a Reboot" in openspec/specs/iac-host-configuration/spec.md.
+#
+# Derived from that requirement's delta specification ahead of any
+# implementation, by an author who had not read one. It was red on arrival, by
+# design -- the role did not exist yet -- and the implementation that followed
+# is what made it pass. A red run here now is a finding, not the expected
+# state.
+#
+# WHAT THIS SCENARIO ESTABLISHES, AND WHAT IT DELIBERATELY DOES NOT
+# -----------------------------------------------------------------
+# It converges with activation DISABLED and asserts every artifact the role
+# writes to the instance's filesystem: the backing file, its size, its
+# ownership and mode, its swap signature, the boot-time mount record and the
+# kernel-parameter file. That is the requirement's own scenario
+# "Configuration is established without activation".
+#
+# It does NOT activate swap, does NOT set a live sysctl, and asserts NO
+# absolute value of `/proc/swaps` or of the live `vm.swappiness`. Every
+# scenario in this repository is a privileged container sharing the runner's
+# kernel (`privileged: true`, `cgroupns_mode: host`). `vm.swappiness` is not a
+# namespaced sysctl and `swapon` registers with the host kernel, so a scenario
+# that activated swap would mutate the runner's own kernel and leave a
+# outside the instance -- `swapon` on a rig where it can succeed, and the live
+# `vm.swappiness` write always, that sysctl not being namespaced. On this
+# suite's overlayfs-backed rig `swapon` fails outright (tested 2026-09-08). Both
+# readings available inside the instance are readings OF THE RUNNER, so an
+# absolute assertion on either is flaky on a runner that has swap of its own
+# and tautological on one already at the value. The negative half is therefore
+# made as a comparison against a value `prepare.yml` captured before
+# `converge` ran -- see verify.yml.
+#
+# What that leaves uncovered here (activation, reboot persistence, and the
+# guard against reformatting active swap) is closed by the hand-run converge
+# against production this change's `tasks.md` describes, and every such gap
+# has a row of its own in `test-plan.md`.
+#
+# `idempotence` IS LEFT IN THE DEFAULT SEQUENCE, deliberately: it converges a
+# second time and fails on any reported change, which is what establishes that
+# the role's configuration path is a no-op on re-converge. It does not reach
+# the active-swap guard, because swap is never active here.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Distinct instance name from every sibling scenario in this repository, so
+  # that scenarios can be created side by side without colliding.
+  - name: swap-role-instance
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py fails the build on a partial
+    # refresh. See ansible/roles/docker/molecule/default/molecule.yml for why a
+    # digest and not a version tag, why `pre_build_image: true` is load-bearing
+    # for it, and how to refresh it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml -- same
+    # reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

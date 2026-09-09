@@ -36,6 +36,33 @@
 - name: Install the container runtime the fixtures and the role both need
   hosts: all
   become: true
+  vars:
+    # FIXTURE ONLY. This scenario runs real containers INSIDE the Molecule
+    # instance (two stopped fixture holders and a local registry). Under the
+    # default overlayfs snapshotter that fails with "failed to mount ...
+    # fstype: overlay ... invalid argument" -- Docker-in-Docker cannot stack
+    # another overlay here. vfs is slower but mounts anywhere, which is the
+    # right trade for a fixture.
+    #
+    # Supplied to the `docker` role rather than written to
+    # /etc/docker/daemon.json in prepare.yml, where it used to live: that file
+    # is now rendered by the role itself and a copy written beforehand does not
+    # survive. prepare.yml says so at the point the write was removed. These
+    # options are merged UNDER the role's log ceiling, so this fixture cannot
+    # unset the thing the role exists to guarantee.
+    #
+    # ONE TIMING DIFFERENCE FROM THE OLD ARRANGEMENT, recorded because a later
+    # author could be caught by it. Writing the file in `prepare.yml` put vfs in
+    # place before dockerd ever started. Supplying it as a role variable means
+    # dockerd starts once on the default snapshotter and is then restarted onto
+    # vfs by the external role's own `meta: flush_handlers`. Nothing in this
+    # scenario pulls or builds inside that window, so it is safe as written --
+    # but a step added to `prepare.yml` that pulled an image would land it on
+    # the wrong graphdriver and it would be invisible afterwards.
+    docker_daemon_extra_options:
+      storage-driver: vfs
+      features:
+        containerd-snapshotter: false
   roles:
     - role: docker
 

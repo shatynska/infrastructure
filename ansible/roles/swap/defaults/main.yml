@@ -1,0 +1,65 @@
+---
+# Every variable here has a SAFE DEFAULT, which is why this role carries no
+# required-input assertion. openspec/specs/iac-host-configuration/spec.md's "A
+# Role's Absent Required Input Is Reported by Name" reaches inputs that have no
+# safe default and must therefore come from the caller -- a source CIDR for a
+# firewall rule, a key that grants network membership. A swap file's size and
+# path are not that class: a wrong value here is a suboptimal host, not a
+# silently wrong answer substituted for a stated one. The absence of an assert
+# is a decision, not an oversight; keep it that way, and if a variable without
+# a safe default is ever added to this role, it acquires one.
+
+# Backed by a file on the ROOT filesystem, deliberately. A partition cannot be
+# added to an already provisioned host without repartitioning it, and the
+# attached main-data volume is a network block device -- putting the kernel's
+# last-resort memory tier on the network makes the tier least able to tolerate
+# pressure depend on the component least able to tolerate it. It is also the
+# volume platform/'s Postgres, Prometheus and Grafana bind-mount.
+swap_file_path: /swapfile
+
+# 4 GiB against this host's 7.6 GiB of RAM, and about 6% of the 65 GB free on
+# its root device. Sized against what swap is FOR here rather than by an
+# RAM-multiplier rule: HostMemoryPressure needs a leak to hold above 90% for
+# ten minutes before it fires, and swap's job is to keep the host answering for
+# at least that long instead of letting the OOM killer stop whichever process
+# is largest -- on this host, Postgres or Prometheus, neither of them the one
+# that leaked.
+#
+# Resizing is `swapoff`, delete the file, re-converge. Molecule overrides this
+# to a small value: a defaulted converge would `dd` 4 GiB inside a CI container
+# on every run, and the assertion is against the CONFIGURED size, which a small
+# value satisfies exactly as well.
+swap_size_mb: 4096
+
+# Against Ubuntu's default of 60. Swap here is an overflow reserve, not a
+# memory tier: at 60 the kernel pages out a working set on a host with 6 GiB
+# available, trading latency for nothing. At 10 it still swaps under genuine
+# pressure, which is the only case this role is about.
+swap_swappiness: 10
+swap_sysctl_file: /etc/sysctl.d/60-swappiness.conf
+
+# A TEST AFFORDANCE, AND NOT A PRODUCTION SWITCH. Nothing in
+# ansible/playbooks/host-baseline.yml sets it, and nothing should.
+#
+# It exists because activation is the one part of this role that writes state
+# the run does not own. `swapon` registers the file with the KERNEL, and
+# `vm.swappiness` is not a namespaced sysctl -- so on any host sharing a kernel
+# with others, both reach outside the machine being configured. Every Molecule
+# scenario in this repository runs `privileged: true` with
+# `cgroupns_mode: host`, so a scenario that activated swap would reach the CI
+# runner's own kernel rather than the instance's.
+#
+# The two halves differ in reach, and it is worth knowing which is which.
+# `swapon` fails outright on the overlayfs-backed rig this suite uses --
+# `Invalid argument`, tested 2026-09-08 by removing this gate -- so there the
+# file half is unreachable rather than merely guarded, though it would land on
+# a rig where activation can succeed. The live `vm.swappiness` write has no
+# such obstacle: that sysctl is not namespaced and no filesystem is involved,
+# so it always changes the runner's own kernel.
+#
+# Setting it false leaves the file, its permissions, its fstab record and the
+# sysctl file all established, and touches no kernel state. That split is
+# itself a requirement -- "Configuring swap SHALL be separable from activating
+# it" -- so this is not merely a hook for the tests; the tests are why it is
+# observable.
+swap_activate: true

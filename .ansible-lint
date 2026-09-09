@@ -25,3 +25,4 @@ mock_roles:
   - tailscale
   - ops_user
   - platform_data_volume
+  - swap

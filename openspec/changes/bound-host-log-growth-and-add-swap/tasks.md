@@ -16,13 +16,13 @@ and is fine.
 
 ## 1. Implementation
 
-- [ ] 1.1 Give `ansible/roles/docker/` a `defaults/main.yml` holding this
+- [x] 1.1 Give `ansible/roles/docker/` a `defaults/main.yml` holding this
   project's own two-variable interface — `docker_log_max_size` (`"50m"`) and
   `docker_log_max_files` (`"3"`) — with a comment recording why the values are
   generous rather than minimal (no log aggregation on this host, so `json-file`
   is the only history an incident can read) and naming queue entry 28 as the
   event that makes revisiting them right.
-- [ ] 1.2 Pass them to the pinned external role from
+- [x] 1.2 Pass them to the pinned external role from
   `ansible/roles/docker/meta/main.yml`'s existing `dependencies:` entry as
   `docker_daemon_options`, with `log-driver: json-file` written explicitly and
   `log-opts` carrying `max-size` and `max-file` templated from 1.1's variables.
@@ -33,13 +33,13 @@ and is fine.
   rather than by naming `docker_daemon_options` from inventory. Do **not** edit
   `ansible/inventory/group_vars/prod.yml`: these are safe defaults every host
   this repository configures should inherit, not prod facts.
-- [ ] 1.3 Write `ansible/roles/docker/README.md`. The role has had no README
+- [x] 1.3 Write `ansible/roles/docker/README.md`. The role has had no README
   because it had no interface; it has one now. Cover the two variables, that the
   bound reaches only containers **created after** the daemon restart and
   therefore not the containers currently running, that a container declaring its
   own logging options overrides the default, and that rendering `daemon.json`
   restarts the daemon and so briefly stops every container on the host.
-- [ ] 1.4 Create `ansible/roles/swap/` with the conventional shape —
+- [x] 1.4 Create `ansible/roles/swap/` with the conventional shape —
   `tasks/main.yml`, `defaults/main.yml`, `meta/main.yml`, `README.md` — modelled
   on `image_prune`. `meta/main.yml` needs the `galaxy_info`
   `namespace`/`role_name` pair every role here carries (Molecule's bundled
@@ -55,13 +55,13 @@ and is fine.
   Input Is Reported by Name" — that requirement reaches inputs with no safe
   default. Say so in the file's comment so the omission reads as a decision
   rather than an oversight.
-- [ ] 1.5 `swap_activate` is a **test affordance and is documented as one**, in
+- [x] 1.5 `swap_activate` is a **test affordance and is documented as one**, in
   both `defaults/main.yml` and the README: `vm.swappiness` is not a namespaced
   sysctl and `swapon` registers with the host kernel, so a privileged container
   sharing the runner's kernel cannot activate swap without mutating state the
   run does not own. It is not a production switch, and nothing in
   `host-baseline.yml` sets it.
-- [ ] 1.6 Write `ansible/roles/swap/tasks/main.yml` in this order, each task
+- [x] 1.6 Write `ansible/roles/swap/tasks/main.yml` in this order, each task
   guarded so a re-converge is a no-op:
 
   1. **Establish the current state before acting.** `stat` the file; read
@@ -98,21 +98,51 @@ and is fine.
      3.8, deliberately and by hand, where re-applying is the point.
 
   Nothing in this role notifies a handler and nothing restarts a service.
-- [ ] 1.7 Write `ansible/roles/swap/README.md`: what the role establishes and
+- [x] 1.7 Write `ansible/roles/swap/README.md`: what the role establishes and
   what it deliberately does not, the sizing reasoning, why the file is on the
   root filesystem and explicitly **not** on the `main-data` volume, what
   `swap_activate` is for and why it exists, and how to resize (`swapoff`,
   delete, re-converge) and how to remove entirely.
-- [ ] 1.8 Add `swap` to `ansible/playbooks/host-baseline.yml` **after
-  `deploy_user`**, with a comment giving the reason. The role is
-  order-independent — it depends on nothing and nothing depends on it — so the
-  placement is chosen for what it does not disturb: the play carries two
-  role-scope pre-flight assertions, `hardening`'s on its CIDR list and
-  `deploy_user`'s on `deploy_apps`, and no play-scope check at all (queue entry
-  3c). Placing `swap` after both means this change adds nothing to what a run
-  missing a required input does to the host before it refuses. Do not write
-  "the play's only assertion": there are two.
-- [ ] 1.9 Record the swap-utilisation alert in `docs/change-queue.md` as its own
+- [x] 1.8 Add `swap` to `ansible/playbooks/host-baseline.yml` **last**, with a
+  comment giving the reason. The role is order-independent — it depends on
+  nothing and nothing depends on it — so the placement is chosen for what it
+  does not disturb: the play carries role-scope pre-flight assertions and no
+  play-scope check at all, so a run missing a required input still changes the
+  host with every role ahead of the one that refuses (queue entry 3c). Running
+  after all of them means this change adds nothing to that set.
+
+  **Corrected during code review.** This task first said "after `deploy_user`"
+  and asserted the play carries **two** assertions. It carries **five** —
+  `hardening`, `deploy_user`, `ops_user`, `platform_data_volume` and
+  `image_prune` — so that placement left three running after `swap`, and the
+  claim that it disturbed nothing was false: a host with a malformed
+  `ops_user_accounts` entry, or an undiscoverable data volume, would have had
+  4 GiB written, formatted and swapped on before the run refused. Moving it
+  last makes the stated property true instead of merely asserted. Verify the
+  count against `grep -n "ansible.builtin.assert" ansible/roles/*/tasks/main.yml`
+  rather than trusting either number written here.
+- [x] 1.9 **Reconcile with the three scenarios that pre-write
+  `/etc/docker/daemon.json`** (Decision 10 — found while deriving this change's
+  tests, and verified in the tree). `image_prune/default`,
+  `image_prune/abandon-paths` and `deploy_user/default` write that file in
+  `prepare.yml` to select the `vfs` storage driver for their nested-container
+  fixtures, then converge `role: docker`. The external role renders the file
+  with `copy:` — an overwrite — gated on `docker_daemon_options` being
+  non-empty, a gate task 1.2 makes true. Without this task, this change breaks
+  three scenarios belonging to other changes.
+
+  Add `docker_daemon_extra_options` (default `{}`) to the wrapper's
+  `defaults/main.yml`, and compose in `meta/main.yml` with the log-bound
+  dictionary applied **last** (`extra | combine(bound, recursive=True)`), so the
+  hatch can add any option and cannot remove the ceiling. Then have each of the
+  three scenarios pass its storage-driver settings as that variable in
+  `converge.yml` and delete the now-dead `prepare.yml` write, with a comment
+  saying why the fixture moved.
+
+  **Change no assertion in any of the three**, and do not relax one to make a
+  converge pass. If one of them goes red for a reason other than the storage
+  driver, that is a finding about this change, not a test to adjust.
+- [x] 1.10 Record the swap-utilisation alert in `docs/change-queue.md` as its own
   entry: `node_memory_SwapFree_bytes` is already scraped, the rule is a few
   lines, and it belongs in `platform/docker-compose.yml` — a different layer
   reached by a different pipeline, which is why it is not folded in. Note in it
@@ -127,14 +157,14 @@ The scenarios below are what the delta calls for. They are derived by an author
 other than whoever implements section 1, from the delta specs rather than from
 the implementation, per this project's workflow.
 
-- [ ] 2.1 **Before running Molecule at all**, clear the shared state its runs
+- [x] 2.1 **Before running Molecule at all**, clear the shared state its runs
   collide on. Molecule's instance name, `~/.ansible/tmp/molecule.*` and
   `~/.cache/molecule/<role>` are stable per role and shared across working
   trees, so a concurrent run in another tree surfaces as "Module result
   deserialization failed" at `create`, `prepare` or `verify` and reads as a
   module bug (queue entries 8 and 18). A colliding run can pass as easily as
   fail, so a green result taken without this is not evidence.
-- [ ] 2.2 **Provision before believing any result.** A fresh working tree
+- [x] 2.2 **Provision before believing any result.** A fresh working tree
   carries tracked files only: `ansible/roles/geerlingguy.docker/` is gitignored
   and absent, the Molecule toolchain in `ansible/requirements-test.txt` is not
   installed, and a suite that cannot reach what it needs skips and reports
@@ -142,13 +172,13 @@ the implementation, per this project's workflow.
   (`ansible-galaxy collection install -r ansible/requirements.yml`, then
   `ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`)
   and the test toolchain before any claim about a run.
-- [ ] 2.3 Extend `ansible/roles/docker/molecule/default/verify.yml` to assert
+- [x] 2.3 Extend `ansible/roles/docker/molecule/default/verify.yml` to assert
   the rendered `/etc/docker/daemon.json` — that it exists, parses as JSON, names
   `json-file` as `log-driver`, and carries `max-size` and `max-file` under
   `log-opts` with the **exact** values 1.1 sets, each as a JSON string. This is
   the delta's "The daemon's configuration is what carries the bound" scenario;
   asserting only that the file exists would pass against an empty object.
-- [ ] 2.4 In the same scenario, assert "A container created after configuration
+- [x] 2.4 In the same scenario, assert "A container created after configuration
   has a bounded log" the only way a container can: on the converged instance's
   own daemon, **create** a container after the role has run — `docker create`,
   not `docker run`: log options are resolved at creation, so nothing needs to
@@ -162,7 +192,24 @@ the implementation, per this project's workflow.
   something that passes: record in `test-plan.md` that this scenario is
   uncovered by Molecule, and name task 3.7 as its only closer. That leaves the
   scenario resting on one prod observation, which is worth knowing.
-- [ ] 2.5 Create `ansible/roles/swap/molecule/default/` converging with
+
+  **Outcome: the second fallback fired**, and it was reproduced rather than
+  assumed. `docker import` of an empty tar succeeds offline, but `docker create`
+  then fails with an overlay-on-overlay mount error, and the `vfs` workaround
+  the three scenarios in task 1.9 rely on is unavailable here precisely because
+  `daemon.json` is the subject under test. So "A container created after
+  configuration has a bounded log" and "Containers predating the configuration
+  are not claimed as bounded" rest on task 3.7 alone. Nothing weaker was
+  substituted. Do not revisit this by relaxing the assertion.
+
+  **Fold, do not duplicate** (Decision 11). The derived assertions arrived as a
+  separate `docker/molecule/log-bound/` scenario, because the test author may
+  not edit an existing test file. Its `converge.yml` is identical to `default`'s
+  — `role: docker`, no variables — so move every assertion into
+  `default/verify.yml` **verbatim** and delete the extra scenario, rather than
+  paying a second converge of the suite's slowest role on every pull request.
+  Moving them is a relocation; dropping, relaxing or rewording one would not be.
+- [x] 2.5 Create `ansible/roles/swap/molecule/default/` converging with
   `swap_activate: false` **and a small `swap_size_mb`** — the assertion is
   against the configured size, which a small value satisfies exactly as well,
   and a defaulted converge would `dd` 4 GiB inside a CI container on every run.
@@ -171,7 +218,7 @@ the implementation, per this project's workflow.
   swap signature; `/etc/fstab` names it with `fstype: swap`; the sysctl file
   exists and sets the configured value. This is the delta's "Configuration is
   established without activation" scenario.
-- [ ] 2.6 That scenario must **also** assert the negative half — that nothing
+- [x] 2.6 That scenario must **also** assert the negative half — that nothing
   was activated. Both readings available in a container are of the **runner's**
   kernel, not the instance's, so neither can be asserted as an absolute:
   `/proc/swaps` is non-empty on any runner that itself has swap, and a live
@@ -180,13 +227,13 @@ the implementation, per this project's workflow.
   **unchanged from the captured value**. An absolute assertion here is either
   flaky or tautological, and a green tautology in the one place this change
   claims honesty about coverage would be worse than no assertion.
-- [ ] 2.7 Cover "A re-converge leaves active swap intact" as far as a container
+- [x] 2.7 Cover "A re-converge leaves active swap intact" as far as a container
   allows: Molecule's `idempotence` action already runs `converge` twice and
   fails on any reported change, which establishes the configuration path is
   idempotent. It does **not** establish the active-swap guard, because swap is
   never active in the scenario. The guard is observed at task 3.9's prod
   re-converge.
-- [ ] 2.8 `ansible/roles/swap/molecule/default/molecule.yml` must satisfy
+- [x] 2.8 `ansible/roles/swap/molecule/default/molecule.yml` must satisfy
   `iac-cicd-pipeline`'s existing discovery-based checks: a content digest, not a
   tag, and the **same** digest every other authored scenario carries —
   `.github/tests/test_ci_configuration.py` fails the build on a partial refresh.
@@ -194,7 +241,7 @@ the implementation, per this project's workflow.
   one, and point its comment at the `docker` scenario's shared rationale instead
   of restating it. No workflow edit is needed: `ansible-verify.yml` discovers
   roles and scenarios.
-- [ ] 2.9 Write `test-plan.md` mapping each delta scenario to the assertion that
+- [x] 2.9 Write `test-plan.md` mapping each delta scenario to the assertion that
   covers it. For every scenario the suite does not establish, state which
   **claim** is actually made instead — the distinction the delta itself draws
   between observing a boot and exercising the records the host reads at boot:
@@ -225,19 +272,19 @@ the implementation, per this project's workflow.
 
 ## 3. Verification and rollout
 
-- [ ] 3.1 Run `molecule test --all` from `ansible/roles/docker/` and from
+- [x] 3.1 Run `molecule test --all` from `ansible/roles/docker/` and from
   `ansible/roles/swap/`. **Read the SCENARIO RECAP, not the exit code**: the
   run stops at a role's first failing scenario and every scenario sorting after
   it is silently not executed and not listed. Confirm the recap names every
   scenario each role has.
-- [ ] 3.2 Run `pre-commit run --all-files` (`ansible-lint`,
+- [x] 3.2 Run `pre-commit run --all-files` (`ansible-lint`,
   `ansible-playbook --syntax-check`, `gitleaks`, and the Terraform hooks, which
   this change does not touch).
-- [ ] 3.3 Run `python3 -m unittest discover --start-directory .github/tests`
+- [x] 3.3 Run `python3 -m unittest discover --start-directory .github/tests`
   from the repository root — the new `molecule.yml` is subject to that suite's
   digest-agreement and scenario-discovery assertions, and the change's own
   citations are subject to its citation-form check.
-- [ ] 3.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
+- [x] 3.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff, against a
   tree where 3.1–3.3 already pass.
 - [ ] 3.5 Ship by merging. Nothing here reaches prod on merge:
   `host-baseline.yml` is hand-applied (queue entry 23), and merging is what
