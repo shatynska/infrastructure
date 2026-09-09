@@ -1,7 +1,9 @@
 ## ADDED Requirements
 
 ### Requirement: Each Environment Declares Its Own Pipeline Configuration
-Every directory under `terraform/environments/` SHALL carry a committed, machine-readable file declaring the pipeline configuration for that environment: the name of the GitHub Environment its apply job attaches to, the name of the repository secret holding its read-only Hetzner token, and whether the Destroy Policy Gate applies to it.
+Every directory under `terraform/environments/` SHALL carry a committed, machine-readable file declaring the pipeline configuration for that environment. Two fields are **required**: the name of the GitHub Environment its apply job attaches to, and the name of the repository secret holding its read-only Hetzner token. A third is **optional**: whether the Destroy Policy Gate applies to it, which defaults to applying when absent (see the Destroy Policy Gate requirement, whose scenario "An environment declaring nothing is gated" is the case this default serves).
+
+The optional field SHALL name the **gate**, not its inverse — the value states whether the gate applies, rather than whether the environment is disposable. A field whose polarity has to be inferred from its name is one a reader can invert without noticing, and inverting this one silently removes the strongest guard on an apply.
 
 Adding an environment SHALL therefore require **no change to any file under `.github/workflows/`**. Workflows SHALL NOT enumerate environments, name them in a condition, or map an environment to its secrets or its Environment name in workflow text. A pipeline that must be edited to add an environment is the defect this requirement exists to prevent, and it is the state the README already described as absent.
 
@@ -9,7 +11,7 @@ That claim is about workflow files and nothing wider. An environment still needs
 
 Each environment's declared read-only secret name SHALL be distinct from every other environment's, and so SHALL its declared GitHub Environment name. Two environments naming the same read-only secret share one token; two naming the same GitHub Environment share its **write** token and its protection rules, so an environment intended to be ungated would hold the reviewed environment's write credential — contradicting the Write Credentials Confined to the Gated Pipeline requirement (iac-safety-hardening), which places each environment's Read & Write token in that environment's own GitHub Environment. Both are the defect a per-environment declaration exists to prevent, reached through committed data rather than through workflow text and therefore invisible to any check that reads only the workflows.
 
-Discovery SHALL fail closed. An environment directory whose declaration is absent, unparseable, or missing any field the pipeline reads SHALL fail the workflow with a message naming the directory and the missing field, and SHALL NOT be silently skipped. A skipped environment is one that is planned by nothing, applied by nothing and drift-checked by nothing, which is indistinguishable from the environment not existing and is exactly the condition this capability is meant to make impossible.
+Discovery SHALL fail closed. An environment directory whose declaration is absent, unparseable, or missing either **required** field SHALL fail the workflow with a message naming the directory and the missing field, and SHALL NOT be silently skipped. An absent optional field is not a missing field: it takes its default and discovery proceeds. A skipped environment is one that is planned by nothing, applied by nothing and drift-checked by nothing, which is indistinguishable from the environment not existing and is exactly the condition this capability is meant to make impossible.
 
 #### Scenario: A new environment needs no workflow edit
 - **WHEN** a directory is added under `terraform/environments/` carrying a valid pipeline declaration
@@ -24,7 +26,7 @@ Discovery SHALL fail closed. An environment directory whose declaration is absen
 - **THEN** the pipeline SHALL fail, naming both environments, rather than applying two environments under one write token and one set of protection rules
 
 #### Scenario: An environment missing its declaration fails the pipeline
-- **WHEN** a directory under `terraform/environments/` has no pipeline declaration, or one lacking a field the workflows read
+- **WHEN** a directory under `terraform/environments/` has no pipeline declaration, or one lacking either required field
 - **THEN** discovery SHALL fail the workflow with a message naming that directory and the missing field, rather than omitting the environment from the matrix
 
 #### Scenario: Discovery finding no environment fails rather than reporting success
