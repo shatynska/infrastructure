@@ -347,6 +347,8 @@ Traefik, PostgreSQL and monitoring, deployed by `platform-deploy.yml` on a merge
 
 **Heartbeat.** At healthchecks.io (or an equivalent), create a check named `<company>-prod alertmanager`. Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one. Copy the ping URL. Configure where that service should alert you when pings stop, ideally somewhere other than the same Slack workspace: this is the alarm for when everything else is down.
 
+**Periodic-job heartbeats.** In the same project, create a **project ping key** (Settings → Ping key) and keep it: it is the `HEARTBEAT_PING_KEY` repository secret in stage 7.4, and the Vault variable `image_prune_heartbeat_ping_key` in stage 6. It addresses one check per periodic job, listed with its period and grace in Appendix A. The jobs create their checks on first ping (`?create=1`), so nothing needs creating by hand here — but an auto-created check carries the vendor's **default** period, so set each one to the value Appendix A gives once it appears, or a weekly job will alarm daily. Route these checks to Slack `#alerts`, **not** to the destination the `alertmanager` check above alerts to: that one is the alarm for when everything is down and a weekly CI failure must not erode it.
+
 ### 7.2 Generate the platform's own passwords
 
 ```sh
@@ -501,6 +503,19 @@ Every credential the system uses, in one place. "Env" means the `production` Git
 | `PLATFORM_GRAFANA_ADMIN_PASSWORD` | Env secret | 7 | Generated | Grafana login |
 | `PLATFORM_SLACK_WEBHOOK_URL` | Env secret | 7 | Slack app | Alert delivery |
 | `PLATFORM_DEADMANSWITCH_URL` | Env secret | 7 | Heartbeat service | The external alarm |
+| `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in `group_vars/prod.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
+
+`HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.
+
+The checks it addresses, and the settings each needs at the observer. A check comes into existence at its job's first ping and carries the vendor's default period until it is corrected here — so read these back once each check exists, and again after any rebuild:
+
+| Check (slug) | Reported by | Period | Grace |
+|---|---|---|---|
+| `infrastructure-drift` | `.github/workflows/drift.yml`, nightly | 1 day | 12 hours |
+| `infrastructure-pre-commit-autoupdate` | `.github/workflows/pre-commit-autoupdate.yml`, weekly | 7 days | 2 days |
+| `<inventory_hostname>-prune-host-images` | `prune-host-images.service` on the host, weekly | 7 days | 2 days |
+
+The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system. The host slug is templated per host, so a second host converged by the same role reports to a check of its own.
 | `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
 
 ## Appendix B. Rebuilding an existing host
@@ -510,3 +525,5 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 ## Appendix C. What to change for a company host
 
 Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/change-queue.md`. The first two findings there — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The ones still to do before real data arrives: log rotation (21), swap and container limits (22, 7). The ones a company needs that this repository does not: a private repository in the company organisation, an approver who is not the author, and DNS as code (26).
+
+**Heartbeat checks are per repository and per host, not per project.** The workflow slugs carry this repository's name (`infrastructure-`) and the host slug is templated from `inventory_hostname`, so a second repository and a second host each get checks of their own — a shared check would let one reporter's success keep it green while the other's job was dead, which is the exact silence this mechanism exists to end. The free tier's 20 checks are the ceiling on how far that scales; count them before adding a third host.

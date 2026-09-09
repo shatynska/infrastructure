@@ -340,12 +340,34 @@ subject:
 matter when running them. See the change `project-foundation`'s design.md for
 the full testing strategy.
 
+### When a periodic job stops working
+
+Nothing here runs silently any more. Every periodic job — the nightly drift
+check, the weekly hook autoupdate, and the weekly image prune on the host —
+reports each run to a heartbeat check of its own, and **the alarm is the check
+going quiet**, delivered to Slack `#alerts`. A run that failed, a run killed
+mid-flight and a run that never happened at all therefore look the same to it,
+which is the point: the last of those emits no failure for anything else to
+notice.
+
+The three checks, the slug each reports under, and the period and grace that
+decide when silence becomes an alarm are listed once, in
+`docs/bootstrap-a-new-host.md`'s Appendix A, beside the `HEARTBEAT_PING_KEY`
+secret they are addressed with. They are the observer's configuration, not this
+repository's, so nothing here can verify them.
+
 ### Re-enabling the drift-detection workflow
 
 GitHub automatically disables `schedule`-triggered workflows after 60 days
 without any repository activity. If the nightly drift check appears to have
 stopped running, check **Actions → Drift Detection → ⋯ → Enable workflow**,
 then trigger it once manually (`workflow_dispatch`) to confirm it runs clean.
+
+**A manual dispatch reports to the heartbeat check too, and so resets its
+silence timer.** After dispatching, confirm the schedule itself is enabled
+rather than reading the green check as evidence that it is: a workflow that is
+still disabled will look healthy for one whole period — a day for drift, a week
+for the autoupdate — before the alarm you were acting on comes back.
 
 ## Status
 

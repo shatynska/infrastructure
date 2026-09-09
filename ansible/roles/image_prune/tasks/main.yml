@@ -28,6 +28,28 @@
       it.
     quiet: true
 
+# Same shape and the same reasoning as the assertion above, for the input that
+# decides whether this unit is observed at all. It fires before anything is
+# written to the host, per iac-host-configuration's "A Role's Absent Required
+# Input Is Reported by Name": a converge that installed the timer and silently
+# omitted the reporting would leave a scheduled unit running unobserved, which
+# is the state "Scheduled Host Units Report Their Own Liveness" exists to end.
+- name: Assert the heartbeat ping key was supplied
+  ansible.builtin.assert:
+    that:
+      - image_prune_heartbeat_ping_key is defined
+      - image_prune_heartbeat_ping_key is string
+      - image_prune_heartbeat_ping_key | length > 0
+    fail_msg: >-
+      image_prune_heartbeat_ping_key was not supplied. This role has no default
+      for it: it is the project ping key the scheduled unit reports its own
+      liveness under, and without it the unit would run with nothing noticing
+      when it fails, is killed, or stops being scheduled. Set it
+      Vault-encrypted in ansible/inventory/group_vars/prod.yml; a Molecule
+      scenario supplies a fixture value alongside
+      image_prune_heartbeat_base_url pointed at a local sink.
+    quiet: true
+
 - name: Create the directory holding the application enumeration
   ansible.builtin.file:
     path: /etc/prune-host-images
@@ -349,6 +371,104 @@
       printf 'prune-host-images: considered %s, removed %s\n' "$considered" "$removed"
       {% endraw %}
 
+# 0600 root, per iac-host-configuration's "Secrets Never Committed in Plaintext
+# and Never Left World-Readable on Host". The key grants access to nothing, but
+# a party who holds it can suppress this alarm by reporting success on the
+# unit's behalf, which is the outcome the reporting exists to prevent.
+- name: Write the address the reporting script reads
+  ansible.builtin.copy:
+    dest: /etc/prune-host-images/heartbeat.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      HEARTBEAT_BASE_URL={{ image_prune_heartbeat_base_url }}
+      HEARTBEAT_PING_KEY={{ image_prune_heartbeat_ping_key }}
+  no_log: true
+
+# The reporting script needs an HTTP client, and this role may not assume one.
+# The Molecule base image carries no `curl`, which is how this was found: the
+# unit ran, reported nothing, and stayed green -- the `-` prefix below made the
+# missing client invisible to systemd, exactly as it is meant to make a
+# third-party outage invisible. Left implicit, the same absence on a host would
+# read as a working reporter whose check merely happens to be silent, which is
+# the failure this whole change exists to end.
+- name: Ensure the HTTP client the reporting script uses is installed
+  ansible.builtin.apt:
+    name: curl
+    state: present
+    update_cache: true
+
+# 0700 root, and a script rather than a `curl` written straight into
+# ExecStopPost=: a command line is readable from /proc/<pid>/cmdline by any
+# local account while the process runs, and this host deliberately carries
+# unprivileged operator accounts. The script keeps the key in its environment
+# and hands curl the URL on stdin, so the 0600 file above is not defeated
+# during exactly the window the ping is in flight.
+- name: Install the liveness reporting script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/prune-host-images-report
+    owner: root
+    group: root
+    mode: "0700"
+    content: |
+      #!/bin/sh
+      # Reports one activation of prune-host-images.service to the external
+      # observer. See openspec/specs/iac-host-configuration/spec.md,
+      # "Scheduled Host Units Report Their Own Liveness".
+      #
+      # WHAT RAISES THE ALARM IS SILENCE, NOT THIS PING. The observer alarms
+      # when the check has not been reported to within its period and grace,
+      # so a failed run, a run killed on TimeoutStartSec, and a timer that has
+      # stopped firing are equally visible -- and the last of those leaves no
+      # failed unit for anything on this host to read.
+      #
+      # Run by systemd as ExecStopPost=, never from inside the prune script:
+      # a run killed from outside its own process cannot report its own death,
+      # and that kill is precisely what the unit's duration bound exists for.
+      set -eu
+
+      . /etc/prune-host-images/heartbeat.env
+
+      # Templated per host, not written as a literal: two hosts converged by
+      # this role would otherwise share one check, and the live host's weekly
+      # success would keep it green while the other host's timer was dead.
+      slug="{{ inventory_hostname }}-prune-host-images"
+
+      # $SERVICE_RESULT, never $EXIT_STATUS: on the TimeoutStartSec path --
+      # the one this reporting exists for -- systemd sets EXIT_STATUS to a
+      # signal name (KILL) rather than a number, so anything branching on it
+      # breaks there and only there. EXIT_STATUS is carried below as
+      # diagnostic text, where a signal name is what you want to read.
+      if [ "${SERVICE_RESULT:-unknown}" = "success" ]; then
+        endpoint="${HEARTBEAT_BASE_URL}/${HEARTBEAT_PING_KEY}/${slug}?create=1"
+      else
+        endpoint="${HEARTBEAT_BASE_URL}/${HEARTBEAT_PING_KEY}/${slug}/fail?create=1"
+      fi
+
+      # create=1 on BOTH endpoints. A slug-addressed ping to a check that does
+      # not exist returns 404 and does nothing, and a unit that fails from its
+      # first activation never takes the success path -- so a success-only
+      # create=1 would leave a chronically failing prune reported by nothing.
+      #
+      # The URL reaches curl on stdin. The bounded timeout is not a
+      # preference: a hung request inside ExecStopPost= would hold the unit in
+      # deactivating until TimeoutStopSec, on the very path a hung container
+      # runtime already put it.
+      if printf 'url = "%s"\n' "${endpoint}" | curl --fail --silent --show-error --retry 2 --max-time 20 --config -; then
+        exit 0
+      fi
+
+      # Reached only when the report could not be delivered. The unit's own
+      # result is deliberately unaffected -- see the `-` prefix on
+      # ExecStopPost= -- so this line is the ONLY local trace that anything
+      # went wrong, and an operator answering the resulting silence days later
+      # has nothing else to read.
+      printf 'prune-host-images: reporting %s to %s failed, so that check will fall silent and alarm (systemd result %s, exit status %s)\n' \
+        "${slug}" "${HEARTBEAT_BASE_URL}" \
+        "${SERVICE_RESULT:-unknown}" "${EXIT_STATUS:-unknown}" >&2
+      exit 0
+
 - name: Install the prune service unit
   ansible.builtin.copy:
     dest: /etc/systemd/system/prune-host-images.service
@@ -366,6 +486,13 @@
       Type=oneshot
       ExecStart=/usr/local/bin/prune-host-images
       TimeoutStartSec={{ image_prune_timeout_start_sec }}
+      # Runs on EVERY exit path, including the TimeoutStartSec kill -- unlike
+      # OnFailure= (failure only) or ExecStartPost= (success path only). The
+      # leading `-` makes its own failure invisible to systemd on purpose: a
+      # prune that did its work correctly must not be recorded as failed
+      # because a third party was briefly unreachable. The unsent ping becomes
+      # silence, and silence is what the observer alarms on.
+      ExecStopPost=-/usr/local/bin/prune-host-images-report
 
 - name: Install the prune timer unit
   ansible.builtin.copy:

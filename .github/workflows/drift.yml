@@ -92,3 +92,62 @@ jobs:
           else
             gh issue create --title "$issue_title" --body-file "$body_file"
           fi
+
+  # Liveness reporting, per the Scheduled Workflows Report Their Own Liveness
+  # requirement (openspec/specs/iac-cicd-pipeline/spec.md). What raises the
+  # alarm is this check's SILENCE at the external observer, not the ping: a run
+  # that fails, a run killed mid-flight and a run that never happens at all are
+  # equally visible, and the last of those is the one no failure notification
+  # can reach -- GitHub disables a schedule-triggered workflow after 60 days of
+  # repository inactivity and emits nothing at all when it does.
+  #
+  # The period and grace that decide when silence becomes an alarm are the
+  # observer's own configuration and are NOT readable from this file. They are
+  # recorded in docs/bootstrap-a-new-host.md, Appendix A, beside the secret.
+  #
+  # A manual workflow_dispatch reports too, and so resets that silence timer:
+  # after dispatching to recover a disabled workflow, confirm the schedule
+  # itself is enabled rather than reading the green check as evidence. See the
+  # change notice-when-a-periodic-job-stops-reporting, design.md Decision 7.
+  report:
+    name: report
+    needs: [drift]
+    # Runs whatever the rest of the workflow did, so an early failure reports
+    # at once rather than waiting out the observer's silence timeout.
+    if: always()
+    runs-on: ubuntu-latest
+    # No `environment:` and no scope: the ping key is a repository secret
+    # precisely so this job never queues behind a required-reviewer approval.
+    permissions: {}
+    steps:
+      - name: Report this run's outcome to its heartbeat check
+        # A cancellation is an operator's act, not a defect. Reporting it as a
+        # failure would train the alarm to be ignored, and the silence timeout
+        # is still the backstop if cancellations continue.
+        if: ${{ !cancelled() }}
+        env:
+          PING_KEY: ${{ secrets.HEARTBEAT_PING_KEY }}
+          # NOT `success()`. Under `if: always()` that is false for a merely
+          # SKIPPED needed job, which is an ordinary outcome of a healthy run,
+          # and a reporter keyed on it would ping /fail on a healthy nightly.
+          RUN_FAILED: ${{ contains(needs.*.result, 'failure') }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PING_KEY}" ]; then
+            echo "::error::HEARTBEAT_PING_KEY is empty or unset, so this run cannot report to its heartbeat check, and this workflow going quiet raises no alarm until it is set."
+            exit 1
+          fi
+
+          # create=1 on BOTH endpoints, not on the success path alone: a
+          # workflow that fails from its first run never takes the success
+          # path, and a slug-addressed ping to a check that does not exist
+          # returns 404 and does nothing -- leaving the observer with nothing
+          # to go quiet and the whole mechanism decorative.
+          if [ "${RUN_FAILED}" = "true" ]; then
+            url="https://hc-ping.com/${PING_KEY}/infrastructure-drift/fail?create=1"
+          else
+            url="https://hc-ping.com/${PING_KEY}/infrastructure-drift?create=1"
+          fi
+
+          curl --fail --silent --show-error --retry 3 --max-time 30 "${url}"

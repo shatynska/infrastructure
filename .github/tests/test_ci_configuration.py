@@ -2620,7 +2620,24 @@ class TestDashboardBaseUrlIsNotALiteralAddress(unittest.TestCase):
 REQUIRED_INPUT_ASSERTIONS = {
     "ansible/roles/hardening/tasks/main.yml": "hardening_ssh_allowed_cidrs",
     "ansible/roles/deploy_user/tasks/main.yml": "deploy_apps",
+    "ansible/roles/image_prune/tasks/main.yml": "deploy_apps",
 }
+
+# The same obligation over an input that is a STRING rather than a list, which
+# is why it needs limbs of its own: `is sequence` accepts a string and `is not
+# mapping` says nothing useful about one, so the list-shaped set above would
+# pass on a value this role cannot use. `image_prune_heartbeat_ping_key` is the
+# address the scheduled unit reports its own liveness under, and a converge
+# that installed the timer while silently omitting the reporting would leave a
+# scheduled unit running unobserved -- the state "Scheduled Host Units Report
+# Their Own Liveness" (openspec/specs/iac-host-configuration/spec.md) exists to
+# end. An EMPTY key is the case the length limb is for: it is supplied, so `is
+# defined` passes, and it builds a URL addressing no check at all.
+REQUIRED_STRING_INPUT_ASSERTIONS = {
+    "ansible/roles/image_prune/tasks/main.yml": "image_prune_heartbeat_ping_key",
+}
+
+REQUIRED_STRING_INPUT_LIMBS = ("is defined", "is string", "| length > 0")
 
 # Every limb the assertion needs, and why each is load-bearing. `is defined`
 # alone leaves the undefined case; `is sequence` alone accepts a string, which
@@ -2715,6 +2732,79 @@ class TestRequiredRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
                     defaults,
                     f"{defaults_path} now defines {variable}; the assertion in {path} "
                     f"would pass on the default rather than on a supplied value",
+                )
+
+
+class TestRequiredStringRoleInputsAreAssertedBeforeTheRoleActs(unittest.TestCase):
+    """ADDED requirement: A Role's Absent Required Input Is Reported by Name,
+    reached through Scheduled Host Units Report Their Own Liveness.
+
+    Written by the implementer rather than by the test author of the change
+    `notice-when-a-periodic-job-stops-reporting`: covering the new input meant
+    editing an existing test's data, which that change's test-plan.md records
+    as outside a test author's remit. Its tasks.md 3.2 assigns it here for the
+    same reason.
+    """
+
+    def _asserted_variables(self, relative_path):
+        """Every variable named in an assert that runs before any task acts on
+        the host -- the leading run of assertions, and nothing after it."""
+        parsed = yaml.safe_load((ROOT / relative_path).read_text(encoding="utf-8"))
+        self.assertIsInstance(
+            parsed, list, f"{relative_path} did not parse as a task list"
+        )
+        clauses = []
+        for task in parsed:
+            if not isinstance(task, dict) or "ansible.builtin.assert" not in task:
+                break
+            clauses.extend(task["ansible.builtin.assert"].get("that") or [])
+        return clauses
+
+    def test_the_assertion_runs_before_any_task_acts_on_the_host(self) -> None:
+        """SPECIFIED -- the assertion "SHALL fail naming it, before it changes
+        anything on the host". A check placed after the first host-changing
+        task leaves a partially configured host behind."""
+        for path, variable in REQUIRED_STRING_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                clauses = self._asserted_variables(path)
+                self.assertTrue(
+                    any(variable in clause for clause in clauses),
+                    f"{path} does not assert {variable} in its leading run of "
+                    "assertions, so either it is not checked at all or a task has "
+                    "already changed the host by the time it is",
+                )
+
+    def test_the_assertion_carries_every_limb(self) -> None:
+        """SPECIFIED -- the absence must be reported by name "rather than with
+        an undefined-variable, index, or type error raised by a task that
+        consumed it". An empty string is the case the length limb carries: it
+        is supplied, so `is defined` passes, and it addresses no check."""
+        for path, variable in REQUIRED_STRING_INPUT_ASSERTIONS.items():
+            clauses = " ".join(self._asserted_variables(path))
+            for limb in REQUIRED_STRING_INPUT_LIMBS:
+                with self.subTest(role=path, limb=limb):
+                    self.assertIn(
+                        f"{variable} {limb}",
+                        clauses,
+                        f"{path}'s assertion is missing `{variable} {limb}`",
+                    )
+
+    def test_no_default_was_introduced_for_the_asserted_variable(self) -> None:
+        """SPECIFIED -- a required input "SHALL NOT satisfy this obligation by
+        adopting a default value". Here that would be worse than a wrong
+        answer: a defaulted key addresses a check nobody watches, so the unit
+        reports into nothing while every assertion passes."""
+        for path, variable in REQUIRED_STRING_INPUT_ASSERTIONS.items():
+            with self.subTest(role=path):
+                defaults_path = Path(path).parent.parent / "defaults" / "main.yml"
+                defaults = yaml.safe_load(
+                    (ROOT / defaults_path).read_text(encoding="utf-8")
+                ) or {}
+                self.assertNotIn(
+                    variable,
+                    defaults,
+                    f"{defaults_path} now defines {variable}; the role would converge "
+                    "on the default and report to a check nobody is watching",
                 )
 
 
@@ -10276,21 +10366,65 @@ def scenario_directories(role: str) -> list:
     )
 
 
-def scenario_variables(scenario: Path) -> dict:
-    """Every role variable a scenario supplies in its converge playbook.
+def _flatten_task(task):
+    """A task, and every task nested inside its block/rescue/always."""
+    if not isinstance(task, dict):
+        return
+    yield task
+    for key in ("block", "rescue", "always"):
+        for inner in task.get(key) or []:
+            yield from _flatten_task(inner)
 
-    `notice-when-a-periodic-job-stops-reporting`'s tasks.md 4.8b names this
-    file: `image_prune`'s scenarios pass role variables in the `Converge`
-    play's `vars:` block. Every play's `vars:` is read rather than only the
-    play named `Converge`, so a scenario that renames its play is not read as
-    supplying nothing.
+
+def _tasks_in(play: dict):
+    for key in ("pre_tasks", "tasks", "post_tasks", "handlers"):
+        for task in play.get(key) or []:
+            yield from _flatten_task(task)
+
+
+def scenario_role_invocations(scenario: Path, role: str) -> list:
+    """(playbook, variables in force) at every point a scenario converges the
+    role -- in ANY of its playbooks, not only `converge.yml`.
+
+    `notice-when-a-periodic-job-stops-reporting`'s tasks.md 4.8b named
+    `converge.yml`, and reading only that file was not enough: this role's
+    `default` and `abandon-paths` scenarios ALSO converge it from their
+    `verify.yml`, through `include_role` with task-level `vars:`, to arrange
+    a retired application and a never-deployed one. Those re-converges are
+    converges -- they need the role's required inputs, and left on the
+    production base URL they would ping the external observer from a hosted
+    runner exactly as a converge would. The narrower read was widened here
+    after both scenarios failed on it; the finding is recorded in that
+    change's test-plan.md.
     """
-    document = yaml.safe_load((scenario / "converge.yml").read_text(encoding="utf-8"))
-    supplied = {}
-    for play in document if isinstance(document, list) else []:
-        if isinstance(play, dict) and isinstance(play.get("vars"), dict):
-            supplied.update(play["vars"])
-    return supplied
+    found = []
+    for path in sorted(scenario.glob("*.yml")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for play in document if isinstance(document, list) else []:
+            if not isinstance(play, dict):
+                continue
+            play_vars = play.get("vars") if isinstance(play.get("vars"), dict) else {}
+            for entry in play.get("roles") or []:
+                named = entry if isinstance(entry, str) else None
+                if isinstance(entry, dict):
+                    named = entry.get("role") or entry.get("name")
+                if named != role:
+                    continue
+                supplied = dict(play_vars)
+                if isinstance(entry, dict) and isinstance(entry.get("vars"), dict):
+                    supplied.update(entry["vars"])
+                found.append((path.name, supplied))
+            for task in _tasks_in(play):
+                spec = task.get("ansible.builtin.include_role") or task.get(
+                    "include_role"
+                )
+                if not isinstance(spec, dict) or spec.get("name") != role:
+                    continue
+                supplied = dict(play_vars)
+                if isinstance(task.get("vars"), dict):
+                    supplied.update(task["vars"])
+                found.append((path.name, supplied))
+    return found
 
 
 def scenario_expects_a_refusal(scenario: Path) -> bool:
@@ -11013,28 +11147,41 @@ class TestNoTimerRoleScenarioReachesTheExternalObserver(unittest.TestCase):
         3.1.
         """
         for role, scenario in self._scenarios():
-            with self.subTest(role=role, scenario=scenario.name):
-                variable = f"{role}_heartbeat_base_url"
-                supplied = scenario_variables(scenario)
-                self.assertIn(
-                    variable,
-                    supplied,
-                    f"{role}/molecule/{scenario.name} supplies no {variable}, so the "
-                    "reporter runs against its production default and pings the "
-                    "external observer from a hosted runner",
-                )
-                value = str(supplied[variable])
-                self.assertNotEqual(
-                    PRODUCTION_HEARTBEAT_BASE_URL,
-                    value.rstrip("/"),
-                    f"{role}/molecule/{scenario.name} points the reporter at the "
-                    "production observer",
-                )
-                self.assertTrue(
-                    any(local in value for local in ("127.0.0.1", "localhost", "[::1]")),
-                    f"{role}/molecule/{scenario.name} points the reporter at {value!r}, "
-                    "which is not a local sink -- a scenario may reach no third party",
-                )
+            invocations = scenario_role_invocations(scenario, role)
+            self.assertTrue(
+                invocations,
+                f"{role}/molecule/{scenario.name} converges {role} nowhere this read "
+                "can see, so every assertion below would pass having read nothing",
+            )
+            for playbook, supplied in invocations:
+                with self.subTest(
+                    role=role, scenario=scenario.name, playbook=playbook
+                ):
+                    variable = f"{role}_heartbeat_base_url"
+                    self.assertIn(
+                        variable,
+                        supplied,
+                        f"{role}/molecule/{scenario.name}/{playbook} converges the "
+                        f"role supplying no {variable}, so the reporter runs against "
+                        "its production default and pings the external observer from "
+                        "a hosted runner",
+                    )
+                    value = str(supplied[variable])
+                    self.assertNotEqual(
+                        PRODUCTION_HEARTBEAT_BASE_URL,
+                        value.rstrip("/"),
+                        f"{role}/molecule/{scenario.name}/{playbook} points the "
+                        "reporter at the production observer",
+                    )
+                    self.assertTrue(
+                        any(
+                            local in value
+                            for local in ("127.0.0.1", "localhost", "[::1]")
+                        ),
+                        f"{role}/molecule/{scenario.name}/{playbook} points the "
+                        f"reporter at {value!r}, which is not a local sink -- a "
+                        "scenario may reach no third party",
+                    )
 
     def test_every_scenario_supplies_the_ping_key_the_role_requires(self) -> None:
         """DERIVED (tasks.md 3.6/4.8b) -- the requirement itself makes the
@@ -11050,16 +11197,20 @@ class TestNoTimerRoleScenarioReachesTheExternalObserver(unittest.TestCase):
         for role, scenario in self._scenarios():
             if scenario_expects_a_refusal(scenario):
                 continue
-            with self.subTest(role=role, scenario=scenario.name):
-                variable = f"{role}_heartbeat_ping_key"
-                self.assertIn(
-                    variable,
-                    scenario_variables(scenario),
-                    f"{role}/molecule/{scenario.name} supplies no {variable}; the role "
-                    "requires it and this scenario does not converge expecting a "
-                    "refusal, so the run fails for want of an input rather than on "
-                    "anything it asserts",
-                )
+            for playbook, supplied in scenario_role_invocations(scenario, role):
+                with self.subTest(
+                    role=role, scenario=scenario.name, playbook=playbook
+                ):
+                    variable = f"{role}_heartbeat_ping_key"
+                    self.assertIn(
+                        variable,
+                        supplied,
+                        f"{role}/molecule/{scenario.name}/{playbook} converges the "
+                        f"role supplying no {variable}; the role requires it and this "
+                        "scenario does not converge expecting a refusal, so the run "
+                        "fails for want of an input rather than on anything it "
+                        "asserts -- a re-converge from verify.yml is a converge",
+                    )
 
 
 class TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource(unittest.TestCase):
@@ -11385,9 +11536,67 @@ class TestTheLivenessChecksAreARealReadOfTheFile(unittest.TestCase):
             "    - role: image_prune\n",
             encoding="utf-8",
         )
-        supplied = scenario_variables(scratch)
-        self.assertEqual("http://127.0.0.1:8099", supplied["image_prune_heartbeat_base_url"])
+        invocations = scenario_role_invocations(scratch, "image_prune")
+        self.assertEqual(
+            1,
+            len(invocations),
+            "the scenario read found the wrong number of role convergences",
+        )
+        _, supplied = invocations[0]
+        self.assertEqual(
+            "http://127.0.0.1:8099", supplied["image_prune_heartbeat_base_url"]
+        )
         self.assertEqual("fixture-key", supplied["image_prune_heartbeat_ping_key"])
+
+    def test_a_re_converge_from_a_verify_playbook_is_read_as_a_convergence(self) -> None:
+        """Reading `converge.yml` alone was not enough, and this fixture is
+        why: `default` and `abandon-paths` both converge the role a second
+        time from their `verify.yml`, through `include_role` with task-level
+        `vars:`. Those re-converges need the role's required inputs and, left
+        on the production base URL, would ping the external observer exactly
+        as a converge would. Both scenarios failed on this after the narrower
+        read passed them."""
+        scratch = Path(tempfile.mkdtemp(prefix="heartbeat-reconverge-"))
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        (scratch / "converge.yml").write_text(
+            "---\n"
+            "- name: Converge\n"
+            "  hosts: all\n"
+            "  vars:\n"
+            "    image_prune_heartbeat_base_url: http://127.0.0.1:8099\n"
+            "    image_prune_heartbeat_ping_key: fixture-key\n"
+            "  roles:\n"
+            "    - role: image_prune\n",
+            encoding="utf-8",
+        )
+        (scratch / "verify.yml").write_text(
+            "---\n"
+            "- name: Verify\n"
+            "  hosts: all\n"
+            "  tasks:\n"
+            "    - name: Re-converge with a reduced enumeration\n"
+            "      ansible.builtin.include_role:\n"
+            "        name: image_prune\n"
+            "      vars:\n"
+            "        deploy_apps: []\n",
+            encoding="utf-8",
+        )
+        invocations = scenario_role_invocations(scratch, "image_prune")
+        playbooks = sorted(playbook for playbook, _ in invocations)
+        self.assertEqual(
+            ["converge.yml", "verify.yml"],
+            playbooks,
+            "a re-converge from verify.yml was not read as a convergence, so a "
+            "scenario could point it at the production observer unnoticed",
+        )
+        supplied = dict(invocations)["verify.yml"]
+        self.assertNotIn(
+            "image_prune_heartbeat_base_url",
+            supplied,
+            "this fixture's re-converge deliberately supplies no base URL: the read "
+            "must report what that invocation actually has in force, not what a "
+            "sibling playbook supplied",
+        )
         self.assertFalse(
             scenario_expects_a_refusal(scratch),
             "a scenario with no rescue: was read as one that expects a refusal, which "
