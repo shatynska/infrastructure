@@ -290,6 +290,12 @@ A scenario SHALL NOT be exempt from this by being newly added: the obligation is
 
 The obligation SHALL NOT extend to scenarios shipped by Galaxy content installed from `ansible/requirements.yml`, which install beside this repository's own roles and are not committed here. Such content is already pinned as a whole by that manifest, and its scenario definitions are neither editable in place — a reinstall discards local edits — nor reachable by review. The check SHALL derive that exclusion from the manifest's own contents rather than from a hardcoded list of role names, so that adding or removing pinned Galaxy content cannot leave the exclusion stale in either direction.
 
+Every scenario SHALL declare its instance name so that it resolves to a value unique to the working tree the run was started from, rather than to a literal shared by every working tree on the machine. Its default, where no working tree supplies one, SHALL be a value that cannot name a container at all, rather than one that merely reads as wrong: a default that would successfully create an instance reinstates the shared literal under a different spelling. Every scenario SHALL additionally declare an explicit host name for its instance, bounded independently of the instance name, because a host name derived from a namespaced instance name is not bounded by anything the scenario controls and fails once a working tree's own name grows long enough.
+
+The run-time obligation the first of these serves belongs to `iac-repo-foundations`'s *Verification Writing to Shared State Is Namespaced per Working Tree*; what this requirement adds is that the scenario definitions SHALL be checked, statically, to carry all three.
+
+Those obligations SHALL be checked statically over the same scenario definitions this repository authors, by the same checks that read their platform images, and SHALL derive its exclusion of installed Galaxy content from `ansible/requirements.yml` in the same way. A scenario added later SHALL be covered without an edit to the check.
+
 Neither tier SHALL declare a deployment `environment:` or receive any production credential; the Molecule suite runs offline against local containers.
 
 #### Scenario: Ansible-only pull request is linted and syntax-checked
@@ -347,6 +353,14 @@ Neither tier SHALL declare a deployment `environment:` or receive any production
 #### Scenario: An upstream re-push cannot change what the suite ran against
 - **WHEN** the upstream registry re-publishes the tag a scenario's image was originally named by, and no commit is made to this repository
 - **THEN** the scenario SHALL continue to resolve the same image content it resolved before the re-push
+
+#### Scenario: Every authored scenario bounds its instance's host name
+- **WHEN** the pipeline's own configuration checks read every scenario definition this repository authors under `ansible/roles/*/molecule/`
+- **THEN** every scenario SHALL declare an explicit host name for its instance, and a scenario declaring none SHALL fail those checks — its host name would otherwise be derived from a namespaced instance name and fail to create once a working tree's name grew long enough
+
+#### Scenario: Every authored scenario's instance name carries the namespace
+- **WHEN** the pipeline's own configuration checks read every scenario definition this repository authors under `ansible/roles/*/molecule/`
+- **THEN** every declared instance name SHALL carry the working-tree namespace, and its default SHALL be one that cannot name a container at all rather than one that merely looks wrong; a scenario declaring a bare literal name, or a default that would successfully create a shared instance, SHALL fail those checks
 
 ### Requirement: The Specification Record Is Verified in Continuous Integration
 This repository's own specification record — the capability specifications, the active changes and their deltas, and the task lists of archived changes — SHALL be validated by its authoring tool as part of the required pull request status check, unconditionally.
