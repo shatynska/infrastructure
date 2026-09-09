@@ -14,7 +14,6 @@
 - [x] 2.2 Add the namespace and its refusing default to `platforms[].name`, and a short explicit `hostname`, in all authored `ansible/roles/*/molecule/*/molecule.yml`, leaving each existing name as the prefix; verify every file still parses as YAML, that no two names collide within one working tree, and that every reference found in 2.1 was updated with it
 - [x] 2.3 Verify the Galaxy-installed `geerlingguy.docker` scenario is untouched, and that it is excluded by the manifest-derived rule rather than by name
 - [x] 2.4 Run one role's full scenario set through the entry point and verify from `docker ps` during the run that the container carries the working tree's namespace — not only that the run went green (design, Risks: this change's own verification is subject to the hazard it fixes)
-- [ ] 2.5 Verify a second, concurrently-run working tree drives a differently-named container, which is the behaviour the change exists to produce
 - [x] 2.6 Run the full suite through the entry point and verify from the SCENARIO RECAP that every scenario every role declares was executed, rather than reading the exit code alone
 
 ## 3. Relocate the ephemeral directory
@@ -47,11 +46,18 @@
 - [x] 7.1 Record in `docs/deferred-work.md` the residues this design accepts rather than solves — the shared ephemeral write on a namespace-less run, that namespaces accumulate unreclaimed, that a working tree renamed after a run orphans its state, and the rejected stronger form that would make the entry point unavoidable — since `design.md` is archived with the change and would take them with it
 - [x] 7.2 Delete change-queue entry 8, and correct entry 11's account where it assumes the shared-state hazard is still open; verify no remaining entry or source comment cites entry 8 after its deletion
 - [x] 7.3 Record a change-queue entry (46, renumbered from 43 when the trunk claimed that number mid-change) for adopting a ShellCheck pre-commit hook, this change having added the repository's first script with no linter to check it; verify the entry states why it was not folded in here
-- [ ] 7.4 Verify the full suite and `openspec validate --all` pass, then archive the record through its own pull request
+- [x] 7.4 Verify the full suite and `openspec validate --all` pass, then archive the record through its own pull request
+
+**`ship:confirmed`.** The operator confirmed the effect on 2026-09-09, against
+the observation this change proposed: `ansible/scripts/run-molecule
+--print-namespace` returns `infrastructure-e8a5b4` from the main working tree
+and `namespace-the-molecule-suite-per-working-58721e` from this change's own,
+and a run from a role directory creates a container carrying that namespace.
+Not a waiver: this change had an effect that could be observed, and it was.
 
 ## Not performed
 
-- 2.5, the concurrent half only. Two working trees were verified to derive different namespaces and to drive differently-named containers — `namespace-the-molecule-suite-per-working-58721e` here against `infrastructure-e8a5b4` from the main working tree — but the two runs were not performed *simultaneously*.
+- 2.5 Verify a second, concurrently-run working tree drives a differently-named container — the concurrent half only. Two working trees were verified to derive different namespaces and to drive differently-named containers — `namespace-the-molecule-suite-per-working-58721e` here against `infrastructure-e8a5b4` from the main working tree — but the two runs were not performed *simultaneously*.
   Reason: another session held a locked working tree on this machine throughout, and the only way to exercise simultaneity against it is to run the collision this change exists to prevent. A run started from a second tree of this branch was set up and abandoned for the same reason: it proves nothing the derivation does not already establish, since the container name and `ANSIBLE_HOME` are both functions of the working tree's path and were each observed to differ. The property is verified by construction and by observation, not by concurrency; the pull request's own CI matrix exercises the entry point on an isolated runner in addition.
 
 
