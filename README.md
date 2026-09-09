@@ -342,13 +342,20 @@ the full testing strategy.
 
 ### When a periodic job stops working
 
-Nothing here runs silently any more. Every periodic job — the nightly drift
-check, the weekly hook autoupdate, and the weekly image prune on the host —
-reports each run to a heartbeat check of its own, and **the alarm is the check
-going quiet**, delivered to Slack `#alerts`. A run that failed, a run killed
-mid-flight and a run that never happened at all therefore look the same to it,
-which is the point: the last of those emits no failure for anything else to
-notice.
+Every periodic job — the nightly drift check, the weekly hook autoupdate, and
+the weekly image prune on the host — reports each run to a heartbeat check of
+its own, and **the alarm is the check going quiet**, delivered to Slack
+`#alerts`. A run that failed, a run killed mid-flight and a run that never
+happened at all therefore look the same to it, which is the point: the last of
+those emits no failure for anything else to notice.
+
+**This is only live once three things exist outside this repository**: the
+`HEARTBEAT_PING_KEY` repository secret, the same key Vault-encrypted in
+`ansible/inventory/group_vars/prod.yml`, and the checks' routing at the
+observer. Until then the reporters fail loudly rather than quietly — a
+scheduled run turns red naming the missing secret, and a host converge refuses
+— but nothing is being watched. The Status section below says where that
+stands.
 
 The three checks, the slug each reports under, and the period and grace that
 decide when silence becomes an alarm are listed once, in

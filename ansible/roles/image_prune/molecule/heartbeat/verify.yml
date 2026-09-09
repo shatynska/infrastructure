@@ -270,8 +270,20 @@
         echo "START-RC $rc"
         echo "RESULT $(systemctl show prune-host-images.service --property=Result --value)"
         echo "SINK-GREW $(( $(wc -l < {{ image_prune_sink_log }}) - before ))"
-        journalctl --utc --no-pager -u prune-host-images.service \
-          --since "$since" > /var/tmp/image-prune-undeliverable.journal 2>&1 || true
+        # journald ingests the ExecStopPost= stderr write asynchronously, so
+        # reading immediately after `systemctl start` returns can land before
+        # the line is queryable and redden this scenario against a correct
+        # implementation. Flush, then poll for the line rather than assuming
+        # one read is enough.
+        journalctl --sync 2>/dev/null || true
+        for _ in $(seq 1 20); do
+          journalctl --utc --no-pager -u prune-host-images.service \
+            --since "$since" > /var/tmp/image-prune-undeliverable.journal 2>&1 || true
+          grep -q '{{ image_prune_expected_slug }}' \
+            /var/tmp/image-prune-undeliverable.journal && break
+          sleep 1
+          journalctl --sync 2>/dev/null || true
+        done
         echo "JOURNAL-LINES $(grep -c . /var/tmp/image-prune-undeliverable.journal || true)"
         echo "JOURNAL-NAMES-ENDPOINT $(grep -c '{{ image_prune_expected_slug }}' /var/tmp/image-prune-undeliverable.journal || true)"
         echo "JOURNAL-NAMES-CURL $(grep -ci curl /var/tmp/image-prune-undeliverable.journal || true)"

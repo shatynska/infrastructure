@@ -504,6 +504,7 @@ Every credential the system uses, in one place. "Env" means the `production` Git
 | `PLATFORM_SLACK_WEBHOOK_URL` | Env secret | 7 | Slack app | Alert delivery |
 | `PLATFORM_DEADMANSWITCH_URL` | Env secret | 7 | Heartbeat service | The external alarm |
 | `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in `group_vars/prod.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
+| `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
 
 `HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.
 
@@ -516,7 +517,6 @@ The checks it addresses, and the settings each needs at the observer. A check co
 | `<inventory_hostname>-prune-host-images` | `prune-host-images.service` on the host, weekly | 7 days | 2 days |
 
 The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system. The host slug is templated per host, so a second host converged by the same role reports to a check of its own.
-| `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
 
 ## Appendix B. Rebuilding an existing host
 

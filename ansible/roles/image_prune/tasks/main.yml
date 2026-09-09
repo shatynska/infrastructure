@@ -382,8 +382,8 @@
     group: root
     mode: "0600"
     content: |
-      HEARTBEAT_BASE_URL={{ image_prune_heartbeat_base_url }}
-      HEARTBEAT_PING_KEY={{ image_prune_heartbeat_ping_key }}
+      HEARTBEAT_BASE_URL='{{ image_prune_heartbeat_base_url }}'
+      HEARTBEAT_PING_KEY='{{ image_prune_heartbeat_ping_key }}'
   no_log: true
 
 # The reporting script needs an HTTP client, and this role may not assume one.
@@ -428,6 +428,10 @@
       # and that kill is precisely what the unit's duration bound exists for.
       set -eu
 
+      # Both values are single-quoted in the file this sources, so an operator
+      # key carrying a space, a `#` or a `$` reaches the URL intact rather
+      # than being mangled into one addressing no check -- a failure whose
+      # only symptom would be one journal line a week.
       . /etc/prune-host-images/heartbeat.env
 
       # Templated per host, not written as a literal: two hosts converged by
@@ -451,11 +455,27 @@
       # first activation never takes the success path -- so a success-only
       # create=1 would leave a chronically failing prune reported by nothing.
       #
-      # The URL reaches curl on stdin. The bounded timeout is not a
-      # preference: a hung request inside ExecStopPost= would hold the unit in
-      # deactivating until TimeoutStopSec, on the very path a hung container
-      # runtime already put it.
-      if printf 'url = "%s"\n' "${endpoint}" | curl --fail --silent --show-error --retry 2 --max-time 20 --config -; then
+      # The URL and the diagnostic body both reach curl on STDIN, never on its
+      # command line -- `printf` is a shell builtin under /bin/sh here, so no
+      # second process carries the key in /proc/<pid>/cmdline either. A
+      # heredoc would remove even that assumption, but it puts a redirection
+      # token on curl's own line, which the static check that guards this
+      # property reads as an operand.
+      #
+      # The body is what an operator sees in the check's event log when they
+      # open a failed check: without it the log says "fail" and nothing about
+      # why. $EXIT_STATUS is a SIGNAL NAME on the timeout path, which is
+      # exactly what makes it worth carrying here.
+      #
+      # The bounded timeout is not a preference: a hung request inside
+      # ExecStopPost= would hold the unit in deactivating until
+      # TimeoutStopSec, on the very path a hung container runtime already put
+      # it.
+      rc=0
+      printf 'url = "%s"\ndata = "result=%s status=%s"\n' \
+        "${endpoint}" "${SERVICE_RESULT:-unknown}" "${EXIT_STATUS:-unknown}" |
+        curl --fail --silent --show-error --retry 2 --max-time 20 --config - || rc=$?
+      if [ "${rc}" -eq 0 ]; then
         exit 0
       fi
 
@@ -464,9 +484,9 @@
       # ExecStopPost= -- so this line is the ONLY local trace that anything
       # went wrong, and an operator answering the resulting silence days later
       # has nothing else to read.
-      printf 'prune-host-images: reporting %s to %s failed, so that check will fall silent and alarm (systemd result %s, exit status %s)\n' \
-        "${slug}" "${HEARTBEAT_BASE_URL}" \
-        "${SERVICE_RESULT:-unknown}" "${EXIT_STATUS:-unknown}" >&2
+      printf 'prune-host-images: reporting %s to %s failed with curl status %s, so that check will fall silent and alarm (systemd result %s)\n' \
+        "${slug}" "${HEARTBEAT_BASE_URL}" "${rc}" \
+        "${SERVICE_RESULT:-unknown}" >&2
       exit 0
 
 - name: Install the prune service unit

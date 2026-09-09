@@ -329,6 +329,27 @@ change is trying not to reproduce.
 The host unit's own `image_prune_randomized_delay_sec` is one hour, comfortably inside a
 two-day grace.
 
+### 11a. The role installs `curl`, because a missing client is an invisible failure
+
+Added during implementation, after the `heartbeat` scenario caught it: the Molecule base
+image carries no `curl`, so the unit ran, reported nothing, and stayed **green** —
+`ExecStopPost=-` made the missing binary as invisible as it is meant to make a third
+party's outage. On a host that reads as a working reporter whose check merely happens to be
+quiet, which is precisely the silence this change exists to end, reproduced inside the
+mechanism that ends it.
+
+Patching the scenario's `prepare.yml` instead would have turned the test green while
+leaving production depending on an unstated package. So the role installs it, in the same
+`ansible.builtin.apt` form `hardening` uses for `ufw`. The cost is a package dependency and
+an apt/Debian coupling this role did not previously have; the role already targets Ubuntu
+only (`meta/main.yml`), so the coupling is narrower than it looks.
+
+The reporting script's argv guarantee (Decision 9) additionally rests on `printf` being a
+**shell builtin** under `/bin/sh`, which it is on this host and in every scenario. A
+heredoc would remove that assumption, but it puts a redirection token on `curl`'s own line,
+which the static check guarding the argv property reads as an operand — so the assumption
+is recorded here rather than engineered away.
+
 ### 12. The reporter's base URL is a role variable, so a scenario can observe a report
 
 `https://hc-ping.com` is a default in `ansible/roles/image_prune/defaults/main.yml`, not a

@@ -11197,7 +11197,13 @@ class TestNoTimerRoleScenarioReachesTheExternalObserver(unittest.TestCase):
         for role, scenario in self._scenarios():
             if scenario_expects_a_refusal(scenario):
                 continue
-            for playbook, supplied in scenario_role_invocations(scenario, role):
+            invocations = scenario_role_invocations(scenario, role)
+            self.assertTrue(
+                invocations,
+                f"{role}/molecule/{scenario.name} converges {role} nowhere this read "
+                "can see, so this assertion would pass having read nothing",
+            )
+            for playbook, supplied in invocations:
                 with self.subTest(
                     role=role, scenario=scenario.name, playbook=playbook
                 ):
