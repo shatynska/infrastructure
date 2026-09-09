@@ -17,25 +17,44 @@
 #
 # Usage:
 #   ansible/scripts/run-molecule test --all          # from a role directory
+#   ansible/scripts/run-molecule destroy --all       # from a role directory
 #   ansible/scripts/run-molecule --print-namespace   # compute only, run nothing
 #
-# `--print-namespace` exists so the namespace can be read without starting a
-# container -- by a session diagnosing a stray container, and by
-# .github/tests, which may not spawn one.
+# `--print-namespace` is recognised as the FIRST argument only; anywhere else it
+# is passed through to Molecule, which will reject it. It exists so the
+# namespace can be read without starting a container -- by a session diagnosing
+# a stray container, and by .github/tests, which may not spawn one.
 
 set -euo pipefail
 
 repository_root() {
 	# The working tree's own root, not the main checkout's: `--show-toplevel`
 	# resolves to the worktree in a linked working tree, which is the whole
-	# point. Failing here rather than falling back is deliberate; an empty
-	# namespace would restore the shared name this script exists to replace.
+	# point. Failing here rather than falling back is deliberate.
+	#
+	# EMPTY output is checked as well as a non-zero exit, and the distinction is
+	# not theoretical: `namespace_for ""` would hash the empty string, which is a
+	# CONSTANT and therefore identical in every working tree -- precisely the
+	# shared literal this script exists to replace.
 	local root
-	if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
+	if ! root=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$root" ]; then
 		printf 'run-molecule: not inside a git working tree, so no namespace can be derived\n' >&2
 		return 1
 	fi
 	printf '%s\n' "$root"
+}
+
+digest_of() {
+	# `sha256sum` is GNU; `shasum` is what BSD and macOS carry. Neither being
+	# present is a refusal rather than a fallback to something weaker.
+	if command -v sha256sum >/dev/null 2>&1; then
+		printf '%s' "$1" | sha256sum | cut -c1-6
+	elif command -v shasum >/dev/null 2>&1; then
+		printf '%s' "$1" | shasum -a 256 | cut -c1-6
+	else
+		printf 'run-molecule: neither sha256sum nor shasum is available\n' >&2
+		return 1
+	fi
 }
 
 namespace_for() {
@@ -48,22 +67,22 @@ namespace_for() {
 	# clones of this repository on one machine, whose worktree names are drawn
 	# from the same pool.
 	#
-	# Bounded on purpose. The instance name it lands in is capped at nothing,
-	# but every scenario declares its own short `hostname`, so the 64-byte host
-	# name limit is not this value's problem. The cap here keeps `docker ps`
-	# readable rather than enforcing a limit.
-	local root="$1" basename digest
-	basename=$(basename "$root")
-	basename=$(printf '%s' "$basename" | tr -c 'a-zA-Z0-9' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')
-	basename=${basename:0:40}
-	digest=$(printf '%s' "$root" | sha256sum | cut -c1-6)
-	if [ -z "$basename" ]; then
+	# Truncation happens BEFORE the trailing separator is stripped, so a tree
+	# whose fortieth sanitised character is a hyphen does not leave one stranded
+	# against the digest.
+	local root="$1" stem digest
+	stem=$(basename "$root")
+	stem=$(printf '%s' "$stem" | tr -c 'a-zA-Z0-9' '-' | sed 's/-\{2,\}/-/g')
+	stem=${stem:0:40}
+	stem=$(printf '%s' "$stem" | sed 's/^-//; s/-$//')
+	digest=$(digest_of "$root")
+	if [ -z "$stem" ]; then
 		# A working tree whose name sanitises away entirely still gets a
 		# namespace, rather than one beginning with a stray separator.
 		printf 'wt-%s\n' "$digest"
 		return 0
 	fi
-	printf '%s-%s\n' "$basename" "$digest"
+	printf '%s-%s\n' "$stem" "$digest"
 }
 
 collections_path() {
@@ -73,7 +92,35 @@ collections_path() {
 	# inventory. They have to be named explicitly all the same, because
 	# relocating ANSIBLE_HOME relocates $ANSIBLE_HOME/collections with it and
 	# the docker driver finds community.docker there.
-	printf '%s\n' "${ANSIBLE_COLLECTIONS_PATH:-${HOME}/.ansible/collections}"
+	printf '%s\n' "${ANSIBLE_COLLECTIONS_PATH:-${HOME:-/root}/.ansible/collections}"
+}
+
+collections_are_installed() {
+	# ANSIBLE_COLLECTIONS_PATH is a COLON-SEPARATED LIST, not one path, so a
+	# correctly provisioned developer exporting two entries must not be refused
+	# for the first one not existing on its own.
+	#
+	# And a directory EXISTING proves nothing: any unrelated `ansible-galaxy`
+	# install creates `~/.ansible/collections`. Look for a collection the run
+	# actually needs, so the guard cannot declare a machine provisioned and then
+	# let it die at converge -- which is the failure the guard exists to
+	# pre-empt, merely arriving later.
+	local list="$1" entry
+	local IFS=:
+	# Word splitting on IFS is the point here, so the expansion is unquoted.
+	# shellcheck disable=SC2086
+	for entry in $list; do
+		case "$entry" in
+		"~") entry="${HOME:-}" ;;
+		"~/"*) entry="${HOME:-}/${entry#"~/"}" ;;
+		esac
+		[ -n "$entry" ] || continue
+		if [ -d "$entry/ansible_collections/community/docker" ] &&
+			[ -d "$entry/ansible_collections/community/general" ]; then
+			return 0
+		fi
+	done
+	return 1
 }
 
 main() {
@@ -87,14 +134,17 @@ main() {
 	fi
 
 	collections=$(collections_path)
-	if [ ! -d "$collections" ]; then
+	if ! collections_are_installed "$collections"; then
 		# Without this the run fails deep inside `create` with `couldn't resolve
 		# module/action 'community.docker.docker_login'` -- the same message an
 		# ANSIBLE_HOME misconfiguration produces, which sends diagnosis the
-		# wrong way at the worst moment.
-		printf 'run-molecule: no Ansible collections at %s\n' "$collections" >&2
-		printf 'run-molecule: install them once with:\n' >&2
-		printf '  ansible-galaxy collection install community.docker ansible.posix\n' >&2
+		# wrong way at the worst moment. `community.general` is checked too:
+		# hardening's ufw tasks and platform_data_volume's filesystem task need
+		# it, and their failure arrives at converge, after a guard that looked
+		# only for the driver's own collection would have passed.
+		printf 'run-molecule: the pinned Ansible collections are not installed under %s\n' "$collections" >&2
+		printf 'run-molecule: install them once, from the manifest that pins them:\n' >&2
+		printf '  ansible-galaxy collection install -r ansible/requirements.yml\n' >&2
 		return 1
 	fi
 

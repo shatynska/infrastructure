@@ -139,10 +139,18 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
    Run them **per role, with `--all`**:
 
    ```sh
-   cd ansible/roles/<role> && molecule test --all
+   cd ansible/roles/<role> && ../../scripts/run-molecule test --all
    ```
 
-   Several roles carry more than one scenario, so `molecule test -s default`
+   Through `run-molecule`, not `molecule` directly: it gives this working
+   tree its own container names and ephemeral directory, so a run here
+   cannot collide with a run in another working tree on the same machine.
+   Invoked bare, every scenario now fails at `create` with `Invalid
+   container name` — deliberately, and the offending name says what to
+   run instead. `AGENTS.md`, "Namespacing Molecule per working tree",
+   carries the reasoning.
+
+   Several roles carry more than one scenario, so a run without `--all`
    silently skips most of the suite. To see how much, from the repository
    root: `git ls-files 'ansible/roles/*/molecule/*/molecule.yml'`.
 
@@ -186,16 +194,28 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
    of this, including why `pre_build_image` is load-bearing rather than a
    speed-up, is in `ansible/roles/docker/molecule/default/molecule.yml`.
 
-   **If `molecule create` fails on your machine before any test runs**, check
+   **If `create` fails with `Invalid container name`**, Molecule was invoked
+   directly rather than through `ansible/scripts/run-molecule`. That is the
+   designed refusal, not a defect: each scenario's instance name defaults to
+   a value Docker cannot accept, so a run with no working-tree namespace
+   stops instead of quietly sharing a container with another working tree.
+   The name Docker echoes back says what to run.
+
+   **If `create` fails with `couldn't resolve module/action`**, the pinned
+   Galaxy collections are not installed. `run-molecule` checks for them
+   first and names the one-time install; reaching this error means Molecule
+   was invoked directly.
+
+   **If `create` fails with a `StoreError` before any test runs**, check
    `~/.docker/config.json`. A `credsStore` or `credHelpers` entry makes
    Molecule's Docker driver shell out to a credential helper that may not
-   work in your environment, and it fails during `create` with a
-   `StoreError`. This is an environment quirk, not a repository defect —
-   point `DOCKER_CONFIG` at a directory holding an empty `{}` for the run:
+   work in your environment. This is an environment quirk, not a repository
+   defect — point `DOCKER_CONFIG` at a directory holding an empty `{}` for
+   the run:
 
    ```sh
    mkdir -p /tmp/molecule-docker && echo '{}' > /tmp/molecule-docker/config.json
-   DOCKER_CONFIG=/tmp/molecule-docker molecule test --all
+   DOCKER_CONFIG=/tmp/molecule-docker ../../scripts/run-molecule test --all
    ```
 
 ## Environment variables and secrets
@@ -313,7 +333,7 @@ subject:
 | Subject | Command | Tests live in |
 |---|---|---|
 | Terraform modules | `terraform test`, from each module directory | `terraform/modules/<name>/tests/*.tftest.hcl` |
-| What an Ansible role does to a host | `molecule test --all`, from each role directory | `ansible/roles/<name>/molecule/<scenario>/` |
+| What an Ansible role does to a host | `ansible/scripts/run-molecule test --all`, from each role directory | `ansible/roles/<name>/molecule/<scenario>/` |
 | Any property that is a static read of a committed file | `python3 -m unittest discover --start-directory .github/tests`, from the repository root | `.github/tests/*.py` |
 
 `AGENTS.md` carries the rules for choosing between them, and the caveats that
