@@ -259,3 +259,39 @@ now recorded somewhere, which is most of what the entry was protecting against.
 second hostname makes the manual edits frequent enough to be worth the risk.
 Cloudflare and Hetzner DNS were the two candidates considered; neither was
 chosen, and that choice is still open.
+
+## Four residues of namespacing Molecule per working tree
+
+`namespace-the-molecule-suite-per-working-tree` closed the failure that matters
+— a Molecule run reporting success against another session's container. Four
+things it deliberately did not close are recorded here rather than in that
+change's `design.md`, which is archived with it.
+
+**A run with no namespace still writes to the shared ephemeral directory before
+it refuses.** Verified while implementing: a bare `molecule create` in a role
+directory resolves its inventory under `~/.ansible/tmp/molecule.<id>.<scenario>`
+and only then fails at `create` on the container name. That write cannot produce
+a *result* — the run dies before any play — which is why the requirement forbids
+sharing state a result could come from rather than sharing anything at all. The
+levers that would close it do not exist: Molecule's interpolator has no `:?`
+error form, and a guard play would fire at `prepare`, after `create`.
+
+**The entry point is a convention, not a gate.** Nothing stops a session typing
+`molecule` directly; the refusing default is what makes that safe rather than
+silent. The stronger form considered and not taken was deriving the namespace so
+that possessing a valid one implies having used the entry point — rejected
+because it spends the legibility that makes `docker ps` answer *whose container
+is this*, which is the question the whole change exists to make answerable.
+
+**Namespaces accumulate.** Nothing reclaims the `.molecule-home/` of a removed
+working tree, or a container it left behind. Both are named after the tree, so
+both are removable by hand; nothing does it automatically, exactly as
+`AGENTS.md` says of namespaces generally.
+
+**A working tree renamed or moved after a run orphans its state.** The namespace
+is derived from the absolute path, so the old containers and ephemeral
+directories become unreachable by the deterministic-resolution guarantee. Rare,
+loud, and removable by name.
+
+**Revisit when** a session is actually bitten by one of these, or when Molecule
+gains an error form for an unset interpolation.

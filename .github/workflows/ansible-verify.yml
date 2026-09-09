@@ -218,12 +218,22 @@ jobs:
           ansible-galaxy collection install -r ansible/requirements.yml
           ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
 
+      # Run through the entry point, not the runner directly. Every scenario's
+      # instance name now defaults to a value Docker refuses, so invoking
+      # Molecule bare would fail at `create` here exactly as it would on a
+      # workstation -- which is the point of the default, and means CI supplies
+      # a namespace like any other caller rather than being exempt.
+      #
+      # A runner is an isolated checkout, so nothing here can collide with
+      # anything; the namespace it derives is real but uncontended. Running it
+      # the same way regardless is what keeps the local path the exercised one.
+      #
       # `--all` is required, not stylistic: several roles carry more than one
       # scenario, and running without that flag covers only each role's
       # `default` scenario, silently skipping most of the suite.
       - name: molecule test --all
         working-directory: ansible/roles/${{ matrix.role }}
-        run: molecule test --all
+        run: ../../scripts/run-molecule test --all
 
   # The registered required status check. Its name is a literal, so branch
   # protection has something stable to point at; the matrix job's name is not,

@@ -71,7 +71,34 @@ platforms:
   # create, and why the container's contents are pinned and not just its base.
   # Of what that layer installed, only aptitude and rsync are absent from this
   # image, and nothing here uses either.
-  - name: docker-role-instance
+  # The instance name carries a PER-WORKING-TREE NAMESPACE, and the default is
+  # one Docker refuses.
+  #
+  # Molecule's instance name is otherwise a literal shared by every working
+  # tree on the machine, so two sessions running one role create, converge and
+  # destroy the same container. Such a run can equally PASS against a container
+  # the other session converged as fail against it, which reads as evidence the
+  # change under test is sound and is not. AGENTS.md's Testing section carries
+  # the full hazard; its binding section carries the mechanism.
+  #
+  # `unset:...` is not a placeholder. A colon cannot appear in a Docker
+  # container name, so a run supplying no namespace fails at `create` with
+  # `Invalid container name`, echoing the offending name back -- which is why
+  # the default reads as an instruction. Molecule's interpolator substitutes
+  # EMPTY for an unset ${VAR} and has no `:?` error form, so without a refusing
+  # default this would fail OPEN: a session that forgot the variable would
+  # silently get the shared name back. .github/tests fails the build on a
+  # default Docker would accept.
+  #
+  # `hostname` is declared explicitly because the driver otherwise derives it
+  # from the instance name, and Linux caps a host name at 64 bytes. A namespaced
+  # name crosses that on this repository's own working-tree names: verified at
+  # 70 characters, `create` fails with `hostname is too long (maximum 64
+  # bytes)`. The host name needs to be neither unique nor meaningful -- nothing
+  # addresses these containers by it, and nothing under ansible/ reads
+  # `ansible_hostname` -- so it stays a short literal per scenario.
+  - name: docker-role-instance-${INFRA_WORKTREE_NS:-unset:run-via-ansible/scripts/run-molecule}
+    hostname: docker-role
     image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
     pre_build_image: true
     command: /lib/systemd/systemd
