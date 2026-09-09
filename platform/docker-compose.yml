@@ -417,6 +417,52 @@ configs:
                 summary: "Prometheus target {{ $$labels.job }} is down"
                 description: "{{ $$labels.job }} has been unreachable for 5 minutes."
 
+            # alert-on-certificate-expiry: Traefik renews at 30 days
+            # remaining (its documented default, and the traefik service
+            # above sets no certificatesDuration to move it), so anything
+            # under 30 is a renewal that started and has not succeeded. 21
+            # sits nine days inside that window: long enough for the 24h
+            # renewal recheck, ordinary jitter and a week of ACME retries
+            # to resolve unseen, and still three weeks before a client sees
+            # an error.
+            #
+            # `max by (cn)` rather than the raw series: the metric is
+            # labelled by serial as well, so a superseded certificate whose
+            # series lingers after a renewal would otherwise cross the
+            # threshold nine days later and fire against a hostname that is
+            # perfectly healthy. Whether Traefik prunes the old label set
+            # was never established; this makes the question moot. Its cost
+            # is a dependency on `cn` existing, which the rule below covers.
+            - alert: TLSCertificateExpiringSoon
+              expr: >-
+                (max by (cn) (traefik_tls_certs_not_after) - time()) / 86400 < 21
+              for: 1h
+              labels:
+                severity: warning
+              annotations:
+                summary: "TLS certificate for {{ $$labels.cn }} expires soon"
+                description: "{{ $$labels.cn }} has under 21 days of certificate left, so Traefik's renewal at 30 days did not succeed."
+
+            # alert-on-certificate-expiry: the rule above returns an empty
+            # vector if its series stop existing, and an empty vector never
+            # fires and never complains. MetricsTargetDown covers Traefik
+            # becoming unreachable; this covers Traefik staying up while a
+            # version bump renames or drops the metric -- which Dependabot's
+            # platform-monitoring-images group proposes on a schedule.
+            #
+            # Matched on cn!="" rather than on the bare metric name so it
+            # also covers the label being renamed, which would otherwise
+            # collapse the aggregation above into one group with an empty
+            # cn and mask an expiring certificate behind a healthy one.
+            - alert: CertificateExpiryNotObserved
+              expr: absent(traefik_tls_certs_not_after{cn!=""})
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "No TLS certificate expiry is being observed"
+                description: "Traefik is publishing no certificate expiry carrying a cn label, so TLSCertificateExpiringSoon is watching nothing."
+
             - alert: Watchdog
               expr: vector(1)
               labels:
@@ -443,6 +489,29 @@ configs:
             # fix-deadmansswitch-repeat-interval's design.md. Comfortably
             # under group_interval avoids the boundary condition.
             repeat_interval: 2m
+
+          - matchers:
+              - alertname="TLSCertificateExpiringSoon"
+            receiver: slack
+            # alert-on-certificate-expiry: this grouping is what makes the
+            # alert readable, not a preference. The slack receiver above
+            # renders {{ .CommonAnnotations.summary }}, and CommonAnnotations
+            # holds only the annotations IDENTICAL across every alert in a
+            # group. The summary names {{ $$labels.cn }}, so under the
+            # inherited group_by ["alertname"] two certificates firing
+            # together produce a notification with no title and no body.
+            # That is the expected case here, not an edge: this host's
+            # certificates are issued through one ACME account by one
+            # Traefik process, so whatever stops one renewing stops both.
+            # Grouping by cn puts each certificate in its own group and each
+            # notification back in possession of its annotations.
+            group_by: ["alertname", "cn"]
+            # A legitimate three-week firing would re-notify ~126 times at
+            # the inherited 4h, into the same #alerts channel every other
+            # alert uses. That does not add urgency, it teaches people to
+            # skim the channel. A daily countdown is the right cadence for a
+            # deadline three weeks out.
+            repeat_interval: 24h
 
       receivers:
         - name: slack
