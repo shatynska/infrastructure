@@ -489,21 +489,59 @@ Molecule scenario.
 ## 27. check-public-endpoints-from-outside
 
 **Not blocked; recorded because the monitoring stack watches the host and not
-the customer's path to it.**
+the customer's path to it. Narrowed on 2026-09-09 by
+`alert-on-certificate-expiry`, which delivered the certificate-expiry half.**
 
 The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves
 the exporters are. `ApplicationHighErrorRate` needs requests to reach Traefik
 before it can count them. Nothing checks, from outside the host, that a public
-hostname resolves, answers on 443, and presents a certificate that is not about
-to expire -- so a DNS mistake, a Traefik ACME failure, or a cloud-firewall
-change that blocks 443 is invisible until a person notices.
+hostname resolves and answers on 443.
 
-Two shapes: an external uptime service (the dead-man's-switch provider likely
-offers one) with a check per hostname, or `blackbox-exporter` in the platform
-stack probing each hostname and alerting on `probe_success` and
-`probe_ssl_earliest_cert_expiry`. The second stays in the stack and is
-disk-free; the first is independent of the host, which is the property the
-Watchdog was chosen for. Both is not excessive.
+**What was delivered and is no longer in scope here.** A certificate quietly
+ageing out was the third of the three failures this entry named, and it turned
+out to need no probe at all: Traefik publishes `traefik_tls_certs_not_after`,
+Prometheus was already scraping it, and one alert rule now reads it. What
+survives of that failure is only the half no metric can express -- a hostname
+resolving to this host with **no** certificate at all, which produces no series
+because Traefik's default self-signed certificate is not published as one.
+`shatynska.com` and `www.shatynska.com` are in exactly that state today, by
+design, because no application is bound to them yet.
+
+**`blackbox-exporter` cannot serve this entry's own motive**, which is the
+finding that most changes what remains. It runs on the host, and a packet
+addressed to an IP configured on a local interface is delivered locally -- so a
+probe from the host to the host's own public address never traverses the Hetzner
+cloud firewall, which filters ingress at the network edge. The cheaper of the
+two shapes this entry offered cannot see the firewall failure it was offered
+for. It would still catch a routing mistake and would measure what a client is
+actually served rather than what Traefik believes it holds; neither is the same
+thing as looking from outside.
+
+**The two failures that remain, stated more accurately than this entry stated
+them.**
+
+*A cloud-firewall change blocking 443* is gated in one of at least three ways it
+can close, not in all of them. `web_allowed_cidrs` reaches production only
+through the gated pipeline, where a human reviews the exact plan -- but
+`AGENTS.md`'s firewall split makes UFW the co-equal host-level layer, entry 23
+records that the playbook applying it is run by hand with no gate at all, and
+entry 32 records that a console-side change is caught only by a drift workflow
+that itself fails into silence. An outside check is the only thing that would
+see the other two.
+
+*A DNS mistake* is not bounded by how often the zone is hand-edited.
+`docs/deferred-work.md` records that `shatynska.com` is served by third-party
+nameservers at ukraine.com.ua, so a provider outage or a lapsed registration is
+a DNS failure with no edit behind it -- and it is exactly the "invisible until a
+person notices" class this entry was recorded for.
+
+**So what is left is an external uptime service**, with a check per hostname,
+independent of the host in the way the Watchdog is. Note that the assumption
+this entry made about it is probably false: the heartbeat provider named in
+`docs/bootstrap-a-new-host.md` is healthchecks.io, which monitors inbound pings
+and does not make outbound HTTP checks. This is likely a second vendor account
+and therefore an operator decision with a cost attached, which is the main
+reason it is still queued rather than opened.
 
 ## 28. aggregate-container-logs
 
@@ -921,3 +959,95 @@ extra commit on a branch that is squashed anyway.
 Worth writing into `AGENTS.md`'s derive-tests paragraph rather than leaving it
 as a queue entry, since the next change hits it the same way and the cost is
 invisible until review.
+
+## 43. remove-the-stale-test-hostname
+
+**Not blocked; small, and recorded rather than folded into
+`alert-on-certificate-expiry`, which found it while reading Traefik's
+certificate metrics on 2026-09-09.**
+
+`test.shatynska.com` was a throwaway smoke test. The archived change
+`fix-traefik-docker-api-version` used a `whoami` container behind that hostname
+in August 2026 to confirm Traefik's Docker provider had stopped erroring, and
+its `tasks.md` records the confirmation. The container is long gone -- the name
+returns Traefik's 404 -- but two things it left behind are still live:
+
+- the `A` record, `2.29.14.98`, which resolves today and was missing from the
+  zone table in `docs/deferred-work.md` until that table was corrected;
+- a Let's Encrypt certificate, which Traefik still holds and **still renews
+  every 60 days**, and which appears in `traefik_tls_certs_not_after` alongside
+  the real one.
+
+Nothing is broken by it. It is a standing request to a public certificate
+authority for a name nothing serves, and a second series in a metric that now
+drives an alert -- so if that renewal ever fails, the alert correctly reports a
+hostname nobody wants, at which point the operator has to remember what `test`
+was before deciding it does not matter.
+
+**Order matters when removing it.** Take the DNS record away first, then the
+certificate from Traefik's `acme.json`. The reverse leaves a name resolving to
+the host whose certificate has already gone, which is a worse state than the one
+being cleaned up. There is no router to remove -- the container that had one is
+already gone -- so this is a DNS edit plus an `acme.json` edit, and the second
+requires deciding whether editing that file by hand is acceptable at all or
+whether the entry is better closed by leaving the certificate to lapse once the
+record is gone.
+
+## 44. name-every-alert-in-a-grouped-slack-notification
+
+**Not blocked; recorded rather than folded into
+`alert-on-certificate-expiry`, which routed around it for its own alert and
+found the general case in doing so.**
+
+Alertmanager's `slack` receiver renders `{{ .CommonAnnotations.summary }}` and
+`{{ .CommonAnnotations.description }}`. `CommonAnnotations` holds only the
+annotation pairs **identical across every alert in the notification's group** --
+so any alert whose annotations name a per-series label delivers an empty title
+and an empty body the moment two of them group together.
+
+`ApplicationHighErrorRate` is in exactly that state and has been since it was
+written: its summary names the router, `group_by` is `["alertname"]`, and two
+routers erroring at once -- which a shared Traefik makes correlated rather than
+independent -- produce a Slack message that says nothing. Nobody has seen it
+because the alert has not fired on two routers yet.
+
+`alert-on-certificate-expiry` fixed this for its own alert by adding `cn` to
+`group_by` on that alert's own route, which is correct and minimal for one
+alert. It does not generalise: every future alert naming a per-series label
+needs the same treatment, and forgetting is silent.
+
+The general fix is in the receiver, not in a route: render `{{ range .Alerts }}`
+so a grouped notification lists each alert's own annotations. That changes
+delivery for **every** alert in the stack, including ones nobody has re-read,
+which is why it is a change of its own rather than a fold-in. Worth pairing with
+an assertion that no alert's annotations reference a label absent from its
+route's `group_by`, which is a static read of the committed file and would catch
+the next instance instead of waiting for it to fire.
+
+## 45. hold-the-whole-static-suite-to-its-own-constraints
+
+**Not blocked; small, and recorded by `alert-on-certificate-expiry`, which is
+the change that made it untrue.**
+
+`AGENTS.md` says of the `.github/tests` suite that it may not make a network
+call, use a credential, spawn a container runtime or need a Terraform binary,
+and that "those constraints are themselves asserted by tests in that suite".
+They are: three assertions in `TestTheSuiteNeedsNoPrivilegedResource` and its
+neighbours parse the suite and check its imports and subprocess use.
+
+What they parse is `SUITE_PATH`, which is `Path(__file__)` -- that one module.
+While `test_ci_configuration.py` was the whole suite that was the same thing.
+`alert-on-certificate-expiry` added `test_certificate_expiry_alerting.py` as a
+second module, and the new file sits outside all three checks. It was held to
+them by hand, which is exactly the assurance those assertions exist to replace.
+
+The fix is to widen the three from their own file to every `test_*.py` in the
+suite directory. The alternative -- keeping the suite to one file so the
+self-check stays honest -- is worse: it is already 8,600 lines, and it would
+make "add a test" mean "edit the file the derive-tests step forbids an
+independent author from touching".
+
+Note this is the second entry recorded from the same edge: entry 42 is about
+derived tests arriving as a new file and being folded, and this one is about
+what happens when they are not folded. Whichever way that question is settled,
+both should be settled with it.

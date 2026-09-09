@@ -122,7 +122,17 @@ container on the host), postgres-exporter (the shared Postgres instance),
 and Traefik's own metrics endpoint (per-application HTTP status/error-rate
 counts). Alertmanager routes alerts to Slack, plus a permanent Watchdog
 alert routed to an external dead-man's-switch heartbeat service. Grafana
-provides dashboards. See `add-platform-monitoring`'s design.md
+provides dashboards.
+
+Traefik's certificate expiry is alerted on separately, at 21 days
+remaining — Traefik renews at 30, so anything under that is a renewal
+that started and did not finish, and it is otherwise silent until the
+certificate actually expires. That alert takes a route of its own so each
+hostname is named in its own notification rather than several collapsing
+into one that names none; `alert-on-certificate-expiry`'s design.md has
+the reasoning.
+
+See `add-platform-monitoring`'s design.md
 for the full rationale — network placement, why configuration is inline in
 `docker-compose.yml`, and the trade-offs accepted along the way.
 

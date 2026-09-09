@@ -246,8 +246,18 @@ the nameservers, not adding a provider. Read on 2026-09-08:
 | `shatynska.com` A | `2.29.14.98` — the prod host |
 | `www` A | `2.29.14.98` |
 | `fuperia` A | `2.29.14.98` — the name commerce-ops routes, and what Traefik holds a certificate for |
+| `test` A | `2.29.14.98` — **row added 2026-09-09**, record itself predates this table; see below |
 | `shatynska.com` MX | `mx.ukraine.com.ua` |
 | `shatynska.com` TXT | `v=spf1 include:_spf.ukraine.com.ua ~all` |
+
+**The `test` row was missing when this table was written.** It was added on
+2026-09-09 by `alert-on-certificate-expiry`, which found the record while
+reading Traefik's certificate metrics: Traefik holds and is still renewing a
+Let's Encrypt certificate for `test.shatynska.com`. The table was written on
+2026-09-08 as "the records as read", and it was already incomplete that day —
+worth stating plainly, because the table is this project's only written record
+of the zone and its value depends on being read against the zone rather than
+trusted. `docs/change-queue.md` entry 43 covers removing the record itself.
 
 **The zone carries live mail.** An NS migration moves the MX and SPF records
 with it, and a transcription error there stops mail rather than a web service —
