@@ -271,8 +271,13 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 - [x] 5.3 Re-express the existing assertions this change invalidates. First,
   `test_no_job_containing_a_secret_scanning_step_is_conditioned_on_terraform_changes`
   fails any job holding a gitleaks step whose `if:` mentions Terraform — which the plan
-  matrix job's natural gate would. Resolve it by shaping the gate as an **empty matrix**
-  rather than an `if:`, not by relaxing the assertion. Second,
+  matrix job's natural gate would. Resolve it by a gate that does not name a Terraform
+  path, not by relaxing the assertion. **This originally said "an empty matrix rather
+  than an `if:`", and that was wrong** — see the record below: GitHub does not skip a job
+  whose matrix is empty, it never creates it, and `needs.<job>.result` for a job that was
+  never created is `failure`. The gate is an `if:` reading the discovery output, and what
+  keeps that honest is a positive assertion — that some scan in the workflow runs wholly
+  unconditionally — rather than the wording of a refusal. Second,
   `test_the_job_enclosing_the_validating_step_is_unconditional` and
   `test_the_step_invoking_the_suite_is_unconditional` both treat any `if:` key on the job
   as an offence, which `if: always()` trips. Re-express each to accept the single literal
@@ -832,6 +837,47 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 
   Per this project's rules the change is not delivered and its record is not written: the
   fix re-enters at `build`'s review gate and takes a pull request of its own.
+
+  **The empty-matrix question is answered, by pull request #122's own CI, and the answer
+  is the opposite of the working assumption.** Run 34442604917: that pull request touches
+  no path under `terraform/`, so the affected set resolved empty — the first time that
+  case was ever reached. `validate` FAILED with *"The plan matrix concluded 'failure'
+  (plan-expected=false)"*.
+
+  GitHub does not skip a job whose matrix is empty. It never **creates** the job at all —
+  it is absent from the run's job list entirely — and `needs.<job>.result` for a job that
+  was never created is `failure`, not `skipped`. So the empty-matrix gate this change
+  shipped with would have failed the required status check on every pull request touching
+  no Terraform path: every documentation change, every Ansible change, every change to
+  this suite. It was recorded as a known fork before the first run, and the first run
+  that could reach it found it.
+
+  **The gate is now a job-level `if:` reading the discovery output**, which is what that
+  record predicted the fix would be. The reason 5.3 forbade an `if:` was
+  `test_no_job_containing_a_secret_scanning_step_is_conditioned_on_terraform_changes`,
+  and this condition satisfies it — but satisfying an assertion by wording is the evasion
+  this repository refuses everywhere else, so the argument is made properly instead. What
+  that requirement wants is that *some* scan runs on every pull request; that scan is
+  `validate`'s, which is unconditional. The plan job's copy serves a different obligation
+  — an ordering, which has nothing to order where there is no plan.
+
+  **And the argument is now asserted rather than argued.**
+  `test_at_least_one_secret_scan_is_wholly_unconditional` requires some gitleaks step in
+  the workflow to run under no condition of its own and none on its job that could
+  evaluate false. Confirmed red against a tree where `validate`'s scan is gated the same
+  way the plan job's is — the evasion the two existing refusals could not distinguish
+  from the correct shape.
+
+  **Writing that assertion found a second defect, in a locator every assertion in that
+  class shares.** `gitleaks_steps` matched any step whose text mentions gitleaks,
+  including a shell COMMENT — and the environment-discovery body cites the gitleaks step
+  as its precedent for reading a pin out of a committed file. So `discover` counted as a
+  scan job and the new assertion passed vacuously, on a comment. The locator requires an
+  invocation now: a `name`, a `uses`, or a non-comment line of `run`. Repairing it then
+  showed the new assertion was itself too strict — it read `validate`'s `always()` as a
+  condition, where `always()` cannot evaluate false and gates nothing — so it reads the
+  same `job_condition_is_admissible` predicate the two unconditionality requirements are
+  read with.
 
 ## 8. Archive
 
