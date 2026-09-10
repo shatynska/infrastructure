@@ -293,91 +293,6 @@ is operational rather than structural. It read the live host as well as the
 tree, so where an entry cites a host fact, that is what `main-server` showed on
 2026-09-08, not an inference from the code.
 
-## 50. configure-the-staging-host
-
-**The other half of the former entry 49**, recorded when
-`add-a-staging-environment` delivered the first half and deleted that entry.
-Staging is provisioned — `terraform/environments/staging/`, its own Hetzner
-project, its own HCP workspace, an ungated apply — and configured by nothing. It
-is a bare host with an attached, unmounted volume, which is not yet either of
-the two things staging is for.
-
-Those two purposes were recorded in entry 49 and are unchanged, because they
-have different requirements and conflating them is how a staging environment
-ends up serving neither:
-
-- **a place to rehearse infrastructure changes** — a PostgreSQL major upgrade
-  (38), a hardening change. Ephemeral, no consumers, no DNS, no certificates.
-- **a place applications deploy to** — `commerce-ops` and the applications after
-  it need somewhere a pre-release build can be looked at before prod.
-  Permanent, own hostnames and certificates, own per-app deploy keys, and a
-  deploy path in each application's own repository.
-
-**It is the second.** The second contains the first imperfectly: rehearsing
-something destructive breaks the application environment at the same time, which
-is a scheduling problem for the company and a non-problem here.
-
-What it carries:
-
-- **`hosts: prod` in `ansible/playbooks/host-baseline.yml` becoming a
-  parameter.** This is the first change with a second value to give it. The
-  dynamic inventory already groups by the `environment` Hetzner label, and
-  staging's resources carry `environment = "staging"`.
-- **A way for the inventory to see two Hetzner projects, which today it cannot.**
-  `ansible/inventory/hcloud.yml` authenticates with a single `HCLOUD_TOKEN`, and
-  a Hetzner token is scoped to one project — so under prod's token the `staging`
-  group is *empty*, and under staging's, `prod` is. This is a consequence of
-  `add-a-staging-environment`'s decision to give staging its own project, and it
-  is this entry's to solve: a second inventory source, a per-environment token,
-  or a token-per-run convention. **The failure mode is why it is listed
-  separately rather than folded into the bullet above:** a play whose `hosts:`
-  matches nothing prints `skipping: no hosts matched` and exits **0**, so a
-  converge that reached no host is indistinguishable from one that had nothing
-  to do — including in CI.
-- **Staging's own secret set.** The Vault password, the tailnet OAuth client,
-  and platform's eight. None of them exist for staging today, and each is a
-  prerequisite for a converge rather than something discovered during one.
-- **`ansible/inventory/group_vars/staging.yml`**, written from scratch rather
-  than inherited from prod's. `docs/deferred-work.md`'s "Two gaps in
-  required-input validation that only the play could close" names exactly this
-  moment as its revisit trigger, for that reason.
-- **The first converge, which cannot come from CI and never will.** CI reaches a
-  host over the tailnet, and tailnet membership is created *by* the converge
-  (`ansible/roles/tailscale`); before it the host answers only on public SSH,
-  which the cloud firewall restricts to one ISP `/24`. That first run is local,
-  exactly as `docs/bootstrap-a-new-host.md` §6.3 documents for prod. It is
-  genesis rather than an exception to the never-apply-locally rule, and it is a
-  step the company server will need too.
-- **`platform/`'s Compose stack**, and the per-application deploy keys the
-  applications need. The volume name and mount path need no work: staging's
-  volume is `main-data` in a project of its own, so `/mnt/main-data/prometheus`
-  and `/mnt/main-data/grafana` are correct there as written.
-- **DNS records for the staging hostnames.** Manual: DNS is in no repository
-  (`docs/deferred-work.md`, "Managing DNS in Terraform" — whose own revisit
-  trigger is this change, since this is where there is finally a migration to
-  rehearse against).
-
-Three things it must not undo, each one a property `add-a-staging-environment`
-shipped deliberately rather than by omission:
-
-- **`web_allowed_cidrs = []`.** Staging's cloud firewall opens no web port at
-  all. The platform stack will come up unreachable until this change opens
-  80/443 on purpose, and that is the intended order — a firewall rule added by
-  the change that has something to put behind it, rather than one standing open
-  in front of an empty host.
-- **Staging holds nothing irreplaceable.** This is what makes `destroy_policy_gate:
-  false` and an unreviewed apply safe: a destructive plan applies without a
-  second signal, and what bounds the loss is that everything on staging can be
-  rebuilt from this repository. Putting a database on staging either preserves
-  that — throwaway data, recreated by a seed — or spends it, and spending it
-  means saying so and revisiting the two settings that rest on it.
-- **The `main-data` name.** It is not tidiness: it is what keeps
-  `platform/docker-compose.yml` unparameterised across environments.
-
-**Memory is the thing this will find.** Eight platform containers plus
-`commerce-ops` and its own PostgreSQL on a 2-vCPU instance is tight, which makes
-this the forcing function for container resource limits (7).
-
 ## 23. apply-host-configuration-through-a-gated-workflow
 
 **Unblocked once staging is actually converged, which is not the same day this
@@ -424,6 +339,24 @@ and a root key.
 The shape already exists twice in `.github/workflows/`: a credential-less job
 that shows the reviewer what will change, then a `production`-gated job that
 applies it. Three things in it are not plumbing.
+
+**Two tasks report drift on every check-mode run, and they are not drift.**
+Found 2026-09-10 by `configure-the-staging-host`, whose production check-mode
+run came back `changed=2`. Both are in `tailscale` -- *Add the Tailscale apt
+signing key* and *Add the Tailscale apt repository* -- and each is an
+`ansible.builtin.get_url` with no `checksum:`. Reproduced against a local
+fixture: `get_url` to an existing destination with no checksum reports
+**changed** under `--check`, because establishing that the file already matches
+would require downloading it, and check mode will not.
+
+This bears directly on the paragraph below. A drift detector that reports two
+findings on every single run, forever, is one an operator learns to skip -- the
+same failure mode this entry names for an approval prompt with nothing to
+approve. Whatever shape this change takes has to deal with it: pin a
+`checksum:` (upstream rotates the key, so this is not free), replace `get_url`
+with a task that can verify itself in check mode, or filter these two by name
+and say in the workflow why. What it must not do is ship a drift signal whose
+baseline is two.
 
 **`--check --diff` is not the safety net it looks like.**
 `docs/bootstrap-a-new-host.md` §6.3 already says not to rely on `--check` for a
@@ -1174,16 +1107,14 @@ in two places that must move together:
   needs its own values for every one of them — its own deploy host, its own
   Postgres credentials, its own Grafana password, its own ACME email.
 
-**Where this came from**, since the entry it was split out of is being
-deleted. It was recorded as a separate entry rather than a sixth bullet on
-entry 50,
-which held both halves of "configure the staging host": that entry's *host* half
-— a play that can target a second environment, an inventory that can see two
-Hetzner projects, `group_vars/staging.yml`, and the first local converge — is
-delivered by `configure-the-staging-host`, which deletes entry 50 when it
-archives. Its
-platform bullet said the stack has to reach the second host; **this** entry is
-the mechanism that would let it. The two were separable because a converged host
+**Where this came from**, since the entry it was split out of no longer
+exists. It was recorded as a separate entry rather than a sixth bullet on the
+former entry 50, which held both halves of "configure the staging host". That
+entry's *host* half — a play that can target a second environment, an inventory
+that can see two Hetzner projects, `group_vars/staging.yml`, and the first local
+converge — was delivered by `configure-the-staging-host`, archived 2026-09-10,
+which deleted entry 50 with it. Its platform bullet said the stack has to reach
+the second host; **this** entry is the mechanism that would let it. The two were separable because a converged host
 is a prerequisite either way, and the host half was already large.
 
 What that change left here, so this entry does not re-derive it: staging's
@@ -1226,10 +1157,9 @@ than to mute it.
 ## 53. expose-staging-on-the-web
 
 **The half of the former entry 50 that entry 52 does not claim.** Recorded
-2026-09-10 by `configure-the-staging-host`, which takes entry 50's host half and
-deletes that entry when it archives -- so between that change's two pull
-requests, entry 50 is still present above and still says staging is "configured
-by nothing". Without this entry the work below would go with it, since
+2026-09-10 by `configure-the-staging-host`, which took entry 50's host half and
+deleted that entry on archiving. Without this entry the work below would have
+gone with it, since
 entry 52's own text scopes itself to `platform-deploy.yml`'s `environment:`
 literal and the eight `PLATFORM_*` secrets and mentions neither ports nor DNS.
 
