@@ -287,14 +287,17 @@ now recorded somewhere, which is most of what the entry was protecting against.
 one that fires, and it has not fired yet.** That change provisioned staging's
 infrastructure and gave it no hostname: there is a second environment, but still
 only one zone's worth of records and nothing to rehearse a migration against.
-The trigger becomes live with `docs/change-queue.md` entry 50, which is where
-staging acquires DNS records — and that is the moment to weigh doing it in
-Terraform rather than by hand, since it is the first time the manual edit would
-be made twice.
+The trigger becomes live with `docs/change-queue.md`'s staging web-exposure
+entry, which is where staging acquires DNS records — and that is the moment to
+weigh doing it in Terraform rather than by hand, since it is the first time the
+manual edit would be made twice. It was entry 50's until
+`configure-the-staging-host` took entry 50's host half and left the hostnames
+to that entry; entry 50 is gone, and this pointer moved rather than dying with
+it.
 
-**Revisit when** staging acquires its hostnames (entry 50), or when mail moves
-off this zone, or when a second hostname makes the manual edits frequent enough
-to be worth the risk.
+**Revisit when** staging acquires its hostnames (the staging web-exposure
+entry), or when mail moves off this zone, or when a second hostname makes the
+manual edits frequent enough to be worth the risk.
 Cloudflare and Hetzner DNS were the two candidates considered; neither was
 chosen, and that choice is still open.
 
@@ -379,10 +382,34 @@ wording is what defers it — the condition is a `group_vars` written from
 scratch, not an environment existing — and that happens in
 `docs/change-queue.md` entry 50.
 
-**Revisit when** `ansible/inventory/group_vars/staging.yml` is written (entry
-50) or another host is bootstrapped — the first moment a `group_vars` is written
-from scratch rather than inherited, and so the first moment either gap has a
-real case rather than a constructed one.
+**Revisited 2026-09-10 by `configure-the-staging-host`, the trigger firing at
+last, and both gaps stand.** `ansible/inventory/group_vars/staging.yml` was
+written from scratch in that change, so each gap now has the real case the
+condition was waiting for — and the case is met by the file being complete and
+reviewed rather than by a new check. The reasoning that deferred them is
+untouched: what they produce is a partially-converged host rather than a damaged
+one, every role in the play is idempotent, and the play-scope fix would restate
+every role's required inputs in a second place nothing keeps in step with the
+roles.
+
+**Do not read that change's guard play as this fix.** `host-baseline.yml` now
+opens with a play against `localhost` that refuses when the targeted
+environment resolved to no host. That is a different question at a different
+scope: this entry is about a role's *input* being absent on a host that
+resolved, and the guard is about *no host resolving at all*, which is upstream
+of every role and of every role-scope assertion. Neither gap is narrowed by it.
+
+One thing did change in the exposure. Staging's `group_vars` deliberately leaves
+`deploy_apps` unset rather than empty, so `deploy_user` refuses until the
+operator supplies staging's deploy keypair — which means the play-scope gap is
+now reachable on a real host on purpose, by design, rather than only by a
+hand-edit. It is still the recoverable failure described above: correct the file
+and re-run.
+
+**Revisit when** a third environment's `group_vars` is written, or when a
+partially-converged host actually costs something — the exposure is now
+observed rather than hypothetical, so the next occurrence is evidence rather
+than a constructed case.
 
 ## Asserting that the README agrees with the tree
 
@@ -716,6 +743,21 @@ every environment and deliberately left these four as they were.
 - *Data Durability for Stateful Resources* and *No Store on This Host Holds Data
   Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`)
 
+**Two more joined them on 2026-09-10**, added by `configure-the-staging-host`
+rather than generalised by it, for the reason the "why not swept" paragraph
+below already gives:
+
+- *Host Joins a Private Tailnet for Non-Operator SSH Access* — "the prod host"
+- *Unprivileged Operator Accounts Support Interactive Host Inspection* — "on the
+  prod host"
+
+Both are in `openspec/specs/iac-host-configuration/spec.md`, and both acquired a
+second subject the moment staging began converging with the same role set: a
+staging host joins the same tailnet and carries the same operator account, and
+the requirements describing that name only prod. Unlike the four above, these
+two now describe a mechanism that has *run* against a second host rather than
+one merely available to it.
+
 The first two describe a mechanism both environments now use: staging declares
 `server_enabled` and `volume_enabled` with prod's semantics, and its rollback
 and its cost-pause both rest on them. They are obliged for staging by nothing —
@@ -731,6 +773,12 @@ sweep into the diff that most needed reading closely — the same argument the
 requirement-naming entry above makes.
 
 **Revisit when** staging acquires a persistent store — `docs/change-queue.md`
-entry 50, which puts the platform stack and a database on it. That is the moment
+entry 52, which puts the platform stack and a database on it. That is the moment
 "this host" becomes genuinely ambiguous and the durability requirements have to
 say which host they mean.
+
+This trigger named entry 50 until 2026-09-10. `configure-the-staging-host` took
+entry 50's host half and deleted the entry, and the trigger followed the
+*subject* rather than the number: a persistent store arrives with the platform
+stack, which is entry 52's, not with staging's ports opening, which is the
+web-exposure entry's.

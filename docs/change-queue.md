@@ -380,14 +380,23 @@ this the forcing function for container resource limits (7).
 
 ## 23. apply-host-configuration-through-a-gated-workflow
 
-**Blocked on 50, not on 49** -- not because it cannot be built against prod, but
-because it should not be. It was recorded unblocked on 2026-09-06; the block was
-added on 2026-09-09 when staging was identified, and re-pointed on 2026-09-10
-when `add-a-staging-environment` delivered staging's Terraform half. The block
-did not lift with it: what this entry needs is a non-prod host to *converge*
-against, and staging is not yet an Ansible target -- no `group_vars`, no play
-that can name it, no first converge. Entry 50 is what supplies those. It remains
-the one path to production this repository still leaves to a workstation.
+**No longer blocked.** It waited on a non-prod host to *converge* against, and
+`configure-the-staging-host` supplied one on 2026-09-10: staging now has an
+inventory source, a `group_vars` of its own, a play that can name it, and a
+first converge behind it. The block was recorded on 2026-09-09 when staging was
+identified, re-pointed on 2026-09-10 when `add-a-staging-environment` delivered
+staging's Terraform half, and lifted when that change's host half landed.
+
+This remains the one path to production this repository still leaves to a
+workstation.
+
+Two things that change picked up which this entry inherits. The converge is now
+invoked as `ansible-playbook playbooks/host-baseline.yml -i
+inventory/<environment>.hcloud.yml -e target_environment=<environment>`, so a
+workflow parameterises over the environment rather than hard-coding one. And a
+run that reaches no host now fails instead of exiting 0 -- which matters more in
+CI than locally, since a workflow reporting green over a converge that touched
+nothing is exactly the failure a scheduled job hides.
 
 `ansible/playbooks/host-baseline.yml` is applied by hand: no workflow runs
 `ansible-playbook` against prod, the Vault password lives only on the
@@ -1108,6 +1117,71 @@ act by the operator, who can force the replacement in the same session. Worth
 writing that into the rotation step of whatever runbook covers it, which is a
 smaller piece of work than this entry and does not wait on it.
 
+## 53. expose-staging-on-the-web
+
+**The half of the former entry 50 that entry 52 does not claim.** Recorded
+2026-09-10 by `configure-the-staging-host`, which took entry 50's host half and
+deleted that entry; without this the work below would have gone with it, since
+entry 52's own text scopes itself to `platform-deploy.yml`'s `environment:`
+literal and the eight `PLATFORM_*` secrets and mentions neither ports nor DNS.
+
+Staging is a configured host with no way in from the internet:
+
+- **`web_allowed_cidrs = []`** in `terraform/environments/staging/terraform.tfvars`,
+  mirrored by `hardening_web_allowed_cidrs: []` in
+  `ansible/inventory/group_vars/staging.yml`. Both layers must open together —
+  for any given port exactly one layer is the documented access gate, and
+  opening one while assuming the other is closed is the split this repository's
+  firewall convention exists to prevent.
+- **No hostnames and no DNS records.** Manual, because DNS is in no repository
+  (`docs/deferred-work.md`, "Managing DNS in Terraform", whose revisit trigger
+  now points here — this is the first time the manual edit would be made twice,
+  which is the moment that entry says to weigh doing it in Terraform).
+- **No certificates**, which follow from the hostnames via Traefik's ACME path.
+
+**It must not undo what `add-a-staging-environment` shipped deliberately.**
+`web_allowed_cidrs = []` is not an oversight: it is a firewall that opens no
+port in front of a host with nothing behind it, and the intended order is that
+the change with something to put there opens them. That is this entry.
+
+**Blocked on 52, or at least pointless before it.** Entry 50 held both halves
+and got this ordering for free; splitting them loses it, so it is stated. Ports
+opened before the stack can reach staging is precisely the state the bullet
+above warns against.
+
+## 54. test-a-play-at-play-scope
+
+Recorded 2026-09-10 by `configure-the-staging-host`, whose `design.md` Decision
+10 found the gap and whose test author independently confirmed it.
+
+That change adds a guard play to `ansible/playbooks/host-baseline.yml` that
+refuses when the targeted environment resolved to no host — closing a path where
+a converge that reached nothing exited 0. **Its behaviour is verified by hand
+and by nothing else**, and the two test commands this project has cannot take
+it:
+
+- **Molecule's subject is a role on a host.** This is a play, and the case under
+  test is the one where there is no host.
+- **`.github/tests` may only read committed files statically.** Running
+  `ansible-playbook` is not a static read, and that is enforced rather than
+  conventional: `TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource`
+  in `test_ci_configuration.py` reads every module in the directory and would
+  fail one that spawned it.
+
+So what exists today is a static assertion that the guard is *present* and
+correctly shaped, plus a manual run recorded in that change's task list. **A
+green pull request does not establish that the guard fires.**
+
+What a play-scope harness would cover, beyond this one guard: any play-level
+behaviour at all — role ordering, `when:` conditions on role inclusion, and the
+play-scope input validation `docs/deferred-work.md`'s "Two gaps in
+required-input validation that only the play could close" describes, which is
+currently deferred partly because nothing could test a fix for it.
+
+Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and
+whatever runner it needs, which is why it was not invented inside a change whose
+diff most needed reading closely.
+
 ## 51. assert-every-tfvars-assigns-its-required-variables
 
 Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the
@@ -1156,15 +1230,21 @@ in two places that must move together:
   needs its own values for every one of them — its own deploy host, its own
   Postgres credentials, its own Grafana password, its own ACME email.
 
-**Its relationship to entry 50, which is why this is a separate entry rather
-than a sixth bullet there.** Entry 50 is the *host* half: making a play target a
-second environment, giving the inventory a way to see two Hetzner projects,
-writing `group_vars/staging.yml`, and the first local converge. Its platform
-bullet says the stack has to reach the second host; **this** entry is the
-mechanism that would let it. They are separable — the Ansible work is useful
-without the workflow work, since a converged host is a prerequisite either way —
-and 50 is already large. Whichever is done second should check whether the other
-left it anything.
+**Where this came from**, since the entry it was split out of is gone. It was
+recorded as a separate entry rather than a sixth bullet on the former entry 50,
+which held both halves of "configure the staging host": that entry's *host* half
+— a play that can target a second environment, an inventory that can see two
+Hetzner projects, `group_vars/staging.yml`, and the first local converge — was
+delivered by `configure-the-staging-host` and archived on 2026-09-10. Its
+platform bullet said the stack has to reach the second host; **this** entry is
+the mechanism that would let it. The two were separable because a converged host
+is a prerequisite either way, and the host half was already large.
+
+What that change left here, so this entry does not re-derive it: staging's
+`deploy` account is already authorised for `platform` under a staging-only
+keypair, whose private half is in the operator's password manager and in no
+GitHub secret. `commerce-ops` is deliberately not authorised on staging — it has
+no staging deploy path in its own repository yet.
 
 The shape to copy is the one `make-the-pipeline-environment-agnostic` proved:
 the workflow reads what it needs from committed per-environment declarations and
@@ -1172,6 +1252,21 @@ names no environment itself. `platform/` has no such declaration today, and
 whether it should reuse `terraform/environments/<name>/pipeline.yml` or grow one
 of its own is the first decision this change makes.
 
-**Blocked on 50**, or at least pointless before it: deploying a Compose stack to
-a host that has no Docker, no deploy user and no data volume mounted fails at
-the first step.
+**No longer blocked.** It waited on a converged host, and
+`configure-the-staging-host` delivered one on 2026-09-10 -- Docker, the deploy
+account, the mounted data volume, the tailnet. That change also left this one a
+`deploy` account already authorised for `platform` under a staging keypair, so
+no second converge is needed to begin. What it did *not* leave is staging's
+`PLATFORM_*` secret set, which is still this entry's to create in full.
+
+**Entry 53 is blocked on this one**, and the coupling is worth reading from this
+end too: 53 opens 80/443 on staging, and opening them before there is a stack
+behind them is the state `add-a-staging-environment` deliberately avoided. Do
+this first.
+
+**Staging's prune check is red until this lands.** `staging-server-prune-host-images`
+reports failure on every weekly activation because a host with nothing deployed
+has an empty keep set, which the prune treats as a refusal rather than licence
+to remove everything. That was accepted deliberately and bounded by this entry;
+if it stays red long enough to be tuned out, that is the signal to revisit
+rather than to mute it.

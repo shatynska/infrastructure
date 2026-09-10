@@ -10,7 +10,11 @@
 # ONE TOKEN, ONE ENVIRONMENT. A Hetzner token is scoped to one project and each
 # environment has a project of its own, so this value reaches exactly one of
 # them. This file at the repository root is prod's; staging's belongs in an
-# .envrc inside terraform/environments/staging/. The same variable also feeds
-# Ansible's dynamic inventory, which sees only its token's project — and a play
-# matching no host exits 0.
+# .envrc inside terraform/environments/staging/.
+#
+# THIS VARIABLE IS TERRAFORM'S, and no longer Ansible's. Its value depends on
+# which directory you are standing in, which suits a tool always run from
+# inside an environment directory and does not suit one always run from
+# ansible/. Ansible reads HCLOUD_TOKEN_PROD and HCLOUD_TOKEN_STAGING instead,
+# one per inventory source, from ansible/.envrc — see ansible/.envrc.example.
 export HCLOUD_TOKEN="your-read-only-hetzner-token"
