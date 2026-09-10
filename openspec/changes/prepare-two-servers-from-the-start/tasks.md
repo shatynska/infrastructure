@@ -105,17 +105,27 @@ rather than from the task's list, which is the point of the task:
 | Tailscale auth key: reusable, count, expiry | §0.4, §5.3's row, §6.3a ×2, §6.4 step 1, Appendix A | **one fixed** |
 | Which hosts the inspection key is configured on | §0.3, §0.4, §6.1, Appendix A | yes |
 | What the heartbeat ping key addresses | §0.4, §7.1, Appendix A | yes |
-| What stage 6 configures | end-state summary, time estimate, "From here on, two hosts", §6's opening | yes |
+| What stage 6 configures | end-state summary, time estimate, "From here on, two hosts", §6's opening, **Appendix C** | **one fixed** |
+| Whether the GHCR token is one value or two | §0.4, §6's opening, §6.4's secrets table, Appendix A | **all four reconciled** |
 
-The one disagreement it caught: §6.4 step 1 read "Tailscale admin → Machines:
-**the server** is listed… Disable key expiry for it". Unambiguous when stage 6
-ran once and ambiguous now that it runs per environment — a reader converging
-staging could take it as already done. It now names the host just converged and
-says the step repeats.
+Its first walk caught one: §6.4 step 1 read "Tailscale admin → Machines: **the
+server** is listed… Disable key expiry for it" — unambiguous when stage 6 ran
+once, ambiguous now that it runs per environment. It now names the host just
+converged and says the step repeats.
 
-That is the class-closing check earning its place on its first use, and it
-found the same shape of defect that plan review found in rounds 2 and 3: a fact
-stated in several places, updated in some of them.
+**Code review then found two the walk had missed, and both were missing rows
+rather than missed locations.** The GHCR token was not on the list at all, and
+the document stated it four ways: §0.4 said "1, shared", Appendix A said "one
+per environment", §6's opening said the two runs "share no token", and §6.4 said
+"per environment". A value counted one way and its storage another, with no
+sentence distinguishing them — all four now say one value, stored twice. And
+"what stage 6 configures" had a fifth location in Appendix C, still telling a
+company reader that the second host *configured* is something they do not get.
+
+Recorded rather than quietly fixed. A hand-built inventory of a document's
+duplicated facts is subject to the mechanism it exists to close; this task says
+so and then demonstrated it. Six facts now, and the instruction stands: rebuild
+the list by grep, do not trust it.
 
 ## 8. Ship
 

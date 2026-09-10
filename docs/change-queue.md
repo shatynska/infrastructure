@@ -299,10 +299,10 @@ tree, so where an entry cites a host fact, that is what `main-server` showed on
 was written.** It waited on a non-prod host to *converge* against.
 `configure-the-staging-host` supplied everything a converge needs from this
 repository on 2026-09-10 -- an inventory source, a `group_vars` of its own, a
-play that can name it -- but the converge itself is operator work against
-credentials that exist nowhere here, and `ansible/inventory/group_vars/staging.yml`
-is committed incomplete until it is done. **Check that staging is converged
-before starting this**, rather than inferring it from this entry.
+play that can name it -- The converge itself was operator work, and it
+happened: staging converged on 2026-09-10, and the values `staging.yml` was
+committed without were supplied in PR #130. This entry is unblocked in fact and
+not merely in principle.
 
 The block's history, since it has moved three times: recorded on 2026-09-09
 when staging was identified; re-pointed on 2026-09-10 when
