@@ -12,7 +12,9 @@ A count nobody can check in a few minutes does not belong in §0.4.
 
 ## 2. §0.4 — what exists once and what exists twice
 
-- [ ] 2.1 Add a new §0.4 whose table lists, for every credential the procedure creates **for the infrastructure itself**, how many exist and what proves it. **Declare that boundary in the preamble** — stages 0 to 7, excluding the per-application secrets stage 8 creates — because a table read as complete and not being so is worse than no table.
+- [ ] 2.1 Add a new §0.4 whose table lists **every credential, and every account or object of which the procedure creates one per environment**, with how many exist and what proves it. That wording rather than "credential", because four rows — the Hetzner projects, the HCP workspaces, the OAuth client — are not credentials.
+
+      **Declare the boundary in the preamble: stages 0 to 6.** Carry the two facts outside it as clauses of that sentence rather than as rows: stage 7's platform-stack secrets are production's alone until entry 52, and §7.3 and Appendix A list them; and §0.3's own fourth row, one deploy key per application, belongs to stage 8. Naming both is what makes the boundary honest — a reader comparing §0.3's four rows against §0.4 otherwise meets a silent omission.
 
       | Thing | How many | What proves it |
       |---|---|---|
@@ -22,35 +24,38 @@ A count nobody can check in a few minutes does not belong in §0.4.
       | Hetzner project | 2 | *Each Environment Has a Dedicated Hetzner Cloud Project* (`openspec/specs/iac-state-management/spec.md`) |
       | Hetzner API token | 4 — read-only and read-write per project | §1.2. **Not six**: each read-only token is *also* exported under a second variable name for Ansible, which §1.2 says outright, and a second name is not a second token |
       | HCP workspace | 2 | the two `versions.tf` |
-      | `TF_API_TOKEN` | 1, shared | *HCP Terraform Access via a Static Token, Unsplit by Privilege* (same spec file) — it writes state for both workspaces |
+      | `TF_API_TOKEN` | 1, shared | *HCP Terraform Access via a Static Token, Unsplit by Privilege* (same spec file), cited for "one value, unsplit by privilege" and not for where it is stored — that requirement predates staging, and §3.3 now places it in both Environments |
       | Ansible Vault password | **2** | §6.1 requires it; the two `image_prune_heartbeat_ping_key` blocks carry vault ids `prod` and `staging` |
-      | Tailscale auth key | 1 reusable key can serve both joins; this repository used 2 | §5.3, and task 3.1 |
+      | Tailscale auth key | 1 reusable key can serve both joins; this repository used 2 | §5.3, and `ansible/roles/tailscale/tasks/main.yml`, which consumes it once per run and skips on an already-joined host |
       | Tailscale OAuth client | 1 | §5.3 — one client serves every repository |
       | GHCR pull token | 1, shared | §6.1 permits the same token; both `group_vars` name the same `ghcr_pull_username` |
-      | Heartbeat project ping key | 1, shared | `ansible/inventory/group_vars/staging.yml`: "the same project ping key prod uses… it addresses a DIFFERENT check because the check name is derived from `inventory_hostname`" |
-      | Heartbeat checks | 5 | Appendix A lists four; §7.1's Alertmanager check is the fifth |
-      | Platform stack secrets (`PLATFORM_*`) | 8, production only | §7.3; staging gets its own set with entry 52 |
+      | Heartbeat project ping key | 1, shared — it addresses the five checks Appendix A and §7.1 list | `ansible/inventory/group_vars/staging.yml`: "the same project ping key prod uses… it addresses a DIFFERENT check because the check name is derived from `inventory_hostname`" |
 
       Verify each against what is named before writing it. **Compare values, not lines**: `terraform/environments/prod/terraform.tfvars` pads its `=` for alignment and staging's does not, so a line comparison reports the two `ssh_public_key` entries as differing when the keys are byte-identical — confirmed by hashing the extracted values. The same applies to the `ops_user_accounts` keys. That mistake would put **2** in a row whose truth is **1, shared**.
 
-      Two rows were wrong in the first draft and are corrected here rather than silently: an "Ansible inventory credential | 2" row double-counted the read-only Hetzner tokens under their second variable names, and `TF_API_TOKEN` was missing entirely.
+      Four rows have been corrected or cut rather than silently fixed, because in a table whose premise is correct counts the corrections are the substance. An "Ansible inventory credential | 2" row double-counted the read-only Hetzner tokens under their second variable names. `TF_API_TOKEN` was missing entirely. A "Platform stack secrets | 8" row matched nothing — §7.3's table has seven rows and the document says "the seven in 7.3", while every `PLATFORM_*` name in it numbers nine — and it is cut with the boundary moved to stage 6 rather than renumbered. A "Heartbeat checks | 5" row is folded into the ping-key row: §7.1 says the checks need no creating by hand, so a reader assembling credentials acts on the key and not on the count.
 
-- [ ] 2.2 State the axis the table follows, above it. **Do not use "read-only is shared, access-granting is per environment"** — it was the first draft's rule and it mis-sorts four of these rows: the inspection key grants root-equivalent access by docker-group membership and is shared; the ping key lets its holder suppress an alarm and is shared; the Hetzner read-only tokens are read-only and are per environment; `TF_API_TOKEN` writes state for both and is shared.
+- [ ] 2.2 **Point at §0.3's axis rather than restating it.** §0.3's paragraph — "each has a different holder and a different blast radius" — sits four lines above, and a second copy of a rationale is the cost this whole change is about. §0.4's preamble carries a pointer to it plus the one cause §0.3 does not state: **a Hetzner token reaches exactly one project**, so those come in pairs regardless of what they can do. The "What proves it" column carries the rest. §0.3 keeps the reasoning, §0.4 keeps the counts, and each is said once.
 
-      Use the axis §0.3 already states — **a different holder and a different blast radius** — under which the counts fall out without exceptions: one holder means one credential (the operator's two keys); one purpose per environment means two (the platform deploy keypair, the Vault password); and a mechanical constraint means two regardless of what the credential can do (a Hetzner token reaches exactly one project). Name that third cause separately rather than folding it into the first two, because it is the reason the read-only tokens come in pairs.
+      **Do not reintroduce "read-only is shared, access-granting is per environment".** It was the first draft's rule and it mis-sorts four of these rows: the inspection key grants root-equivalent access by docker-group membership and is shared; the ping key lets its holder suppress an alarm and is shared; the Hetzner read-only tokens are read-only and come in pairs; `TF_API_TOKEN` writes state for both and is one value. It is recorded here because it is attractive and the next reader will think of it too.
 
 - [ ] 2.3 Place §0.4 after §0.3 and before stage 1, and cross-reference it with Appendix A in both directions: the same set, seen at the moment of assembling it and at the moment of rotating it. Say that the two move together. Verify by reading stages 0 to 1 straight through.
 
-## 3. Appendix A — the inventory that must not disagree with §0.3 and §5.3
+## 3. The two other places that repeat what §0.3 says
 
-- [ ] 3.1 Update Appendix A's **Tailscale server auth key** row, which is singular, and its **`PLATFORM_DEPLOY_SSH_KEY`** row, whose "Value from" cell says "the platform deploy key from stage 0… then delete the local file". `configure-the-staging-host`'s task 7.4 gave the Vault-password, GHCR and heartbeat rows "one per environment" and left these two behind. Without this the document's own "complete secret inventory" contradicts §0.3 and §5.3 the day this lands — the exact drift this change exists to remove, re-created one appendix over.
+- [ ] 3.1 **§6.4's "Secrets created in this stage" table carries the same destructive instruction task 1.2 fixes** — its `PLATFORM_DEPLOY_SSH_KEY` row reads "The **private** half of the platform deploy key from stage 0. Store it now, then delete the local file", inside the stage a reader now runs *once per environment*. Fixing §0.3 alone leaves the loss reachable by a second route. Mark that row and `PLATFORM_DEPLOY_HOST` production-only for now, and say where staging's private half goes until entry 52.
+
+      An earlier draft of this task attributed that sentence to Appendix A, which is how §6.4 went unnoticed: Appendix A's cell in fact reads "`ssh-keygen`, platform key". Quote a document before correcting it.
+- [ ] 3.2 Update Appendix A's **Tailscale server auth key** row, which is singular, and its **`PLATFORM_DEPLOY_SSH_KEY`** row, which says "Env secret" with no environment named. `configure-the-staging-host`'s task 7.4 gave the Vault-password, GHCR and heartbeat rows "one per environment" and left these two behind. Without this the document's own "complete secret inventory" contradicts §0.3 and §5.3 the day this lands — the exact drift this change exists to remove, re-created one appendix over.
 
 ## 4. §5.2 and §5.3 — the tailnet, for two hosts
 
 - [ ] 4.1 Settle the auth-key count **once**, and use the same words in §5.3 and §0.4. The truth: `ansible/roles/tailscale/tasks/main.yml` consumes `tailscale_auth_key` once per run and skips the task on an already-joined host, so **one reusable key can serve both joins**. Two are wanted if the key is single-use, or if you want to revoke one host's join without touching the other — which is what this repository did (archived task 9.4 generated staging its own). Do **not** write "one consumed per host at join": a reusable key is not consumed, and the first draft said both things in two places.
 - [ ] 4.2 Make the "Disable key expiry" instruction per machine — it is a per-node setting, and a host whose expiry is left on drops off the tailnet silently in 180 days.
 - [ ] 4.3 Update §5.3's "Secrets created in this stage" table for whatever 4.1 settles. The two `TAILSCALE_OAUTH_*` rows stay: one client serves every repository, and their `production` Environment scope is correct until entry 52 gives staging a deploy workflow.
-- [ ] 4.4 Sweep the singular "the server" out of the rest of stages 0 and 5: §5.2's ACL guidance, §5's opening paragraph, and the Tailscale and DNS rows of §0.1 and §0.2. Keep §5.2's advice unchanged — the tailnet runs unrestricted here, and a company tailnet with more members wants an ACL letting `tag:ci` and operators reach each host on 22 and 3000.
+- [ ] 4.4 Sweep the singular "the server" out of the rest of stages 0 and 5: §5.2's ACL guidance, §5's opening paragraph, and **two rows in §0.1 and one in §0.2** — §0.2 has only the Tailscale-client row, and no DNS row at all. Keep §5.2's advice unchanged: the tailnet runs unrestricted here, and a company tailnet with more members wants an ACL letting `tag:ci` and operators reach each host on 22 and 3000.
+
+      **One singular in that sweep must stay singular, and making it plural would cause the failure §4.4 warns about.** §0.1's DNS row — "Pointing hostnames at the server" — is correct: §4.4 says "**Do not point a hostname at the staging server**", because staging ships `web_allowed_cidrs = []` and a record aimed at it yields a hostname that times out and a certificate that never issues, with no error naming the cause. Make that row say *the production server* specifically, and leave the reason to §4.4.
 
 ## 5. The end-state summary and the time estimate
 

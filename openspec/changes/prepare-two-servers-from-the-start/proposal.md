@@ -63,8 +63,11 @@ into §6.1 missing a keypair.
   substantial addition, and it is the artifact this session most obviously
   lacked: a single table saying, for every credential the procedure creates for
   the infrastructure itself, how many of it there are and what proves the count.
-  It declares that boundary — stages 0 to 7, not stage 8's per-application
-  secrets — because a table read as complete and not being so is worse than none.
+  It declares that boundary — **stages 0 to 6** — because a table read as
+  complete and not being so is worse than none, and it names the two things it
+  deliberately leaves out: stage 7's platform-stack secrets, which are
+  production's alone until entry 52, and §0.3's own application-deploy-key row,
+  which belongs to stage 8.
 
   **The axis it sorts on is the one §0.3 already states**: a different holder and
   a different blast radius, plus the mechanical constraint that a Hetzner token
@@ -99,8 +102,10 @@ mechanism moves. The document is the only thing that changes.
 
 **Documentation.** `docs/bootstrap-a-new-host.md` — the end-state summary and
 time estimate at the top, §0.3, a new §0.4, §5.2, §5.3, the opening of stage 5,
-two rows each in §0.1 and §0.2, and **Appendix A**, whose Tailscale auth key and
-`PLATFORM_DEPLOY_SSH_KEY` rows are still singular. That appendix is the
+two rows in §0.1 and one in §0.2, **§6.4's "Secrets created in this stage"
+table** — which repeats §0.3's "delete the local file" instruction inside the
+stage that now runs once per environment — and **Appendix A**, whose Tailscale
+auth key and `PLATFORM_DEPLOY_SSH_KEY` rows are still singular. That appendix is the
 document's own "complete secret inventory", so leaving it would have this change
 create the drift it exists to remove, one appendix over.
 
