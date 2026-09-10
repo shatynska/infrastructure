@@ -1,17 +1,20 @@
 # Bootstrapping a new host from this repository
 
-This is the end-to-end procedure for standing up a new server, and the repository and accounts around it, using this repository as the template. It is written for a developer who has shipped application code but has not run infrastructure before, so it names every account, every secret, and where each secret's value comes from, in the order you will need them. It is also the document to start from when the host has to be rebuilt, or when someone else has to take the system over.
+This is the end-to-end procedure for standing up **two** servers — a reviewed production environment and an ungated staging one — and the repository and accounts around them, using this repository as the template. It is written for a developer who has shipped application code but has not run infrastructure before, so it names every account, every secret, and where each secret's value comes from, in the order you will need them. It is also the document to start from when a host has to be rebuilt (Appendix B, which covers the configured one) or when someone else has to take the system over.
 
 What you will have at the end:
 
-- A Hetzner Cloud server with a firewall and a data volume, created and changed only through reviewed pull requests.
-- The server configured (Docker, host firewall, a private network, restricted deploy accounts) by Ansible.
-- A shared platform stack on it: Traefik with automatic TLS, PostgreSQL, Prometheus, Alertmanager, Grafana, alerts to Slack, and an external heartbeat.
-- A path for any application repository to deploy itself to the host from its own GitHub Actions workflow.
+- **Two** Hetzner Cloud servers, each in its own Hetzner project, each with a firewall and a data volume, created and changed only through reviewed pull requests. Production's apply waits for a human; staging's does not.
+- **The production server** configured (Docker, host firewall, a private network, restricted deploy accounts) by Ansible.
+- A shared platform stack **on the production server**: Traefik with automatic TLS, PostgreSQL, Prometheus, Alertmanager, Grafana, alerts to Slack, and an external heartbeat.
+- A path for any application repository to deploy itself **to the production host** from its own GitHub Actions workflow.
+- **A staging server that is provisioned and not configured** — reachable over SSH, carrying an attached unmounted volume, running nothing. Three mechanisms in this repository are still single-environment, and stage 5 says which and what closes them. That is the honest end state today; it is not an oversight in this procedure.
+
+**Two servers is a standing cost**, not a one-off configuration: two instances and two volumes billed monthly, two hosts to patch and rebuild, two token pairs to rotate. Staging is roughly half production's bill. Decide you want that before stage 1, because the decisions that follow are shaped by it and are awkward to unpick afterwards. If you want one environment, this document still works: delete the second directory under `terraform/environments/`, skip its secrets, and read every "two" below as "one".
 
 **How to read this.** Stages are in dependency order; do not skip ahead. Each stage ends with a **Secrets created in this stage** table and a **Check** list. `<angle brackets>` are placeholders you replace. "Operator" means the person doing this. Commands are run from the repository root unless a `cd` is shown. The reasoning behind most decisions is in `openspec/specs/` and in the archived changes under `openspec/changes/archive/`; this document only says what to do.
 
-**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. Stage 8 is repeated per application.
+**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. The second environment adds perhaps an hour of console work in stages 1 to 3 and nothing after that, since stages 5 to 9 configure one host. Stage 8 is repeated per application.
 
 ## Stage 0. Accounts, tools and keys
 
@@ -22,8 +25,8 @@ Nothing here touches a server. It is the shopping list.
 | Service | Used for | Who owns the account |
 |---|---|---|
 | GitHub | The repository, CI, the approval gate, the container registry (GHCR) | The company organisation, not a personal account |
-| Hetzner Cloud | The server, firewall, volume, backups | The company, with billing set up |
-| HCP Terraform (app.terraform.io) | Storing Terraform state and locking it | The company; the free tier is enough |
+| Hetzner Cloud | Both servers, their firewalls, volumes and backups — **one project per environment**, created in stage 1 | The company, with billing set up |
+| HCP Terraform (app.terraform.io) | Storing Terraform state and locking it — one workspace per environment | The company; the free tier is enough |
 | Tailscale | A private network between the server, CI runners and operators | The company; the free plan is enough for now |
 | Slack | Alert delivery | The company workspace |
 | A heartbeat service (Healthchecks.io or similar) | Noticing when the whole host or its alerting dies | The company |
@@ -42,19 +45,21 @@ Install these once. Versions are pinned by the repository where it matters.
 | `tflint`, `gitleaks`, `pre-commit` | Local checks that mirror CI |
 | Python 3.12 and `uv` | Ansible and its test toolchain |
 | Docker (Docker Desktop on Windows/macOS, or the engine on Linux) | Molecule tests only |
-| `direnv` (optional but recommended) | Loads the read-only Hetzner token only inside this directory |
+| `direnv` (optional but recommended) | Loads each environment's read-only Hetzner token only inside that environment's directory — one token reaches one project, so the scoping matters |
 | Tailscale client | Reaching the server over the private network |
 
 Follow `README.md`, "Local setup", steps 1 to 5. Step 5 installs Ansible into a virtual environment and the Galaxy content into `ansible/roles/`; the `-p ansible/roles` flag there is required, not optional.
 
 ### 0.3 SSH keys you will generate
 
-Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two purposes; each has a different holder and a different blast radius.
+Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two **purposes**; each has a different holder and a different blast radius.
+
+**One purpose may span both environments, and the operator key does.** Both environment directories in this repository carry the same `ssh_public_key`, and that is deliberate rather than an oversight: the key authorises `root` on hosts this repository can recreate in their entirety, both are reached by the same operator, and a second private half would be one more thing to hold, rotate and lose for no gain. What must never be shared is a key across *purposes* — the operator key, the inspection key, the platform deploy key and each application's deploy key stay four distinct keys, because those have four different holders. If you decide otherwise for your company, generate a second operator key and put its public half in the second environment's `terraform.tfvars`; nothing else changes.
 
 | Key | Command | Passphrase | Private half lives in |
 |---|---|---|---|
-| Operator key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-prod -C "<you>@<company> prod root"` | Yes | Your workstation only. This is `root` on the server. |
-| Operator inspection key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-prod-ops -C "ops-<you>"` | Yes | Your workstation. Unprivileged login, used daily instead of root. |
+| Operator key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-root -C "<you>@<company> root"` | Yes | Your workstation only. This is `root` on **both** servers. |
+| Operator inspection key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ops -C "ops-<you>"` | Yes | Your workstation. Unprivileged login, used daily instead of root. Configured on the production host only, in stage 6. |
 | Platform deploy key | `ssh-keygen -t ed25519 -f platform_deploy_key -N "" -C "deploy@platform"` | **No** (CI cannot type one) | GitHub secret only; delete the local file after storing it |
 | One deploy key per application | `ssh-keygen -t ed25519 -f <app>_deploy_key -N "" -C "<app>-deploy"` | **No** | That application's GitHub secret only |
 
@@ -62,47 +67,60 @@ Keep the `.pub` halves; they are committed to the repository in later stages and
 
 ## Stage 1. Hetzner Cloud
 
-### 1.1 Register and create a dedicated project
+### 1.1 Register and create one project per environment
 
 1. Register at console.hetzner.cloud, complete identity verification, add a payment method.
-2. Create a project named `<company>-prod`. One project per environment: the API tokens below are scoped to a project, and that scope is what keeps a leaked read-only token from reading anything else.
-3. Do **not** create a server, firewall or volume in the console. Terraform creates them in stage 4, and anything created by hand is drift the nightly check will report.
+2. Create **two** projects: `<company>-prod` and `<company>-staging`.
+3. Do **not** create a server, firewall or volume in either console. Terraform creates them in stage 4, and anything created by hand is drift the nightly check will report.
 
-### 1.2 Create two API tokens
+**One project per environment is a decision, and this is where it is made.** A Hetzner API token is scoped to exactly one project, so the project boundary is what the whole credential split rests on. The pipeline supports either answer; two projects is the recommendation, for two reasons that are hard to see in advance:
 
-In the project: Security → API tokens → Generate API token.
+- **One project means one Read & Write token covering both environments**, so staging's apply must sit behind an approver too — otherwise any push to `main` reaches a production-capable credential. An approved staging deploy is as slow as production and stops being used, which is most of what staging is for.
+- **Hetzner volume names are unique per project, not globally.** In one project the second environment's volume cannot also be called `main-data`, so it gets a different name, a different mount path, and `platform/docker-compose.yml`'s hardcoded `/mnt/main-data/prometheus` and `/mnt/main-data/grafana` must be parameterised — or Prometheus and Grafana come up writing to a path that does not exist, silently.
+
+Two projects costs a second token pair to rotate. One project costs the two items above, every time you deploy.
+
+### 1.2 Create four API tokens, two per project
+
+In **each** project: Security → API tokens → Generate API token. Check the project switcher before generating — a token made in the wrong project is the failure that looks like everything else.
 
 | Token | Permission | Where it goes | Never goes |
 |---|---|---|---|
-| Read Only | Read | Your workstation (`.envrc`, stage 4) and the repository secret `HCLOUD_TOKEN` (stage 3) | Nowhere else |
-| Read & Write | Read & Write | The `production` Environment secret `HCLOUD_TOKEN` (stage 3) | Any local file, shell, or note. If you can run `terraform apply` from your laptop, this token is in the wrong place. |
+| Production Read Only | Read | Your workstation (the repo-root `.envrc`, stage 4) and the repository secret `HCLOUD_TOKEN` (stage 3) | Nowhere else |
+| Production Read & Write | Read & Write | The `production` Environment secret `HCLOUD_TOKEN` (stage 3) | Any local file, shell, or note. If you can run `terraform apply` from your laptop, this token is in the wrong place. |
+| Staging Read Only | Read | Your workstation (`terraform/environments/staging/.envrc`, stage 4) and the repository secret `HCLOUD_TOKEN_STAGING` (stage 3) | Nowhere else |
+| Staging Read & Write | Read & Write | The `staging` Environment secret `HCLOUD_TOKEN` (stage 3) | The same places. An ungated apply does not make its token less confined. |
 
-Each token is shown once. Put both in the password manager immediately.
+Each token is shown once. Put all four in the password manager immediately, each labelled with its project **and** its permission level.
+
+The two read-only secrets have different **names** at the repository level, and that is required rather than stylistic: a repository secret holds one value, so two environments naming the same one would plan under a single credential. Discovery fails the pipeline, naming both offenders, if two environments ever declare the same read-only secret or the same GitHub Environment.
 
 ### 1.3 Decide the sizing and record it
 
-You will write these into `terraform/environments/prod/terraform.tfvars` in stage 3. Decide them now.
+You will write these into each environment's `terraform.tfvars` in stage 3. Decide them now, for both.
 
-| Setting | Guidance | This repository's value |
-|---|---|---|
-| `location` | Pick one datacenter and stay in it; the volume cannot move | `hel1` (Helsinki); `fsn1` and `nbg1` are the German alternatives |
-| `server_type` | `cx33` is 4 vCPU / 8 GB; for several services start at `cx43` (8 vCPU / 16 GB) or a `cpx` type. You can resize later, but only upward without a rebuild | `cx33` |
-| `image` | A current Ubuntu LTS | `ubuntu-26.04` |
-| `volume_size` | GB for Prometheus and Grafana state (and future logs); resizable upward only | `10` |
-| `ssh_allowed_cidrs` | The public IP ranges allowed to reach SSH. Must not be `0.0.0.0/0`. If everyone will use Tailscale, see `docs/change-queue.md` entry 25 for closing public SSH entirely | one ISP `/24` |
-| `web_allowed_cidrs` | `["0.0.0.0/0"]` for a public web host | `["0.0.0.0/0"]` |
+| Setting | Guidance | Production | Staging |
+|---|---|---|---|
+| `location` | Pick one datacenter and stay in it; the volume cannot move | `hel1` (Helsinki); `fsn1` and `nbg1` are the German alternatives | The same, unless you want to rehearse a region move |
+| `server_type` | `cx33` is 4 vCPU / 8 GB; for several services start at `cx43` (8 vCPU / 16 GB) or a `cpx` type. You can resize later, but only upward without a rebuild. **Read the current type names off the console** — the generation changes, and a name that no longer exists fails at apply | `cx33` | `cx23`, roughly half the bill. Deliberately tight: a staging host that cannot fit the stack is what forces container resource limits to be set, rather than deferred until production needs them |
+| `image` | A current Ubuntu LTS | `ubuntu-26.04` | The same. An environment that rehearses production on a different image rehearses something else |
+| `volume_size` | GB for Prometheus and Grafana state (and future logs); resizable upward only | `10` | `10` |
+| `volume_name` | Keep it identical across environments. Names are unique per project, so a project each frees the name, and the same name means the same on-host mount path — which is what lets `platform/docker-compose.yml` stay unparameterised | `main-data` | `main-data` |
+| `name` | The server's own name, which becomes its `inventory_hostname`. **Must differ between environments** — two hosts sharing one name merge in any inventory that reads both projects, and share a single `<inventory_hostname>-prune-host-images` heartbeat check, where the live host's weekly success masks the other's dead timer | `main-server` | `staging-server` |
+| `ssh_allowed_cidrs` | The public IP ranges allowed to reach SSH. Must not be `0.0.0.0/0`. If everyone will use Tailscale, see `docs/change-queue.md` entry 25 for closing public SSH entirely | one ISP `/24` | The same |
+| `web_allowed_cidrs` | `["0.0.0.0/0"]` for a public web host | `["0.0.0.0/0"]` | `[]` — no web rule at all, until something is deployed there. See stage 5 |
 
-**Secrets created in this stage:** the two Hetzner tokens, held in the password manager until stage 3.
+**Secrets created in this stage:** four Hetzner tokens, held in the password manager until stage 3.
 
-**Check:** the project exists and is empty; both tokens are in the password manager, labelled with their permission level.
+**Check:** both projects exist and are empty; all four tokens are in the password manager, each labelled with its project and its permission level.
 
 ## Stage 2. HCP Terraform
 
 Terraform needs somewhere to keep its state file (the record of what it created) that both your workstation and CI can reach, with a lock so two runs cannot overlap. HCP Terraform provides exactly that, and this setup uses nothing else from it.
 
 1. Register at app.terraform.io and create an organisation named `<company>`.
-2. Create a workspace: **CLI-driven workflow**, named `infrastructure-prod`. No VCS connection.
-3. In the workspace's Settings → General, set **Execution Mode** to **Local**. This is essential: the default, Remote, would run plans on HCP's machines and break the saved-plan flow the pipeline depends on.
+2. Create **two** workspaces, both **CLI-driven workflow**, no VCS connection, named for their environments: `infrastructure-prod` and `infrastructure-staging`. The names are read from each environment's `versions.tf` in stage 3, so a typo there creates a second, empty workspace under whatever you typed. **No two environments may share a workspace** — a workspace holds one state, so sharing one would have each apply read the other's resources as its own and plan them for destruction.
+3. In **each** workspace's Settings → General, set **Execution Mode** to **Local**, and save. This is essential and it is per workspace: the default is Remote, so a workspace created and not adjusted is misconfigured even when its sibling is correct. Remote execution runs plans on HCP's machines, and `terraform plan -out=tfplan` then yields no plan file the apply job can apply — which breaks the saved-plan approval flow with no error naming execution mode.
 4. Create an API token, and it **must be a USER token**: your avatar (top right) → **Account settings → Tokens → Create an API token**. One token; this tier has no way to split it by privilege, and the Hetzner token split in stage 1 is the real security boundary.
 
    **Not an organisation token, and not a team token.** HCP issues three kinds and they are not interchangeable. An organisation token (Organisation settings → API token) administers organisation objects — workspaces, teams, variables — and **cannot perform state operations**. A team token is limited to that team's workspace permissions. Only a user token can lock a workspace and write state, which is what every job in this pipeline does.
@@ -116,15 +134,17 @@ Terraform needs somewhere to keep its state file (the record of what it created)
 
 | Name | Value | Stored where (stage 3) |
 |---|---|---|
-| `TF_API_TOKEN` | The HCP Terraform **user** API token (Account settings → Tokens — not an organisation or team token) | Repository secret **and** `production` Environment secret, identical value |
+| `TF_API_TOKEN` | The HCP Terraform **user** API token (Account settings → Tokens — not an organisation or team token) | Repository secret **and both** Environment secrets, the same value in all three |
 
-**Check:** the workspace shows Execution Mode: Local and has no runs.
+**Check:** **both** workspaces show Execution Mode: Local and have no runs; the token is a user token.
 
 ## Stage 3. The GitHub repository
 
 ### 3.1 Create the repository from this one
 
-1. In the company organisation, create an empty **private** repository named `infrastructure`. Private, because the tree will contain your office IP ranges, server identifiers and internal hostnames.
+1. In the company organisation, create a **private** repository named `infrastructure`. Private, because the tree will contain your office IP ranges, server identifiers and internal hostnames.
+
+   **Tick "Add a license", and nothing else.** The repository must not be empty, and this is the reason: the apply workflow compares a push against the commit that preceded it, and a branch's *first* push has no predecessor — it refuses that case by design, so a first push into an empty repository creates nothing and reports a failure. One initial commit gives the content push something to be compared against. It must be the license: this template already contains `README.md` and `.gitignore`, so either of those would collide with your content when you reconcile in step 2.
 2. Copy this repository's tree into it. The simplest faithful way:
 
    ```sh
@@ -133,7 +153,28 @@ Terraform needs somewhere to keep its state file (the record of what it created)
    git remote set-url origin git@github.com:<company>/infrastructure.git
    ```
 
-   Keeping the history keeps the reasoning behind every file. If you prefer a clean history, `rm -rf .git && git init` first; the `openspec/` archive still carries the reasoning either way.
+   Then bring the license commit underneath your history, so the push in stage 4.2 has a predecessor to be compared against:
+
+   ```sh
+   git fetch origin
+   git merge --allow-unrelated-histories origin/main
+   ```
+
+   One merge commit, no conflict — the license file exists in neither history — and every template commit keeps its identity. Do **not** rebase here: your history is unrelated to that commit, so a rebase would replay every template commit onto it and rewrite the history you just chose to keep.
+
+   Keeping the history keeps the reasoning behind every file. If you prefer a clean history, replace the block above with:
+
+   ```sh
+   git clone https://github.com/shatynska/infrastructure <company>-infrastructure
+   cd <company>-infrastructure
+   rm -rf .git
+   git init -b main
+   git remote add origin git@github.com:<company>/infrastructure.git
+   ```
+
+   `-b main` and `remote add` are both load-bearing there: without the first the branch is named whatever your Git defaults to and the push in 4.2 fails on its refspec, and without the second there is no remote to set a URL on. This variant has no commit yet, so its reconciliation waits until stage 4.2, where the commit exists. The `openspec/` archive still carries the reasoning either way.
+
+   **A force-push is not a shortcut.** Whichever variant you take, do not overwrite the license commit — that leaves the apply workflow comparing against an object your checkout cannot resolve, which it refuses with a different message and the same result: nothing is applied.
 
 3. Find every reference to the original owner and replace it:
 
@@ -141,97 +182,173 @@ Terraform needs somewhere to keep its state file (the record of what it created)
    grep -rn 'shatynska' --exclude-dir=.git --exclude-dir=openspec .
    ```
 
-   The ones that matter: the `organization` in `terraform/environments/prod/versions.tf` (your HCP organisation from stage 2), `ghcr_pull_username` in `ansible/inventory/group_vars/prod.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
+   The ones that matter: the `organization` in **both** `terraform/environments/prod/versions.tf` **and** `terraform/environments/staging/versions.tf` (your HCP organisation from stage 2), `ghcr_pull_username` in `ansible/inventory/group_vars/prod.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
 
-4. Edit `terraform/environments/prod/terraform.tfvars` with the stage 1 decisions, and put the **public** half of your operator key from stage 0 into `ssh_public_key`. Everything in this file is non-secret and committed.
+   Both `versions.tf` files carry it, and changing only production's is the easy miss: staging would then initialise against someone else's HCP organisation, and the error names a workspace rather than an organisation.
 
-5. Delete the `moved` block at the bottom of `terraform/environments/prod/ssh_key.tf`. It records a one-time relocation in the original repository and is meaningless in a fresh state.
+4. Edit **both** `terraform.tfvars` files — `terraform/environments/prod/` and `terraform/environments/staging/` — with the stage 1.3 decisions for that environment, putting the **public** half of your operator key from stage 0 into each `ssh_public_key`. Everything in these files is non-secret and committed. Check `name` differs between them and `volume_name` does not; stage 1.3 says why each matters.
 
-6. Run `pre-commit install --hook-type pre-commit --hook-type commit-msg` so your commits are checked the way CI checks them.
+5. Read `terraform/environments/staging/pipeline.yml` and accept or change its three values: `github_environment: staging`, `read_only_secret: HCLOUD_TOKEN_STAGING`, and `destroy_policy_gate: false`. These are what stage 3.2 and 3.3 must match — the Environment you create and the repository secret you set take their names from this file, not from any workflow. `terraform/environments/prod/pipeline.yml` is its counterpart and needs no change unless you rename things.
 
-Do not push yet. The first push to `main` triggers the apply workflow, and it must find its secrets in place.
+6. Delete the `moved` block at the bottom of `terraform/environments/prod/ssh_key.tf`. It records a one-time relocation in the original repository and is meaningless in a fresh state. Staging's `ssh_key.tf` has no such block and needs no edit; its own comment says why.
+
+7. Run `pre-commit install --hook-type pre-commit --hook-type commit-msg` so your commits are checked the way CI checks them.
+
+**Do not push yet, and the reason is now sharper than it used to be.** Because you initialised the repository with a commit in step 1, your push in stage 4.2 *will* be compared against it, *will* plan, and will therefore need every secret from 3.3 already in place. The two environments' plan jobs run under two different repository secrets; a missing one authenticates as nobody rather than erroring cleanly.
 
 ### 3.2 Repository settings
 
 All of these are in Settings on github.com, or via `gh`.
 
-1. **Environment.** Settings → Environments → New environment: `production`. Add the protection rule **Required reviewers** and name at least one person. For a company, this person should not be the only person who opens pull requests; the Environment approval is the human gate every production change passes through.
+1. **Environments, two of them.** Settings → Environments → New environment, twice:
+
+   - **`production`** — add the protection rule **Required reviewers** and name at least one person. For a company, this person should not be the only person who opens pull requests; the Environment approval is the human gate every production change passes through.
+   - **`staging`** — add **no** protection rules at all. Its apply runs on merge, without a human.
+
+   The names must match what each environment's `pipeline.yml` declares (step 5 of 3.1), and they must differ from each other: two environments naming one GitHub Environment would share its write token and its protection rules, so the ungated one would hold the reviewed one's credential. Discovery fails the pipeline, naming both, if they ever collide.
+
+   **What makes an ungated apply safe is the project boundary from stage 1, and nothing else.** Staging's write token can destroy staging's Hetzner project and cannot touch production's. Whether an Environment requires a reviewer is a repository setting that no file in this repository can verify — which cuts both ways: nothing will tell you if `production` loses its reviewer either.
 2. **Label.** Issues → Labels → New label: `destroy-override`. A merged pull request must carry this label for the apply workflow to accept a plan that deletes or replaces a resource. Without it, such plans fail on purpose.
 3. **Workflow token.** Settings → Actions → General → Workflow permissions: **Read repository contents and packages permissions**. Each workflow declares the little it needs on top.
 4. **Merge methods.** Leave merge commits enabled. The destroy gate reads the pull request number from the merge commit message; squash and rebase merges fall back to a slower API lookup.
 
 ### 3.3 Secrets
 
-Repository secrets: Settings → Secrets and variables → Actions → Repository secrets. Environment secrets: Settings → Environments → production → Environment secrets. Or with `gh`:
+Repository secrets: Settings → Secrets and variables → Actions → Repository secrets. Environment secrets: Settings → Environments → *that environment* → Environment secrets. Or with `gh`, which prompts for each value and reads it when you press Enter:
 
 ```sh
-gh secret set HCLOUD_TOKEN --body '<read-only token>'
-gh secret set HCLOUD_TOKEN --env production --body '<read & write token>'
-gh secret set TF_API_TOKEN --body '<hcp token>'
-gh secret set TF_API_TOKEN --env production --body '<hcp token>'
+gh secret set HCLOUD_TOKEN                    # production Read Only
+gh secret set HCLOUD_TOKEN_STAGING            # staging Read Only
+gh secret set TF_API_TOKEN                    # the HCP user token
+gh secret set HCLOUD_TOKEN --env production   # production Read & Write
+gh secret set TF_API_TOKEN --env production   # the same HCP user token
+gh secret set HCLOUD_TOKEN --env staging      # staging Read & Write
+gh secret set TF_API_TOKEN --env staging      # the same HCP user token
 ```
+
+Do not pass `--body '<token>'`: that records the secret in your shell history, where it then lives until the file rotates out.
 
 **Secrets created in this stage**
 
 | Name | Scope | Value from | Read by |
 |---|---|---|---|
-| `HCLOUD_TOKEN` | Repository | Stage 1, Read Only token | PR plans, drift detection, the apply workflow's plan job, the Ansible inventory |
-| `HCLOUD_TOKEN` | `production` Environment | Stage 1, Read & Write token | The apply job only, after approval. GitHub resolves an Environment secret ahead of a repository secret of the same name, which is the whole mechanism. |
+| `HCLOUD_TOKEN` | Repository | Stage 1, production Read Only | Production's PR plans, drift detection and apply-workflow plan job, and the Ansible inventory |
+| `HCLOUD_TOKEN_STAGING` | Repository | Stage 1, staging Read Only | Staging's PR plans, drift detection and apply-workflow plan job |
+| `HCLOUD_TOKEN` | `production` Environment | Stage 1, production Read & Write | Production's apply job only, after approval. GitHub resolves an Environment secret ahead of a repository secret of the same name, which is the whole mechanism. |
+| `HCLOUD_TOKEN` | `staging` Environment | Stage 1, staging Read & Write | Staging's apply job, immediately on merge |
 | `TF_API_TOKEN` | Repository | Stage 2 | Every Terraform job |
-| `TF_API_TOKEN` | `production` Environment | Stage 2, same value | The apply job |
+| `TF_API_TOKEN` | `production` Environment | Stage 2, same value | Production's apply job |
+| `TF_API_TOKEN` | `staging` Environment | Stage 2, same value | Staging's apply job |
 
-**Where those two names come from.** Neither `production` nor the repository secret name `HCLOUD_TOKEN` is written in any workflow. Both are declared by `terraform/environments/prod/pipeline.yml`, which the pipeline's discovery step reads; the workflows carry no environment name at all. If you rename either, rename it there in the same change, or the plan job resolves an empty secret and the apply job attaches to an Environment that does not exist.
+**`.github/dependabot.yml` already lists both environment directories**, and it must keep listing exactly the ones that exist. Dependabot's terraform ecosystem has no discovery mechanism, so a directory the list omits is not partially covered — it is uncovered, and its provider pins rot with no signal. The CI suite compares that list against the lockfiles in the tree and fails the build if a lockfile-bearing directory is missing. If you drop the second environment, drop its entry with it; if you add a third, add one.
 
-The `production` Environment **must** define `HCLOUD_TOKEN`. GitHub resolves an *absent* Environment secret to the repository secret of the same name rather than failing, so omitting it would make the apply job authenticate with the read-only token — or, once a second environment exists, with another environment's. The apply job detects that and refuses to apply, but the fix is here.
+**The two read-only secrets have different names on purpose.** A repository secret holds one value, and plan jobs declare no `environment:` — they can only reach repository secrets — so each environment needs a name of its own. Which name is read comes from that environment's own `pipeline.yml`, not from any workflow.
 
-**Check:** four secrets set; `production` shows one required reviewer; the label exists; the repository is private.
+**Where those names come from.** No environment name and no secret name is written in any workflow. Each is declared by that environment's own `pipeline.yml`, which the pipeline's discovery step reads. If you rename one, rename it there in the same change, or the plan job resolves an empty secret and the apply job attaches to an Environment that does not exist.
 
-**Adding a *second* environment is out of this document's scope.** This is the procedure for the first host, and it assumes one environment throughout — one tailnet, one inventory group, one platform stack.
+**Each Environment must define its own `HCLOUD_TOKEN`.** GitHub resolves an *absent* Environment secret to the repository secret of the same name rather than failing — so an Environment that omits it applies with whatever the repository holds under that name, which here is **production's read-only token**, and at more than one environment could be another environment's write token. The apply job digests the value and refuses to apply when it matches the repository-scoped one, but the fix is here.
 
-What it is, before anything else, is **a second server running permanently**: another instance and another volume billed monthly, another host to patch, converge and monitor, another tailnet member, and another token pair to rotate. The checklists elsewhere describe secrets and settings, which makes an environment read like configuration; it is a machine. Decide you want the standing cost before working through them, not after. What a second environment takes from the pipeline is in the README ("A staging environment…"); staging itself was added by the change `add-a-staging-environment`, and what its host still takes is `docs/change-queue.md` entry 50. Nothing in that list is a change to a file under `.github/workflows/`.
+**Check:** seven secrets set — three at repository scope, two on each Environment; `production` shows one required reviewer and `staging` shows none; the label exists; the repository is private and holds exactly one commit, the license.
 
-## Stage 4. First Terraform apply: the server exists
+## Stage 4. First Terraform apply: both servers exist
 
-### 4.1 Prove the configuration locally
+### 4.1 Prove both configurations locally
 
-Create `.envrc` from `.envrc.example` with the **Read Only** token, run `direnv allow` (or `source .envrc`), then:
+Each environment needs its own read-only token in scope, because one token reaches one project. Put production's in the repo-root `.envrc` (copy `.envrc.example`), and staging's in an `.envrc` **inside** `terraform/environments/staging/` — directory-scoped, so planning staging never leaves staging's token in the shell that plans production. Both paths are gitignored.
+
+Run `direnv allow` in each directory that has one; direnv loads the nearest `.envrc` and does not merge the parent's, which is what keeps the two tokens apart. **Without direnv**, `source` the file for the environment you are about to work on, in a shell you do not then reuse for the other — the export outlives the directory, and carrying staging's token into `prod/` produces the misleading plan described below rather than an error.
+
+Then, for each environment in turn:
 
 ```sh
-cd terraform/environments/prod
+cd terraform/environments/prod        # then repeat in staging/
 terraform init
 terraform plan
 ```
 
-`init` connects to the HCP workspace from stage 2. `plan` should propose creating a firewall, an SSH key, a server and a volume, and nothing else. Do not run `apply`: the read-only token would refuse it, and that refusal is the boundary this whole setup relies on.
+`init` connects to that environment's HCP workspace from stage 2 — check the workspace name in the output matches the directory you are in. `plan` should propose creating a firewall, an SSH key, a server and a volume, and nothing else, in each environment.
 
-### 4.2 Push, and approve the first apply
+Do not run `apply`: the read-only token would refuse it, and that refusal is the boundary this whole setup relies on. **With the wrong environment's token in scope the plan is misleading rather than refused** — an empty workspace and a foreign project produce the same "four resources to create" you expect, so check the workspace name rather than the resource count.
+
+### 4.2 Push, and approve production's apply
+
+Commit your work:
 
 ```sh
-git add -A && git commit -m "chore: bootstrap <company> prod from the template"
+git add -A
+git commit -m "chore: bootstrap <company> from the template"
+```
+
+`git add -A` rather than `git commit -a`: after the clean-history variant's fresh `init`, every file is untracked and `-a` would commit nothing.
+
+If you took the **clean-history** variant in 3.1, this is the commit its reconciliation waited for, so bring the license commit underneath it now:
+
+```sh
+git fetch origin
+git rebase origin/main
+```
+
+If you took the keep-history variant, you merged at 3.1 and there is nothing to do here. Then push:
+
+```sh
 git push -u origin main
 ```
 
-Open Actions on github.com. Three workflows start: PR Validation and Ansible Verify do nothing useful on a push, but **Terraform Apply (prod)** runs its `plan` job, writes the plan into the run's summary, and then waits on the `production` Environment. Read the summary. If it is the four resources from 4.1, approve. The `apply` job creates them.
+`-u` sets the upstream, which the clean-history variant does not have — it used `remote add`, not a clone.
 
-### 4.3 Get the address and log in
+Open Actions on github.com. **Two** workflows start, and only one of them is the one you want. PR Validation and Ansible Verify do not run at all — both are triggered by pull requests only.
+
+- **Terraform Apply** — this is the one. Read on.
+- **Platform Deploy** — triggered because this push adds the whole `platform/` tree, which is its path filter. Its `deploy` job attaches to the `production` Environment, so **it raises a second approval request that looks exactly like the one below**. Do not approve it. There is nothing to deploy yet: the host is not converged until stage 6, and every secret that job needs is created in stages 5 to 7. Cancel the run, or leave it pending and let it expire. Stage 7.4 is where the platform stack is deployed for the first time, deliberately and with its prerequisites in place.
+
+The run covers **both** environments, because this push changes files under both environment directories:
+
+- **staging's apply runs immediately**, with no approval, and creates its four resources;
+- **production's apply waits** on the `production` Environment. Read its plan job's summary. If it is the four resources from 4.1, approve; the `apply` job creates them.
+
+Neither environment's failure withholds the other's apply — that separation is deliberate, so a broken staging can never be the reason a correct production change cannot ship. This is the pipeline's specified behaviour; two applies in one run, one of them pausing, is a path this repository has specified and not yet observed, so read the run rather than assuming it.
+
+**If the run fails at "List the paths this merge changes"**, with a message about a push carrying no usable comparison base, the repository was created empty and this is its first push. That is the case step 1 of 3.1 avoids by initialising with a license. Recover by making one more commit and pushing again — and that commit must touch a file **under each** `terraform/environments/<name>/`, because Terraform Apply is filtered to `terraform/**` at the workflow level and then narrowed to the environments whose own directories changed. A recovery commit touching neither starts no run at all, silently; one touching a single environment leaves the other server uncreated. Do not force-push: it produces the same failure with a different message.
+
+### 4.3 Get the addresses and log in
 
 ```sh
-cd terraform/environments/prod && terraform output
+cd terraform/environments/prod && terraform output        # then repeat in staging/
 ```
 
-`server_ipv4_address` is the public address. Log in once as root with the operator key, which also records the host's fingerprint in your `known_hosts` (Ansible requires that in stage 6):
+Each environment's `server_ipv4_address` is that server's public address; you now have two. Record both.
+
+Log in once as root to **the production host** with the operator key, which also records its fingerprint in your `known_hosts` — Ansible requires that in stage 6:
 
 ```sh
-ssh -i ~/.ssh/<company>-prod root@<ipv4>
+ssh -i ~/.ssh/<company>-root root@<prod ipv4>
 ```
+
+The staging host answers the same key, and logging into it is worth doing once to confirm it is reachable. It needs no `known_hosts` entry, because nothing converges it: stage 6 configures the production host only.
 
 ### 4.4 DNS
 
-In the DNS provider, create an `A` record per hostname an application will serve, pointing at `<ipv4>`. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now. There is no Terraform for DNS, deliberately — see "Managing DNS in Terraform" in `docs/deferred-work.md`, which names the provider (ukraine.com.ua, nameservers `inhostedns.*`) and lists the zone's records as read on 2026-09-08, including the MX and SPF that make an automated migration riskier than it looks.
+In the DNS provider, create an `A` record per hostname an application will serve, **pointing at the production address**. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now.
 
-**Secrets created in this stage:** none. `.envrc` holds the read-only token and is gitignored.
+**Do not point a hostname at the staging server.** It ships with `web_allowed_cidrs = []`, so its cloud firewall opens neither 80 nor 443 and nothing answers there; a record aimed at it produces a hostname that times out and a certificate that never issues, with no error naming the cause. Staging gets its own hostnames from the change that deploys something to it, which also opens those ports deliberately.
 
-**Check:** `terraform plan` locally now says "No changes"; the nightly Drift Detection workflow, run once by hand from Actions → Drift Detection → Run workflow, also reports no drift; `ssh root@<ipv4>` works with the operator key and nothing else.
+There is no Terraform for DNS, deliberately — see "Managing DNS in Terraform" in `docs/deferred-work.md`, which names the provider (ukraine.com.ua, nameservers `inhostedns.*`) and lists the zone's records as read on 2026-09-08, including the MX and SPF that make an automated migration riskier than it looks.
+
+**Secrets created in this stage:** none. The two `.envrc` files hold the two read-only tokens and are gitignored.
+
+**Check:** `terraform plan` says "No changes" locally in **both** environment directories; the nightly Drift Detection workflow, run once by hand from Actions → Drift Detection → Run workflow, reports no drift for **both** environments in one run — its own `report` job will still fail at this stage, because `HEARTBEAT_PING_KEY` is not created until stage 7.3, so read the two `drift` jobs rather than the run's overall result; `ssh root@<prod ipv4>` works with the operator key and nothing else; both servers appear in their own Hetzner projects and neither project holds anything you created by hand.
+
+## From here on, one host
+
+You now have two servers. **Everything from stage 5 to stage 9 configures one of them — the production host.** This is not an omission in the procedure; three mechanisms in this repository are single-environment by construction, and no step you can follow would change that:
+
+- **`ansible/playbooks/host-baseline.yml` targets `hosts: prod`**, a literal rather than a parameter. No play can be pointed at a second environment.
+- **`ansible/inventory/hcloud.yml` authenticates with a single `HCLOUD_TOKEN`**, and a Hetzner token reaches one project. With a project per environment, the inventory sees one environment at a time — and the failure is quiet: a play whose `hosts:` matches nothing prints `skipping: no hosts matched` and **exits 0**, so a converge that reached no host reads exactly like one that had nothing to do.
+- **`.github/workflows/platform-deploy.yml` declares `environment: production`** and deploys to a single `PLATFORM_DEPLOY_HOST`. The platform stack has no per-environment path at all.
+
+The first two are `docs/change-queue.md` entry 50; the third has an entry of its own there. Until those land, the staging server is a provisioned, reachable host with an attached unmounted volume, and that is all it is.
+
+**If you decide you do not want it yet**, delete `terraform/environments/staging/`, remove its `HCLOUD_TOKEN_STAGING` repository secret and its `staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
 
 ## Stage 5. Tailscale
 
@@ -343,7 +460,7 @@ You should see your server under `@prod`. If you see nothing, `HCLOUD_TOKEN` is 
 cd ansible
 ansible-playbook playbooks/host-baseline.yml \
   --vault-id prod@prompt \
-  --private-key ~/.ssh/<company>-prod \
+  --private-key ~/.ssh/<company>-root \
   -e tailscale_auth_key=<tskey-auth-... from stage 5>
 ```
 
@@ -357,7 +474,7 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
 2. Log in the way you will from now on, over the tailnet, unprivileged:
 
    ```sh
-   ssh -i ~/.ssh/<company>-prod-ops ops-<you>@100.x.y.z
+   ssh -i ~/.ssh/<company>-ops ops-<you>@100.x.y.z
    docker ps        # works: the account is in the docker group
    sudo -n true     # refused: the account has no sudo, by design
    ```
@@ -386,7 +503,7 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
 | `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository | The **private** half of the platform deploy key from stage 0. Store it now, then delete the local file. | `platform-deploy.yml`'s deploy job |
 | `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
-**Check:** `sudo ufw status` as root shows default deny with 22, 80, 443 and the tailnet rules; `tailscale status` on the server shows `Running`; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
+**Check** (the production host; the staging server is untouched by this stage): `sudo ufw status` as root shows default deny with 22, 80, 443 and the tailnet rules; `tailscale status` on the server shows `Running`; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
 
 **Then prove the prune reports.** Its timer is weekly, so nothing reaches the heartbeat service until it fires — and a reporter that cannot reach the observer leaves a *successful* unit behind by design, so a green `systemctl status` is not evidence. Trigger one activation and read what it says:
 
@@ -461,7 +578,7 @@ Until this is done the `MetricsTargetDown` alert fires for `postgres-exporter`, 
 
 **The heartbeat.** Nothing to run; confirm in the heartbeat service that pings are arriving every couple of minutes.
 
-**Check:** `docker ps` shows nine `platform-*` containers, all `(healthy)`; `http://100.x.y.z:3000` from your workstation opens Grafana and `admin` with the Grafana password shows three dashboards; the heartbeat service shows the check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in `#alerts`.
+**Check** (the production host): `docker ps` shows nine `platform-*` containers, all `(healthy)`; `http://100.x.y.z:3000` from your workstation opens Grafana and `admin` with the Grafana password shows three dashboards; the heartbeat service shows the check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in `#alerts`.
 
 **Secrets created in this stage:** the seven in 7.3.
 
@@ -566,13 +683,17 @@ Do these once the first pull requests have run, since branch protection can only
 
 ## Appendix A. Complete secret inventory
 
-Every credential the system uses, in one place. "Env" means the `production` GitHub Environment.
+Every credential the system uses, in one place. "Env" means a GitHub Environment; where a row names one, it says which.
+
+The Hetzner rows come in pairs, one per environment, because a Hetzner token reaches exactly one project. The `TF_API_TOKEN` row does not: one HCP user token serves both workspaces.
 
 | Name | Where | Created in | Value from | Breaks when wrong |
 |---|---|---|---|---|
-| Hetzner Read Only token | `.envrc`; repo secret `HCLOUD_TOKEN` | 1 | Hetzner project → API tokens | Local plans, PR plans, drift detection, Ansible inventory |
-| Hetzner Read & Write token | Env secret `HCLOUD_TOKEN` | 1 | Same | The apply job |
-| `TF_API_TOKEN` | Repo secret and Env secret; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
+| Production Hetzner Read Only | repo-root `.envrc`; repo secret `HCLOUD_TOKEN` | 1 | The production Hetzner project → API tokens | Production's local plans, PR plans and drift detection; the Ansible inventory |
+| Production Hetzner Read & Write | `production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
+| Staging Hetzner Read Only | `terraform/environments/staging/.envrc`; repo secret `HCLOUD_TOKEN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection |
+| Staging Hetzner Read & Write | `staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
+| `TF_API_TOKEN` | Repo secret and **both** Env secrets; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |
 | Operator inspection key | Workstation | 0 | `ssh-keygen` | Daily unprivileged login |
 | Tailscale server auth key | Password manager | 5 | Tailscale → Keys | Joining the host to the tailnet (first run, rebuilds) |
@@ -604,10 +725,14 @@ The graces are set against **observed** scheduling, not against the `cron:` line
 
 ## Appendix B. Rebuilding an existing host
 
+**This covers the production host** — the configured one. Rebuilding the staging server is `server_enabled` toggled off and on in its own `terraform.tfvars`, then reading its new address, because nothing else has been done to it.
+
 The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, 5.3's auth key if the old one expired, 6.3, 6.4 (new tailnet IP → `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by re-running the last Platform Deploy from Actions, 7.5, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/change-queue.md` entry 33 is what closes that, and entry 30 is the plan to turn this paragraph into a rehearsed runbook with timings.
 
-## Appendix C. What to change for a company host
+## Appendix C. What to change for a company deployment
 
 Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/change-queue.md`. The first two findings there — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The ones still to do before real data arrives: log rotation (21), swap and container limits (22, 7). The ones a company needs that this repository does not: a private repository in the company organisation, an approver who is not the author, and DNS as code (26).
+
+**Two environments are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. What a company still gets that this repository does not is the second host *configured*, and that waits on the entries stage 5 names.
 
 **Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-server` — the name prod's tfvars uses — would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. This stopped being hypothetical when `add-a-staging-environment` added a second environment: staging's `terraform.tfvars` names its server `staging-server` for exactly this reason, and says so where the value is set. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.
