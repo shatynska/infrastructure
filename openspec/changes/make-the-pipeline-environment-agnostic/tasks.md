@@ -370,6 +370,66 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   copy was then run against all six refusal shapes plus a clean two-environment tree,
   and all three behave identically.
 
+  **Review round 1 (7.4). Six findings applied; two raised and not applied.**
+
+  Applied on this branch, each verified: the pull-request plan step now fails on ANY
+  non-zero status rather than on exit 1 alone (137 from an OOM-killed runner, 143, 126
+  and 127 previously passed as a plan that ran and passed, and `validate` now concludes
+  explicitly on that row's result); the plan comment's body is written before `init` and
+  the comment steps guard on `steps.plan.outcome != ''` rather than `!= 'skipped'`, which
+  a step carrying no `if:` can never be, so a failed gitleaks or a failed `init` no longer
+  ends the log with a missing-file error from the comment action; `drift.yml` matches its
+  issue on the whole title rather than by `--search ... in:title` with `.[0]`, which is
+  ranked and tokenised and would let `prod`'s clean plan close `prod-eu`'s real drift
+  report; the declaration reader trims rather than deletes internal whitespace and refuses
+  an unusable secret name or a control character by name, instead of normalising a value
+  into a usable-looking one; and the duplication justification is corrected in all four
+  places -- copies are not the only available shape, a composite action would work, and
+  the reason for not using one is the cost of a fourth file in this diff.
+
+  The sixth is the sweep narrowed under 5.2 above. The review found the narrowing left a
+  reachable escape -- a step writing a declared secret to `$GITHUB_ENV` for a later plan
+  to inherit, or an action handed it through `with:` -- so it was replaced with the
+  CLOSED FORM this capability holds its own suppression checks to: the whole job is swept
+  again, with exactly one exemption, for the step whose `id` the job publishes in its
+  `outputs:` and whose `run` invokes no Terraform command. A second step wearing that
+  shape is itself an offence. All five escape routes were confirmed red. The review also
+  proposed naming prod's read-only secret something other than `HCLOUD_TOKEN`, which
+  would satisfy both assertions unedited; that is checked and does not work --
+  `test_prod_declares_the_secret_and_environment_it_already_uses` requires the name, and
+  it would need a repository secret created before the merge, which design.md Decision 1
+  exists to avoid.
+
+  **Two findings are NOT applied, because both stem from shapes this change's own
+  specification prescribes.** Fixing either properly means amending a requirement, not
+  patching YAML, so they are recorded here and raised rather than absorbed.
+
+  - **`apply.yml`: one environment's plan failure blocks every environment's apply.**
+    `needs:` is job-scoped, not row-scoped, so `fail-fast: false` lets every plan row run
+    but any failing row makes the whole `plan` job `failure` and skips `apply` for all
+    rows. Latent at one environment and invisible to this change's acceptance test. It is
+    fail-CLOSED -- nothing is applied that should not be -- and the obvious repair is
+    worse: an `if:` letting apply rows start regardless would raise an Environment
+    approval for a row with no saved plan, which *Gated Production Apply* forbids by
+    name. A correct repair needs a further job, after the plan matrix and declaring no
+    `environment:`, that resolves which environments actually produced a plan and which
+    the apply matrix then runs over.
+  - **`apply.yml`: a run is no longer atomic over its concurrency group.** Workflow-level
+    `concurrency` held the group for the whole run; job level acquires it twice with a gap
+    between, so a second merge's plan can run between the first merge's plan and its
+    apply. The second merge's approved apply then fails "Saved plan is stale" -- after the
+    reviewer has already granted the approval. That is fail-safe and is the requirement's
+    own scenario "Applied changes match the approved plan" doing its job, but it burns
+    approvals, and it is reachable at ONE environment, unlike the finding above. A second
+    and unverified consequence: if a job awaiting Environment approval counts as *pending*
+    for its concurrency group, a third merge's plan queuing would CANCEL an approved,
+    waiting apply -- silently, since a cancellation is not a failure. That behaviour is
+    GitHub's and could not be established from this repository.
+
+    *Serialized Terraform Runs* as this change amends it prescribes the job-level shape
+    and forbids the workflow-level one, so the gap is in the requirement as much as in
+    the code.
+
 ## 8. Archive
 
 - [ ] 8.1 Once the effect is confirmed, bring the branch back to the freshly fetched

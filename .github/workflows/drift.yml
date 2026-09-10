@@ -47,11 +47,15 @@ jobs:
           # by nothing, which is indistinguishable from it not existing.
           #
           # THIS BODY IS IDENTICAL IN ALL THREE TERRAFORM WORKFLOWS, and
-          # `.github/tests` asserts that it stays so. A job attaches to one
-          # GitHub Environment and jobs cannot be shared between workflows, so
-          # the copies are the only available shape; only one of them is
-          # executed by the suite, and the identity assertion is what makes
-          # running that one evidence about all three. Edit them together.
+          # `.github/tests` asserts that it stays so. Copies are not the only
+          # available shape -- a composite action under `.github/actions/` would
+          # share these steps, and the reason for not using one is that it costs
+          # a fourth file in a diff already restructuring three gated workflows,
+          # and that `.github/tests` locates this body by step name inside a
+          # workflow. Both are costs rather than blockers. What makes the copies
+          # safe meanwhile is the identity assertion: the suite executes one copy
+          # and that assertion is what makes running it evidence about all three.
+          # Edit them together, or factor them out together.
           #
           # Free of Actions expressions on purpose -- it takes nothing from the
           # event -- so `.github/tests` can pull this body out and run it
@@ -74,11 +78,18 @@ jobs:
           # the same shape the gitleaks step uses to read its pin out of
           # .pre-commit-config.yaml, and what keeps this body runnable with
           # nothing but bash, jq and coreutils.
+          #
+          # Leading and trailing whitespace is trimmed; whitespace INSIDE a
+          # value is kept, because a GitHub Environment name may legitimately
+          # carry a space and silently deleting it would attach the apply job to
+          # a different Environment than the one declared -- one GitHub would
+          # then create on demand, with no protection rules. A value that cannot
+          # be used is refused below by name, which is what the requirement asks
+          # for; normalising it into a usable-looking one is not.
           field() {
             sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
               | head -n 1 \
-              | sed -E "s/[[:space:]]+#.*\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/" \
-              | tr -d '[:space:]'
+              | sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/"
           }
 
           records=$(mktemp)
@@ -108,6 +119,29 @@ jobs:
               echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
               incomplete=1
             fi
+
+            # A value that is present but unusable is refused by name rather
+            # than passed on. A plan job indexes `secrets[...]` with the secret
+            # name, and an index GitHub cannot resolve yields an EMPTY
+            # credential rather than an error -- the plan then authenticates as
+            # nobody and fails somewhere far from the cause.
+            case "$read_only_secret" in
+              "") ;;
+              [0-9]* | *[!A-Za-z0-9_]*)
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which is not a GitHub secret name — letters, digits and underscores only, not starting with a digit. A plan job indexes secrets[...] with it, and a name that does not resolve yields an empty credential rather than an error."
+                incomplete=1
+                ;;
+            esac
+
+            # A control character in either value would corrupt the
+            # tab-separated record this loop builds, so it is refused here
+            # rather than silently splitting an environment into two.
+            case "${github_environment}${read_only_secret}" in
+              *[[:cntrl:]]*)
+                echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
+                incomplete=1
+                ;;
+            esac
 
             # The one OPTIONAL field. Absent means the gate applies, so a
             # mistake in a declaration fails safe. A value that is neither
@@ -245,7 +279,18 @@ jobs:
         run: |
           set -euo pipefail
           issue_title="Terraform drift detected: terraform/environments/${ENVIRONMENT_NAME}"
-          existing=$(gh issue list --search "\"$issue_title\" in:title" --state open --json number --jq '.[0].number // empty')
+
+          # Matched on the WHOLE title, not by `--search ... in:title`. That
+          # search is tokenised rather than exact and returns ranked results, so
+          # taking `.[0]` of it picks whatever ranked first -- and once a second
+          # environment exists, one whose name extends another's token sequence
+          # (`prod` and `prod-eu`) can rank first for the other's title. One
+          # environment's drift would then be appended to the other's issue, and
+          # later its clean plan would close that other environment's still-real
+          # report. This is the requirement's own scenario "Drift in one
+          # environment does not resolve another's report", inverted.
+          existing=$(gh issue list --state open --limit 200 --json number,title \
+            | jq -r --arg title "$issue_title" '[.[] | select(.title == $title)] | .[0].number // empty')
 
           if [ "$EXIT_CODE" = "0" ]; then
             echo "No drift."

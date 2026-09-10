@@ -92,11 +92,15 @@ jobs:
           # by nothing, which is indistinguishable from it not existing.
           #
           # THIS BODY IS IDENTICAL IN ALL THREE TERRAFORM WORKFLOWS, and
-          # `.github/tests` asserts that it stays so. A job attaches to one
-          # GitHub Environment and jobs cannot be shared between workflows, so
-          # the copies are the only available shape; only one of them is
-          # executed by the suite, and the identity assertion is what makes
-          # running that one evidence about all three. Edit them together.
+          # `.github/tests` asserts that it stays so. Copies are not the only
+          # available shape -- a composite action under `.github/actions/` would
+          # share these steps, and the reason for not using one is that it costs
+          # a fourth file in a diff already restructuring three gated workflows,
+          # and that `.github/tests` locates this body by step name inside a
+          # workflow. Both are costs rather than blockers. What makes the copies
+          # safe meanwhile is the identity assertion: the suite executes one copy
+          # and that assertion is what makes running it evidence about all three.
+          # Edit them together, or factor them out together.
           #
           # Free of Actions expressions on purpose -- it takes nothing from the
           # event -- so `.github/tests` can pull this body out and run it
@@ -119,11 +123,18 @@ jobs:
           # the same shape the gitleaks step uses to read its pin out of
           # .pre-commit-config.yaml, and what keeps this body runnable with
           # nothing but bash, jq and coreutils.
+          #
+          # Leading and trailing whitespace is trimmed; whitespace INSIDE a
+          # value is kept, because a GitHub Environment name may legitimately
+          # carry a space and silently deleting it would attach the apply job to
+          # a different Environment than the one declared -- one GitHub would
+          # then create on demand, with no protection rules. A value that cannot
+          # be used is refused below by name, which is what the requirement asks
+          # for; normalising it into a usable-looking one is not.
           field() {
             sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
               | head -n 1 \
-              | sed -E "s/[[:space:]]+#.*\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/" \
-              | tr -d '[:space:]'
+              | sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/"
           }
 
           records=$(mktemp)
@@ -153,6 +164,29 @@ jobs:
               echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
               incomplete=1
             fi
+
+            # A value that is present but unusable is refused by name rather
+            # than passed on. A plan job indexes `secrets[...]` with the secret
+            # name, and an index GitHub cannot resolve yields an EMPTY
+            # credential rather than an error -- the plan then authenticates as
+            # nobody and fails somewhere far from the cause.
+            case "$read_only_secret" in
+              "") ;;
+              [0-9]* | *[!A-Za-z0-9_]*)
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which is not a GitHub secret name — letters, digits and underscores only, not starting with a digit. A plan job indexes secrets[...] with it, and a name that does not resolve yields an empty credential rather than an error."
+                incomplete=1
+                ;;
+            esac
+
+            # A control character in either value would corrupt the
+            # tab-separated record this loop builds, so it is refused here
+            # rather than silently splitting an environment into two.
+            case "${github_environment}${read_only_secret}" in
+              *[[:cntrl:]]*)
+                echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
+                incomplete=1
+                ;;
+            esac
 
             # The one OPTIONAL field. Absent means the gate applies, so a
             # mistake in a declaration fails safe. A value that is neither
@@ -393,21 +427,54 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
           ENVIRONMENT_NAME: ${{ matrix.environment.name }}
         run: |
-          set -euo pipefail
-          terraform init
-          set +e
+          set -uo pipefail
+
+          # The comment body is written FIRST, and then again with whatever the
+          # plan produced. The steps below post it whenever this step ran at
+          # all, and without this a failure before the plan -- a failed `init`,
+          # most often -- would leave them pointing at a file that does not
+          # exist, so the last error in the log would be a missing-file failure
+          # from the comment action rather than the failure that actually
+          # stopped the plan.
+          heading="### Terraform Plan — \`terraform/environments/${ENVIRONMENT_NAME}\`"
+          printf '%s\n\nThis plan did not run to completion; see the job log.\n' \
+            "$heading" >comment_body.md
+
+          terraform init >init_output.txt 2>&1
+          init_exit=$?
+          cat init_output.txt
+          if [ "$init_exit" -ne 0 ]; then
+            {
+              echo "$heading"
+              echo
+              echo '`terraform init` failed, so no plan was produced.'
+              echo
+              echo '```'
+              cat init_output.txt
+              echo '```'
+            } >comment_body.md
+            exit 1
+          fi
+
           terraform plan -no-color -input=false -out=tfplan >plan_output.txt 2>&1
           plan_exit=$?
-          set -e
           {
-            echo "### Terraform Plan — \`terraform/environments/${ENVIRONMENT_NAME}\`"
+            echo "$heading"
             echo
             echo '```'
             cat plan_output.txt
             echo '```'
           } >comment_body.md
           cat plan_output.txt
-          if [ "$plan_exit" -eq 1 ]; then
+
+          # ANY non-zero status fails this row, not exit 1 alone. `terraform
+          # plan` returns 0 or 1 of its own accord, but a runner that OOM-kills
+          # it reports 137, a SIGTERM 143, and an unusable binary 126 or 127 --
+          # and `validate` now concludes explicitly on this row's result, so a
+          # status this step let through would be reported as a plan that ran
+          # and passed.
+          if [ "$plan_exit" -ne 0 ]; then
+            echo "::error::terraform plan exited ${plan_exit}. Refusing to report this environment as planned."
             exit 1
           fi
 
@@ -416,8 +483,13 @@ jobs:
       # same comment, leaving one plan standing — and at one environment that
       # defect and the correct behaviour are indistinguishable, which is why
       # this is asserted statically rather than observed on a run.
+      # `steps.plan.outcome != ''` and NOT `!= 'skipped'`. The plan step carries
+      # no `if:`, so it can never be skipped and that comparison is always true
+      # -- including when an earlier step in this job failed, at which point
+      # `outcome` is the empty string and these steps would run against a body
+      # this job never wrote.
       - name: Find existing plan comment
-        if: always() && steps.plan.outcome != 'skipped'
+        if: always() && steps.plan.outcome != ''
         id: find_comment
         uses: peter-evans/find-comment@v4
         with:
@@ -426,7 +498,7 @@ jobs:
           body-includes: "### Terraform Plan — `terraform/environments/${{ matrix.environment.name }}`"
 
       - name: Post plan as PR comment
-        if: always() && steps.plan.outcome != 'skipped'
+        if: always() && steps.plan.outcome != ''
         uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find_comment.outputs.comment-id }}

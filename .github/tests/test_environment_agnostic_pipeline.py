@@ -927,36 +927,46 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
         environment's name -- a `case` over directory basenames, or a literal
         read-only secret name that only one environment uses.
 
-        SCOPED TO THE STEPS THAT INVOKE TERRAFORM, and to the job-level `env:`
-        those steps inherit. This narrowing was made by the implementing author,
-        not by the author of this file, and the reason is recorded here rather
-        than in a commit message because it is the one place two SPECIFIED
-        assertions in this module could not both be satisfied.
+        THE WHOLE JOB IS SWEPT, with ONE named exemption. That exemption was
+        added by the implementing author, not by the author of this file, and
+        the reason is recorded here rather than in a commit message because it
+        is the one place two SPECIFIED assertions in this module could not both
+        be satisfied.
 
-        As first written this read the whole job, and so failed `apply.yml`'s
-        plan job for the read of `secrets.HCLOUD_TOKEN` that
-        `TestTheApplyJobEstablishesItResolvedItsOwnWriteToken
+        As first written this swept the whole job with no exemption, and so
+        failed `apply.yml`'s plan job for the read of `secrets.HCLOUD_TOKEN`
+        that `TestTheApplyJobEstablishesItResolvedItsOwnWriteToken
         .test_the_guard_reads_the_repository_scoped_hcloud_token_by_that_name`
-        REQUIRES to be there. That is not a resolvable tension in the
-        implementation: the Credential Scoping by Privilege requirement obliges
-        the omitted-write-token guard to digest `HCLOUD_TOKEN` by that exact
-        name ("The comparison is against that name specifically, because that is
-        what GitHub falls back to"), and obliges it to happen where the
+        REQUIRES to be there. The Credential Scoping by Privilege requirement
+        obliges the omitted-write-token guard to digest `HCLOUD_TOKEN` by that
+        exact name ("The comparison is against that name specifically, because
+        that is what GitHub falls back to"), and obliges it to happen where the
         REPOSITORY-scoped value is visible, which is only a job declaring no
         `environment:`. Prod declares `HCLOUD_TOKEN` as its own read-only secret
         (design.md Decision 1, so that nothing in repository settings moves at
         one environment), so the guard's mandatory read and this sweep's subject
-        are the same string. No workflow can satisfy both readings.
+        are the same string.
 
-        What the requirement's sentence is about is which credential a plan RUNS
-        UNDER -- "the secret a plan runs under comes from workflow text rather
-        than from that environment's own declaration". So the sweep is scoped to
-        that: a step that invokes Terraform, plus the job-level `env:` such a
-        step inherits, may not bind a declared read-only secret by literal name.
-        A plan job that named its Hetzner credential literally still fails, at
-        step level or at job level; a step that digests a fixed repository
-        secret and publishes nothing but a salted hash of it does not, because
-        no plan runs under it.
+        The three escapes were each checked, and each is closed by another
+        assertion in this module: moving the guard into a job that declares an
+        `environment:` fails that class's own locator; reading the repository
+        token under a different spelling fails
+        `test_the_guard_reads_the_repository_scoped_hcloud_token_by_that_name`;
+        and giving prod a different read-only secret name fails
+        `test_prod_declares_the_secret_and_environment_it_already_uses`, and
+        would additionally require creating a repository secret before the merge
+        -- the exact repository-settings change design.md Decision 1 exists to
+        avoid. So the exemption is made here.
+
+        IT IS A CLOSED FORM, not a scope reduction, which is the standard this
+        capability holds its own suppression checks to. Exactly one step is
+        exempt: the one whose `id` this job publishes in its `outputs:` and
+        whose `run` invokes no Terraform command -- the digest emitter, and
+        nothing else that could be written. Every other read of a declared
+        read-only secret anywhere in an ungated job still fails, INCLUDING the
+        indirect ones a Terraform-only sweep would have missed: a step writing
+        the secret to `$GITHUB_ENV` for a later plan to inherit, or an action
+        handed it through `with:`.
         """
         self.test_there_is_a_name_to_look_for()
         declared_secrets = sorted(
@@ -971,8 +981,9 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
             "no environment declares a read-only secret name, so this assertion would "
             "read nothing",
         )
-        offenders = []
         invoking_terraform = re.compile(r"terraform\s+[a-z]")
+        offenders = []
+        exempted = []
         for path in TERRAFORM_WORKFLOWS:
             workflow = load_yaml(path)
             for job_name, job in jobs(workflow).items():
@@ -981,36 +992,53 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
                     # GitHub Environment, so naming that secret there is the
                     # scheme working rather than a mapping in workflow text.
                     continue
-                # Read at job level too: a job-level `env:` reaches every step
-                # below it, so a literal placed there is bound into the plan
-                # exactly as one placed on the step would be.
-                inherited = uncommented(yaml.safe_dump(job.get("env") or {}, sort_keys=True))
+                published = compact(yaml.safe_dump(job.get("outputs") or {}, sort_keys=True))
+                # Job-level `env:` reaches every step below it, so it is swept
+                # as part of the job rather than attributed to any one step.
+                surfaces = [("<job-level env:>", job.get("env"), False)]
                 for index, step in enumerate(job.get("steps") or []):
-                    if not invocation_lines(step.get("run", ""), invoking_terraform):
-                        continue
-                    body = inherited + uncommented(
-                        yaml.safe_dump(
+                    step_id = str(step.get("id") or "")
+                    is_digest_emitter = (
+                        bool(step_id)
+                        and f"steps.{step_id}.outputs." in published
+                        and not invocation_lines(step.get("run", ""), invoking_terraform)
+                    )
+                    surfaces.append(
+                        (
+                            step_label(job_name, index, step),
                             {
                                 "env": step.get("env"),
                                 "with": step.get("with"),
                                 "run": step.get("run"),
                             },
-                            sort_keys=True,
+                            is_digest_emitter,
                         )
                     )
+                for label, surface, is_digest_emitter in surfaces:
+                    body = uncommented(yaml.safe_dump(surface or {}, sort_keys=True))
                     for secret in declared_secrets:
-                        if re.search(rf"secrets\.{re.escape(secret)}(?![A-Za-z0-9_])", body):
-                            offenders.append(
-                                f"{path.name}:{step_label(job_name, index, step)} runs "
-                                f"Terraform under `secrets.{secret}`"
-                            )
+                        if not re.search(rf"secrets\.{re.escape(secret)}(?![A-Za-z0-9_])", body):
+                            continue
+                        if is_digest_emitter:
+                            exempted.append(f"{path.name}:{label}")
+                            continue
+                        offenders.append(f"{path.name}:{label} reads `secrets.{secret}`")
         self.assertEqual(
             [],
             sorted(set(offenders)),
-            "these steps invoke Terraform in a job declaring no `environment:` and "
-            "bind a specific environment's read-only secret by name, so the secret a "
-            "plan runs under comes from workflow text rather than from that "
-            f"environment's own declaration: {sorted(set(offenders))}",
+            "these jobs declare no `environment:` and yet read a specific "
+            "environment's read-only secret by name, so the secret a plan runs under "
+            "comes from workflow text rather than from that environment's own "
+            f"declaration: {sorted(set(offenders))}",
+        )
+        self.assertLessEqual(
+            len(exempted),
+            1,
+            "more than one step claims the omitted-write-token guard's exemption "
+            f"from this sweep: {sorted(exempted)}. The exemption is for exactly one "
+            "step -- the digest emitter the Credential Scoping by Privilege "
+            "requirement obliges -- and a second step wearing its shape is a second "
+            "literal-named credential read that nothing else here would catch",
         )
 
 
@@ -3099,6 +3127,144 @@ class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
             "different environments -- the reviewer approving one plan and the pipeline "
             f"applying another. Copies: {sorted(bodies)}",
         )
+
+
+class TestTheTwoReadersOfADeclarationAgree(DeclarationTreeFixtureMixin, unittest.TestCase):
+    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    Configuration.
+
+    DERIVED, and added by the implementing author: no scenario states it.
+
+    A declaration is read TWICE by different code. The workflows read it with
+    `sed`, because a discovery body executed by this suite may use nothing but
+    bash, jq and coreutils. This module reads it with `yaml.safe_load`, and
+    locates it by shape rather than by name because the file's name was not
+    decided when these tests were written.
+
+    Every other assertion here exercises one reader or the other; none pairs
+    them on one file. So a declaration the two read DIFFERENTLY -- a duplicate
+    key, where `head -n 1` silently wins and YAML takes the last; a quoted value;
+    a trailing comment -- passes this module's census and reaches the pipeline as
+    something else. What the census approved and what the workflow ran would then
+    be different declarations, and nothing would say so.
+
+    Reconsider this assertion, do not weaken it, if the workflows ever gain a
+    real YAML parser, at which point there is one reader and nothing to pair.
+    """
+
+    def setUp(self) -> None:
+        require_external_tools(
+            self, ("bash", "jq"), "execute the workflow's declaration reader"
+        )
+
+    def _discovery_body(self) -> str:
+        candidates = [
+            str(step["run"])
+            for _, _, step in steps(load_yaml(PR_VALIDATION))
+            if step.get("run")
+            and "terraform/environments" in str(step["run"])
+            and "terraform/modules" not in str(step["run"])
+            and "GITHUB_OUTPUT" in str(step["run"])
+            and not ACTIONS_EXPRESSION.search(str(step["run"]))
+        ]
+        self.assertEqual(1, len(candidates), "expected exactly one discovery body")
+        return candidates[0]
+
+    def _shell_reading(self, tree: Path) -> dict:
+        outputs = tree / "github_output"
+        outputs.touch()
+        result = run_snippet(
+            self._discovery_body(),
+            dict(os.environ, GITHUB_OUTPUT=str(outputs), GITHUB_WORKSPACE=str(tree)),
+            tree,
+        )
+        self.assertEqual(
+            0,
+            result.returncode,
+            "the workflow's reader refused a declaration this module's reader "
+            f"accepted: {(result.stdout + result.stderr)[-600:]!r}",
+        )
+        emitted = github_output_pairs(outputs).get("environments", "")
+        self.assertTrue(emitted, "the discovery body emitted no environments")
+        return {entry["name"]: entry for entry in json.loads(emitted)}
+
+    def test_both_readers_return_the_same_values_for_the_committed_declarations(self) -> None:
+        """DERIVED -- see the class docstring, read over the tree as committed.
+        This is the pairing that matters most, because prod's declaration is the
+        one file both readers actually meet in production."""
+        tree = Path(tempfile.mkdtemp(prefix="reader-agreement-"))
+        self.addCleanup(shutil.rmtree, tree, ignore_errors=True)
+        source = ENVIRONMENTS_DIR
+        shutil.copytree(source, tree / "terraform" / "environments")
+
+        by_shell = self._shell_reading(tree)
+        by_python = environment_declarations()
+
+        self.assertEqual(
+            sorted(by_python),
+            sorted(by_shell),
+            "the two readers disagree about which environments exist",
+        )
+        for name in sorted(by_python):
+            with self.subTest(environment=name):
+                declaration = by_python[name]
+                self.assertEqual([], declaration.offences, "; ".join(declaration.offences))
+                self.assertEqual(
+                    (
+                        declaration.github_environment,
+                        declaration.read_only_secret,
+                        declaration.destroy_gate_applies,
+                    ),
+                    (
+                        by_shell[name]["github_environment"],
+                        by_shell[name]["read_only_secret"],
+                        by_shell[name]["destroy_policy_gate"],
+                    ),
+                    f"the workflow's reader and this module's reader disagree about "
+                    f"`{name}`: the census approved one declaration and the pipeline "
+                    f"would run another. Workflow read {by_shell[name]!r}",
+                )
+
+    def test_both_readers_agree_on_a_declaration_written_awkwardly(self) -> None:
+        """DERIVED -- the committed declarations are written the way this
+        repository writes them, so agreeing on them establishes little on its
+        own. These are the spellings a second environment's author could
+        plausibly reach for and the two readers could plausibly split on."""
+        tree = Path(tempfile.mkdtemp(prefix="reader-agreement-"))
+        self.addCleanup(shutil.rmtree, tree, ignore_errors=True)
+        self._write_tree(tree, {"prod": self._declaration_for("HCLOUD_TOKEN", "production", gate=True)})
+        awkward = (
+            "# A declaration written the long way round.\n"
+            'github_environment: "staging"   # quoted, with a trailing comment\n'
+            "read_only_secret:   HCLOUD_TOKEN_STAGING\n"
+            "destroy_policy_gate: false\n"
+        )
+        directory = tree / "terraform" / "environments" / "staging"
+        directory.mkdir(parents=True)
+        (directory / "pipeline.yml").write_text(awkward, encoding="utf-8")
+
+        by_shell = self._shell_reading(tree)
+        by_python = environment_declarations(tree)
+
+        self.assertEqual(sorted(by_python), sorted(by_shell))
+        for name in sorted(by_python):
+            with self.subTest(environment=name):
+                declaration = by_python[name]
+                self.assertEqual([], declaration.offences, "; ".join(declaration.offences))
+                self.assertEqual(
+                    (
+                        declaration.github_environment,
+                        declaration.read_only_secret,
+                        declaration.destroy_gate_applies,
+                    ),
+                    (
+                        by_shell[name]["github_environment"],
+                        by_shell[name]["read_only_secret"],
+                        by_shell[name]["destroy_policy_gate"],
+                    ),
+                    f"the two readers split on `{name}`. Workflow read "
+                    f"{by_shell[name]!r}",
+                )
 
 
 if __name__ == "__main__":  # pragma: no cover
