@@ -658,16 +658,15 @@ jobs:
       - name: Upload plan artifact
         uses: actions/upload-artifact@v7
         with:
-          name: tfplan-${{ matrix.environment.name }}
+          # THE ATTEMPT IS PART OF THE NAME. Artifacts are scoped to the RUN,
+          # and GitHub exposes no per-attempt listing, so the name is what
+          # carries the attempt: it is how the resolution below tells this
+          # attempt's saved plan from one a previous attempt left behind, and
+          # it is also why re-running every job of a run does not collide with
+          # a name the run already holds.
+          name: tfplan-${{ matrix.environment.name }}-attempt-${{ github.run_attempt }}
           path: terraform/environments/${{ matrix.environment.name }}/tfplan
           retention-days: 1 # tfplan holds sensitive values in cleartext
-          # Artifacts are scoped to the RUN, not to the attempt, so re-running
-          # every job of a run would otherwise fail here on a name this run
-          # already holds from its previous attempt. The resolution above reads
-          # this attempt's listing, so replacing the older artifact is what keeps
-          # the two agreeing: the plan that is downloaded is the plan this
-          # attempt's checks passed.
-          overwrite: true
 
   # Resolves which environments actually produced a saved plan — which is the
   # set the apply stage runs over, and NOT the set the merge affects. That
@@ -735,16 +734,22 @@ jobs:
           # an API returning 502 is indistinguishable from "no plan was saved"
           # unless it is refused here; read as the second it applies nothing and
           # reports green, leaving the divergence to the nightly drift sweep.
-          # SCOPED TO THIS ATTEMPT, not to the run. `runs/<id>/artifacts` returns
-          # every attempt's artifacts, and a re-run is precisely where that
-          # matters: attempt 1 plans an environment cleanly and uploads its
-          # saved plan; the operator re-runs; in attempt 2 that environment's
-          # destroy-policy gate refuses -- a delete appeared, or the override
-          # label was removed -- so it uploads nothing. Attempt 1's artifact is
-          # still in a run-scoped listing, so the environment would enter the
-          # planned set, raise its approval, and apply a plan this attempt's
-          # gate refused. That is the requirement's "only where every check its
-          # plan job performs has passed" holding within an attempt and failing
+          # THE LISTING IS RUN-SCOPED, AND THE ATTEMPT IS CARRIED IN THE NAME.
+          # Artifacts belong to a run rather than to an attempt, and there is no
+          # `runs/<id>/attempts/<n>/artifacts` endpoint -- that path 404s, which
+          # is how this was found rather than assumed. So the plan job uploads
+          # under a name carrying the attempt, and this step reconstructs that
+          # name below.
+          #
+          # It matters on a re-run: attempt 1 plans an environment cleanly and
+          # uploads its saved plan; the operator re-runs; in attempt 2 that
+          # environment's destroy-policy gate refuses -- a delete appeared, or
+          # the override label was removed -- so it uploads nothing. Attempt 1's
+          # artifact is still in the run's listing, and matched on a name
+          # carrying no attempt it would put that environment into the planned
+          # set, raise its approval, and apply a plan this attempt's gate
+          # refused. The requirement's "only where every check its plan job
+          # performs has passed" would then hold within an attempt and fail
           # across them.
           #
           # `per_page` rather than `--paginate`, deliberately: on an endpoint
@@ -753,7 +758,7 @@ jobs:
           # identity check below would then read as malformed, or worse, read as
           # its first page alone. One page is asserted to be the whole listing
           # instead, a few lines down.
-          if ! listing=$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/artifacts?per_page=100" 2>&1); then
+          if ! listing=$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" 2>&1); then
             echo "::error::Could not read this run's artifacts, so which environments produced a saved plan cannot be determined: ${listing}. Refusing to conclude that none did."
             exit 1
           fi
@@ -800,10 +805,10 @@ jobs:
             exit 1
           fi
 
-          # `tfplan-<environment>` is the name the plan job uploads under. The
-          # prefix is spelled out here because this body may carry no Actions
-          # expression, while the upload builds the name from a template -- so
-          # the two are stated in two places and could drift. A drift makes this
+          # `tfplan-<environment>-attempt-<n>` is the name the plan job uploads
+          # under. The literal parts are spelled out here because this body may
+          # carry no Actions expression, while the upload builds the name from a
+          # template -- so the two are stated in two places and could drift. A drift makes this
           # match nothing, resolve the empty set on every run, skip every apply
           # and report the workflow GREEN, since an explicitly empty planned set
           # is accepted by design. That is the most consequential silent failure
@@ -817,8 +822,8 @@ jobs:
           # assertion as a literal, which is why grepping the suite for it finds
           # nothing while the guard is real all the same.
           if ! planned=$(printf '%s' "$CANDIDATES" \
-            | jq -c --argjson published "$published" \
-              'map(select(("tfplan-" + .name) as $artifact | $published | index($artifact) != null))' 2>&1); then
+            | jq -c --argjson published "$published" --arg attempt "$RUN_ATTEMPT" \
+              'map(select(("tfplan-" + .name + "-attempt-" + $attempt) as $artifact | $published | index($artifact) != null))' 2>&1); then
             echo "::error::Could not match this run's saved plans against the discovered environments: ${planned}. Refusing to conclude which environments produced a plan."
             exit 1
           fi
@@ -935,7 +940,7 @@ jobs:
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          name: tfplan-${{ matrix.environment.name }}
+          name: tfplan-${{ matrix.environment.name }}-attempt-${{ github.run_attempt }}
           path: terraform/environments/${{ matrix.environment.name }}
 
       - name: Fail cleanly if the plan artifact is unavailable

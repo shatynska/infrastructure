@@ -345,10 +345,22 @@ jobs:
   #    nothing anywhere else. `validate` scans too, and unconditionally, which
   #    is what covers a pull request that plans nothing at all.
   #
-  # 2. IT IS GATED BY AN EMPTY MATRIX, NEVER BY AN `if:`. A pull request
-  #    affecting no environment resolves to `[]` and this job is skipped. A
-  #    job-level `if:` naming Terraform would put the secret scan behind a path
-  #    condition, which the Pull Request Validation Checks requirement forbids.
+  # 2. IT IS GATED BY AN `if:` READING THE DISCOVERY OUTPUT, not by an empty
+  #    matrix. That was the other way round until an empty matrix was actually
+  #    observed on a run: GitHub does not skip such a job, it never CREATES it,
+  #    and `needs.<job>.result` for a job that was never created is `failure` --
+  #    so every pull request touching no Terraform path failed the required
+  #    status check.
+  #
+  #    The condition names no Terraform path, and that is not a wording trick:
+  #    the Pull Request Validation Checks requirement forbids putting a secret
+  #    scan behind a path condition, and what satisfies that requirement is
+  #    `validate`'s own gitleaks step, which is unconditional and runs on every
+  #    pull request. THIS job's scan exists for a different obligation --
+  #    Pull Request Plan Visibility's "a secret scan SHALL precede every plan,
+  #    in the job that runs it" -- which has nothing to order where there is no
+  #    plan. `.github/tests` asserts the unconditional scan positively, so
+  #    gating this copy cannot be mistaken for gating them all.
   #
   # 3. IT IS NOT THE REGISTERED STATUS CHECK. A matrix generates one context
   #    name per row, so there is no stable name for branch protection to point
@@ -356,6 +368,7 @@ jobs:
   plan:
     name: plan (${{ matrix.environment.name }})
     needs: discover
+    if: ${{ needs.discover.outputs.plan-expected == 'true' }}
     runs-on: ubuntu-latest
     # No `environment:` — a plan job declaring one would both pause on that
     # Environment's protection rules and resolve `HCLOUD_TOKEN` to the

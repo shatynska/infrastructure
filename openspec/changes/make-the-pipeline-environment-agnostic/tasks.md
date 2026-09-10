@@ -271,8 +271,13 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 - [x] 5.3 Re-express the existing assertions this change invalidates. First,
   `test_no_job_containing_a_secret_scanning_step_is_conditioned_on_terraform_changes`
   fails any job holding a gitleaks step whose `if:` mentions Terraform — which the plan
-  matrix job's natural gate would. Resolve it by shaping the gate as an **empty matrix**
-  rather than an `if:`, not by relaxing the assertion. Second,
+  matrix job's natural gate would. Resolve it by a gate that does not name a Terraform
+  path, not by relaxing the assertion. **This originally said "an empty matrix rather
+  than an `if:`", and that was wrong** — see the record below: GitHub does not skip a job
+  whose matrix is empty, it never creates it, and `needs.<job>.result` for a job that was
+  never created is `failure`. The gate is an `if:` reading the discovery output, and what
+  keeps that honest is a positive assertion — that some scan in the workflow runs wholly
+  unconditionally — rather than the wording of a refusal. Second,
   `test_the_job_enclosing_the_validating_step_is_unconditional` and
   `test_the_step_invoking_the_suite_is_unconditional` both treat any `if:` key on the job
   as an offence, which `if: always()` trips. Re-express each to accept the single literal
@@ -787,6 +792,92 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   request changes `terraform/environments/prod/pipeline.yml`, so the matrix is non-empty
   and the skip-versus-error fork was never reached. It stays open until a pull request
   touching no Terraform path runs against this workflow.
+
+  **Pull request #121 merged 2026-09-10 05:40 UTC, and the apply run FAILED. Not
+  delivered.** Run 34442041731: `discover` and `plan (prod)` succeeded, `planned`
+  refused, `apply` never started.
+
+  **Cause: a GitHub API endpoint that does not exist.** Code review round 2 found that
+  the planned-set resolution read `runs/<id>/artifacts`, which spans re-run attempts, and
+  proposed `runs/<id>/attempts/<n>/artifacts` instead. That path was taken without being
+  checked, and it 404s — GitHub scopes artifacts to the run and exposes no per-attempt
+  listing. Verified against the real API after the failure: the run-scoped path returns
+  the listing, the attempts path returns `{"message": "Not Found", "status": "404"}`.
+
+  **It failed closed, which is the design working rather than a consolation.** The
+  refusal is the "a read that refused is not an empty result" branch, and it did exactly
+  what it says: no environment entered the planned set, no apply job started, no
+  `production` approval was raised, and nothing reached Hetzner. Had that branch read a
+  failed API call as "no environment produced a plan", the run would have been GREEN
+  having applied nothing — which is the failure the branch exists to prevent, and it
+  would have been indistinguishable from a merge that legitimately affected no
+  environment.
+
+  **The fix keeps the property and drops the invented endpoint.** The attempt is carried
+  in the artifact NAME — `tfplan-<environment>-attempt-<n>` — so the run-scoped listing,
+  which is the only one that exists, still distinguishes this attempt's saved plan from
+  one an earlier attempt left behind. `overwrite: true` is dropped with it: names are now
+  attempt-unique, so re-running every job of a run collides with nothing.
+
+  **Why nothing here could have caught it, stated plainly.** The suite may make no
+  network call — that constraint is itself asserted by *The Continuous-Integration
+  Configuration Is Itself Verified* — so no test in this repository can establish that an
+  API path exists. The derived tests stub `gh` and answer whatever it is asked, so they
+  passed against a URL that 404s in reality. This is the class code review round 2 named
+  in its process note: a fix asserting something the code and the suite cannot check.
+  The general lesson is not "add a test"; it is that an external API's shape is verified
+  by calling it, and this one now was.
+
+  What IS newly guarded is the property the endpoint was for:
+  `test_an_earlier_attempts_saved_plan_does_not_count_for_this_attempt` runs the
+  resolution as a second attempt over a listing an earlier attempt wrote, and requires
+  the planned set to be empty. Confirmed red against a tree with the attempt dropped from
+  the artifact name. That test was impossible to write while the mechanism was a
+  fictional endpoint, and is straightforward now the mechanism is a name.
+
+  Per this project's rules the change is not delivered and its record is not written: the
+  fix re-enters at `build`'s review gate and takes a pull request of its own.
+
+  **The empty-matrix question is answered, by pull request #122's own CI, and the answer
+  is the opposite of the working assumption.** Run 34442604917: that pull request touches
+  no path under `terraform/`, so the affected set resolved empty — the first time that
+  case was ever reached. `validate` FAILED with *"The plan matrix concluded 'failure'
+  (plan-expected=false)"*.
+
+  GitHub does not skip a job whose matrix is empty. It never **creates** the job at all —
+  it is absent from the run's job list entirely — and `needs.<job>.result` for a job that
+  was never created is `failure`, not `skipped`. So the empty-matrix gate this change
+  shipped with would have failed the required status check on every pull request touching
+  no Terraform path: every documentation change, every Ansible change, every change to
+  this suite. It was recorded as a known fork before the first run, and the first run
+  that could reach it found it.
+
+  **The gate is now a job-level `if:` reading the discovery output**, which is what that
+  record predicted the fix would be. The reason 5.3 forbade an `if:` was
+  `test_no_job_containing_a_secret_scanning_step_is_conditioned_on_terraform_changes`,
+  and this condition satisfies it — but satisfying an assertion by wording is the evasion
+  this repository refuses everywhere else, so the argument is made properly instead. What
+  that requirement wants is that *some* scan runs on every pull request; that scan is
+  `validate`'s, which is unconditional. The plan job's copy serves a different obligation
+  — an ordering, which has nothing to order where there is no plan.
+
+  **And the argument is now asserted rather than argued.**
+  `test_at_least_one_secret_scan_is_wholly_unconditional` requires some gitleaks step in
+  the workflow to run under no condition of its own and none on its job that could
+  evaluate false. Confirmed red against a tree where `validate`'s scan is gated the same
+  way the plan job's is — the evasion the two existing refusals could not distinguish
+  from the correct shape.
+
+  **Writing that assertion found a second defect, in a locator every assertion in that
+  class shares.** `gitleaks_steps` matched any step whose text mentions gitleaks,
+  including a shell COMMENT — and the environment-discovery body cites the gitleaks step
+  as its precedent for reading a pin out of a committed file. So `discover` counted as a
+  scan job and the new assertion passed vacuously, on a comment. The locator requires an
+  invocation now: a `name`, a `uses`, or a non-comment line of `run`. Repairing it then
+  showed the new assertion was itself too strict — it read `validate`'s `always()` as a
+  condition, where `always()` cannot evaluate false and gates nothing — so it reads the
+  same `job_condition_is_admissible` predicate the two unconditionality requirements are
+  read with.
 
 ## 8. Archive
 

@@ -679,7 +679,13 @@ class PlannedSetHarnessMixin(ApplyWorkflowMixin):
                 assignments[key] = ""
         return assignments, unclassified
 
-    def _run(self, rows, artifacts, gh_exit: int = 0, blank: bool = False, body=None):
+    def _run(
+        self, rows, artifacts, gh_exit: int = 0, blank: bool = False, body=None, attempt=None
+    ):
+        """`attempt` runs the body as though it were a LATER attempt of the same
+        run, leaving the listing as an earlier attempt wrote it. Identified by
+        the expression an input carries rather than by its name, like every
+        other input here."""
         name, index, step = self._body()
         job = jobs(self.workflow)[name]
         listing = (
@@ -688,6 +694,21 @@ class PlannedSetHarnessMixin(ApplyWorkflowMixin):
             else json.dumps({"total_count": len(artifacts), "artifacts": artifacts})
         )
         assignments, unclassified = self._inputs(step, job, rows, listing)
+        if attempt is not None:
+            declared = {**(job.get("env") or {}), **(step.get("env") or {})}
+            carrying = [
+                key
+                for key, value in declared.items()
+                if "github.run_attempt" in compact(value)
+            ]
+            self.assertTrue(
+                carrying,
+                "this body takes no input carrying `github.run_attempt`, so it cannot "
+                "tell one attempt of a run from another -- and artifacts belong to the "
+                "run rather than to the attempt",
+            )
+            for key in carrying:
+                assignments[key] = attempt
         if not blank:
             self.assertEqual(
                 [],
@@ -1189,6 +1210,40 @@ class TestThePlannedSetIsNeverResolvedFromAPartialListing(
     names. That mixin was extracted for this, which is the idiom
     `DeclarationTreeFixtureMixin` and `ApplyWorkflowMixin` already set here.
     """
+
+    def test_an_earlier_attempts_saved_plan_does_not_count_for_this_attempt(self) -> None:
+        """DERIVED -- no scenario states it, and it is the sharpest reading of
+        "an environment counts as having produced a saved plan only where every
+        check its plan job performs has passed".
+
+        Artifacts belong to the RUN, not to the attempt, and GitHub exposes no
+        per-attempt listing -- that endpoint returns 404, which is how this was
+        established rather than assumed. So a re-run is where the requirement
+        can fail: attempt 1 plans an environment cleanly and uploads; the
+        operator re-runs; in attempt 2 that environment's destroy-policy gate
+        refuses, so it uploads nothing. Attempt 1's artifact is still listed. If
+        the name it was uploaded under does not distinguish the attempts, the
+        environment enters the planned set, raises its approval, and applies a
+        plan this attempt's gate refused.
+
+        Reconsider this assertion, do not weaken it, if GitHub ever exposes a
+        per-attempt artifact listing and the resolution reads that instead.
+        """
+        rows = [PROD_ROW, STAGING_ROW]
+        result, written = self._run(rows, self._artifacts_for(rows), attempt="2")
+        detail = (result.stdout + result.stderr).strip()[-600:]
+        self.assertEqual(
+            0,
+            result.returncode,
+            f"the resolution refused a second attempt outright: {detail!r}",
+        )
+        self.assertEqual(
+            [],
+            self._resolved_names(written, detail),
+            "a saved plan uploaded by an EARLIER attempt counted as this attempt's, so "
+            "an environment whose plan this attempt refused would be applied behind an "
+            "approval the refusing gate exists because it does not trust",
+        )
 
     def test_a_listing_carrying_no_artifacts_at_all_fails_rather_than_emptying(self) -> None:
         """DERIVED -- a document that PARSES and is not a listing. A filter

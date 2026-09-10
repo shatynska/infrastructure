@@ -308,12 +308,33 @@ class TestScheduledHookRefresh(unittest.TestCase):
 class TestSecretScanningIsUnconditional(unittest.TestCase):
     """MODIFIED requirement: Pull Request Validation Checks."""
 
+    @staticmethod
+    def _is_a_scan(step: dict) -> bool:
+        """Whether a step INVOKES gitleaks, rather than merely mentioning it.
+
+        A shell comment naming gitleaks is not a secret scan, and reading one as
+        one is not pedantic here: the environment-discovery body cites the
+        gitleaks step as the precedent for reading a pin out of a committed
+        file, so the job holding it counted as a scan job -- and an assertion
+        that some scan runs unconditionally was satisfied by a comment.
+        """
+        for key in ("name", "uses"):
+            if "gitleaks" in str(step.get(key, "")).lower():
+                return True
+        for line in str(step.get("run", "")).splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if "gitleaks" in stripped.lower():
+                return True
+        return False
+
     def setUp(self) -> None:
         self.workflow = load_yaml(PR_VALIDATION)
         self.gitleaks_steps = [
             (job, index, step)
             for job, index, step in steps(self.workflow)
-            if "gitleaks" in step_text(step).lower()
+            if self._is_a_scan(step)
         ]
 
     def test_the_workflow_has_a_secret_scanning_step_at_all(self) -> None:
@@ -353,6 +374,46 @@ class TestSecretScanningIsUnconditional(unittest.TestCase):
                 offenders.append(job_name)
         self.assertEqual(
             [], sorted(set(offenders)), f"job-level `if:` gated on Terraform: {sorted(set(offenders))}"
+        )
+
+    def test_at_least_one_secret_scan_is_wholly_unconditional(self) -> None:
+        """SPECIFIED -- "`gitleaks` SHALL run on every pull request, whether or
+        not Terraform configuration changed", and scenario "A credential outside
+        Terraform is still caught".
+
+        Stated POSITIVELY, and added because the two assertions above cannot
+        carry this between them. Both are refusals -- no scan step, and no job
+        holding one, may be conditioned on Terraform having changed -- and a
+        refusal is satisfied by a condition that gates the scan on something
+        spelled differently. `make-the-pipeline-environment-agnostic` created
+        exactly that situation: its plan matrix job carries a second gitleaks
+        copy, for a different obligation (an ordering, which has nothing to
+        order where there is no plan), and gates the job on a discovery output.
+        That is correct, and it is indistinguishable to the refusals above from
+        gating EVERY scan the same way.
+
+        So this asserts what the requirement actually wants: somewhere in this
+        workflow, a gitleaks step runs on every pull request whatever it touched
+        -- no condition of its own, and none on its job that could evaluate
+        false. `always()` on the enclosing job is admitted, through the same
+        predicate the two unconditionality requirements are read with, because it
+        cannot evaluate false and so gates nothing; that job is an aggregator and
+        carries `always()` for a reason argued elsewhere.
+        """
+        self.test_the_workflow_has_a_secret_scanning_step_at_all()
+        unconditional = [
+            step_label(job, index, step)
+            for job, index, step in self.gitleaks_steps
+            if step.get("if") is None
+            and job_condition_is_admissible(jobs(self.workflow)[job] or {})
+        ]
+        self.assertTrue(
+            unconditional,
+            "every gitleaks step in pr-validation.yml sits behind a condition, on the "
+            "step or on its job, so a pull request that does not satisfy those "
+            "conditions is not scanned at all. At least one scan must run on every "
+            "pull request whatever it touched. The steps found were "
+            + repr([step_label(job, index, step) for job, index, step in self.gitleaks_steps]),
         )
 
     def test_secret_scanning_precedes_any_terraform_plan_in_the_same_job(self) -> None:
