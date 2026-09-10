@@ -879,6 +879,50 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   same `job_condition_is_admissible` predicate the two unconditionality requirements are
   read with.
 
+  **Pull request #122 merged 2026-09-10 05:57 UTC. The apply half is still unconfirmed,
+  and this records exactly which half is which rather than reading one as the other.**
+
+  #122 changed only `.github/` and `openspec/`, so `apply.yml`'s path filter correctly did
+  not fire — no apply run exists for it. That is the *Gated Production Apply* scenario "A
+  merge that cannot change infrastructure raises no approval request" behaving as
+  specified, and it is also why the fixed apply path has not yet run once.
+
+  **What IS confirmed, on real infrastructure.** `drift.yml` was dispatched against `main`
+  at the merged commit (run 34443257058, all three jobs green), and it exercises most of
+  this change's machinery read-only:
+
+  - `discover` emitted `[{"name":"prod","github_environment":"production","read_only_secret":"HCLOUD_TOKEN",…}]`
+    — the declaration read from the committed file rather than from workflow text.
+  - `drift (prod)` — the per-environment matrix job, named from the matrix — resolved its
+    Hetzner token through `secrets[matrix.environment.read_only_secret]`, refreshed four
+    real resources and reported *"No changes. Your infrastructure matches the
+    configuration."* So the indexed secret read works against the live API, which is the
+    mechanism task 1.1 probed and everything credential-shaped rests on.
+  - `Report drift as a deduplicated issue` concluded *"No drift"* under the
+    per-environment title, and no drift issue is open — the expected state.
+  - `report` pinged the heartbeat. **Note for the operator:** a dispatch resets the
+    external silence timer exactly as a scheduled run does, so the next genuine silence is
+    measured from now rather than from the last nightly.
+
+  Together with pull request #121's own run — where `plan (prod)` ran a real plan under
+  the read-only token and posted one per-environment comment — the pull-request half and
+  the drift half of this change are both confirmed against production infrastructure.
+
+  **What is NOT confirmed: the apply path.** Nothing has yet exercised `planned`
+  resolving a real artifact listing, `apply (prod)` attaching to the `production`
+  Environment and requesting its approval, or `terraform apply` running a saved plan. Its
+  only successful run in this repository predates the change. `apply.yml` is triggered by
+  a push touching `terraform/**` and by nothing else — deliberately: it declares no
+  `workflow_dispatch:`, and adding one would make production applicable from a manual
+  trigger, which is the gate this capability exists to hold.
+
+  So 7.6 is half done and stays open. The apply half needs a merge that touches
+  `terraform/**`, and this session did not invent one: manufacturing a Terraform change
+  to trip a workflow is a verification act rather than a feature, and which of the two
+  ways to get it is right — waiting for the next real infrastructure change, or making a
+  deliberate no-op-plan trigger merge and saying so — is the operator's call, not this
+  session's.
+
 ## 8. Archive
 
 - [ ] 8.1 Once the effect is confirmed, bring the branch back to the freshly fetched
