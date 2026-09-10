@@ -349,15 +349,6 @@ fixture: `get_url` to an existing destination with no checksum reports
 **changed** under `--check`, because establishing that the file already matches
 would require downloading it, and check mode will not.
 
-**`docs/bootstrap-a-new-host.md` §6.3 now states that baseline as operator
-guidance**: it tells a reader that a healthy host reports `changed=2` and names
-both tasks. So whichever remedy this change takes, §6.3 changes with it.
-Left alone, that paragraph would go on telling operators to expect two changed
-tasks on a host where zero is correct -- training them to discount the signal
-this change exists to create. Recorded here by
-`align-the-bootstrap-doc-with-a-real-run`, which wrote that guidance and so owes
-the reciprocal line, since before it merged nothing asserted a baseline at all.
-
 This bears directly on the paragraph below. A drift detector that reports two
 findings on every single run, forever, is one an operator learns to skip -- the
 same failure mode this entry names for an approval prompt with nothing to
@@ -366,6 +357,15 @@ approve. Whatever shape this change takes has to deal with it: pin a
 with a task that can verify itself in check mode, or filter these two by name
 and say in the workflow why. What it must not do is ship a drift signal whose
 baseline is two.
+
+**`docs/bootstrap-a-new-host.md` §6.3 now states that baseline as operator
+guidance**: it tells a reader that a healthy host reports `changed=2` and names
+both tasks. So whichever remedy this change takes, §6.3 changes with it.
+Left alone, that paragraph would go on telling operators to expect two changed
+tasks on a host where zero is correct -- training them to discount the signal
+this change exists to create. Recorded here by
+`align-the-bootstrap-doc-with-a-real-run`, which wrote that guidance and so owes
+the reciprocal line, since before it merged nothing asserted a baseline at all.
 
 **`--check --diff` is not the safety net it looks like.**
 `docs/bootstrap-a-new-host.md` §6.3 already says not to rely on `--check` for a

@@ -16,38 +16,88 @@ not all rest on the same kind:
 
 ## 1. §6.0 — the `source` fallback, and why it is safe here
 
-- [ ] 1.1 Add the non-direnv path to §6.0, matching §4.1's shape: `source .envrc` from `ansible/`, once per shell. Do the same in `ansible/.envrc.example`'s header, whose copy instructions likewise stop at `direnv allow` (line 4) — it is the file the operator has open at that exact step, so fixing §6.0 alone leaves the instruction they are actually looking at unchanged. Verify by reading §4.1 and confirming the three now offer the same alternative rather than one assuming a tool the others do not.
-- [ ] 1.2 State the asymmetry at §6.0, where the fallback is offered: sourcing **Terraform's** `.envrc` is the hazard §4.1 describes, because the root and staging files both export `HCLOUD_TOKEN` with different values and the export outlives the directory. Sourcing **`ansible/.envrc`** carries no such risk — `HCLOUD_TOKEN_PROD` and `HCLOUD_TOKEN_STAGING` collide with nothing and mean the same thing anywhere. §4.1 already says this, in the paragraph explaining the hazard; cross-reference it rather than restating it in full, and make §6.0 say enough that a reader who starts at stage 6 is not left to infer it. Verify the sentence names both variables and does not merely say "it is safe".
-- [ ] 1.3 Fix `README.md`'s local-setup step 4, which says "`direnv allow` is not optional". True of direnv users, false as a statement about the procedure. Rephrase so it is the *allow step* that is not optional **when using direnv**, and point at the `source` alternative. Verify by reading the step end to end as someone without direnv installed.
+- [x] 1.1 Add the non-direnv path to §6.0, matching §4.1's shape: `source .envrc` from `ansible/`, once per shell. Do the same in `ansible/.envrc.example`'s header, whose copy instructions likewise stop at `direnv allow` (line 4) — it is the file the operator has open at that exact step, so fixing §6.0 alone leaves the instruction they are actually looking at unchanged. Verify by reading §4.1 and confirming the three now offer the same alternative rather than one assuming a tool the others do not.
+- [x] 1.2 State the asymmetry at §6.0, where the fallback is offered: sourcing **Terraform's** `.envrc` is the hazard §4.1 describes, because the root and staging files both export `HCLOUD_TOKEN` with different values and the export outlives the directory. Sourcing **`ansible/.envrc`** carries no such risk — `HCLOUD_TOKEN_PROD` and `HCLOUD_TOKEN_STAGING` collide with nothing and mean the same thing anywhere. §4.1 already says this, in the paragraph explaining the hazard; cross-reference it rather than restating it in full, and make §6.0 say enough that a reader who starts at stage 6 is not left to infer it. Verify the sentence names both variables and does not merely say "it is safe".
+- [x] 1.3 Fix `README.md`'s local-setup step 4, which says "`direnv allow` is not optional". True of direnv users, false as a statement about the procedure. Rephrase so it is the *allow step* that is not optional **when using direnv**, and point at the `source` alternative. Verify by reading the step end to end as someone without direnv installed.
 
 ## 2. §6.3 — what a failed converge looks like, and how to recover
 
-- [ ] 2.1 Add a subsection to §6.3 for a converge that fails partway. It SHALL say that the failure leaves a **partially-converged host** — the roles ahead of the failing one have applied — and that the recovery is to correct the input and re-run the same command, every role being idempotent, rather than to rebuild the host or start over. Evidence: `configure-the-staging-host` 10.2, where a failure at `tailscale up` left `docker` and `hardening` applied and the re-run completed at `ok=76 changed=28 failed=0`.
-- [ ] 2.2 In that subsection, name the `no_log` masking specifically. A failure in *Bring the host onto the tailnet* reports `"censored": "the output has been hidden due to the fact that 'no_log: true' was specified for this result"` and nothing else, because the auth key would otherwise be printed. Give the recovery that actually works: SSH to the host as root and run `tailscale up --authkey=…` by hand, which prints what was masked; `tailscale status` and `journalctl -u tailscaled` for context. Verify the commands match what the role runs — `ansible/roles/tailscale/tasks/main.yml`'s task is `tailscale up --authkey={{ tailscale_auth_key }}`.
-- [ ] 2.3 Say that the masking is deliberate rather than a defect, and attribute it correctly: it is the **role's own decision**, stated in the comment above the task in `ansible/roles/tailscale/tasks/main.yml` — "`no_log` because the auth key would otherwise appear in the task's command output". Do **not** cite *Tailscale auth key is never committed* as obliging it: that requirement is about the key staying out of version control, and a grep of `openspec/specs/` for `no_log`, `masked` and `censored` returns nothing. Writing a false citation into the operator's document is the exact defect this change exists to remove. A reader who thinks the masking is a bug will look for a way to turn it off; one who knows why it is there will go to the host instead.
+- [x] 2.1 Add a subsection to §6.3 for a converge that fails partway. It SHALL say that the failure leaves a **partially-converged host** — the roles ahead of the failing one have applied — and that the recovery is to correct the input and re-run the same command, every role being idempotent, rather than to rebuild the host or start over. Evidence: `configure-the-staging-host` 10.2, where a failure at `tailscale up` left `docker` and `hardening` applied and the re-run completed at `ok=76 changed=28 failed=0`.
+- [x] 2.2 In that subsection, name the `no_log` masking specifically. A failure in *Bring the host onto the tailnet* reports `"censored": "the output has been hidden due to the fact that 'no_log: true' was specified for this result"` and nothing else, because the auth key would otherwise be printed. Give the recovery that actually works: SSH to the host as root and run `tailscale up --authkey=…` by hand, which prints what was masked; `tailscale status` and `journalctl -u tailscaled` for context. Verify the commands match what the role runs — `ansible/roles/tailscale/tasks/main.yml`'s task is `tailscale up --authkey={{ tailscale_auth_key }}`.
+- [x] 2.3 Say that the masking is deliberate rather than a defect, and attribute it correctly: it is the **role's own decision**, stated in the comment above the task in `ansible/roles/tailscale/tasks/main.yml` — "`no_log` because the auth key would otherwise appear in the task's command output". Do **not** cite *Tailscale auth key is never committed* as obliging it: that requirement is about the key staying out of version control, and a grep of `openspec/specs/` for `no_log`, `masked` and `censored` returns nothing. Writing a false citation into the operator's document is the exact defect this change exists to remove. A reader who thinks the masking is a bug will look for a way to turn it off; one who knows why it is there will go to the host instead.
 
 ## 3. §6.3 — `--check --diff` and its two permanent false positives
 
-- [ ] 3.1 Qualify the sentence "`--check --diff` is useful on every run after the first". Add that **two `tailscale` tasks report `changed` on every check-mode run and always will** — *Add the Tailscale apt signing key* and *Add the Tailscale apt repository*, both `ansible.builtin.get_url` with no `checksum:`, which cannot confirm a file already matches without downloading it, and check mode will not. So a healthy host reads `changed=2`, and the baseline to compare against is two rather than zero. Evidence: `configure-the-staging-host` 10.1 against production, plus a fixture reproduction recorded there.
-- [ ] 3.1a Write the reciprocal half into `docs/change-queue.md` entry 23, beside its existing false-positives paragraph: that §6.3 now tells operators a healthy host reads `changed=2` and names both tasks, so whichever remedy entry 23 takes, §6.3 changes with it — otherwise the document trains operators to discount the very signal that change exists to create. **This change owes that line, not entry 23**: before this merges, no document states that baseline, so entry 23's implementer cannot be expected to discover a dependency nobody recorded. Same shape as `configure-the-staging-host` task 8.5, which added the reciprocal of an ordering line "so the coupling is readable from either end rather than only from the newer entry".
-- [ ] 3.2 Point the reader at `docs/change-queue.md` entry 23, which carries the same finding for the change that would turn `--check --diff` into the host layer's drift detector. Cite it as a queue entry, not by a path under `openspec/changes/`. Verify the citation form against `AGENTS.md`'s "Citing this repository's own specifications and change records" and by `python3 -m unittest discover --start-directory .github/tests` passing, which enforces it.
+- [x] 3.1 Qualify the sentence "`--check --diff` is useful on every run after the first". Add that **two `tailscale` tasks report `changed` on every check-mode run and always will** — *Add the Tailscale apt signing key* and *Add the Tailscale apt repository*, both `ansible.builtin.get_url` with no `checksum:`, which cannot confirm a file already matches without downloading it, and check mode will not. So a healthy host reads `changed=2`, and the baseline to compare against is two rather than zero. Evidence: `configure-the-staging-host` 10.1 against production, plus a fixture reproduction recorded there.
+- [x] 3.1a Write the reciprocal half into `docs/change-queue.md` entry 23, beside its existing false-positives paragraph: that §6.3 now tells operators a healthy host reads `changed=2` and names both tasks, so whichever remedy entry 23 takes, §6.3 changes with it — otherwise the document trains operators to discount the very signal that change exists to create. **This change owes that line, not entry 23**: before this merges, no document states that baseline, so entry 23's implementer cannot be expected to discover a dependency nobody recorded. Same shape as `configure-the-staging-host` task 8.5, which added the reciprocal of an ordering line "so the coupling is readable from either end rather than only from the newer entry".
+- [x] 3.2 Point the reader at `docs/change-queue.md` entry 23, which carries the same finding for the change that would turn `--check --diff` into the host layer's drift detector. Cite it as a queue entry, not by a path under `openspec/changes/`. Verify the citation form against `AGENTS.md`'s "Citing this repository's own specifications and change records" and by `python3 -m unittest discover --start-directory .github/tests` passing, which enforces it.
 
 ## 4. §6.1 — checking the GHCR token before relying on it
 
-- [ ] 4.1 Add a check after the token-creation paragraph: a request to `https://api.github.com/user` with the token as the password in basic auth returns **`200`** and an `x-oauth-scopes` header naming `read:packages`. Three things the wording must get right, and each was got wrong first:
+- [x] 4.1 Add a check after the token-creation paragraph: a request to `https://api.github.com/user` with the token as the password in basic auth returns **`200`** and an `x-oauth-scopes` header naming `read:packages`. Three things the wording must get right, and each was got wrong first:
 
       - **Do not put the token in the command line.** `curl -u <user>` with no password prompts for it, which keeps it out of both shell history and `ps`. §6.1's neighbouring decrypt check is careful in exactly this way — it "prints the value's length, never the value" — and this check should match that standard rather than undercut it.
       - **Assert `200`, not `HTTP/2 200`.** The protocol prefix depends on the client and the negotiation, not on the token.
       - **Name the fine-grained-token case.** A fine-grained PAT returns `200` with *no* `x-oauth-scopes` header at all, which reads as "no scopes" and is really "wrong token type" — this procedure wants a **classic** token. Without that caveat the check produces a confident misdiagnosis.
 
       Say what each outcome means: `401` is expired, revoked or truncated; a `200` whose scopes omit `read:packages` authenticates but cannot pull, and would fail later at `docker compose pull` rather than now.
-- [ ] 4.2 Note that the token's absence is tolerated, so this check is not a gate: `deploy_user` guards the registry login with a `when:` and skips it, per *Host Authenticates to GHCR for Application Image Pulls*. A reader stuck on the token should know they can proceed without it and return to it. Verify against `ansible/roles/deploy_user/tasks/main.yml`, whose login task carries that condition.
+- [x] 4.2 Note that the token's absence is tolerated, so this check is not a gate: `deploy_user` guards the registry login with a `when:` and skips it, per *Host Authenticates to GHCR for Application Image Pulls*. A reader stuck on the token should know they can proceed without it and return to it. Verify against `ansible/roles/deploy_user/tasks/main.yml`, whose login task carries that condition.
 
 ## 5. Verification
 
-- [ ] 5.1 `python3 -m unittest discover --start-directory .github/tests` from the repository root, passing — the suite that enforces the citation form and the repository-wide conventions this change's prose is subject to.
-- [ ] 5.2 `pre-commit run --all-files`, passing. Note what this does **not** establish: no hook reads prose for truth, so the accuracy of every sentence added here rests on the observations cited per task, not on a green check.
-- [ ] 5.3 Read §6 end to end as an operator who has never run it, and confirm that every command in it is one that has actually been executed — during `configure-the-staging-host`'s converge, or in task 6.2 below — or is marked as not yet exercised. That change's task 7.2 set this obligation for the stage; this change is subject to it too, and 6.2 is where the commands this change *adds* get executed rather than merely asserted.
+- [x] 5.1 `python3 -m unittest discover --start-directory .github/tests` from the repository root, passing — the suite that enforces the citation form and the repository-wide conventions this change's prose is subject to.
+- [x] 5.2 `pre-commit run --all-files`, passing. Note what this does **not** establish: no hook reads prose for truth, so the accuracy of every sentence added here rests on the observations cited per task, not on a green check.
+- [x] 5.3 Read §6 end to end as an operator who has never run it, and confirm that every command in it is one that has actually been executed — during `configure-the-staging-host`'s converge, or in task 6.2 below — or is marked as not yet exercised. That change's task 7.2 set this obligation for the stage; this change is subject to it too, and 6.2 is where the commands this change *adds* get executed rather than merely asserted.
+
+## Verification record
+
+**5.1** `python3 -m unittest discover --start-directory .github/tests` — 557,
+OK. **5.2** `pre-commit run --all-files` — all hooks pass. Neither establishes
+that a sentence is true; what follows is what does.
+
+**5.3 — stage 6 read end to end.** Every command in the stage has now been
+executed at least once, in `configure-the-staging-host`'s converge or in this
+session, with one exception: `direnv allow`, which is exercised by anyone who
+has direnv and whose absence is the case section 1 exists to handle.
+
+**Corrections made after code review, each a claim that was not true as first
+written.** Recorded rather than quietly fixed, because in a change whose subject
+is documentary accuracy the corrections are the substance:
+
+- §6.3a said "the failing one and everything after it has not [applied]".
+  False, and self-contradicted thirteen lines later by the instruction to expect
+  `tailscaled` active: *Bring the host onto the tailnet* is the **last** task in
+  `ansible/roles/tailscale/tasks/main.yml`, so the keyrings directory, both
+  `get_url` tasks, the pinned package and the enabled unit have all applied.
+- §6.3a told the operator to wait for `tailscale status` to report `Running`.
+  It never does. `Running` is `BackendState` in `tailscale status --json`, which
+  is the field the role's own `when:` reads. §6.4 carried the same error from an
+  earlier change and is corrected with it.
+- §6.3a put the auth key on a command line, contradicting the standard §6.1
+  sets ninety lines earlier for the GHCR token. Now `read -rs`.
+- §6.3's "compare against two" was true and incomplete: two is the baseline for
+  what check mode can *see*. Seven `command` tasks skip and five
+  `geerlingguy.docker` tasks swallow failures, which entry 23 already records
+  and §6.3 did not.
+- §6.1's `grep -i '^HTTP\|x-oauth-scopes'` uses a GNU BRE extension that prints
+  nothing on the macOS workstations §0.2 supports — indistinguishable from the
+  fine-grained-token diagnosis it would be read as. Now `grep -iE`, and `curl
+  -sS` so a transport failure says so rather than looking like the same thing.
+- §6.1 claimed a fine-grained token "cannot pull packages". Plausible, and
+  evidenced by nothing in this repository; the confirmation gate cannot produce
+  it either, since the operator's token is classic. Softened to what is
+  checkable.
+- The end-state summary at the top of the document still promised "a staging
+  server that is provisioned and not configured". `configure-the-staging-host`
+  updated the section that says otherwise and missed the summary above it.
+
+**6.2 — the confirmation observations.** Two are already satisfied from this
+session: `ansible/.envrc` sourced with no direnv hook, after which
+`ansible-inventory -i inventory/staging.hcloud.yml --graph` resolved
+`staging-server`; and the token check returning `200`. The third — a check-mode
+run against **staging** reporting `changed=2` on the two named tasks — is
+outstanding, and matters because 10.1 established that figure on production
+only, where it could still have been a coincidence of one host.
 
 ## 6. Ship
 
