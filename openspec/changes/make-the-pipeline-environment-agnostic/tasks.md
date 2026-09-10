@@ -139,7 +139,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   same-job comparison would compare a value with itself. Verify by running both step
   bodies standalone over known inputs, confirming equal inputs fail and unequal inputs
   pass, and that neither body prints either token.
-- [ ] 4.3b `apply.yml`: run the apply matrix over the environments that produced a
+- [x] 4.3b `apply.yml`: run the apply matrix over the environments that produced a
   saved plan, not over the environments the merge affects, per design.md decision 8. A
   job after the plan matrix, declaring no `environment:` and running whatever that
   matrix concluded, resolves which environments have a plan artifact and emits them;
@@ -164,7 +164,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   fail-closed body in `apply.yml` with no executable test, and its verification degrades
   into a run someone did once. Verify by running its body standalone over a full set, a
   partial set, an explicitly empty one and an unresolvable one, as a committed test.
-- [ ] 4.3c `apply.yml`: attach the apply job to that resolved set, which is the half a
+- [x] 4.3c `apply.yml`: attach the apply job to that resolved set, which is the half a
   resolver alone does not settle and the half the original defect lives in. The apply
   job SHALL keep the plan job in `needs:` **and** carry a condition of its own —
   `!cancelled()` and the resolver having succeeded. Both halves are load-bearing:
@@ -186,7 +186,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   Name any already-written assertion this shape invalidates — at minimum
   `test_each_apply_job_depends_on_a_job_that_plans`, which this shape keeps green — and
   re-express rather than weaken it if it does not.
-- [ ] 4.3d `apply.yml`: publish the saved plan artifact **only after every check in the
+- [x] 4.3d `apply.yml`: publish the saved plan artifact **only after every check in the
   plan job has passed**, per design.md decision 8 and the delta's "A plan its own gate
   refused is not applied". The upload SHALL be the last step of the plan job and SHALL
   carry no condition, so a failed destroy-policy gate stops it by ordinary step
@@ -202,7 +202,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   it declares a continue-on-error setting **in any form, including one whose value is an
   expression** — the closed form this capability already holds its own record-validation
   step to, for exactly this reason.
-- [ ] 4.3e `apply.yml`: give the plan job and the apply job separate per-environment
+- [x] 4.3e `apply.yml`: give the plan job and the apply job separate per-environment
   `concurrency` groups, per design.md decision 9, so a queued plan cannot cancel an
   apply awaiting its Environment's protection rules. Verify that both still derive
   their group from the matrix, that both still set `cancel-in-progress: false`, and
@@ -347,7 +347,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   written into the test's own docstring, because a reader of that test needs it more
   than a reader of this file does.
 
-- [ ] 5.5 Have the tests for the two amended requirements derived by an author other
+- [x] 5.5 Have the tests for the two amended requirements derived by an author other
   than whoever implements them, as 5.1 did for the original deltas: the three scenarios
   added by this revisit — *One environment's failed plan does not block another's
   apply*, *An unresolvable set of planned environments fails the run*, and *A queued
@@ -385,7 +385,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   `docs/change-queue.md` as appropriate, for the same reason. Verify it states the
   working assumption this change ships with.
 
-- [ ] 6.5 Add a `docs/deferred-work.md` entry for the concurrency question decision 9
+- [x] 6.5 Add a `docs/deferred-work.md` entry for the concurrency question decision 9
   declines to settle: whether a job awaiting a GitHub Environment's protection rules
   counts as *pending* for concurrency. The delta now names it as unestablished, but the
   delta is the durable artifact and `design.md` is archived with the change, so the
@@ -393,7 +393,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   needs a scratch Environment carrying a required reviewer, which is more
   repository-settings churn than tasks 1.1–1.2's probes needed and than the Migration
   Plan promises — and what would trigger revisiting.
-- [ ] 6.6 Add a `docs/deferred-work.md` entry for the hazard decision 9 does **not**
+- [x] 6.6 Add a `docs/deferred-work.md` entry for the hazard decision 9 does **not**
   close: within the apply group, a third merge's queued apply can cancel a second
   merge's pending apply, as a cancellation rather than a failure. Pre-existing rather
   than introduced — the workflow-level group this change replaces had the same property
@@ -630,6 +630,65 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   round 1 caught in the Goals bullet — and the cross-reference naming which tasks carry
   the work was stale. Both corrected, and 6.5 and 6.6 moved after 6.4 so the completed
   group's result block ends it.
+
+  **Result (4.3b-4.3e, 5.5, 6.5-6.6).** 5.5 was dispatched from the commit holding the
+  approved amended plan, before any of 4.3b-4.3e existed, and produced
+  `.github/tests/test_planned_environment_apply_stage.py` (19 methods, four classes) plus
+  a second-pass section appended to `test-plan.md`. It went red as it should: 12 of the
+  19 failed, all 471 pre-existing tests passed. Seven passed on arrival, each
+  investigated rather than recorded as coverage; four of those are the 4.3d case, where
+  the implementation already ordered the upload last and unconditionally and nothing
+  required it — they are reversal guards, and that is exactly the finding 4.3d exists to
+  close.
+
+  The implementation adds a `planned` job to `apply.yml`: `needs: [discover, plan]`,
+  `if: !cancelled() && needs.discover.result == 'success'`, no `environment:`,
+  `actions: read` and nothing else. It reads this run's artifact NAMES through
+  `gh api`, never their contents, and matches them against the discovered candidates.
+  The apply job takes its matrix from that job's output, keeps `plan` in `needs:` so
+  4.3a's guard keeps its operand, and carries
+  `if: !cancelled() && needs.planned.result == 'success'` — the condition being what
+  suppresses the implicit `success()` over `needs:` and so what actually breaks the
+  coupling. The two concurrency groups are now `terraform-plan-<env>` and
+  `terraform-apply-<env>`.
+
+  **Two things found while implementing, neither of them in the derived tests.** First,
+  `gh api --paginate` on an endpoint returning an OBJECT emits one JSON document per
+  page rather than one document, so the identity check would have read a stream as
+  malformed — or, worse, read its first page as the whole listing. Replaced with an
+  explicit `per_page=100` and an assertion that the page IS the whole listing: a
+  truncated listing drops environments from the planned set, and a dropped environment
+  is a reviewed, approved change that never reaches its cloud with the run still green.
+  That is the only silent failure in this resolution and it is now refused. Second, a
+  document that parses and carries no `artifacts` key would have evaluated to an empty
+  set and been reported as read-and-empty. Both are now committed tests
+  (`TestThePlannedSetIsNeverResolvedFromAPartialListing`), not scratch runs — a
+  fail-closed path guarded by a check nobody runs again is guarded by nothing.
+
+  **One deviation the test author raised rather than absorbed, reviewed and accepted.**
+  4.3d says "neither the upload nor the gate carries an `if:`"; the derived test narrows
+  the gate half to admit exactly one condition, a bare reference to the environment's
+  declared applicability. The concern that motivated 4.3d's literal wording — that a
+  step-level `if:` on a declared value is fail-OPEN, since an empty value is falsy and
+  would skip the gate — does not arise here: discovery already refuses a
+  `destroy_policy_gate` that is neither absent nor boolean, and defaults an absent one to
+  `true`, so the value reaching the matrix is always a real boolean. The narrowing is
+  also tight, admitting only a bare matrix reference and refusing `if: false`,
+  `if: always()` and `always() && matrix.x` alike. Accepted. The implementation carries no
+  `if:` on the gate in any case, reading applicability inside the step body.
+
+  **One test of this change's own was corrected, and it was mine rather than the derived
+  pass's.** `TestTheDuplicatedBodiesStayIdentical` located the duplicated bodies by a
+  step-name prefix, and the new resolution step's name begins the same way — so it read
+  as a second copy of the changed-path resolution. Located by SHAPE now, which is what
+  this suite does everywhere else and what that locator should have done from the start.
+  Confirmed still red for a real drift between two copies.
+
+  6.5 and 6.6 record the two concurrency questions in `docs/deferred-work.md`: whether a
+  job awaiting an Environment's approval is "pending" for concurrency, with why the
+  experiment was not run and what would settle it for free; and the hazard decision 9
+  does not close, an apply cancelling a pending apply, with the nightly drift sweep named
+  as the backstop that makes it an entry rather than a change.
 
 ## 8. Archive
 

@@ -3059,20 +3059,29 @@ class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
     copy and nothing to compare.
     """
 
-    def _bodies(self, prefix: str) -> dict:
+    def _bodies(self, label: str, matches) -> dict:
+        """Every workflow's copy of one body, located BY SHAPE rather than by
+        the name the implementation gave the step.
+
+        Located by name at first, and that was wrong for the reason this suite
+        avoids name-based locators everywhere else: a sibling step whose name
+        merely begins the same way is indistinguishable from a second copy. The
+        apply workflow's planned-environment resolution is exactly such a
+        sibling, and it broke this assertion the day it was written.
+        """
         found = {}
         for path in TERRAFORM_WORKFLOWS:
             workflow = load_yaml(path)
             matching = [
                 str(step["run"])
                 for _, _, step in steps(workflow)
-                if step.get("run") and str(step.get("name", "")).startswith(prefix)
+                if step.get("run") and matches(str(step["run"]))
             ]
             self.assertLessEqual(
                 len(matching),
                 1,
-                f"{path.name} carries {len(matching)} steps named {prefix!r}; each "
-                "workflow holds at most one copy of this body",
+                f"{path.name} carries {len(matching)} steps whose body is {label}; each "
+                "workflow holds at most one copy of it",
             )
             if matching:
                 found[path.name] = matching[0]
@@ -3082,7 +3091,13 @@ class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
         """DERIVED -- see the class docstring. Every Terraform workflow runs a
         matrix over the discovered environments, so every one of them carries
         this body; a workflow that lost it would run over nothing."""
-        bodies = self._bodies("Discover the environments")
+        bodies = self._bodies(
+            "the environment discovery",
+            lambda body: "terraform/environments" in body
+            and "terraform/modules" not in body
+            and "GITHUB_OUTPUT" in body
+            and not ACTIONS_EXPRESSION.search(body),
+        )
         self.assertEqual(
             sorted(path.name for path in TERRAFORM_WORKFLOWS),
             sorted(bodies),
@@ -3103,7 +3118,13 @@ class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
         """DERIVED -- see the class docstring. `drift.yml` deliberately carries
         no resolution: drift is divergence from what was committed, which no
         diff predicts, so it plans every environment on every run."""
-        bodies = self._bodies("Resolve which environments")
+        bodies = self._bodies(
+            "the changed-path resolution",
+            lambda body: "terraform/environments" in body
+            and "terraform/modules" in body
+            and "GITHUB_OUTPUT" in body
+            and not ACTIONS_EXPRESSION.search(body),
+        )
         self.assertEqual(
             [APPLY.name, PR_VALIDATION.name],
             sorted(bodies),

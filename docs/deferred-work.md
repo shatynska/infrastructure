@@ -527,3 +527,66 @@ for a persistently red job; or an environment is added whose sweep is
 deliberately allowed to fail, at which point one check cannot express both
 states. Neither is observable at one environment, which is why this ships as an
 assumption rather than a decision.
+
+## Whether a job awaiting an Environment's approval is "pending" for concurrency
+
+Recorded by `make-the-pipeline-environment-agnostic`, whose `design.md`
+Decision 9 declines to settle it. The delta names it as unestablished, but a
+delta is archived into the main specification and `design.md` is archived with
+its change — so without an entry here the question would quietly become settled
+fact the moment the change archives.
+
+**The question.** GitHub cancels a *previously pending* job in a concurrency
+group when a new one queues, and does so even under `cancel-in-progress: false`
+— that much is documented. What is not established is whether a job that is
+waiting on a GitHub Environment's protection rules counts as *pending* for that
+purpose, or as something else. If it counts as pending, then any job queuing
+into the same group can cancel an approved apply that is waiting for its
+reviewer, and it does so as a **cancellation** rather than a failure — which
+nothing in this repository reads as an alarm.
+
+**What was done instead.** `apply.yml`'s plan job and apply job were given
+separate per-environment groups, so a queued plan can no longer be the thing
+that cancels a waiting apply. That is correct under *both* answers: where a
+waiting apply is pending, the separation removes a silent-loss path; where it is
+not, the separation costs only a plan that Terraform later refuses as stale,
+loudly. The experiment would establish whether that cost is necessary, not
+whether the separation is right.
+
+**Why the experiment was not run.** Tasks 1.1 and 1.2 of that change ran exactly
+this kind of scratch-workflow probe for two matrix mechanisms, so the precedent
+exists. This one is more expensive: it needs a scratch GitHub Environment
+*carrying a required reviewer*, a merge to the trunk to trigger the apply path,
+and a second and third merge timed against a human approval — repository-settings
+churn well beyond what those probes needed, against a Migration Plan that
+promises none.
+
+**Revisit when** a second environment exists and applies queue often enough for
+the answer to matter, or when an approved apply is ever observed to have been
+cancelled rather than run. The second is the observation that settles it for
+free, and the entry below is where to look first if it happens.
+
+## An apply can still cancel another apply, silently
+
+Recorded by `make-the-pipeline-environment-agnostic`. Its `design.md` Decision 9
+argues from the hazard class above and closes only one pairing of it, so the
+residue is written down rather than left to read as closed.
+
+Separating the plan and apply concurrency groups stops a queued *plan* cancelling
+a waiting *apply*. It does nothing about an apply cancelling an apply: three
+merges affecting one environment in quick succession leave the second merge's
+pending apply liable to be cancelled by the third's, with the same property that
+makes it worth recording — a cancellation is not a failure, so a change that was
+reviewed, approved and never applied leaves a run that looks unremarkable.
+
+**This is pre-existing, not introduced.** The workflow-level `concurrency` group
+that change replaces had the same property at run level; only the granularity
+moved. It is out of that change's scope for the same reason.
+
+**Mitigation available today:** the nightly drift sweep detects the divergence a
+cancelled apply leaves behind, within a day, and opens an issue for it. That is
+the backstop, and it is why this is an entry rather than a change.
+
+**Revisit when** a cancelled apply is actually observed, or when the queue is
+deep enough that a third merge behind a pending approval stops being unusual —
+which needs either a busier trunk or an environment whose approval sits unread.

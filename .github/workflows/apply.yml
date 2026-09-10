@@ -386,8 +386,14 @@ jobs:
     # JOB level: state is per environment, so a run against one contends with
     # nothing in another, and a workflow-level declaration cannot read a matrix
     # value at all. See the Serialized Terraform Runs requirement.
+    #
+    # A DIFFERENT group from the apply job's, deliberately. Sharing one would
+    # let this job, queued by a later merge, cancel an apply that is waiting on
+    # its Environment's protection rules — GitHub cancels a previously pending
+    # job in a group when a new one queues — and a cancellation is not a
+    # failure, so nothing here would report an approved change that never ran.
     concurrency:
-      group: terraform-${{ matrix.environment.name }}
+      group: terraform-plan-${{ matrix.environment.name }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -642,9 +648,151 @@ jobs:
           path: terraform/environments/${{ matrix.environment.name }}/tfplan
           retention-days: 1 # tfplan holds sensitive values in cleartext
 
+  # Resolves which environments actually produced a saved plan — which is the
+  # set the apply stage runs over, and NOT the set the merge affects. That
+  # difference is the whole reason this job exists.
+  #
+  # `needs:` is scoped to a JOB, not to a matrix row. An apply matrix depending
+  # on the plan matrix is therefore skipped in full the moment any single
+  # environment's plan row fails: `fail-fast: false` lets the other rows run,
+  # but it cannot stop their collective result being `failure`. One broken
+  # environment would stop every other environment's correct change reaching
+  # production. The opposite repair is worse — a condition letting the apply
+  # rows start regardless would request an Environment's approval for a row with
+  # no saved plan, which is the empty approval prompt this workflow's path
+  # filter exists to prevent, moved to the apply stage.
+  #
+  # A matrix job cannot publish a per-row result: its `outputs:` are written by
+  # every row into one namespace, last writer wins. So the fact is read from
+  # this run's artifacts instead. The saved plan is already named per
+  # environment, and the plan job publishes it as its LAST step, carrying no
+  # condition — so a row that failed for any reason, its own destroy-policy gate
+  # included, never reached the upload and is absent here. That ordering is what
+  # makes "an artifact exists" mean "every check in that plan job passed"; the
+  # Gated Production Apply Applies the Reviewed Plan requirement obliges it
+  # rather than leaving it to the order of a file.
+  planned:
+    name: planned
+    needs: [discover, plan]
+    # Runs whatever the plan matrix concluded — that is the point of it — but
+    # not on a run whose own discovery refused, and not on a cancelled one.
+    if: ${{ !cancelled() && needs.discover.result == 'success' }}
+    runs-on: ubuntu-latest
+    # No `environment:`. This job decides which Environments the run will ask
+    # for, so it cannot itself be gated on one of them.
+    permissions:
+      # The one scope it needs and nothing else: reading this run's artifact
+      # NAMES. It never downloads them — a saved plan holds sensitive values in
+      # cleartext, and a job that needs to know only which plans exist has no
+      # business holding their contents. See Least-Privilege Workflow
+      # Permissions.
+      actions: read
+    outputs:
+      environments: ${{ steps.planned.outputs.environments }}
+    steps:
+      - name: Resolve which environments produced a saved plan
+        id: planned
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          CANDIDATES: ${{ needs.discover.outputs.environments }}
+        run: |
+          set -euo pipefail
+
+          # Free of Actions expressions, every input through `env:`, like every
+          # other fail-closed body in these workflows -- so `.github/tests` can
+          # pull it out and run it across the inputs it must tell apart.
+
+          if [ -z "${CANDIDATES}" ] || [ -z "${REPOSITORY}" ] || [ -z "${RUN_ID}" ]; then
+            echo "::error::The planned-environment resolution has no candidate set, repository or run id to work from, which means a step it depends on did not conclude. Refusing to read that as 'no environment was planned': that applies nothing for a merge that did change infrastructure and reports a green run."
+            exit 1
+          fi
+
+          # A read that REFUSED is not an empty result. An expired credential or
+          # an API returning 502 is indistinguishable from "no plan was saved"
+          # unless it is refused here; read as the second it applies nothing and
+          # reports green, leaving the divergence to the nightly drift sweep.
+          # `per_page` rather than `--paginate`, deliberately: on an endpoint
+          # returning an OBJECT, `--paginate` emits one JSON document per page
+          # and the result is a stream rather than a document -- which the
+          # identity check below would then read as malformed, or worse, read as
+          # its first page alone. One page is asserted to be the whole listing
+          # instead, three lines down.
+          if ! listing=$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" 2>&1); then
+            echo "::error::Could not read this run's artifacts, so which environments produced a saved plan cannot be determined: ${listing}. Refusing to conclude that none did."
+            exit 1
+          fi
+
+          # A read that SUCCEEDED and returned something which is not a listing
+          # is the same failure wearing a different face: a proxy's HTML error
+          # page parses as nothing, and a tolerant filter would evaluate it to
+          # an empty set and report it as read-and-empty. Identity is asserted
+          # separately, exactly as the destroy-policy gate asserts
+          # `format_version` on a plan.
+          if ! printf '%s' "$listing" | jq -e 'has("artifacts")' >/dev/null 2>&1; then
+            echo "::error::This run's artifact listing carries no 'artifacts' key, so it is not a listing. Refusing to conclude that no environment produced a saved plan."
+            exit 1
+          fi
+
+          if ! published=$(printf '%s' "$listing" | jq -c '[.artifacts[].name]' 2>&1); then
+            echo "::error::Could not read the artifact names out of this run's listing: ${published}. Refusing to conclude that no environment produced a saved plan."
+            exit 1
+          fi
+
+          # A TRUNCATED listing is the third face of the same failure, and the
+          # only one of the three that is silent: a page holding fewer artifacts
+          # than the run has drops environments from the planned set, and a
+          # dropped environment is a reviewed change that never reaches its
+          # cloud with nothing said about it. Refused rather than paginated,
+          # because a run uploading one saved plan per environment cannot
+          # plausibly fill a page -- so reaching this branch means something is
+          # wrong rather than large.
+          returned=$(printf '%s' "$published" | jq 'length')
+          total=$(printf '%s' "$listing" | jq '.total_count // (.artifacts | length)')
+          if [ "$returned" -ne "$total" ]; then
+            echo "::error::This run's artifact listing reports ${total} artifacts and returned ${returned}, so it is truncated. Refusing to resolve the planned environments from a partial listing: an environment missing from it is a reviewed change that would never be applied."
+            exit 1
+          fi
+
+          # `tfplan-<environment>` is the name the plan job uploads under. The
+          # prefix is spelled out here because this body may carry no Actions
+          # expression; `.github/tests` reads the template out of that upload
+          # step and fails this pairing if the two ever drift apart.
+          planned=$(printf '%s' "$CANDIDATES" \
+            | jq -c --argjson published "$published" \
+              'map(select(("tfplan-" + .name) as $artifact | $published | index($artifact) != null))')
+
+          count=$(printf '%s' "$planned" | jq 'length')
+
+          # An EXPLICITLY empty set is accepted, and that is a different
+          # judgement from the refusals above rather than an inconsistency with
+          # them. A merge matching this workflow's path filter while affecting
+          # no environment reaches this stage with nothing to apply, and so does
+          # one whose every plan failed — where the run is already red for that
+          # reason. Failing here would turn a benign merge into a red apply
+          # workflow.
+          echo "Environments that produced a saved plan (${count}): ${planned}"
+          echo "environments=${planned}" >>"$GITHUB_OUTPUT"
+
   apply:
     name: apply (${{ matrix.environment.name }})
-    needs: [discover, plan]
+    # `plan` stays in `needs:` alongside `planned`, and it is not decorative:
+    # the omitted-write-token guard below reads `needs.plan.outputs`, which
+    # leaves scope the moment that edge is dropped. The guard would then compare
+    # against an empty string and pass — in exactly the configuration it exists
+    # to catch. `.github/tests` asserts both the edge and that what it reads is
+    # an output the plan job actually publishes.
+    needs: [discover, plan, planned]
+    # THE CONDITION IS WHAT BREAKS THE COUPLING. A `needs:` edge implies
+    # `success()` over every dependency, so without this the job is skipped
+    # whenever the plan stage's aggregate result is `failure` — the defect this
+    # shape exists to remove, and one every other part of the mechanism would
+    # appear to have fixed. `!cancelled()` suppresses that implicit `success()`;
+    # requiring `planned` to have succeeded is what stops the apply stage
+    # starting on a resolution that refused. No apply condition reads the plan
+    # stage's own result, which is where the coupling would return.
+    if: ${{ !cancelled() && needs.planned.result == 'success' }}
     runs-on: ubuntu-latest
     # Every apply job declares an `environment:`, taken from the environment's
     # own declaration. Whether that PAUSES for a human is a property of that
@@ -655,13 +803,16 @@ jobs:
     environment: ${{ matrix.environment.github_environment }}
     permissions:
       contents: read
+    # A DIFFERENT group from the plan job's, per environment. See the comment on
+    # that job: sharing one would let a later merge's queued plan cancel an
+    # apply awaiting its reviewer, silently.
     concurrency:
-      group: terraform-${{ matrix.environment.name }}
+      group: terraform-apply-${{ matrix.environment.name }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+        environment: ${{ fromJSON(needs.planned.outputs.environments) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7

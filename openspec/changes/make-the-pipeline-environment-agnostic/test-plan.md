@@ -421,3 +421,343 @@ and the tests that depend on it.
    runner's own idiom, and no Actions-specific skill exists. Recorded as an
    absence rather than resolved with a near-miss skill. No test depends on this;
    it is recorded because the floor requires the absence to be visible.
+
+---
+
+# Second derivation pass — the amended requirements (tasks.md 5.5)
+
+Everything above records the FIRST pass, from the delta specs at commit
+`fbef40d`. It is left exactly as it was written: the scenarios it accounted for
+are unchanged by this revisit, and a record rewritten to look like it always
+covered both passes would lose which pass established what.
+
+This section accounts for the four scenarios and the amended sentences this
+change's revisit ADDED to two `iac-cicd-pipeline` requirements, derived from the
+delta specs at commit `8d66bf3` — the commit holding the approved amended plan —
+by an author other than whoever implements them, and from no implementation of
+tasks 4.3b–4.3e. **This pass adds tests and never subtracts:** nothing in it
+edited, deleted or disabled an existing test, in the first pass's module or in
+any other.
+
+## Where the second pass's tests are
+
+- `.github/tests/test_planned_environment_apply_stage.py` — new, 19 test methods
+  in four classes. Individually selectable with
+  `python3 -m unittest test_planned_environment_apply_stage.<Class>.<method>`
+  run from `.github/tests`, or with
+  `python3 -m unittest discover --start-directory .github/tests` from the
+  repository root.
+
+A fifth module rather than a section of the first pass's, for the reason that
+pass gave for being a fourth: this author may only add, and
+`test_environment_agnostic_pipeline.py` is now an existing test file like any
+other. The Terraform-module and Molecule rows of this project's three test
+commands are again unused. The one command this module spawns is `bash`; the
+`gh` its executed body meets is a stub written into a scratch directory and put
+on `PATH`, which prints a fixture and reaches no network — so
+`test_ci_configuration.TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource`
+holds over this module too, and was confirmed to.
+
+## Baseline
+
+Full suite, taken before any test of this pass was written, from the repository
+root at commit `8d66bf3`:
+
+    python3 -m unittest discover --start-directory .github/tests
+    Ran 471 tests in 8.482s — OK
+
+Nothing was failing beforehand. After this pass, the same command reports:
+
+    Ran 490 tests in 9.0s — FAILED (failures=13)
+
+The 471 pre-existing tests still pass. The 13 failure records are **12 failing
+methods** of the 19 added — one method reports two, because it refuses two
+shapes of unresolvable input as subtests. Failing is the correct outcome: none
+of tasks 4.3b–4.3e is implemented.
+
+### The 12 failing methods, and what each failure establishes
+
+Eleven of them fail in the same state and for one cause: **the target does not
+exist.** `apply.yml`'s apply matrix is still built from the merge's AFFECTED
+set, resolved before any plan has run, so there is no resolution of which
+environments produced a saved plan for these assertions to report on. The
+locator says exactly that in its own failure message rather than reporting on
+the affected-set job instead, which it would otherwise find and which resolves
+something else entirely.
+
+- `TestTheApplyStageRunsOverThePlanned` — all six: the matrix's source, the
+  Environment the resolution declares, the condition that lets it run after a
+  failed plan row, the apply job's condition, the apply job's dependence on the
+  resolution, and that the resolution reads names rather than plans.
+- `TestThePlannedSetResolutionIsRunRatherThanRead` — all five: there is no
+  `${{ }}`-free body publishing a planned set to execute.
+
+The twelfth,
+`TestThePlanAndApplyGroupsAreSeparate.test_no_plan_job_shares_a_concurrency_group_with_an_apply_job`,
+fails in the stronger state — **the code ran and produced a wrong value.** Both
+jobs declare `group: terraform-${{ matrix.environment.name }}` today, which is
+one group, which is what task 4.3e exists to split.
+
+### The 7 passing methods, and why none is a false green
+
+A test that passes on its first run before its implementation exists is an alarm
+under this project's testing floor, so each was investigated and each was then
+shown to go RED against a scratch copy of the tree carrying the one defect it
+names. The mutations were made to a copy under a temporary directory and never
+to this repository; the copy was restored after each.
+
+| Method | Why it passes today | Confirmed red against |
+|---|---|---|
+| `TestTheApplyStageRunsOverThePlanned.test_each_apply_job_keeps_its_plan_job_in_needs` | The edge already exists, and tasks.md 4.3c says so outright: the shape this revisit prescribes keeps it green | `needs: [discover]` on the apply job |
+| `TestTheApplyStageRunsOverThePlanned.test_the_write_token_guard_reads_an_output_its_plan_job_publishes` | Task 4.3a is implemented, so the guard already reads `needs.<plan>.outputs.<digest>` | the same `needs:` removal, and separately the plan job publishing that digest under another name |
+| `TestASavedPlanIsPublishedOnlyAfterItsOwnChecksPassed.test_no_step_of_the_plan_job_runs_after_the_saved_plan_is_published` | The implementation as built already orders the upload last — which is the plan review's finding: nothing REQUIRED it | a trailing step added after the upload |
+| `.test_the_publication_of_a_saved_plan_carries_no_condition` | Same: unconditional already, obliged by nothing until now | `if: always()` on the upload |
+| `.test_neither_the_plan_job_nor_any_step_of_it_can_suppress_a_failure` | No `continue-on-error` in the plan job today | `continue-on-error: true` on the destroy-policy gate |
+| `.test_the_destroy_policy_gate_carries_no_condition_but_its_applicability` | The gate carries no `if:` today; applicability reaches it through `env:` | `if: always()` on the gate |
+| `TestThePlanAndApplyGroupsAreSeparate.test_no_plan_outside_the_apply_workflow_joins_either_group` | Neither `pr-validation.yml` nor `drift.yml` declares a group that could coincide with the apply workflow's | the apply workflow's group copied onto `pr-validation.yml`'s plan job |
+
+The four in `TestASavedPlanIsPublishedOnlyAfterItsOwnChecksPassed` are the case
+the delta's amendment is about: the implementation already has the property and
+nothing would have noticed its loss. They are guards against a reversal, which
+is exactly what task 4.3d asks for, and they are not coverage of work still to
+be done.
+
+### The tests were also shown to go GREEN, not only red
+
+Twelve red methods establish that the target is absent; on their own they would
+not establish that the assertions can ever be satisfied. So a **throwaway**
+conforming implementation of tasks 4.3b–4.3e — a resolver job after the plan
+matrix declaring no `environment:`, `if: !cancelled() && needs.<discover>.result
+== 'success'`, `permissions: actions: read`, a `${{ }}`-free body reading this
+run's artifact names through `gh api` with the run id and the repository through
+`env:`, an apply matrix over its output, an apply condition of `!cancelled() &&
+needs.<resolve>.result == 'success'`, and split `terraform-plan-…` /
+`terraform-apply-…` groups — was written **into the scratch copy only** and run
+against.
+
+Two results, both worth recording:
+
+1. All 19 methods pass against it, so none is broken by construction.
+2. **The whole suite passes against it — 490 tests, OK.** That is the evidence
+   behind this pass's obsolete list being empty rather than unexamined: one
+   plausible conforming shape breaks no existing assertion in this repository.
+
+The scratch implementation was then broken one defect at a time and each
+assertion confirmed red again: a resolution declaring an `environment:`; a
+resolution carrying no condition; an apply condition reading the plan stage's
+result; an apply job with no condition at all; a resolution downloading the
+saved plans; a resolution emitting every candidate rather than the planned; a
+resolution refusing an explicitly empty set; a resolution failing OPEN on an
+unreadable listing; and the two concurrency groups made to coincide again.
+Nothing from that scratch tree is committed, and no part of this pass wrote to
+`.github/workflows/`.
+
+## Scenario accounting — the four scenarios this revisit adds
+
+Two requirements gained scenarios; the counts move from 8 to 11 and from 2 to 3.
+Every scenario of both is accounted for exactly once across the two passes: the
+pre-amendment ones in the tables above, the four below.
+
+### MODIFIED — Gated Production Apply Applies the Reviewed Plan (+3, now 11)
+
+| Scenario | Test(s) |
+|---|---|
+| A plan its own gate refused is not applied | `TestASavedPlanIsPublishedOnlyAfterItsOwnChecksPassed.test_no_step_of_the_plan_job_runs_after_the_saved_plan_is_published`, `.test_the_publication_of_a_saved_plan_carries_no_condition`, `.test_neither_the_plan_job_nor_any_step_of_it_can_suppress_a_failure`, `.test_the_destroy_policy_gate_carries_no_condition_but_its_applicability` — **structural**, see the uncovered list |
+| One environment's failed plan does not block another's apply | `TestThePlannedSetResolutionIsRunRatherThanRead.test_an_environment_whose_plan_failed_is_absent_and_the_others_remain` (executed), `TestTheApplyStageRunsOverThePlanned.test_the_apply_matrix_reads_a_set_resolved_after_the_plan_stage`, `.test_no_apply_jobs_condition_resolves_through_the_plan_stages_result`, `.test_the_resolution_runs_even_when_an_environments_plan_failed` |
+| An unresolvable set of planned environments fails the run | `TestThePlannedSetResolutionIsRunRatherThanRead.test_a_resolution_that_could_not_read_the_run_fails_it` (both subtests), `.test_a_listing_that_is_not_a_valid_set_fails_rather_than_emptying` — **partial**, see the uncovered list |
+
+The amended sentences that are not scenarios, and where each is read:
+
+- "An environment SHALL be applied only where its own plan was produced" —
+  `TestThePlannedSetResolutionIsRunRatherThanRead.test_every_environment_that_produced_a_plan_is_in_the_resolved_set`
+  and `.test_an_environment_whose_plan_failed_is_absent_and_the_others_remain`.
+- "The set of environments to apply SHALL instead be resolved from which
+  environments actually produced a saved plan" —
+  `TestTheApplyStageRunsOverThePlanned.test_the_apply_matrix_reads_a_set_resolved_after_the_plan_stage`.
+- "An environment counts as having produced a saved plan only where every check
+  its plan job performs has passed … the artifact SHALL therefore be published
+  only after every such check has passed, and unconditionally on their having
+  passed" — the four methods of
+  `TestASavedPlanIsPublishedOnlyAfterItsOwnChecksPassed`.
+- "That resolution SHALL run outside any GitHub Environment" —
+  `TestTheApplyStageRunsOverThePlanned.test_the_resolution_runs_outside_any_github_environment`.
+- "An **explicitly empty** planned set … SHALL NOT fail the run" —
+  `TestThePlannedSetResolutionIsRunRatherThanRead.test_an_explicitly_empty_planned_set_is_accepted`.
+- "The apply stage SHALL NOT reach its conclusion through the plan stage's
+  aggregate result" —
+  `TestTheApplyStageRunsOverThePlanned.test_no_apply_jobs_condition_resolves_through_the_plan_stages_result`,
+  with `.test_each_apply_jobs_condition_requires_the_resolution_to_have_succeeded`
+  and `.test_each_apply_job_keeps_its_plan_job_in_needs` holding the two halves
+  tasks.md 4.3c calls load-bearing, and
+  `.test_the_write_token_guard_reads_an_output_its_plan_job_publishes` holding
+  the second half against the edit that would disarm it silently.
+- "the `tfplan` artifact SHALL be treated as a secret", read at the resolution —
+  `TestTheApplyStageRunsOverThePlanned.test_the_resolution_reads_artifact_names_and_downloads_no_saved_plan`.
+
+### MODIFIED — Serialized Terraform Runs (+1, now 3)
+
+| Scenario | Test(s) |
+|---|---|
+| A queued plan does not cancel an apply awaiting approval | `TestThePlanAndApplyGroupsAreSeparate.test_no_plan_job_shares_a_concurrency_group_with_an_apply_job`, `.test_no_plan_outside_the_apply_workflow_joins_either_group` — **structural**, see the uncovered list |
+
+The amended sentence: "**Within the apply workflow, its plan job and its apply
+job SHALL NOT share a group** … a plan run on a pull request or on the drift
+schedule … SHALL NOT be placed in either group" — the same two methods. The
+first compares the two groups with every `${{ }}` collapsed to one placeholder,
+which is what "cannot coincide for **any** environment name" means as a static
+read: two groups differing only in which expression they interpolate hold the
+same value for some environment.
+
+Not restated by this pass, because the first pass already covers them and this
+revisit does not supersede them: that each of these jobs declares a group of its
+own derived from the matrix with `cancel-in-progress: false`
+(`TestConcurrencyIsDeclaredPerEnvironment.test_every_job_that_plans_or_applies_declares_its_own_concurrency_group`),
+and that `apply.yml` declares no workflow-level group. **A plan job and an apply
+job sharing ONE such group satisfies both of those**, which is why the sentence
+was added and why the assertion above has to be a separate one.
+
+## Uncovered and partially covered scenarios of this pass, with reasons
+
+1. **A plan its own gate refused is not applied** — covered **structurally**.
+   What is asserted is that a refused gate cannot be followed by a publication:
+   the upload is the plan job's last step, carries no condition, and neither the
+   job nor any step of it can suppress a failure. What is NOT asserted is the
+   run's behaviour on a plan that actually contains a deletion — the gate reads
+   `terraform show -json`, and this suite may not spawn a Terraform binary. The
+   same boundary the first pass records for every other destroy-gate scenario.
+2. **An unresolvable set of planned environments fails the run** — the refusal is
+   executed over two shapes of unresolvable input, but the delta's "**with a
+   message identifying that resolution as the cause**" is asserted only as far as
+   a non-zero exit. The message's wording is not pinned, deliberately and for the
+   same reason the first pass did not pin the affected-set resolution's: pinning
+   prose would fail a correct implementation that phrased it otherwise, and the
+   run's failure is what stops the apply.
+3. **A queued plan does not cancel an apply awaiting approval** — covered
+   **structurally**, and it cannot be covered otherwise from here. Whether a job
+   awaiting its Environment's protection rules counts as *pending* for a
+   concurrency group is GitHub's behaviour, which the delta itself records as
+   unestablished and which `docs/deferred-work.md` is to carry (tasks.md 6.5).
+   What a committed file can say is that the two groups cannot coincide, and that
+   is what is asserted.
+4. **One environment's failed plan does not block another's apply** — the
+   resolution half is EXECUTED, over a partial set; the "under its own GitHub
+   Environment's protection rules" half is repository settings, which this suite
+   makes no network call to read. Recorded so the executed half is not read as
+   covering the scenario whole.
+
+## Assertion classification for this pass
+
+Each method carries its classification in its own docstring, in the convention
+the modules beside it use.
+
+- **SPECIFIED** — 17 of the 19. Each names the amended sentence or the scenario
+  it traces to.
+- **DERIVED** — 2, each naming what it traces to and each carrying the sentence
+  *"Reconsider this assertion, do not weaken it, if …"*:
+  `TestTheApplyStageRunsOverThePlanned.test_each_apply_jobs_condition_requires_the_resolution_to_have_succeeded`
+  (design.md decision 8 and tasks.md 4.3c — the delta requires the run to fail on
+  an unresolvable set, and an apply stage admitted by `!cancelled()` alone would
+  start on a resolution that refused), and
+  `TestASavedPlanIsPublishedOnlyAfterItsOwnChecksPassed.test_the_destroy_policy_gate_carries_no_condition_but_its_applicability`
+  (tasks.md 4.3d, narrowed — see the project questions below).
+- **Deliberately untested** — the four entries above, each with its reason.
+- **One classification sits in a locator rather than in an assertion**, as it did
+  in the first pass. `TestThePlannedSetResolutionIsRunRatherThanRead` finds the
+  body it executes through the workflow's own wiring — the apply matrix names the
+  resolver job's output, the job's `outputs:` names the step that wrote it — and
+  then requires that step to be `${{ }}`-free with its inputs through `env:`.
+  That shape is DERIVED, from tasks.md 3.4 and 4.3b, which fix it deliberately so
+  that this suite can execute the body at all. The locator's failure message
+  states the shape it looked for and why.
+
+## Obsolete-test candidates from this pass
+
+**None found by this search.** Read that as *"this search found none"*, not as
+*"there are none"* — but it is a stronger statement than that phrase usually
+carries here, because the search was not only a read:
+
+- The bounded read: every module under `.github/tests/*.py`, the dispatched
+  test-path glob, and the first pass's own accounting above as a
+  scenario-to-test map. The amendment adds sentences and scenarios to two
+  MODIFIED requirements and removes none, renames none, and reverses none — so
+  there is no superseded behaviour for an existing assertion to be pinned to.
+- The executed check: the whole suite was run against a scratch tree carrying a
+  conforming implementation of tasks 4.3b–4.3e, and reported **490 tests, OK**.
+  An existing assertion this amendment's shape invalidates would have been red
+  there.
+
+Task 4.3c asks for any already-written assertion this shape invalidates to be
+named, "at minimum `test_each_apply_job_depends_on_a_job_that_plans`". It is
+named, and it is **not** invalidated: the apply job keeps its plan job in
+`needs:`, so
+`test_environment_agnostic_pipeline.TestEveryApplyIsGatedAndPerEnvironment.test_each_apply_job_depends_on_a_job_that_plans`
+stays green, as that task predicted. It is re-expressed all the same, additively
+and for the second reason the revisit gives it —
+`TestTheApplyStageRunsOverThePlanned.test_each_apply_job_keeps_its_plan_job_in_needs`
+asserts the edge, and
+`.test_the_write_token_guard_reads_an_output_its_plan_job_publishes` asserts what
+the edge is FOR, which the edge assertion alone does not: a guard still
+referencing `needs.<plan>.outputs.<x>` that the plan job no longer publishes
+resolves to an empty string and passes.
+
+The first pass's obsolete list stands unchanged; nothing in this pass touched any
+test on it.
+
+## Unresolved project questions from this pass
+
+Recorded rather than resolved silently, for the same reason the first pass gave:
+this pass runs as a dispatched subagent with no channel to ask on.
+
+1. **How the resolution reads which plans exist is not fixed by the delta.** The
+   delta says "Where the resolution is made by observing an artifact"; tasks.md
+   4.3b names `gh api repos/<owner>/<repo>/actions/runs/<id>/artifacts` as that
+   read, and requires the body to take every input through `env:` including the
+   run id and the repository.
+   *Assumption taken:* the executed tests put a stub `gh` on `PATH` which answers
+   from a fixture (including the `--jq` form) and refuses when the case calls for
+   it, AND supply the same fixture to any `env:` value that reads another step's
+   output — so a body calling `gh` itself and a body handed a listing by a
+   sibling step are both executable. A body reaching the API by some third means,
+   `curl` for instance, would fail these tests, and the failure message says what
+   was supplied.
+   *Tests that depend on it:* all five of
+   `TestThePlannedSetResolutionIsRunRatherThanRead`.
+2. **The shape of the candidate set arriving at the resolution is not fixed.**
+   *Assumption taken:* a JSON array of the declaration rows discovery already
+   emits — the same `PROD_ROW`/`STAGING_ROW` fixtures the first pass added to
+   `test_environment_agnostic_pipeline.py`, imported rather than restated so the
+   two passes cannot drift apart. The resolved set is read back as a JSON list
+   and each entry's `name` taken, tolerating a list of plain names.
+   *Tests that depend on it:* the same five.
+3. **The saved plan's artifact name is a template this pass renders rather than
+   assumes.** It is taken from the plan job's own upload step and rendered per
+   environment, substituting `matrix.<field>` — in either the flat or the
+   one-dimension-holds-the-row spelling — and the few `github.*` facts the
+   resolution has through `env:`. An artifact named from anything else is one the
+   resolution cannot reconstruct per environment, and the test says which
+   expression it could not resolve rather than silently comparing against the
+   wrong string.
+   *Tests that depend on it:* the three positive cases of that class.
+4. **This pass narrowed one instruction of tasks.md 4.3d, deliberately and
+   visibly.** That task says "neither the upload nor the gate carries an `if:`".
+   The upload half is asserted exactly as written. The **gate** half is narrowed
+   to admit one condition and nothing else: a bare reference to the environment's
+   own declared applicability, `if: matrix.<field>` or
+   `if: ${{ matrix.<dimension>.<field> }}`, in either spelling and containing
+   nothing else. The reason is that whether the gate applies is per-environment
+   policy by the *Destroy Policy Gate* requirement, and an implementation
+   expressing that applicability as an `if:` reading only the matrix would be
+   failed by the literal instruction for doing something the specification
+   allows. `if: false`, `if: always()` and every other spelling remain refused, so
+   the hole the task is aimed at stays closed. **This is a deviation from a task's
+   literal wording and is raised rather than absorbed.**
+   *Test that depends on it:*
+   `TestASavedPlanIsPublishedOnlyAfterItsOwnChecksPassed.test_the_destroy_policy_gate_carries_no_condition_but_its_applicability`.
+5. **The one permission tasks.md 4.3b names for the resolver — `actions: read`,
+   "and nothing else" — is not asserted by this pass.** It belongs to
+   *Least-Privilege Workflow Permissions*, which this revisit does not amend and
+   which `test_ci_configuration.py` already sweeps at repository scope. Recorded
+   so its absence here reads as a boundary rather than as an omission.
+6. **No stack skill exists for GitHub Actions workflow YAML in this library** —
+   the same absence the first pass recorded, unchanged. `python` was loaded for
+   the runner's idiom, `testing` for the floor. No test depends on this.
