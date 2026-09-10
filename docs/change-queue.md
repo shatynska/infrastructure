@@ -293,49 +293,23 @@ is operational rather than structural. It read the live host as well as the
 tree, so where an entry cites a host fact, that is what `main-server` showed on
 2026-09-08, not an inference from the code.
 
-## 49. add-a-staging-environment
+## 50. configure-the-staging-host
 
-**Its blocker is delivered.** Entry 24, `make-the-pipeline-environment-agnostic`,
-is archived: `apply.yml`, `drift.yml` and `pr-validation.yml` discover
-`terraform/environments/*/` and run per environment, so adding one changes no file
-under `.github/workflows/`. What it still takes is everything outside them, and the
-README's staging paragraph lists it: a `pipeline.yml` in the new directory naming a
-GitHub Environment and a read-only secret **distinct from prod's**, that
-Environment holding its own `HCLOUD_TOKEN`, a repository secret of the declared
-read-only name, an HCP workspace, and a Dependabot entry for the lockfile. The
-decision it left undecided is unchanged by that and is now this entry's, carried
-here from 24's own text so it is not lost with it:
+**The other half of the former entry 49**, recorded when
+`add-a-staging-environment` delivered the first half and deleted that entry.
+Staging is provisioned — `terraform/environments/staging/`, its own Hetzner
+project, its own HCP workspace, an ungated apply — and configured by nothing. It
+is a bare host with an attached, unmounted volume, which is not yet either of
+the two things staging is for.
 
-**Whether staging shares prod's Hetzner project.** One project means one read-write
-token, so staging's apply must be gated behind an approver too -- otherwise any push
-to `main` reaches a prod-capable credential. A second Hetzner project isolates the
-token and lets staging be ungated, which is most of the point of staging: an approved
-staging deploy is as slow as prod and stops being used. The pipeline supports either
--- an environment's `pipeline.yml` names its own GitHub Environment, and whether that
-Environment requires a reviewer is a repository setting -- so this is a decision
-rather than a constraint.
+Those two purposes were recorded in entry 49 and are unchanged, because they
+have different requirements and conflating them is how a staging environment
+ends up serving neither:
 
-A second project also settles a naming collision. `platform/docker-compose.yml`
-hardcodes `/mnt/main-data/prometheus` and `/mnt/main-data/grafana`. The Ansible role's
-`platform_data_volume_mount_path` is overridable per `group_vars`; those Compose bind
-mounts are not. Hetzner volume names are unique per project, so within a single
-project staging cannot also be `main-data`, and a different name gives a different
-mount path -- staging's Prometheus and Grafana would come up writing nowhere,
-silently. A second project frees the name; staying in one means parameterising the
-Compose paths. **Recommendation: a second Hetzner project.** It is a recommendation,
-not a decided thing.
-
-Recorded 2026-09-09, and it supersedes the reading in
-`docs/review-2026-09-08-host-readiness.md` that the company needed a
-single-environment copy of this shape. It needs two environments, so this
-repository is where that is rehearsed rather than discovered on a deadline.
-
-Two purposes must not be conflated, because they have different requirements:
-
-- **a place to rehearse infrastructure changes** -- a PostgreSQL major upgrade
+- **a place to rehearse infrastructure changes** — a PostgreSQL major upgrade
   (38), a hardening change. Ephemeral, no consumers, no DNS, no certificates.
-- **a place applications deploy to** -- `commerce-ops` and the applications
-  after it need somewhere a pre-release build can be looked at before prod.
+- **a place applications deploy to** — `commerce-ops` and the applications after
+  it need somewhere a pre-release build can be looked at before prod.
   Permanent, own hostnames and certificates, own per-app deploy keys, and a
   deploy path in each application's own repository.
 
@@ -343,43 +317,77 @@ Two purposes must not be conflated, because they have different requirements:
 something destructive breaks the application environment at the same time, which
 is a scheduling problem for the company and a non-problem here.
 
-Shape: a 2-vCPU Hetzner instance, roughly half prod's bill, same modules, same
-roles, same platform stack. It carries `terraform/environments/staging/`, a
-second HCP workspace with Execution Mode set to Local (as prod's `versions.tf`
-records for `infrastructure-prod`), a `staging` GitHub Environment and its own
-secret set -- the Vault password, the tailnet OAuth client, and platform's
-eight -- a `group_vars/staging.yml`, and DNS records for the staging hostnames.
-It also carries the Ansible half moved here from the archived change
-`make-the-pipeline-environment-agnostic`, which declined it as not pipeline work:
-`hosts: prod` in
-`host-baseline.yml` becoming a parameter, which this is the first change to give
-a second value to.
-Those records are manual: DNS is in no repository (`docs/deferred-work.md`,
-"Managing DNS in Terraform").
+What it carries:
 
-Three things it will find, which is the reason to do it here:
+- **`hosts: prod` in `ansible/playbooks/host-baseline.yml` becoming a
+  parameter.** This is the first change with a second value to give it. The
+  dynamic inventory already groups by the `environment` Hetzner label, and
+  staging's resources carry `environment = "staging"`.
+- **A way for the inventory to see two Hetzner projects, which today it cannot.**
+  `ansible/inventory/hcloud.yml` authenticates with a single `HCLOUD_TOKEN`, and
+  a Hetzner token is scoped to one project — so under prod's token the `staging`
+  group is *empty*, and under staging's, `prod` is. This is a consequence of
+  `add-a-staging-environment`'s decision to give staging its own project, and it
+  is this entry's to solve: a second inventory source, a per-environment token,
+  or a token-per-run convention. **The failure mode is why it is listed
+  separately rather than folded into the bullet above:** a play whose `hosts:`
+  matches nothing prints `skipping: no hosts matched` and exits **0**, so a
+  converge that reached no host is indistinguishable from one that had nothing
+  to do — including in CI.
+- **Staging's own secret set.** The Vault password, the tailnet OAuth client,
+  and platform's eight. None of them exist for staging today, and each is a
+  prerequisite for a converge rather than something discovered during one.
+- **`ansible/inventory/group_vars/staging.yml`**, written from scratch rather
+  than inherited from prod's. `docs/deferred-work.md`'s "Two gaps in
+  required-input validation that only the play could close" names exactly this
+  moment as its revisit trigger, for that reason.
+- **The first converge, which cannot come from CI and never will.** CI reaches a
+  host over the tailnet, and tailnet membership is created *by* the converge
+  (`ansible/roles/tailscale`); before it the host answers only on public SSH,
+  which the cloud firewall restricts to one ISP `/24`. That first run is local,
+  exactly as `docs/bootstrap-a-new-host.md` §6.3 documents for prod. It is
+  genesis rather than an exception to the never-apply-locally rule, and it is a
+  step the company server will need too.
+- **`platform/`'s Compose stack**, and the per-application deploy keys the
+  applications need. The volume name and mount path need no work: staging's
+  volume is `main-data` in a project of its own, so `/mnt/main-data/prometheus`
+  and `/mnt/main-data/grafana` are correct there as written.
+- **DNS records for the staging hostnames.** Manual: DNS is in no repository
+  (`docs/deferred-work.md`, "Managing DNS in Terraform" — whose own revisit
+  trigger is this change, since this is where there is finally a migration to
+  rehearse against).
 
-- the volume-name and Compose-path coupling described above;
-- memory. Eight platform containers plus `commerce-ops` and its own PostgreSQL
-  on the 2-vCPU tier is tight, which makes this the forcing function for
-  container resource limits (7);
-- **the first converge of a new host cannot come from CI, and never will.** CI
-  reaches a host over the tailnet, and tailnet membership is created *by* the
-  converge (`ansible/roles/tailscale`); before it the host answers only on
-  public SSH, which the cloud firewall restricts to one ISP `/24`. That first
-  run is local, exactly as `docs/bootstrap-a-new-host.md` §6.3 documents for
-  prod. It is genesis rather than an exception to the never-apply-locally rule,
-  and it is a step the company server will need too.
+Three things it must not undo, each one a property `add-a-staging-environment`
+shipped deliberately rather than by omission:
 
-Its `terraform apply`, unlike its first converge, goes through `apply.yml` from
-the very first one.
+- **`web_allowed_cidrs = []`.** Staging's cloud firewall opens no web port at
+  all. The platform stack will come up unreachable until this change opens
+  80/443 on purpose, and that is the intended order — a firewall rule added by
+  the change that has something to put behind it, rather than one standing open
+  in front of an empty host.
+- **Staging holds nothing irreplaceable.** This is what makes `destroy_policy_gate:
+  false` and an unreviewed apply safe: a destructive plan applies without a
+  second signal, and what bounds the loss is that everything on staging can be
+  rebuilt from this repository. Putting a database on staging either preserves
+  that — throwaway data, recreated by a seed — or spends it, and spending it
+  means saying so and revisiting the two settings that rest on it.
+- **The `main-data` name.** It is not tidiness: it is what keeps
+  `platform/docker-compose.yml` unparameterised across environments.
+
+**Memory is the thing this will find.** Eight platform containers plus
+`commerce-ops` and its own PostgreSQL on a 2-vCPU instance is tight, which makes
+this the forcing function for container resource limits (7).
 
 ## 23. apply-host-configuration-through-a-gated-workflow
 
-**Blocked on 49** -- not because it cannot be built against prod, but because it
-should not be. It was recorded unblocked on 2026-09-06; the block was added on
-2026-09-09 when staging was identified. It is the one path to production this
-repository still leaves to a workstation.
+**Blocked on 50, not on 49** -- not because it cannot be built against prod, but
+because it should not be. It was recorded unblocked on 2026-09-06; the block was
+added on 2026-09-09 when staging was identified, and re-pointed on 2026-09-10
+when `add-a-staging-environment` delivered staging's Terraform half. The block
+did not lift with it: what this entry needs is a non-prod host to *converge*
+against, and staging is not yet an Ansible target -- no `group_vars`, no play
+that can name it, no first converge. Entry 50 is what supplies those. It remains
+the one path to production this repository still leaves to a workstation.
 
 `ansible/playbooks/host-baseline.yml` is applied by hand: no workflow runs
 `ansible-playbook` against prod, the Vault password lives only on the
@@ -1099,3 +1107,32 @@ Bounded in the meantime by how rotation actually happens here: it is a manual
 act by the operator, who can force the replacement in the same session. Worth
 writing that into the rotation step of whatever runbook covers it, which is a
 smaller piece of work than this entry and does not wait on it.
+
+## 51. assert-every-tfvars-assigns-its-required-variables
+
+Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the
+gap by falling into it.
+
+That change shipped `terraform/environments/staging/terraform.tfvars` with
+`server_type` deliberately unassigned, and `variables.tf` declares it with no
+default. Nothing in this repository detects that. The consequence is not subtle
+once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run
+Terraform with `-input=false`, so the plan exits non-zero with `No value for
+required variable`, the conclusion step fails the required check, and a nightly
+drift sweep would fail for that environment every night and take the shared
+heartbeat with it — but it is detected by a *plan*, which needs a credential, a
+workspace and a network. The same fact is a pure static read: for each
+environment directory, every variable `variables.tf` declares without a `default`
+appears as an assignment in `terraform.tfvars`.
+
+That places it squarely in `.github/tests`, whose subject is any property that is
+a static read of a committed file, and which may make no network call and invoke
+no Terraform binary. The parser is the only real work: `terraform.tfvars`
+assignments and `variable` blocks with and without defaults, without importing
+HCL machinery the suite does not have. `test_a_second_environment.py` already
+reads `terraform.tfvars` for volume names and can lend its approach.
+
+**Not blocked.** It was left out of `add-a-staging-environment` because the gap it
+covers was that change's own disclosed, in-flight state — writing the check that
+fails the tree you are still assembling is a different change than the one that
+assembled it.

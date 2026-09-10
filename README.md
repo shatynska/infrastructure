@@ -24,8 +24,8 @@ production; see `AGENTS.md` for the conventions that assumes.
 - **Container orchestration.** Plain VMs via `hcloud_server`; no
   Kubernetes, Nomad, or similar.
 
-A staging environment is *not* a non-goal — it's an anticipated near-term
-addition (see Status below), not a rejected idea.
+A staging environment is *not* a non-goal, and is no longer hypothetical:
+`terraform/environments/staging/` exists (see Status below).
 
 ## Repository layout
 
@@ -39,8 +39,8 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
   firewall).
   - `terraform/modules/` — shared, reusable Terraform modules (e.g.
     `terraform/modules/server`).
-  - `terraform/environments/<name>/` — one folder per environment (currently
-    only `prod`), each calling the shared modules with environment-specific
+  - `terraform/environments/<name>/` — one folder per environment (`prod` and
+    `staging`), each calling the shared modules with environment-specific
     variables. New environments are added as new folders, never as branches.
 - `ansible/` — Ansible configures the provisioned host (container runtime,
   host-level security). Scope stops at the container runtime; it never
@@ -88,14 +88,29 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
    direnv allow
    ```
 
-   Never put the **Read & Write** token here or in any other local file — it
-   lives exclusively in the `production` GitHub Environment secret. See
-   `AGENTS.md`.
+   Never put a **Read & Write** token here or in any other local file. This
+   holds for every environment: each one's write token lives exclusively in
+   that environment's own GitHub Environment secret — prod's in `production`,
+   staging's in `staging` — and an environment whose Environment requires no
+   reviewer is no exception, since the reviewer and the confinement are
+   independent. What belongs in this file is a **Read Only** token, and
+   nothing else. See `AGENTS.md`.
+
+   **One token reaches one environment**, because each environment has a
+   Hetzner project of its own and a Hetzner token cannot span projects. Put
+   prod's read-only token in the repo-root `.envrc`, and staging's in an
+   `.envrc` inside `terraform/environments/staging/` — directory-scoped, so
+   planning staging never leaves staging's token in the shell that plans prod.
 
    Without `direnv`, `source .envrc` from the repo root once per shell —
-   it is a plain `export`. The dynamic inventory needs `HCLOUD_TOKEN` too,
+   it is a plain `export`. That path loses the isolation above, since the
+   export outlives the directory: source the environment's own file in a
+   shell you do not reuse for another environment, or the next
+   `ansible -i inventory/hcloud.yml prod` silently resolves no hosts. The dynamic inventory needs `HCLOUD_TOKEN` too,
    not just Terraform: without it `ansible -i inventory/hcloud.yml prod`
-   resolves no hosts.
+   resolves no hosts. It resolves no hosts under the *wrong* environment's
+   token either, and that failure is quiet — a play matching no host exits 0.
+   The inventory sees only the project its token belongs to.
 
 5. To run the Ansible tests, install the pinned Molecule toolchain:
 
@@ -226,16 +241,19 @@ allowed CIDRs, volume name and size, and the server/volume enable flags). Files
 matching `*.secret.tfvars` or `secrets.auto.tfvars` are gitignored and must
 never be committed.
 
-Repository secrets in GitHub hold `HCLOUD_TOKEN`, `TF_API_TOKEN` (see CI/CD
+Repository secrets in GitHub hold `HCLOUD_TOKEN` and `HCLOUD_TOKEN_STAGING`
+(one read-only token per environment, since a repository secret holds one value
+and each environment's project needs its own), `TF_API_TOKEN` (see CI/CD
 below for the privilege split on those), `APP_CLIENT_ID` / `APP_PRIVATE_KEY`,
 and `HEARTBEAT_PING_KEY` — the last of those deliberately repository-scoped
 rather than an Environment secret, because the scheduled workflows report their
 own liveness with it and a job reading an Environment secret would wait on
 required-reviewer approval. This is not the full list of secrets the workflows read: the
 `PLATFORM_*` and `TAILSCALE_OAUTH_*` values, and the read-write overrides of
-`HCLOUD_TOKEN` and `TF_API_TOKEN`, are consumed only by jobs declaring
-`environment: production` and are Environment secrets rather than repository
-ones.
+`HCLOUD_TOKEN` and `TF_API_TOKEN`, are consumed only by jobs declaring an
+`environment:` — `production` or `staging` — and are Environment secrets rather
+than repository ones. Declaring the Environment is what confines them; whether
+it also pauses for a reviewer is a separate property, and `staging` does not.
 
 `APP_CLIENT_ID` and `APP_PRIVATE_KEY` identify a GitHub App named
 **`infrastructure-autoupdate`**, owned by `shatynska` and reachable at
@@ -287,8 +305,10 @@ One entry per file in `.github/workflows/`:
 - **`apply.yml`** (merge to `main`, path-filtered) — a two-job apply. A plan
   job (read-only Hetzner token) saves a plan file and posts its diff to the run
   summary, plus a destroy-policy check; an apply job (read-write token) applies
-  that exact saved plan only after a required reviewer approves the
-  `production` GitHub Environment.
+  that exact saved plan, and only after that environment's own GitHub
+  Environment lets it — which for `production` means a required reviewer, and
+  for `staging` means immediately. Both run per environment, over whichever
+  environments the merge affects.
 - **`platform-deploy.yml`** (merge to `main` touching `platform/`) — the same
   diff-then-approve split for the Compose stack: a diff job with no credential,
   then a deploy job gated on the same `production` Environment.
@@ -391,11 +411,24 @@ identity, scope, and non-goals are recorded in the change
 `project-foundation`'s design.md; every change since is recorded under
 `openspec/`.
 
-A staging environment is still anticipated as the next environment, but is not
-yet in scope. The pipeline no longer stands in its way: `pr-validation.yml`,
-`apply.yml` and `drift.yml` discover `terraform/environments/*/` and run per
-environment, so **adding one changes no file under `.github/workflows/`**. What
-it does still take is everything outside those files:
+`staging` is the second environment, provisioned from
+`terraform/environments/staging/` and reached by the same pipeline: it is
+planned on every pull request that affects it, applied on merge, and swept by
+the nightly drift run. Two things distinguish it from prod, both deliberate and
+both recorded in its own `pipeline.yml` — its apply requires no reviewer, and
+the destroy-policy gate does not apply to it. Neither is a relaxation of where
+its write credential lives; that is identical to prod's. It runs in a **separate
+Hetzner Cloud project**, which is what makes both safe and what frees it to
+reuse prod's `main-data` volume name, and therefore the same on-host mount path.
+
+What staging is *not*, yet: configured. It carries no Ansible group variables,
+no platform stack and no DNS records, so it is a provisioned host rather than a
+place applications deploy to. `docs/change-queue.md` records that half.
+
+Adding the environment after it changed **no file under
+`.github/workflows/`** — `pr-validation.yml`, `apply.yml` and `drift.yml`
+discover `terraform/environments/*/` and run per environment. What adding one
+does still take is everything outside those files:
 
 - a `terraform/environments/<name>/` folder reusing the same modules, carrying
   its own `pipeline.yml` — the committed declaration naming the GitHub
@@ -413,8 +446,7 @@ it does still take is everything outside those files:
 - a repository secret of the declared read-only name, holding that
   environment's **Read Only** token;
 - whatever the environment is *for* — a host to configure, group variables, DNS.
-  See `docs/change-queue.md` entry 49, which records the full list for staging
-  specifically.
+  For staging, `docs/change-queue.md` records what that half still needs.
 
 The `terraform/`/`ansible/`/`platform/` structure, and the pipeline boundary
 between the three, were established by the change
