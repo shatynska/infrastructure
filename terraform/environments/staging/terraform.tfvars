@@ -1,0 +1,42 @@
+# Non-secret staging configuration. Committed per the Version Control
+# Excludes State and Secrets requirement — CI needs these values present
+# in a clean checkout.
+
+name = "staging-server"
+
+# server_type is DELIBERATELY UNSET until it has been read off the Hetzner
+# console for staging's own project (tasks.md task 1.3). Staging runs roughly
+# half prod's `cx33` (4 vCPU / 8 GB) tier, and no credential in this
+# repository or in a fresh working tree can confirm which 2-vCPU type name is
+# current. An unset required variable fails `terraform plan` by name, loudly
+# and destroying nothing; a plausible guess committed here would instead be
+# discovered at apply, against a project that already exists.
+#
+# server_type = "..."
+
+image    = "ubuntu-26.04"
+location = "hel1"
+
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMeSWD47lN9AUVvOF2/7llxkBY0WWDgmAA1VwgIdhQsW"
+
+# The same operator ISP range prod allows: the cloud firewall is no wider for
+# staging than for prod.
+ssh_allowed_cidrs = ["176.104.184.0/24"]
+
+# Empty, and empty on purpose: staging runs nothing yet. This creates no web
+# rule at all, rather than opening 80/443 to the internet on a host with
+# nothing behind them. The change that deploys the platform stack to staging
+# opens them deliberately.
+web_allowed_cidrs = []
+
+server_enabled = true
+
+volume_enabled = true
+
+# Deliberately the same name prod's volume carries. Volume names are unique
+# per Hetzner project, not globally, and staging has a project of its own —
+# so the name is free, and reusing it keeps the on-host mount path identical
+# across environments, which is what lets platform/docker-compose.yml keep
+# its hardcoded /mnt/main-data/prometheus and /mnt/main-data/grafana.
+volume_name = "main-data"
+volume_size = 10

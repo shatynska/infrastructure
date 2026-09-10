@@ -48,11 +48,21 @@ then this is the intended shape, and the inline JSON is its accepted cost.
 single `delete_protection` variable. They are distinct capabilities and a
 consumer could in principle want one without the other.
 
-No consumer does. There is one environment, and it wants both. Splitting them
-adds a variable, a validation and a test for a case that does not exist, and
-the coupled default is the safer one. **Revisit when** a second environment
-actually needs them apart — most likely the anticipated staging environment,
-which may want rebuild without delete protection.
+No consumer does. Splitting them adds a variable, a validation and a test for a
+case that does not exist, and the coupled default is the safer one.
+
+**Revisited 2026-09-10 by `add-a-staging-environment`, and it stands.** This
+entry used to argue from "There is one environment, and it wants both", which
+stopped being true that day: there are two, and they want opposite values.
+Neither wants them *apart*, which is what this entry is actually about. Prod sets
+`delete_protection = true` and wants rebuild protection with it; staging sets
+`false` and wants neither, because being rebuilt is what staging is for. The
+coupling holds at two environments for the same reason it held at one — the
+argument merely no longer rests on there being only one.
+
+**Revisit when** an environment actually needs them apart: an environment that
+must be rebuildable in place while remaining undeletable, which neither of the
+current two is.
 
 ## Generating Ansible's CIDR variables from Terraform
 
@@ -273,9 +283,18 @@ entry 30) or an IPv4 change is still followed by a manual edit nobody has
 written down. The table above is the mitigation for the moment: the records are
 now recorded somewhere, which is most of what the entry was protecting against.
 
-**Revisit when** a staging environment exists to rehearse the migration against
-(`docs/change-queue.md` entry 49), or when mail moves off this zone, or when a
-second hostname makes the manual edits frequent enough to be worth the risk.
+**Revisited 2026-09-10 by `add-a-staging-environment`. Its first trigger is the
+one that fires, and it has not fired yet.** That change provisioned staging's
+infrastructure and gave it no hostname: there is a second environment, but still
+only one zone's worth of records and nothing to rehearse a migration against.
+The trigger becomes live with `docs/change-queue.md` entry 50, which is where
+staging acquires DNS records — and that is the moment to weigh doing it in
+Terraform rather than by hand, since it is the first time the manual edit would
+be made twice.
+
+**Revisit when** staging acquires its hostnames (entry 50), or when mail moves
+off this zone, or when a second hostname makes the manual edits frequent enough
+to be worth the risk.
 Cloudflare and Hetzner DNS were the two candidates considered; neither was
 chosen, and that choice is still open.
 
@@ -352,8 +371,16 @@ changed shape since it was written. The first host where either could bite is a
 where the ordering decision depends on it, and that comment is the mitigation:
 the role placed last is placed there because a refusal ahead of it is possible.
 
-**Revisit when** a second environment exists (`docs/change-queue.md` entry 49)
-or another host is bootstrapped — the first moment a `group_vars` is written
+**Revisited 2026-09-10 by `add-a-staging-environment`, and it stands.** A second
+environment now exists, but that change is Terraform and pipeline only: staging
+has no `group_vars` and no play that can target it, so nothing has yet been
+written from scratch and neither gap has acquired a real case. The trigger's own
+wording is what defers it — the condition is a `group_vars` written from
+scratch, not an environment existing — and that happens in
+`docs/change-queue.md` entry 50.
+
+**Revisit when** `ansible/inventory/group_vars/staging.yml` is written (entry
+50) or another host is bootstrapped — the first moment a `group_vars` is written
 from scratch rather than inherited, and so the first moment either gap has a
 real case rather than a constructed one.
 
@@ -490,12 +517,18 @@ change records. Renaming sweeps every one of those into a diff that already
 restructures three gated workflows at once — a mechanical rename mixed into the
 diff that most needs to be read closely.
 
+**Revisited 2026-09-10 by `add-a-staging-environment`, and it stands.** A second
+environment now exists, so the name and the content no longer describe the same
+set — but the trigger is a reader actually misled, and nothing has been. That
+change did rename a fourth requirement of this kind, *Dedicated Hetzner Cloud
+Project for Prod*, which it had to modify anyway; that is this entry's own stated
+cheap moment, taken where it arose. The three below had no content change there,
+so renaming them would have been the bare sweep this entry declines.
+
 **Revisit when** a change modifies *Gated Production Apply Applies the Reviewed
-Plan* for a substantive reason and can carry the rename, or when a second
-environment exists and a reader has actually been misled by the name into
-believing the requirement does not bind it. The second is the signal that
-matters: until there is a second environment, the name and the content describe
-the same set.
+Plan* for a substantive reason and can carry the rename, or when a reader is
+actually misled by one of these names into believing the requirement does not
+bind an environment other than prod.
 
 ## Whether the drift heartbeat stays one check across all environments
 
@@ -520,13 +553,19 @@ failed plan takes the whole heartbeat red. That is the correct polarity for an
 alarm and the wrong one for attribution — the alert says the sweep is unhealthy
 without saying which environment.
 
-**Revisit when** a second environment exists and one of two things happens: an
-environment's plan fails often enough that the shared heartbeat is muted in
-practice, which is the failure mode *Scheduled Drift Detection* already names
-for a persistently red job; or an environment is added whose sweep is
-deliberately allowed to fail, at which point one check cannot express both
-states. Neither is observable at one environment, which is why this ships as an
-assumption rather than a decision.
+**Revisited 2026-09-10 by `add-a-staging-environment`, and it stands — but its
+evidence starts accumulating now.** A second environment exists, and the nightly
+sweep is the first mechanism the two share for real: one run, two plan jobs, two
+read-only secrets, one heartbeat. Staging is neither of the two cases that would
+force a split — its plan is not expected to fail, and its sweep is not
+deliberately allowed to fail. So the working assumption is unchanged and is, for
+the first time, actually being tested rather than reasoned about.
+
+**Revisit when** one of two things happens: an environment's plan fails often
+enough that the shared heartbeat is muted in practice, which is the failure mode
+*Scheduled Drift Detection* already names for a persistently red job; or an
+environment is added whose sweep is deliberately allowed to fail, at which point
+one check cannot express both states.
 
 ## Whether a job awaiting an Environment's approval is "pending" for concurrency
 
@@ -561,10 +600,17 @@ and a second and third merge timed against a human approval — repository-setti
 churn well beyond what those probes needed, against a Migration Plan that
 promises none.
 
-**Revisit when** a second environment exists and applies queue often enough for
-the answer to matter, or when an approved apply is ever observed to have been
-cancelled rather than run. The second is the observation that settles it for
-free, and the entry below is where to look first if it happens.
+**Revisited 2026-09-10 by `add-a-staging-environment`, and it stands.** A second
+environment exists, and it makes the question no more pressing than it was:
+staging's applies are ungated, so they never wait on a protection rule and never
+occupy the state this question is about, and prod's queue is unchanged. The
+answer starts to matter only when two environments' applies contend, which needs
+a busier trunk than this repository has.
+
+**Revisit when** applies queue often enough for the answer to matter, or when an
+approved apply is ever observed to have been cancelled rather than run. The
+second is the observation that settles it for free, and the entry below is where
+to look first if it happens.
 
 ## An apply can still cancel another apply, silently
 
@@ -590,3 +636,99 @@ the backstop, and it is why this is an entry rather than a change.
 **Revisit when** a cancelled apply is actually observed, or when the queue is
 deep enough that a third merge behind a pending approval stops being unusual —
 which needs either a busier trunk or an environment whose approval sits unread.
+
+## Promotion ordering between environments is a discipline, not a mechanism
+
+Recorded by `add-a-staging-environment`, whose `design.md` Decision 7 settles it
+by modifying a requirement rather than implementing one.
+
+*Environment and Module Folder Structure* (`openspec/specs/iac-repo-foundations/spec.md`)
+used to prescribe that ordered promotion "SHALL be achieved by sequencing apply
+jobs within a single workflow (lower environment first, then the gated production
+environment)". At one environment that sentence described nothing. At two it
+describes a mechanism the apply workflow does not have, so it was unmet the day
+staging existed.
+
+**It was not implemented, and the reason is not effort.** Sequencing staging's
+apply ahead of prod's makes prod's apply depend on staging's outcome, which is
+the coupling *Gated Production Apply Applies the Reviewed Plan*
+(`openspec/specs/iac-cicd-pipeline/spec.md`) exists to remove: a broken staging
+would become a reason a correct prod fix cannot reach production. That
+requirement states the obligation for plans, and it holds here for the same
+mechanical reason — a stage-scoped dependency cannot tell this environment's
+outcome from another's.
+
+**What holds instead**, and it is weaker: a merge affecting both environments
+applies to staging immediately and raises prod's approval at the same time, so
+promotion ordering is available to prod's approver, who can withhold approval
+until staging's apply has been seen to succeed. Nothing enforces it. An approver
+who clicks first gets prod before staging, and no check says so.
+
+**What a future change wanting a mechanism must not do:** reintroduce a
+dependency between environments' apply jobs, in either direction. If ordering is
+wanted, it has to come from something that cannot make one environment's failure
+withhold another's change — a gate on prod's approval that reads staging's last
+apply, say, rather than a `needs:` between them.
+
+**Revisit when** an approver actually promotes out of order and it matters, or
+when a third environment makes "lower environment first" ambiguous rather than
+merely unenforced.
+
+## Three pipeline paths that two environments still do not exercise
+
+Recorded by `add-a-staging-environment`. Its `design.md` Decision 9 lists what
+that change's own runs confirmed and what they could not, and this is the second
+half, kept where it outlives the change.
+
+Adding staging exercised: discovery emitting two entries, the
+affected-environment narrowing actually excluding an environment,
+`secrets[matrix.environment.read_only_secret]` resolving a second name, an
+ungated apply, and — in the nightly sweep — two environments planned in one run
+under two credentials against one heartbeat.
+
+Three paths remain unexercised at two environments:
+
+- two plan comments on one pull request;
+- two apply jobs in one run;
+- one of two applies pausing for its reviewer while the other proceeds.
+
+All three need a merge that affects **both** environments, which means a change
+under `terraform/modules/`. Manufacturing one — a whitespace edit to a module —
+was refused deliberately: it would raise a `production` approval with nothing to
+approve, which *Gated Production Apply Applies the Reviewed Plan* names as the
+thing that trains an approver to grant without reading. Paying that to test the
+pipeline would spend the property the pipeline exists to protect.
+
+**Revisit when** the next change under `terraform/modules/` merges, which
+supplies all three for free. Read its run rather than assuming it: these paths
+have never run, and the two-environment behaviour of this pipeline is inference
+until one of them does.
+
+## Four requirements still stated over prod alone
+
+Recorded by `add-a-staging-environment`, which generalised four requirements to
+every environment and deliberately left these four as they were.
+
+- *Conditional Prod Server Creation* (`openspec/specs/iac-server-lifecycle/spec.md`)
+- *Conditional Prod Volume Creation* (`openspec/specs/iac-data-volumes/spec.md`)
+- *Data Durability for Stateful Resources* and *No Store on This Host Holds Data
+  Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`)
+
+The first two describe a mechanism both environments now use: staging declares
+`server_enabled` and `volume_enabled` with prod's semantics, and its rollback
+and its cost-pause both rest on them. They are obliged for staging by nothing —
+the requirements name prod. The last two say "this host", which was unambiguous
+at one host and is not at two.
+
+**Why not swept.** Nothing on staging contradicts any of them: it holds no
+store, so the durability and backup requirements have no second subject yet, and
+the lifecycle toggles are correct at both environments whether or not the
+requirement says so. Generalising four requirements across three capabilities in
+a change whose scope was one environment directory would have mixed a mechanical
+sweep into the diff that most needed reading closely — the same argument the
+requirement-naming entry above makes.
+
+**Revisit when** staging acquires a persistent store — `docs/change-queue.md`
+entry 50, which puts the platform stack and a database on it. That is the moment
+"this host" becomes genuinely ambiguous and the durability requirements have to
+say which host they mean.

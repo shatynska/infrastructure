@@ -9,6 +9,7 @@ updates:
     # suite compares the two sets and fails if they diverge.
     directories:
       - "/terraform/environments/prod"
+      - "/terraform/environments/staging"
       - "/terraform/modules/server"
       - "/terraform/modules/volume"
     schedule:

@@ -61,12 +61,12 @@ ordering this change most depends on.
 
 ## 2. The environment directory
 
-- [ ] 2.1 Add `terraform/environments/staging/versions.tf` with the `cloud` block naming
+- [x] 2.1 Add `terraform/environments/staging/versions.tf` with the `cloud` block naming
   the `infrastructure-staging` workspace, and a provider comment stating which token
   applies in which context — this environment's read-only secret is
   `HCLOUD_TOKEN_STAGING`, and its Environment-scoped `HCLOUD_TOKEN` is the write one.
   Verify that no other environment's `versions.tf` names the same workspace.
-- [ ] 2.2 Add `variables.tf`, `outputs.tf` and `ssh_key.tf`. `variables.tf` SHALL declare
+- [x] 2.2 Add `variables.tf`, `outputs.tf` and `ssh_key.tf`. `variables.tf` SHALL declare
   `server_enabled` and `volume_enabled` with prod's defaults — design.md's rollback and
   its cost-pause both rest on them, and no requirement obliges them for staging, so
   omitting them would leave two documented properties silently absent. `ssh_key.tf`
@@ -84,14 +84,23 @@ ordering this change most depends on.
   and `delete_protection = false` on the volume. Verify every value against design.md
   Decision 4's table and the paragraph under it, which states the ones that are
   deliberately prod's.
-- [ ] 2.4 Add `pipeline.yml` declaring `github_environment: staging`,
+
+  **Result (2026-09-10). Written except `server_type`, which is why this stays
+  unticked.** `main.tf` and `terraform.tfvars` carry every value above. `server_type`
+  is deliberately absent, with a comment in `terraform.tfvars` naming task 1.3 and
+  saying why: no credential in this tree can confirm which 2-vCPU type name is
+  current, and an unset required variable fails `terraform plan` by name, loudly,
+  destroying nothing — where a plausible guess would be discovered at apply against
+  a project that already exists. Ticking this task is task 1.3's operator writing
+  the confirmed string in.
+- [x] 2.4 Add `pipeline.yml` declaring `github_environment: staging`,
   `read_only_secret: HCLOUD_TOKEN_STAGING` and `destroy_policy_gate: false`, with
   comments explaining the last rather than restating the field. Verify both names differ
   from prod's — discovery fails the pipeline naming both offenders otherwise — and that
   `terraform validate` and `terraform fmt -check` still pass, since Terraform must not
   read this file.
-- [ ] 2.5 **(operator, needs 1.8)** Run `terraform init` in the new directory against the
-  workspace from 1.4 and commit the generated `.terraform.lock.hcl`
+- [x] 2.5 Run `terraform init` in the new directory and commit the generated
+  `.terraform.lock.hcl`
   (*Provider Lockfile Committed*, `openspec/specs/iac-repo-foundations/spec.md`). Verify
   the file is committed and that its provider version matches prod's lockfile — both
   directories consume the same modules at the same commit. **Do not copy prod's
@@ -101,33 +110,44 @@ ordering this change most depends on.
   performed is disclosed"), **plus** a `docs/change-queue.md` entry to produce the
   lockfile, named in the disclosure — without one, *Provider Lockfile Committed* stays
   unmet with nothing in this repository able to detect it.
+
+  **Result (2026-09-10). Done, and the credential premise was wrong.** This task and
+  design.md Decision 6 both assumed the lockfile needed the workspace to exist.
+  `terraform init -backend=false` skips backend initialisation entirely, resolves
+  providers and writes the lockfile with no HCP credential, no Hetzner token and no
+  workspace. Run in this tree; `terraform validate` passed afterwards. The result is
+  byte-identical to prod's `.terraform.lock.hcl` — the outcome the copy would have
+  produced, reached by generating it, so identity is an observation rather than an
+  assumption. Neither the no-copy rule nor the disclosure contingency was needed;
+  both stay written down for the case that genuinely needs the backend. Decision 6
+  is corrected in place.
 - [ ] 2.6 **(operator, needs 1.8)** Run `terraform plan` in the new directory under
   staging's **Read Only** token and read what the first apply will create. Verify it
   shows the server, its firewall, the SSH key and the volume, destroys nothing, and — the
   point of running it locally at all — that the read-only token is refused nothing a plan
   needs, so the pipeline's plan job will behave the same.
-- [ ] 2.7 Add `/terraform/environments/staging` to `.github/dependabot.yml`'s terraform
+- [x] 2.7 Add `/terraform/environments/staging` to `.github/dependabot.yml`'s terraform
   `directories`. Verify by running the CI-configuration suite, which compares that list
   against the tree and fails on divergence.
 
 ## 3. Bringing the record to two environments
 
-- [ ] 3.1 Apply the four specification deltas — they are this change's own delta files
+- [x] 3.1 Apply the four specification deltas — they are this change's own delta files
   and reach `openspec/specs/` only at archive; verify with `openspec validate
   add-a-staging-environment --strict`.
-- [ ] 3.2 Generalise the never-apply-locally record in `AGENTS.md`'s "Production changes
+- [x] 3.2 Generalise the never-apply-locally record in `AGENTS.md`'s "Production changes
   never bypass the pipeline" section so it states the prohibition over every environment
   rather than naming `terraform/environments/prod/`, keeping prod's reviewer gate stated
   as prod's. Verify against the *Write Credentials Confined to the Gated Pipeline*
   scenario "The record covers an environment added after it was written".
-- [ ] 3.3 Generalise the same record in the README's runbook, and bring **both** places
+- [x] 3.3 Generalise the same record in the README's runbook, and bring **both** places
   the README describes staging as anticipated to what is now true — the "not a non-goal"
   paragraph near the top and the Status paragraph near the end, including its pointer to
   `docs/change-queue.md` entry 49 as recording "the full list for staging specifically",
   which task 3.4 repurposes. Keep the adding-an-environment checklist as what *adding an
   environment* takes. Verify by grepping the README for `staging` and reading every hit,
   and that no environment is the sole subject of the local-apply prohibition.
-- [ ] 3.4 Replace `docs/change-queue.md` entry 49 with an entry for the half this change
+- [x] 3.4 Replace `docs/change-queue.md` entry 49 with an entry for the half this change
   does not carry — the Ansible and platform work, `hosts:` becoming a parameter,
   `group_vars/staging.yml`, the first local converge, DNS — preserving entry 49's own
   reasoning for each rather than summarising it away, and lift entry 23's block, whose
@@ -140,23 +160,34 @@ ordering this change most depends on.
   explain why.
   Verify both entries read correctly against what this change actually delivered, not
   against what it proposed.
-- [ ] 3.5 Revisit **every** `docs/deferred-work.md` entry whose stated revisit trigger
+
+  **Result (2026-09-10). Done, and entry 23's block was re-pointed rather than
+  lifted.** Entry 49 is replaced by entry 50, `configure-the-staging-host`, carrying
+  entry 49's own reasoning for the two purposes, the first-converge genesis argument
+  and the memory finding, plus the two constraints this change asks it not to undo
+  (`web_allowed_cidrs = []`, and staging holding nothing irreplaceable). This task's
+  own wording said to *lift* entry 23's block; that turned out to be wrong against
+  what was delivered. Entry 23 needs a non-prod host to **converge** against, and
+  staging is not yet an Ansible target — no `group_vars`, no play that can name it,
+  no first converge. Its block now names entry 50, with the re-pointing and its date
+  recorded in the entry itself.
+- [x] 3.5 Revisit **every** `docs/deferred-work.md` entry whose stated revisit trigger
   names a second or staging environment — derived by reading the file, not from a count;
   design.md Decision 8 lists the six and why "An apply can still cancel another apply" is
   not among them. Verify that the `rebuild_protection` entry's "There is one environment"
   premise is corrected, that the DNS entry records that its trigger fires on the
   successor rather than here, and that each remaining entry names a trigger that still
   has not fired.
-- [ ] 3.6 Add a `docs/deferred-work.md` entry for promotion ordering — that applies are
+- [x] 3.6 Add a `docs/deferred-work.md` entry for promotion ordering — that applies are
   unordered by design, that the ordering a reader might expect is the approver's
   discipline, and what a future change wanting a mechanism must not reintroduce
   (design.md Decision 7). Verify it states a revisit trigger.
-- [ ] 3.7 Add a `docs/deferred-work.md` entry naming the three pipeline paths two
+- [x] 3.7 Add a `docs/deferred-work.md` entry naming the three pipeline paths two
   environments still do not exercise — two plan comments on one pull request, two apply
   jobs in one run, one of two applies pausing — why manufacturing a module change to
   reach them was refused, and that the next change under `terraform/modules/` supplies
   them for free (design.md Decision 9). Verify it names that as the trigger.
-- [ ] 3.8 Add a `docs/deferred-work.md` entry for the four requirements left prod-named
+- [x] 3.8 Add a `docs/deferred-work.md` entry for the four requirements left prod-named
   on purpose — *Conditional Prod Server Creation*, *Conditional Prod Volume Creation*,
   *Data Durability for Stateful Resources* and *No Store on This Host Holds Data
   Requiring Backup*, the last two of which say "this host" and become ambiguous at two.
@@ -165,20 +196,42 @@ ordering this change most depends on.
 
 ## 4. Verification
 
-- [ ] 4.1 Run the derived tests for this change and confirm they pass:
+- [x] 4.1 Run the derived tests for this change and confirm they pass:
   `python3 -m unittest discover --start-directory .github/tests` from the repository root.
   Until this is run in a provisioned tree it is not evidence — `pip install -r
   .github/requirements-ci.txt` first.
+  **Result (2026-09-10).** `python3 -m unittest discover --start-directory .github/tests`
+  from the repository root: **529 tests, OK**. Baseline before the implementation was
+  529 with 5 failures, all five in `test_a_second_environment.py` and all five closed
+  by this change's own work — the environment directory closed two, the `AGENTS.md`
+  and README record edits closed two more, and the README's anticipation wording
+  closed the last. Tree provisioned first: `pip install -r .github/requirements-ci.txt`,
+  `ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`,
+  `npm --prefix .github ci`, all exit 0.
+
+  One existing test's **docstring** was corrected, not its assertion:
+  `test_environment_agnostic_pipeline.TestTheWriteCredentialBoundaryIsStatedToAgents`
+  quoted the scenario as requiring "production changes", which this change's delta
+  widens to "infrastructure changes". The fragments it matches survive the
+  generalisation and still pass.
+
 - [ ] 4.2 Run the rest of this repository's static verification over the new directory:
   `terraform fmt -check`, `terraform validate`, `tflint`, and the pre-commit hooks.
   Verify each passes for `terraform/environments/staging/` specifically, not only for the
   tree as a whole.
-- [ ] 4.3 Run `openspec validate --all` and `openspec validate --archived`. Verify both
+- [x] 4.3 Run `openspec validate --all` and `openspec validate --archived`. Verify both
   pass, since the pull request requires them.
-- [ ] 4.4 Confirm that `git diff --stat` against `main` shows **no file under
+- [x] 4.4 Confirm that `git diff --stat` against `main` shows **no file under
   `.github/workflows/`**. Verify by reading the list rather than by recalling the intent:
   this is the claim *Each Environment Declares Its Own Pipeline Configuration* makes, and
   the first change able to falsify it.
+
+  **Result (2026-09-10).** `git diff --name-only origin/main` filtered to
+  `.github/workflows/` returns nothing: 24 files changed, none of them a workflow.
+  Compared against `origin/main` rather than the local `main` ref, which is stale by
+  one merge and would have shown the previous change's diff as this one's. The claim
+  holds for the first environment ever added under it. `openspec validate --all`:
+  10 passed, 0 failed. `openspec validate --archived`: 37 passed, 0 failed (4.3).
 
 ## 5. Review, ship and observe
 

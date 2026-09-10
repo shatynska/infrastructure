@@ -200,9 +200,19 @@ a commit that removes the directory — is also the way to lose the change.
 
 One consequence worth stating: the lockfile. `.terraform.lock.hcl` must be
 committed (*Provider Lockfile Committed*, `openspec/specs/iac-repo-foundations/spec.md`),
-and it is produced by `terraform init` in the new directory, which needs the
-workspace to exist. It is therefore generated locally after the workspace is
-created and before the branch is pushed — the same ordering, for the same reason.
+and it is produced by `terraform init` in the new directory.
+
+**Corrected during implementation (2026-09-10).** This decision first said the
+lockfile needed the workspace to exist, and that is true only of a full
+`terraform init`. `terraform init -backend=false` skips backend initialisation
+entirely and still resolves providers and writes the lockfile, so it needs no
+HCP credential, no Hetzner token and no workspace — it was run in this tree, and
+`terraform validate` passed after it. The result is byte-identical to prod's
+lockfile, which is what the same provider and the same constraint at the same
+commit should produce; the difference from copying prod's is that this one was
+*produced*, and identity is the observation rather than the assumption. The
+paragraph below stands as the rule for anything that genuinely needs the
+backend — a plan, an apply, a state read.
 
 **That local run is operator work, not authoring work.** `terraform init` needs
 HCP credentials and `terraform plan` needs staging's Read Only Hetzner token, and

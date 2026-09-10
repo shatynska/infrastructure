@@ -2548,9 +2548,16 @@ class TestTheWriteCredentialBoundaryIsStatedToAgents(unittest.TestCase):
 
     def test_the_conventions_file_states_that_apply_is_not_run_locally(self) -> None:
         """SPECIFIED -- scenario "An agent opening the repository is told the
-        boundary": "a repository-root `AGENTS.md` SHALL state that production
-        changes reach Hetzner only through the gated pipeline and that
-        `terraform apply` is not run locally"."""
+        boundary": "a repository-root `AGENTS.md` SHALL state that
+        infrastructure changes reach Hetzner only through the gated pipeline
+        and that `terraform apply` is not run locally".
+
+        The citation formerly read "production changes"; `add-a-staging-environment`
+        widened the scenario to "infrastructure changes" at the point where a
+        second environment existed to be silently excluded by the narrower
+        word. Only the quotation moved -- the fragments this assertion matches
+        survive the generalisation untouched, and weakening them to accommodate
+        it would be the opposite of what that change did."""
         flat = flattened(self.text)
         missing = [
             fragment for fragment in WRITE_CREDENTIAL_BOUNDARY_FRAGMENTS if fragment not in flat
