@@ -378,11 +378,57 @@ ordering this change most depends on.
   no concurrent writer could be corrupted. Re-ran the failed jobs; both passed.
   Worth knowing for the next environment, since a first plan against a brand-new
   workspace is where this appeared.
-- [ ] 5.3 On the operator's confirmation that it merged, record what the apply run did:
+- [x] 5.3 On the operator's confirmation that it merged, record what the apply run did:
   which environments entered it (staging only), that staging's apply ran without pausing
   — this repository's first apply reaching real infrastructure with no approval click —
   and that no `production` approval was requested. Verify against the run, not against
   the expectation.
+
+  **Result (2026-09-10), run 34458573224, after five attempts.** `Apply complete!
+  Resources: 4 added, 0 changed, 0 destroyed` — `server_id = 165402032`,
+  `server_ipv4_address = 62.238.17.177`, `volume_id = 106839043`. Staging alone
+  entered the run; no `production` approval was requested; the apply did not pause.
+
+  **The four failures before it were one cause: the `staging` Environment's
+  `TF_API_TOKEN` was an HCP *organisation* token.** HCP issues three kinds and they
+  are not interchangeable — an organisation token administers workspaces, teams and
+  variables but cannot perform state operations, which a user token can. The
+  signature is what made it expensive: `terraform init` **succeeds**, because
+  reading a workspace is organisation administration, and the run then dies at
+  `Error acquiring the state lock / Error message: resource not found`, because HCP
+  reports the authorisation failure as a 404. The error names the lock; the cause is
+  the credential; every remedy the message suggests is the wrong one.
+
+  What identified it: the organisation token's `last-used` timestamp read
+  `2026-09-10T09:24:47.741Z`, and the failing job's `terraform init` ran at
+  09:24:47.74 with its lock failing at 09:24:49.66. Nothing else was talking to HCP
+  in that second. The asymmetry was visible throughout and was read too slowly — the
+  plan jobs, which use the *repository* copy of `TF_API_TOKEN`, locked the same
+  workspace successfully in every one of those runs.
+
+  **Two changes made while chasing it were unnecessary, and are disclosed rather
+  than presented as steps.** The workspace's `terraform-version` was changed from
+  HCP's creation default of `1.16.2` to `1.9.8`, matching the `~> 1.9` the pipeline
+  pins; harmless and arguably more accurate, and it is left in place. An empty state
+  version (`serial 1`, `resources: []`) was pushed by the operator to test whether a
+  workspace that had never held state was the cause; it was not, the apply overwrote
+  it as serial 2, and nothing depends on it. Neither belongs in the runbook, and the
+  runbook does not gain them.
+
+  **What does go in the runbook** is the token kind. `docs/bootstrap-a-new-host.md`
+  stage 2 previously offered an organisation token as an equivalent alternative to a
+  user token, which is what was followed; it now requires a user token from Account
+  settings → Tokens, names the two kinds that do not work, and carries the failure
+  signature and the `last-used` check that identifies it. The README's
+  adding-an-environment checklist and both secret tables say the same.
+
+  One further finding, from a wrong turn of mine: **`gh run rerun --failed` can never
+  repair a failed apply.** The plan job does not re-run, so no artifact is produced
+  for the new attempt, while the apply job derives the artifact name from the current
+  attempt number — the download fails with `Artifact not found for name:
+  tfplan-staging-attempt-2`. The workflow's own error message prescribes the remedy
+  (a fresh push to `main`); a full `gh run rerun` also works, since it re-runs the
+  plan job. Nothing states this where a person looks before trying.
 - [ ] 5.4 Confirm the effect with the operator: staging's server and volume exist in the
   staging Hetzner project, prod's project is unchanged, and the **next nightly drift
   sweep** plans both environments in one run. That sweep is the genuine two-environment

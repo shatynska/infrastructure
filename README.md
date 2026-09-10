@@ -440,9 +440,13 @@ does still take is everything outside those files:
 - its own HCP Terraform workspace, and a `.github/dependabot.yml` entry for the
   lockfile `terraform init` creates in that folder;
 - a GitHub Environment of the declared name, holding `HCLOUD_TOKEN` (that
-  environment's **Read & Write** token) and `TF_API_TOKEN`. An Environment that
-  omits `HCLOUD_TOKEN` silently resolves to the repository secret of that name,
-  so the apply job refuses to apply where it detects that;
+  environment's **Read & Write** token) and `TF_API_TOKEN` (an HCP **user**
+  token, from Account settings → Tokens — an organisation token can read a
+  workspace but cannot write its state, and fails as
+  `Error acquiring the state lock: resource not found` long after `init`
+  succeeded). An Environment that omits `HCLOUD_TOKEN` silently resolves to the
+  repository secret of that name, so the apply job refuses to apply where it
+  detects that;
 - a repository secret of the declared read-only name, holding that
   environment's **Read Only** token;
 - whatever the environment is *for* — a host to configure, group variables, DNS.
