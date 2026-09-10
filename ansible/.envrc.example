@@ -3,6 +3,13 @@
 #   cp .envrc.example .envrc
 #   direnv allow
 #
+# Without direnv, `source .envrc` from this directory once per shell -- these
+# are plain exports. That is a full alternative here and not a fallback with a
+# catch: neither name is the HCLOUD_TOKEN that the repository-root and
+# terraform/environments/staging/ .envrc files both export with DIFFERENT
+# values, where an export outliving its directory is a real hazard. See
+# docs/bootstrap-a-new-host.md 4.1 for that one, and 6.0 for this one.
+#
 # BOTH ARE READ ONLY TOKENS. Never put a Read & Write token here: each
 # environment's lives exclusively in that environment's own GitHub Environment
 # secret, and an environment whose Environment requires no reviewer is no

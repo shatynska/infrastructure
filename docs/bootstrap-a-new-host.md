@@ -8,7 +8,7 @@ What you will have at the end:
 - **The production server** configured (Docker, host firewall, a private network, restricted deploy accounts) by Ansible.
 - A shared platform stack **on the production server**: Traefik with automatic TLS, PostgreSQL, Prometheus, Alertmanager, Grafana, alerts to Slack, and an external heartbeat.
 - A path for any application repository to deploy itself **to the production host** from its own GitHub Actions workflow.
-- **A staging server that is provisioned and not configured** — reachable over SSH, carrying an attached unmounted volume, running nothing. Three mechanisms in this repository are still single-environment, and stage 5 says which and what closes them. That is the honest end state today; it is not an oversight in this procedure.
+- **A staging server, configured but running nothing** — stage 6 converges it alongside production: Docker, the host firewall, the tailnet, the operator and deploy accounts, the mounted data volume, the weekly image prune. What it does not have is an application stack, a hostname or an open web port, because `platform-deploy.yml` still deploys to one environment. "From here on, two hosts" says which and what closes it. That is the honest end state today; it is not an oversight in this procedure.
 
 **Two servers is a standing cost**, not a one-off configuration: two instances and two volumes billed monthly, two hosts to patch and rebuild, two token pairs to rotate. Staging is roughly half production's bill. Decide you want that before stage 1, because the decisions that follow are shaped by it and are awkward to unpick afterwards. If you want one environment, this document still works: delete the second directory under `terraform/environments/`, skip its secrets, and read every "two" below as "one".
 
@@ -419,6 +419,8 @@ cp .envrc.example .envrc
 direnv allow
 ```
 
+**Without direnv**, `source .envrc` from `ansible/` once per shell — they are plain `export` lines, exactly as at §4.1. Unlike there, that is a perfectly good way to run this one and not a fallback with a catch: §4.1's warning exists because the root and staging `.envrc` files both export `HCLOUD_TOKEN` with different values, so an export outliving its directory points Terraform at the wrong project. These two variables collide with nothing and mean the same thing wherever you stand, which is why each inventory source names its own rather than sharing Terraform's.
+
 Both are **Read Only** tokens. A wrong or missing one fails the run rather than producing an environment with no host in it, so a typo here cannot masquerade as a destroyed server.
 
 ### 6.1 Fill in the inventory variables
@@ -437,6 +439,21 @@ Edit `ansible/inventory/group_vars/<environment>.yml` — production's and stagi
 | `image_prune_heartbeat_ping_key` | Vault-encrypted, see below. **The play refuses to run without it** |
 
 **The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`).
+
+**Check the token before you encrypt it**, because a bad one is only discovered much later, at `docker compose pull`:
+
+```sh
+curl -sSD - -o /dev/null -u <the github username> https://api.github.com/user \
+  | grep -iE 'HTTP/|x-oauth-scopes'
+```
+
+It prompts for a password; paste the token there, so it stays out of your shell history and out of `ps`. You want `200` and an `x-oauth-scopes` header naming `read:packages`.
+
+- **`401`** — expired, revoked, or pasted truncated. These tokens are long; a missing tail looks exactly like a wrong token.
+- **`200` with no `x-oauth-scopes` header at all** — this is a *fine-grained* token, not the **classic** one this procedure asks for. Fine-grained tokens carry no OAuth scopes, so there is nothing for the check above to read and no way to confirm from here that it can pull packages. Generate a classic token rather than reasoning about whether this one might work.
+- **`200` with scopes that omit `read:packages`** — the right kind of token with the wrong scope.
+
+**None of this is a gate**, so do not let it stop you: an absent GHCR credential is tolerated by design. `deploy_user` guards the registry login with a `when:` and skips it, per *Host Authenticates to GHCR for Application Image Pulls* (`openspec/specs/iac-host-configuration/spec.md`) — a host converged without one simply cannot pull private images, which matters only once an application deploys to it. Leave it unset — commented out, in a `group_vars` written from the template — and come back to it.
 
 Choose a Vault password **for this environment** — production and staging get different ones, so that whoever can converge staging does not thereby hold the password protecting production's secrets — store it in the password manager, then encrypt the token in place:
 
@@ -497,7 +514,44 @@ ansible-playbook playbooks/host-baseline.yml \
 
 Two prompts: the Vault password, and (if the key has one) the operator key's passphrase. A first run takes several minutes; Docker's installation is the slow part. A second run immediately afterwards should report `changed=0`; if it does not, something is not idempotent and worth understanding before moving on.
 
-Do not rely on `--check` for the first run: apt-based tasks report changes they did not make and later tasks then fail against a stale package cache. `--check --diff` is useful on every run after the first.
+Do not rely on `--check` for the first run: apt-based tasks report changes they did not make and later tasks then fail against a stale package cache.
+
+`--check --diff` is useful on every run after the first, with one thing to know before you read its output: **a healthy host reports `changed=2`, not zero.** Both are in the `tailscale` role — *Add the Tailscale apt signing key* and *Add the Tailscale apt repository* — and both are `get_url` tasks with no `checksum:`. Confirming such a file already matches would mean downloading it, which check mode will not do, so it reports "would change" every time and always will. Two is the baseline; compare against two, and read anything else.
+
+**And two is a baseline for what check mode can see, which is less than the host.** `command` tasks skip under `--check` — `ops_user`'s three and `swap`'s four — and `geerlingguy.docker` carries `ignore_errors: "{{ ansible_check_mode }}"` on five, so failures there are swallowed. A clean check means no *file or package* drift was found; it is not a statement that the host is as this repository describes it. `docs/change-queue.md` entry 23, which would turn this flag into the host layer's drift detector, owns removing those two — and when it does, this paragraph changes with it.
+
+### 6.3a When the run fails partway
+
+It can, and the first converge of a host is where it is likeliest. What a failure leaves is a **partially-converged host**: every role ahead of the failing one has applied in full, the failing role has applied up to the task that failed, and nothing after it has run.
+
+That middle clause matters. In the case below the failing task is the *last* one in its role, so Tailscale is installed and `tailscaled` is running even though the host never joined the tailnet.
+
+None of that is a reason to rebuild — **correct the input and run the same command again.** Every role here is idempotent, so the second run reports `ok` for the work already done and carries on from where it stopped.
+
+**That assumes you can still reach the host.** `hardening` runs before `tailscale` and ends by enabling UFW, so at the moment of a tailscale failure the host answers on whatever `hardening_ssh_allowed_cidrs` allows — and the tailnet, which is the other way in, is precisely what has not come up. Both environments here set an operator ISP range, so public SSH still gets you in. On a host configured for tailnet-only SSH, which the role permits and which is stricter than what this repository runs, a failure here would leave no way in at all, and rebuilding would be the recovery.
+
+One failure hides its own cause, and it is the one most likely to bite on a first run. If *Bring the host onto the tailnet* fails, Ansible prints only:
+
+```
+fatal: [<host>]: FAILED! => {"censored": "the output has been hidden due to the
+fact that 'no_log: true' was specified for this result", "changed": true}
+```
+
+That masking is deliberate, not a defect: the task's command carries the auth key, and `no_log` is what keeps it out of the run's output — the role's own comment says so. Do not go looking for a way to turn it off. Go to the host instead, and run the same command by hand, where nothing is masked:
+
+```sh
+ssh -i ~/.ssh/<company>-root root@<the host's ipv4>
+systemctl is-active tailscaled     # expect: active
+tailscale status                   # expect: Logged out.
+read -rs KEY                       # paste the key, press Enter; it is not echoed
+tailscale up --authkey="$KEY"      # this prints the real error
+journalctl -u tailscaled -n 30 --no-pager
+tailscale status --json | grep BackendState    # "Running" once it has joined
+```
+
+`read -rs` keeps the key out of `root`'s shell history, which is worth the extra line for a credential that is **reusable** and lives for 90 days (§5.3). Be clear about what it does not do: `--authkey="$KEY"` is expanded by the shell before `tailscale` runs, so the key is in that process's arguments and readable from `/proc/<pid>/cmdline` for as long as the command takes. On a first converge there is no unprivileged account on the host to read it — `ops_user` runs after `tailscale` — but on a re-converge of a configured host there is. This is weaker than §6.1's `curl` prompt, which never puts the token in an argument at all.
+
+The usual causes, in rough order: the key was already consumed, because it was generated single-use rather than **reusable** (§5.3); it expired; it was pasted truncated; or the tailnet policy requires a tag the key does not carry. Once `BackendState` reads `Running`, `exit` and re-run the playbook. The `tailscale up` task will skip this time: its `when:` reads that same field, which is why the check above uses `--json` rather than plain `tailscale status`.
 
 ### 6.4 After the run
 
@@ -538,7 +592,7 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
 | `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository | The **private** half of the platform deploy key from stage 0. Store it now, then delete the local file. | `platform-deploy.yml`'s deploy job |
 | `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
-**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status` on the server shows `Running`; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
+**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
 
 The web ports are where the two differ, and the difference is the check: **production shows 80 and 443, staging shows neither.** Staging carries `web_allowed_cidrs = []` at both layers, so a staging host with UFW rules for 80/443 means its `group_vars` has drifted from its `terraform.tfvars`.
 

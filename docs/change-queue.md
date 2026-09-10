@@ -356,7 +356,13 @@ approve. Whatever shape this change takes has to deal with it: pin a
 `checksum:` (upstream rotates the key, so this is not free), replace `get_url`
 with a task that can verify itself in check mode, or filter these two by name
 and say in the workflow why. What it must not do is ship a drift signal whose
-baseline is two.
+baseline is two. **And whatever it does, `docs/bootstrap-a-new-host.md` §6.3
+changes with it**: that section now tells operators a healthy host reports
+`changed=2` and names both tasks, so a remedy that leaves it alone would have
+the document training them to discount the very signal this entry exists to
+create. Written into §6.3, and this line into here, by
+`align-the-bootstrap-doc-with-a-real-run` -- before it merged nothing asserted
+a baseline at all, so this entry's implementer could not have known to look.
 
 **`--check --diff` is not the safety net it looks like.**
 `docs/bootstrap-a-new-host.md` §6.3 already says not to rely on `--check` for a

@@ -121,9 +121,12 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
    ansible-inventory -i inventory/prod.hcloud.yml --graph      # or staging
    ```
 
-   `direnv allow` is not optional: direnv refuses to load an unallowed
-   `.envrc`, so a correctly filled file still yields
-   `Invalid Hetzner Cloud API Token` without it.
+   **If you use direnv**, the `allow` step is not optional: direnv refuses to
+   load an unallowed `.envrc`, so a correctly filled file still yields
+   `Invalid Hetzner Cloud API Token` without it. **If you do not**, drop that
+   half and `source .envrc` instead — these are plain exports, and unlike
+   Terraform's `.envrc` files above, neither variable is one whose value
+   depends on which directory you are in.
 
    A missing or wrong token fails the run naming the source it could not
    parse, rather than resolving to an environment with no host in it.
