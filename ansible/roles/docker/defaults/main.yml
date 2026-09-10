@@ -10,8 +10,10 @@
 # it refuses to default hardening_ssh_allowed_cidrs because no source CIDR is
 # safe in general, and it does default hardening_web_allowed_cidrs closed
 # because closed is. Setting these two from
-# ansible/inventory/group_vars/prod.yml instead would hand unbounded logs to
-# the next host built from this repository, silently.
+# an environment's own ansible/inventory/group_vars/<environment>.yml instead
+# would hand unbounded logs to the next host built from this repository,
+# silently -- and now that there is more than one such file, to whichever
+# environment was added without remembering to copy them.
 #
 # WHY THE VALUES ARE GENEROUS RATHER THAN MINIMAL. 50m x 3 caps each container
 # at 150 MB -- about 1.7 GB across the eleven containers prod runs today,

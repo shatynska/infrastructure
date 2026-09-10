@@ -1,0 +1,162 @@
+---
+# Staging's host variables. Written from scratch rather than copied from
+# prod.yml and edited: `docs/deferred-work.md`'s "Two gaps in required-input
+# validation that only the play could close" names this file as the first
+# moment a group_vars is written from scratch, and so the first moment either
+# gap has a real case rather than a constructed one.
+#
+# The staging server was created with only a single SSH key and no root
+# password (terraform/modules/server/main.tf's own comment: providing a key
+# at creation means Hetzner never sets one) -- root is the only login this
+# host has, exactly as on prod.
+ansible_user: root
+
+# Non-secret staging configuration, mirroring
+# terraform/environments/staging/terraform.tfvars's ssh_allowed_cidrs and
+# web_allowed_cidrs exactly -- see ansible/roles/hardening/README.md for why
+# these two are hand-kept in sync rather than generated from Terraform, and
+# why that matters.
+#
+# The SSH range is the same operator ISP range prod allows: the cloud
+# firewall is no wider for staging than for prod.
+hardening_ssh_allowed_cidrs:
+  - "176.104.184.0/24"
+
+# EMPTY, AND EMPTY ON PURPOSE -- mirroring web_allowed_cidrs = [] in
+# staging's terraform.tfvars, where it is likewise deliberate. Staging's
+# cloud firewall opens no web port at all, so UFW opens none either: for any
+# given port exactly one layer is the documented access gate, and neither is
+# left open in front of a host with nothing behind it.
+#
+# Stated rather than omitted. The role defaults it to [] anyway, but the
+# mirror obligation above is between this file and terraform.tfvars, and an
+# absent value mirrors nothing. The change that puts the platform stack on
+# staging opens 80/443 in both places together -- see docs/change-queue.md's
+# staging web-exposure entry.
+hardening_web_allowed_cidrs: []
+
+# Operator identities allowed an unprivileged, interactive login on this
+# host (add-ops-account). Safe to commit -- these are public keys, not
+# secrets; each private half is generated out-of-band on the operator's own
+# workstation and never enters this repository.
+#
+# `state` is per-entry and defaults to `present`. To revoke an operator, set
+# its `state` to `absent` and LEAVE THE ENTRY HERE until the next converge
+# has removed the account -- deleting the entry outright is not revocation,
+# it just stops the role from acting on it. See
+# ansible/roles/ops_user/README.md.
+#
+# NOTE: `docker` group membership is root-equivalent by escalation, so this
+# is not a boundary against the key holder -- it buys blast-radius
+# containment against mistakes, attribution, and revocability.
+#
+# The same operator key prod carries, deliberately: this is the human's own
+# identity, not a per-environment credential, and giving one person two keys
+# for two hosts buys nothing and loses attribution when one is rotated.
+ops_user_accounts:
+  - name: ops-claude
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICc/YzvZTHHNETGGAy89vD7IpzTU3jDAphOeKD6q5Kiu ops-claude"
+
+# Subdirectories platform_data_volume creates on the mounted main-data volume
+# for platform/docker-compose.yml's Prometheus and Grafana services to
+# bind-mount. Identical to prod's, and identical on purpose: staging's volume
+# is named `main-data` too (volume names are unique per Hetzner project, not
+# globally), so /mnt/main-data/prometheus and /mnt/main-data/grafana are
+# correct here as written and platform/docker-compose.yml stays
+# unparameterised across environments.
+#
+# Owner/group match each image's own upstream default user, so no `user:`
+# override is needed in the Compose service definitions: 65534/65534 is
+# prom/prometheus's default ("nobody"); 472/472 is grafana/grafana's own
+# documented default.
+platform_data_volume_subdirs:
+  - path: prometheus
+    owner: "65534"
+    group: "65534"
+    mode: "0755"
+  - path: grafana
+    owner: "472"
+    group: "472"
+    mode: "0755"
+
+# ghcr_pull_username is not secret (it's the GitHub account the token belongs
+# to) and is committed in plain text. The same account prod uses: the token
+# is read-only (`read:packages`) against the same packages, so a second
+# account would be a second thing to rotate for no isolation gained.
+ghcr_pull_username: shatynska
+
+# ---------------------------------------------------------------------------
+# STILL TO BE SUPPLIED. Everything below is generated out-of-band by the
+# operator, on their own workstation, and encrypted in place under the
+# `staging` vault id -- NOT prod's. A staging-only operator must not hold the
+# password protecting production's secrets, which is what reusing prod's
+# vault id would mean.
+#
+# Until all three are here, `host-baseline.yml` refuses against staging, and
+# it is worth being exact about which absence does it. `deploy_apps` is left
+# UNSET below rather than set to `[]`, because an empty list is a *supplied*
+# value to both roles that read it -- their assertions say so in as many
+# words -- meaning "no application may deploy to this host". That would
+# converge, and would leave the weekly prune abandoning with "the
+# enumeration names no application", which is a different failure from the
+# one this environment is expected to have. Unset, `deploy_user` refuses by
+# name before any task changes the host, which is the intended state of this
+# file rather than a defect in it. `image_prune` refuses on the ping key the
+# same way.
+# ---------------------------------------------------------------------------
+
+# Per-application deploy public keys (add-per-app-deploy-keys). Safe to
+# commit -- public keys, not secrets.
+#
+# STAGING'S OWN KEYPAIR, NOT PROD'S. One leaked private half must not deploy
+# to both environments. Generate it on the workstation, commit the public
+# half here, and keep the private half for the change that deploys the
+# platform stack to staging -- it becomes that environment's own
+# PLATFORM_DEPLOY_SSH_KEY and belongs in no GitHub secret before then.
+#
+# `commerce-ops` is deliberately absent: it has no staging deploy path in its
+# own repository yet, and an enumerated application with no Compose file
+# contributes nothing to the prune's keep set while implying an
+# authorisation nothing uses.
+#
+# NOTE ON THE PRUNE, so it is not read as a fault later: on a host where
+# nothing is deployed yet, no enumerated application renders an image
+# reference and no container holds one, so the keep set is empty and the
+# weekly unit ABANDONS and reports failure. That is this role's documented
+# contract, it is accepted deliberately, and it ends when the platform stack
+# reaches staging.
+#
+# deploy_apps:
+#   - name: platform
+#     public_key: "ssh-ed25519 AAAA... deploy@platform-staging"
+
+# A genuine secret (a read:packages-scoped GHCR token): Vault-encrypt it in
+# place, never plain text.
+#
+#   cd ansible
+#   ansible-vault encrypt_string --vault-id staging@prompt '<ghp_... token>' \
+#     --name ghcr_pull_token
+#
+# and paste the whole block here, `ghcr_pull_token: !vault |` line included.
+# ghcr_pull_token:
+
+# The project ping key the weekly prune unit reports its own liveness under.
+# A genuine secret for the same reason: a party who holds it can suppress
+# this alarm by reporting success on the unit's behalf.
+#
+#   cd ansible
+#   ansible-vault encrypt_string --vault-id staging@prompt '<ping key>' \
+#     --name image_prune_heartbeat_ping_key
+#
+# It is the same project ping key prod uses, and it addresses a DIFFERENT
+# check because the check name is derived from inventory_hostname: staging's
+# server is named `staging-server`, so the check is
+# `staging-server-prune-host-images`. docs/bootstrap-a-new-host.md Appendix A
+# records the period and grace to give it -- a check created by its first
+# ping carries the observer's default until corrected.
+#
+# The key must be a bare token of letters, digits, `_` and `-`; the role
+# refuses anything else by name, because the value is rendered into a shell
+# file its reporting script sources and a quote in it would make that script
+# fail silently.
+# image_prune_heartbeat_ping_key:

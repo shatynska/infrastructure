@@ -115,7 +115,12 @@
       ansible.builtin.assert:
         that:
           - "'hardening_ssh_allowed_cidrs' in absent_cidrs_outcome.failed_msg"
-          - "'group_vars/prod.yml' in absent_cidrs_outcome.failed_msg"
+          # The exact literal the role now emits, not a loosened
+          # 'group_vars/' substring: the directory alone would still be
+          # present in the prod-naming message this change replaced, so a
+          # substring test would pass against the very wording it exists to
+          # rule out.
+          - "'ansible/inventory/group_vars/<environment>.yml' in absent_cidrs_outcome.failed_msg"
         fail_msg: >-
           The run failed at a check, but its message does not name both the
           input and where it is expected to be set:

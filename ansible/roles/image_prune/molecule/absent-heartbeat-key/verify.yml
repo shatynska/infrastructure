@@ -110,13 +110,17 @@
       ansible.builtin.assert:
         that:
           - "'image_prune_heartbeat_ping_key' in absent_key_outcome.failed_msg"
-          - "'group_vars/prod.yml' in absent_key_outcome.failed_msg"
+          # The exact literal the role now emits -- see the sibling
+          # assertion in hardening's absent-ssh-cidrs scenario for why this
+          # is not loosened to 'group_vars/'.
+          - "'ansible/inventory/group_vars/<environment>.yml' in absent_key_outcome.failed_msg"
         fail_msg: >-
           The run failed at a check, but its message does not name both the
           input and where it is expected to be set:
           '{{ absent_key_outcome.failed_msg }}'. An operator reading it has to
           be told which input was not supplied and how to supply it -- the
-          value is Vault-encrypted in ansible/inventory/group_vars/prod.yml,
+          value is Vault-encrypted in the targeted environment's own
+          ansible/inventory/group_vars/<environment>.yml,
           and that is the whole difference between this diagnostic and the
           error it replaces.
         success_msg: >-

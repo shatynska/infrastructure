@@ -21,7 +21,8 @@ through `to_nice_json`, which writes an unquoted `3` as a JSON number, and the
 daemon rejects a non-string `max-file`.
 
 They are role defaults rather than values in
-`ansible/inventory/group_vars/prod.yml` because an unbounded container log is
+any environment's `ansible/inventory/group_vars/<environment>.yml` because an
+unbounded container log is
 unsafe on any host this repository configures. Setting them from inventory
 would hand unbounded logs to the next host built from this repository,
 silently. `hardening` draws the same line from the other side: no default for a

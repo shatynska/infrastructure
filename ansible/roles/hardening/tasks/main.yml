@@ -30,7 +30,8 @@
     fail_msg: >-
       hardening_ssh_allowed_cidrs was not supplied, or is not a list. This
       role has no default for it and there is no safe default source CIDR for
-      SSH -- set it in ansible/inventory/group_vars/prod.yml (see this role's
+      SSH -- set it in ansible/inventory/group_vars/<environment>.yml, the file
+      for the environment this run targets (see this role's
       defaults/main.yml and README).
 
 - name: Ensure UFW is installed

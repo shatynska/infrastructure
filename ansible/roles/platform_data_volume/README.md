@@ -1,7 +1,7 @@
 # platform_data_volume
 
 Mounts the platform's dedicated data volume — the Terraform-provisioned
-`main-data` Hetzner Volume (`terraform/environments/prod/terraform.tfvars`,
+`main-data` Hetzner Volume (`terraform/environments/<environment>/terraform.tfvars`,
 `terraform/modules/volume`) — at a fixed host path, formatting it if it has
 no filesystem yet, and persists the mount in `/etc/fstab` so it survives a
 reboot without a manual step. Also creates whatever subdirectories a
