@@ -293,57 +293,39 @@ is operational rather than structural. It read the live host as well as the
 tree, so where an entry cites a host fact, that is what `main-server` showed on
 2026-09-08, not an inference from the code.
 
-## 24. make-the-pipeline-environment-agnostic
-
-**Not blocked, and first of three: it is the enabler for a staging environment
-(49) and, through it, for the gated host-config workflow (23).**
-
-`apply.yml`, `drift.yml` and `pr-validation.yml`'s plan step each pin
-`working-directory: terraform/environments/prod`. The idiom that replaces it
-is already in this repository -- `pr-validation.yml`'s `fmt` and `validate`
-steps loop over `terraform/modules/*/ terraform/environments/*/` -- so this
-extends a discovery loop that exists rather than inventing one, to plan, apply
-and drift.
-
-The layers underneath need nothing. `modules/server`'s `delete_protection`
-variable names "a future staging environment" as its own reason for being
-parameterised. `ansible/inventory/hcloud.yml` keys groups on the `environment`
-Hetzner label and its comment already says adding staging "is a label value,
-not an inventory rewrite".
-
-**The Ansible half is not here**, though this entry first placed it here. No
-workflow converges `ansible/` at all -- that is entry 23's whole subject -- so
-`hosts: prod` in `host-baseline.yml` is not pipeline work, and it has no second
-value to take until 49 creates a second host. It moves to 49.
-
-**Verifiable at N=1, which is why it goes first.** The generalisation runs with
-a matrix of one element and its acceptance test is that prod plans, applies and
-drifts exactly as before: no new infrastructure, nothing deployed, fully
-reversible. Building it before staging exists is therefore not speculative
-generality -- it is what lets staging's very first `terraform apply` go through
-the pipeline instead of a workstation, and staging is then this change's second
-acceptance test.
-
-**The decision it carries**, and the only part that is not mechanical: whether
-staging shares prod's Hetzner project. One project means one read-write token,
-so staging's apply must be gated behind an approver too -- otherwise any push to
-`main` reaches a prod-capable credential. A second Hetzner project isolates the
-token and lets staging be ungated, which is most of the point of staging: an
-approved staging deploy is as slow as prod and stops being used.
-
-A second project also settles a naming collision. `platform/docker-compose.yml`
-hardcodes `/mnt/main-data/prometheus` and `/mnt/main-data/grafana`. The Ansible
-role's `platform_data_volume_mount_path` is overridable per `group_vars`; those
-Compose bind mounts are not. Hetzner volume names are unique per project, so
-within a single project staging cannot also be `main-data`, and a different name
-gives a different mount path -- staging's Prometheus and Grafana would come up
-writing nowhere, silently. A second project frees the name; staying in one means
-parameterising the Compose paths. **Recommendation: a second Hetzner project.**
-It is a recommendation, not a decided thing.
-
 ## 49. add-a-staging-environment
 
-**Blocked on 24.** Recorded 2026-09-09, and it supersedes the reading in
+**Its blocker is delivered.** Entry 24, `make-the-pipeline-environment-agnostic`,
+is archived: `apply.yml`, `drift.yml` and `pr-validation.yml` discover
+`terraform/environments/*/` and run per environment, so adding one changes no file
+under `.github/workflows/`. What it still takes is everything outside them, and the
+README's staging paragraph lists it: a `pipeline.yml` in the new directory naming a
+GitHub Environment and a read-only secret **distinct from prod's**, that
+Environment holding its own `HCLOUD_TOKEN`, a repository secret of the declared
+read-only name, an HCP workspace, and a Dependabot entry for the lockfile. The
+decision it left undecided is unchanged by that and is now this entry's, carried
+here from 24's own text so it is not lost with it:
+
+**Whether staging shares prod's Hetzner project.** One project means one read-write
+token, so staging's apply must be gated behind an approver too -- otherwise any push
+to `main` reaches a prod-capable credential. A second Hetzner project isolates the
+token and lets staging be ungated, which is most of the point of staging: an approved
+staging deploy is as slow as prod and stops being used. The pipeline supports either
+-- an environment's `pipeline.yml` names its own GitHub Environment, and whether that
+Environment requires a reviewer is a repository setting -- so this is a decision
+rather than a constraint.
+
+A second project also settles a naming collision. `platform/docker-compose.yml`
+hardcodes `/mnt/main-data/prometheus` and `/mnt/main-data/grafana`. The Ansible role's
+`platform_data_volume_mount_path` is overridable per `group_vars`; those Compose bind
+mounts are not. Hetzner volume names are unique per project, so within a single
+project staging cannot also be `main-data`, and a different name gives a different
+mount path -- staging's Prometheus and Grafana would come up writing nowhere,
+silently. A second project frees the name; staying in one means parameterising the
+Compose paths. **Recommendation: a second Hetzner project.** It is a recommendation,
+not a decided thing.
+
+Recorded 2026-09-09, and it supersedes the reading in
 `docs/review-2026-09-08-host-readiness.md` that the company needed a
 single-environment copy of this shape. It needs two environments, so this
 repository is where that is rehearsed rather than discovered on a deadline.
@@ -367,7 +349,9 @@ second HCP workspace with Execution Mode set to Local (as prod's `versions.tf`
 records for `infrastructure-prod`), a `staging` GitHub Environment and its own
 secret set -- the Vault password, the tailnet OAuth client, and platform's
 eight -- a `group_vars/staging.yml`, and DNS records for the staging hostnames.
-It also carries the Ansible half moved here from 24: `hosts: prod` in
+It also carries the Ansible half moved here from the archived change
+`make-the-pipeline-environment-agnostic`, which declined it as not pipeline work:
+`hosts: prod` in
 `host-baseline.yml` becoming a parameter, which this is the first change to give
 a second value to.
 Those records are manual: DNS is in no repository (`docs/deferred-work.md`,
@@ -375,7 +359,7 @@ Those records are manual: DNS is in no repository (`docs/deferred-work.md`,
 
 Three things it will find, which is the reason to do it here:
 
-- the volume-name and Compose-path coupling 24 describes;
+- the volume-name and Compose-path coupling described above;
 - memory. Eight platform containers plus `commerce-ops` and its own PostgreSQL
   on the 2-vCPU tier is tight, which makes this the forcing function for
   container resource limits (7);
@@ -602,7 +586,7 @@ time they take is unknown.
 A `docs/runbook-rebuild.md` that lists them in order, names the secret each
 step needs, and records the last rehearsal's date and duration is the
 deliverable. The rehearsal is the point; the document is how it survives.
-Entry 24's staging environment is where the rehearsal can happen without
+Entry 49's staging environment is where the rehearsal can happen without
 touching prod.
 
 ## 33. move-commerce-ops-durable-data-to-supabase

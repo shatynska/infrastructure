@@ -64,13 +64,15 @@ Every `hcloud_*` resource managed by this repository SHALL carry an `environment
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`
 
 ### Requirement: Write Credentials Confined to the Gated Pipeline
-The **Read & Write** Hetzner Cloud API token SHALL exist in exactly one location: the `production` GitHub Environment secret. It SHALL NOT be exported into a shell environment, written to a dotfile, `direnv` file, or any `.tfvars` file, or stored in a local credential helper on any workstation.
+Each environment's **Read & Write** Hetzner Cloud API token SHALL exist in exactly one location: that environment's own GitHub Environment secret, named `HCLOUD_TOKEN`. No such token SHALL be exported into a shell environment, written to a dotfile, `direnv` file, or any `.tfvars` file, or stored in a local credential helper on any workstation.
 
-Local Terraform work SHALL authenticate with the **Read Only** token, which is sufficient for `terraform plan` and refresh and which causes any local `terraform apply` to fail at the Hetzner Cloud API.
+Local Terraform work SHALL authenticate with that environment's **Read Only** token — the one its declaration names as its read-only secret (see the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability) — which is sufficient for `terraform plan` and refresh and which causes any local `terraform apply` to fail at the Hetzner Cloud API. This states which token a workstation uses, not where the workstation obtains it.
 
 Because the workspace's Execution Mode is Local, the destroy-policy gate, the saved-plan approval gate, and branch protection are properties of the GitHub Actions path to production rather than of Terraform itself — a workstation holding a write-capable token bypasses all three in a single command. This requirement extends the split established by the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability from CI jobs to workstations.
 
-The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents.
+This holds of every environment, not of production alone. An environment whose GitHub Environment requires no reviewer is not thereby exempt: the reviewer and the credential confinement are independent properties, and an unreviewed environment's write token reaching a workstation is the same bypass with a smaller blast radius rather than a permitted one.
+
+The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents. Where only one environment exists, a record naming that environment satisfies this; the record is generalised by the change that adds a second, at the point where there is a second token to confine.
 
 #### Scenario: Local apply is refused by the API
 - **WHEN** an operator or coding agent runs `terraform apply` from a workstation against `terraform/environments/prod/`
@@ -79,6 +81,10 @@ The prohibition SHALL be recorded where it is loaded without being sought: the r
 #### Scenario: Local plan remains available
 - **WHEN** an operator runs `terraform plan` from a workstation against `terraform/environments/prod/`
 - **THEN** it SHALL succeed using the read-only token, so that local iteration never requires write credentials
+
+#### Scenario: A non-production environment's write token is confined identically
+- **WHEN** an environment exists whose GitHub Environment requires no reviewer
+- **THEN** its Read & Write token SHALL still exist only in that Environment's secrets, and SHALL NOT be available on any workstation
 
 #### Scenario: An agent opening the repository is told the boundary
 - **WHEN** a coding agent begins work in this repository
