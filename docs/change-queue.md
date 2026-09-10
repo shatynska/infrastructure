@@ -1236,3 +1236,29 @@ currently deferred partly because nothing could test a fix for it.
 Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and
 whatever runner it needs, which is why it was not invented inside a change whose
 diff most needed reading closely.
+
+## 55. refresh-staging-group-vars-banner
+
+Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, which sends a
+reader to that file for evidence and meets a banner saying the opposite of what
+the file now is.
+
+`ansible/inventory/group_vars/staging.yml` opens its lower half with
+
+    # THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET CONVERGED.
+
+and closes it with "this file's state is PENDING the operator, not finished.
+Until it is completed there is no converged staging host, no prune timer and no
+`staging-server-prune-host-images` check." All three values it lists as missing
+were supplied in PR #130, and the host converged the same evening --
+`configure-the-staging-host`'s archived task list records the run and the checks
+that followed it.
+
+The banner was correct when written and is the kind of text that goes stale
+silently: nothing fails, and a reader who trusts it draws a wrong conclusion
+about the environment. What replaces it is not just deletion — the paragraphs
+under it explain *which* absence refuses a converge and which is tolerated, and
+that reasoning is worth keeping in some form for whoever writes the next
+environment's `group_vars` from scratch.
+
+Not blocked, and small. It touches one file and no mechanism.
