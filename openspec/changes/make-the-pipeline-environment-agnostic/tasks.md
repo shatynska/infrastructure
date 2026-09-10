@@ -788,6 +788,51 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   and the skip-versus-error fork was never reached. It stays open until a pull request
   touching no Terraform path runs against this workflow.
 
+  **Pull request #121 merged 2026-09-10 05:40 UTC, and the apply run FAILED. Not
+  delivered.** Run 34442041731: `discover` and `plan (prod)` succeeded, `planned`
+  refused, `apply` never started.
+
+  **Cause: a GitHub API endpoint that does not exist.** Code review round 2 found that
+  the planned-set resolution read `runs/<id>/artifacts`, which spans re-run attempts, and
+  proposed `runs/<id>/attempts/<n>/artifacts` instead. That path was taken without being
+  checked, and it 404s — GitHub scopes artifacts to the run and exposes no per-attempt
+  listing. Verified against the real API after the failure: the run-scoped path returns
+  the listing, the attempts path returns `{"message": "Not Found", "status": "404"}`.
+
+  **It failed closed, which is the design working rather than a consolation.** The
+  refusal is the "a read that refused is not an empty result" branch, and it did exactly
+  what it says: no environment entered the planned set, no apply job started, no
+  `production` approval was raised, and nothing reached Hetzner. Had that branch read a
+  failed API call as "no environment produced a plan", the run would have been GREEN
+  having applied nothing — which is the failure the branch exists to prevent, and it
+  would have been indistinguishable from a merge that legitimately affected no
+  environment.
+
+  **The fix keeps the property and drops the invented endpoint.** The attempt is carried
+  in the artifact NAME — `tfplan-<environment>-attempt-<n>` — so the run-scoped listing,
+  which is the only one that exists, still distinguishes this attempt's saved plan from
+  one an earlier attempt left behind. `overwrite: true` is dropped with it: names are now
+  attempt-unique, so re-running every job of a run collides with nothing.
+
+  **Why nothing here could have caught it, stated plainly.** The suite may make no
+  network call — that constraint is itself asserted by *The Continuous-Integration
+  Configuration Is Itself Verified* — so no test in this repository can establish that an
+  API path exists. The derived tests stub `gh` and answer whatever it is asked, so they
+  passed against a URL that 404s in reality. This is the class code review round 2 named
+  in its process note: a fix asserting something the code and the suite cannot check.
+  The general lesson is not "add a test"; it is that an external API's shape is verified
+  by calling it, and this one now was.
+
+  What IS newly guarded is the property the endpoint was for:
+  `test_an_earlier_attempts_saved_plan_does_not_count_for_this_attempt` runs the
+  resolution as a second attempt over a listing an earlier attempt wrote, and requires
+  the planned set to be empty. Confirmed red against a tree with the attempt dropped from
+  the artifact name. That test was impossible to write while the mechanism was a
+  fictional endpoint, and is straightforward now the mechanism is a name.
+
+  Per this project's rules the change is not delivered and its record is not written: the
+  fix re-enters at `build`'s review gate and takes a pull request of its own.
+
 ## 8. Archive
 
 - [ ] 8.1 Once the effect is confirmed, bring the branch back to the freshly fetched
