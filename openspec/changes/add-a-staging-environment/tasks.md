@@ -344,13 +344,40 @@ ordering this change most depends on.
   directory — one clause added saying to use a shell you do not reuse. Round 2
   confirmed the inventory fix holds and that entry 50 is a complete enough brief
   that its author will not re-derive the problem.
-- [ ] 5.2 Open the pull request and read it against design.md Decision 9's list of what
+- [x] 5.2 Open the pull request and read it against design.md Decision 9's list of what
   this run is **specified** to do — this pull request affects staging alone, so one plan
   comment is correct and two would be a defect. Verify, and record here: discovery
   emitted two entries; the affected-environment narrowing selected staging and excluded
   prod; exactly one plan comment appeared, for staging; its plan authenticated under
   `HCLOUD_TOKEN_STAGING`, a secret name no run has resolved before; no job paused for an
   approval; every required check passed.
+
+  **Result (2026-09-10), PR #125, run 34457522320.** Every observation this task
+  asks for, read off the run:
+
+  - **Discovery emitted two entries** — `[{"name":"prod","github_environment":"production","read_only_secret":"HCLOUD_TOKEN","destroy_policy_gate":true},{"name":"staging","github_environment":"staging","read_only_secret":"HCLOUD_TOKEN_STAGING","destroy_policy_gate":false}]`. The first time this step has produced a set rather than a single-element list, and the distinctness rules it enforces had two names to compare rather than one.
+  - **The narrowing excluded prod** — `Affected environments (1): [staging]`. That path has existed since `make-the-pipeline-environment-agnostic` and until now had nothing it could exclude.
+  - **Exactly one plan comment**, for staging: `Plan: 4 to add, 0 to change, 0 to destroy`. Two would have been the defect; the round-1 plan review is what caught this task originally asking for two.
+  - **`HCLOUD_TOKEN_STAGING` resolved** — the matrix carried the name, the plan authenticated, and no run before this one had ever resolved a second read-only secret.
+  - **No job paused**, and no `production` approval was requested.
+  - Every required check passed, including seven Molecule scenarios and `validate`.
+
+  **One failure on the way, and it was not this change.** The first `plan (staging)`
+  died on `Error acquiring the state lock`, and the lock it collided with had been
+  created **120 ms earlier by a GitHub runner running a plan** — the same job. No
+  other run in the repository touched that workspace and no local `terraform`
+  process was alive, so the lock request reached HCP, its response was lost, and
+  the client's retry was refused by its own lock. The workspace was left `locked:
+  true` with `current-run: null`: a lock with no operation behind it, which every
+  later plan would keep failing against. `validate` then failed at exactly one step
+  — "Conclude on the plan matrix's behalf" — which is the required check doing its
+  job rather than a second fault.
+
+  Released via the HCP API after establishing there was nothing to protect: the
+  workspace had **no current state version at all** (404) and no run in flight, so
+  no concurrent writer could be corrupted. Re-ran the failed jobs; both passed.
+  Worth knowing for the next environment, since a first plan against a brand-new
+  workspace is where this appeared.
 - [ ] 5.3 On the operator's confirmation that it merged, record what the apply run did:
   which environments entered it (staging only), that staging's apply ran without pausing
   — this repository's first apply reaching real infrastructure with no approval click —
