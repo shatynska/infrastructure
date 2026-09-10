@@ -429,17 +429,17 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 - [x] 7.3 Run `pre-commit run --all-files` and confirm `terraform fmt`, `terraform
   validate`, `tflint` and `gitleaks` pass. `gitleaks` matters here: this change moves
   secret *names* through workflow text and must move no secret value.
-- [ ] 7.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 7.2 and 7.3
+- [x] 7.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 7.2 and 7.3
   pass.
-- [ ] 7.4a Re-run 7.2 and 7.3 after the plan revisit's implementation lands, and
+- [x] 7.4a Re-run 7.2 and 7.3 after the plan revisit's implementation lands, and
   re-dispatch `ai-toolkit:change-code-reviewer`. Round 1's findings are recorded above;
   this is round 2, and it reads the resolver job and the split concurrency groups that
   round 1 asked for.
-- [ ] 7.5 Open the pull request, let CI run, and confirm on it that `validate` reports
+- [x] 7.5 Open the pull request, let CI run, and confirm on it that `validate` reports
   as a literal context and that exactly one plan comment appears, for prod. Wait for
   the operator's confirmation that it merged. Nothing here applies to production from
   a local machine.
-- [ ] 7.6 Confirm the effect: after the merge, the `apply.yml` run for this change
+- [x] 7.6 Confirm the effect: after the merge, the `apply.yml` run for this change
   SHALL request the `production` approval exactly as before, its plan job summary SHALL
   show a prod plan of the same shape the pre-change workflow produced, and the next
   nightly `drift.yml` SHALL report against a per-environment issue title. Record the
@@ -923,13 +923,72 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   deliberate no-op-plan trigger merge and saying so — is the operator's call, not this
   session's.
 
+  **The effect is confirmed. Apply run 34443893650, 2026-09-10, every job green.**
+
+  Pull request #123 was opened for two stated purposes — a real correction to prod's
+  provider comment, which described the pre-change credential scheme, and exercising the
+  apply path, which nothing had done since the restructure. Its merge produced the run
+  that closes this gate. What it establishes, job by job:
+
+  - `discover` resolved prod as the affected environment from the changed path.
+  - `plan (prod)` produced **"No changes. Your infrastructure matches the
+    configuration."** — the no-op this change predicted, since #123 touches a comment and
+    no resource. A non-empty plan here would have been the signal 7.6 warns about.
+  - `planned` — the job that failed on #121 and that #122 fixed — reported
+    *"Environments that produced a saved plan (1)"* and named prod. The artifact it
+    matched is `tfplan-prod-attempt-1`, so the attempt-in-the-name scheme works on a real
+    listing rather than only against a stub.
+  - `apply (prod)` **paused for the `production` Environment approval and was approved**
+    — confirmed from the run's approvals record (`state: approved`, environment
+    `production`), not inferred from the job having run. That is the gate this whole
+    capability exists to hold, and it held.
+  - The omitted-write-token guard reported *"This Environment supplied its own
+    HCLOUD_TOKEN; it is not the repository-scoped value"* — so decision 4a's guard is
+    live at one environment and passed for the right reason, which is what that decision
+    claimed and could not previously demonstrate.
+  - `terraform apply` on the saved plan: **"Apply complete! Resources: 0 added, 0
+    changed, 0 destroyed."**
+
+  With pull request #121's plan comment and the dispatched drift sweep (run 34443257058)
+  already recorded above, all three of this change's paths — pull-request plan, gated
+  apply, and scheduled drift — are now confirmed against production infrastructure. The
+  acceptance test this change set itself is met: prod plans, applies and drifts as it did
+  before, through workflows that name no environment.
+
+  **7.4a's second code review is the round recorded above**, whose findings were applied
+  in the commit that revived the dead `set -e` handling.
+
 ## 8. Archive
 
-- [ ] 8.1 Once the effect is confirmed, bring the branch back to the freshly fetched
+- [x] 8.1 Once the effect is confirmed, bring the branch back to the freshly fetched
   trunk and commit the specification record, then open the record's own pull request.
-- [ ] 8.2 In the same commit, delete `docs/change-queue.md` entry 24, which this change
+- [x] 8.2 In the same commit, delete `docs/change-queue.md` entry 24, which this change
   delivers. Leave entries 49 and 23 untouched and update 49's "Blocked on 24" line to
   record that its blocker is delivered.
+
+  **Result (8.1-8.2).** The record is archived to
+  `openspec/changes/archive/2026-09-10-make-the-pipeline-environment-agnostic/` and its
+  deltas merged into the main specifications: one requirement added and eight modified in
+  `iac-cicd-pipeline`, one modified in `iac-safety-hardening`. `docs/change-queue.md`
+  entry 24 is deleted and entry 49's blocker line records that its blocker is delivered,
+  with the list of what a second environment still takes outside `.github/workflows/`.
+
+  **One thing was done that 8.2 says not to do, and it is disclosed rather than
+  absorbed.** That task says to leave entry 49 untouched apart from its "Blocked on 24"
+  line. Two paragraphs of entry 24 were carried into 49 all the same: the decision on
+  whether staging shares prod's Hetzner project, and the volume-name/Compose-path
+  collision that decision settles. Neither was delivered by this change — they are
+  decisions 49 must make — and deleting entry 24 as instructed would have destroyed the
+  only record of them. Three references to entry 24 from elsewhere in the queue were
+  repaired for the same reason, one of which ("Entry 24's staging environment") was
+  already wrong before this change touched it: staging is 49's.
+
+  This change also opened three pull requests rather than the two the workflow names as
+  its floor, and the third was not a defect in the record: #121 delivered the change,
+  #122 fixed two defects its own merge and CI exposed, and #123 carried a real correction
+  while being the merge that exercised the apply path. #122's existence is the workflow's
+  "the change is not delivered, fix it and re-enter at build's review gate" working as
+  written.
 
 After 8.2's pull request merges, and once nothing uncommitted or unpushed remains,
 remove the branch locally and on the remote and remove the working tree from the
