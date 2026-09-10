@@ -65,8 +65,10 @@ Three constraints bound every decision below:
 Settled by the operator before this change was drafted, and carried here from
 `docs/change-queue.md` entry 49, which recommended it.
 
-A Hetzner API token is scoped to exactly one project. One project would therefore
-mean one Read & Write token covering both environments, which forces staging's
+A Hetzner API token is scoped to exactly one project — which is also why the
+Ansible dynamic inventory can see only one environment at a time, a consequence
+this decision creates and `docs/change-queue.md` entry 50 owns. One project would
+therefore mean one Read & Write token covering both environments, which forces staging's
 apply behind an approver — otherwise any push to `main` reaches a prod-capable
 credential — and an approved staging deploy is as slow as prod and stops being
 used, which is most of staging's value gone. It would also collide on the volume
@@ -118,8 +120,9 @@ Prod keeps `destroy_policy_gate: true`, and the polarity note in prod's
 **Consequence accepted:** a merge that destroys staging's server and volume
 applies without a second signal. What bounds the loss is that staging holds
 nothing which is not reproducible by this repository — and that property is not
-self-sustaining. `docs/change-queue.md` entry 49 decides staging is the
-*permanent, application-facing* environment, so its successor will put
+self-sustaining. `docs/change-queue.md` entry 49 — replaced by entry 50 when this
+change landed — decides staging is the *permanent, application-facing*
+environment, so its successor will put
 applications and a database on it. The constraint therefore travels: the
 successor's change-queue entry states it, so that whoever spends it does so
 knowingly rather than by not having read an archived design.
@@ -142,6 +145,7 @@ What differs, and why:
 | `backups` | `true` | `false` | Nothing on staging is worth restoring, and backups are a percentage of the instance price |
 | `github_environment` | `production` | `staging` | Distinctness is required by the declaration requirement, and discovery fails the pipeline on a collision |
 | `read_only_secret` | `HCLOUD_TOKEN` | `HCLOUD_TOKEN_STAGING` | Same reason: a repository secret holds one value |
+| `name` | `main-server` | `main-server` | Added to this table during implementation, because it looks like it should differ and must not: `modules/server` composes the firewall name as `<environment>-<name>`, so a `staging-server` here yields `staging-staging-server`. Free to reuse for the same reason `main-data` is |
 | `web_allowed_cidrs` | `["0.0.0.0/0"]` | `[]` | Staging runs nothing this change deploys. `[]` is the module default and creates no web rule at all; opening 80/443 belongs to the change that puts something behind them |
 
 Everything not in that table is prod's value, and three are worth naming because

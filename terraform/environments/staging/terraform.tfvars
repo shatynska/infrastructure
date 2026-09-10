@@ -2,7 +2,7 @@
 # Excludes State and Secrets requirement — CI needs these values present
 # in a clean checkout.
 
-name = "staging-server"
+name = "main-server"
 
 # server_type is DELIBERATELY UNSET until it has been read off the Hetzner
 # console for staging's own project (tasks.md task 1.3). Staging runs roughly

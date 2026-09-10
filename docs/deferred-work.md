@@ -680,11 +680,13 @@ Recorded by `add-a-staging-environment`. Its `design.md` Decision 9 lists what
 that change's own runs confirmed and what they could not, and this is the second
 half, kept where it outlives the change.
 
-Adding staging exercised: discovery emitting two entries, the
+Adding staging is what exercises: discovery emitting two entries, the
 affected-environment narrowing actually excluding an environment,
 `secrets[matrix.environment.read_only_secret]` resolving a second name, an
 ungated apply, and — in the nightly sweep — two environments planned in one run
-under two credentials against one heartbeat.
+under two credentials against one heartbeat. Written before those runs happened,
+and deliberately in that tense: what they actually did is recorded in that
+change's own task list, and this entry is about the paths they do *not* reach.
 
 Three paths remain unexercised at two environments:
 

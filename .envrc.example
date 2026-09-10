@@ -3,6 +3,14 @@
 #   direnv allow
 #
 # Read Only Hetzner Cloud token only — enough for `terraform plan`/`validate`.
-# Never put the Read & Write token here; it lives exclusively in the
-# `production` GitHub Environment secret. See AGENTS.md.
+# Never put a Read & Write token here: each environment's lives exclusively in
+# that environment's own GitHub Environment secret, and an environment whose
+# Environment requires no reviewer is no exception. See AGENTS.md.
+#
+# ONE TOKEN, ONE ENVIRONMENT. A Hetzner token is scoped to one project and each
+# environment has a project of its own, so this value reaches exactly one of
+# them. This file at the repository root is prod's; staging's belongs in an
+# .envrc inside terraform/environments/staging/. The same variable also feeds
+# Ansible's dynamic inventory, which sees only its token's project — and a play
+# matching no host exits 0.
 export HCLOUD_TOKEN="your-read-only-hetzner-token"

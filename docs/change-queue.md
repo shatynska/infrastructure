@@ -322,8 +322,21 @@ What it carries:
 - **`hosts: prod` in `ansible/playbooks/host-baseline.yml` becoming a
   parameter.** This is the first change with a second value to give it. The
   dynamic inventory already groups by the `environment` Hetzner label, and
-  staging's resources carry `environment = "staging"`, so the group exists the
-  moment staging applies — what does not exist is a play that can target it.
+  staging's resources carry `environment = "staging"`.
+- **A way for the inventory to see two Hetzner projects, which today it cannot.**
+  `ansible/inventory/hcloud.yml` authenticates with a single `HCLOUD_TOKEN`, and
+  a Hetzner token is scoped to one project — so under prod's token the `staging`
+  group is *empty*, and under staging's, `prod` is. This is a consequence of
+  `add-a-staging-environment`'s decision to give staging its own project, and it
+  is this entry's to solve: a second inventory source, a per-environment token,
+  or a token-per-run convention. **The failure mode is why it is listed
+  separately rather than folded into the bullet above:** a play whose `hosts:`
+  matches nothing prints `skipping: no hosts matched` and exits **0**, so a
+  converge that reached no host is indistinguishable from one that had nothing
+  to do — including in CI.
+- **Staging's own secret set.** The Vault password, the tailnet OAuth client,
+  and platform's eight. None of them exist for staging today, and each is a
+  prerequisite for a converge rather than something discovered during one.
 - **`ansible/inventory/group_vars/staging.yml`**, written from scratch rather
   than inherited from prod's. `docs/deferred-work.md`'s "Two gaps in
   required-input validation that only the play could close" names exactly this
@@ -1094,3 +1107,32 @@ Bounded in the meantime by how rotation actually happens here: it is a manual
 act by the operator, who can force the replacement in the same session. Worth
 writing that into the rotation step of whatever runbook covers it, which is a
 smaller piece of work than this entry and does not wait on it.
+
+## 51. assert-every-tfvars-assigns-its-required-variables
+
+Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the
+gap by falling into it.
+
+That change shipped `terraform/environments/staging/terraform.tfvars` with
+`server_type` deliberately unassigned, and `variables.tf` declares it with no
+default. Nothing in this repository detects that. The consequence is not subtle
+once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run
+Terraform with `-input=false`, so the plan exits non-zero with `No value for
+required variable`, the conclusion step fails the required check, and a nightly
+drift sweep would fail for that environment every night and take the shared
+heartbeat with it — but it is detected by a *plan*, which needs a credential, a
+workspace and a network. The same fact is a pure static read: for each
+environment directory, every variable `variables.tf` declares without a `default`
+appears as an assignment in `terraform.tfvars`.
+
+That places it squarely in `.github/tests`, whose subject is any property that is
+a static read of a committed file, and which may make no network call and invoke
+no Terraform binary. The parser is the only real work: `terraform.tfvars`
+assignments and `variable` blocks with and without defaults, without importing
+HCL machinery the suite does not have. `test_a_second_environment.py` already
+reads `terraform.tfvars` for volume names and can lend its approach.
+
+**Not blocked.** It was left out of `add-a-staging-environment` because the gap it
+covers was that change's own disclosed, in-flight state — writing the check that
+fails the tree you are still assembling is a different change than the one that
+assembled it.

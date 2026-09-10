@@ -215,10 +215,18 @@ ordering this change most depends on.
   widens to "infrastructure changes". The fragments it matches survive the
   generalisation and still pass.
 
-- [ ] 4.2 Run the rest of this repository's static verification over the new directory:
+- [x] 4.2 Run the rest of this repository's static verification over the new directory:
   `terraform fmt -check`, `terraform validate`, `tflint`, and the pre-commit hooks.
   Verify each passes for `terraform/environments/staging/` specifically, not only for the
   tree as a whole.
+
+  **Result (2026-09-10).** All four pass against the staging directory: `terraform
+  fmt -check -recursive terraform/`, `tflint` (exit 0, no findings), `terraform
+  validate` ("Success! The configuration is valid" — after `terraform init
+  -backend=false`, which installs the modules `validate` needs without touching the
+  backend), and the pre-commit hooks on the implementation commit, where the three
+  Terraform hooks report Passed rather than Skipped for the first time in this
+  change.
 - [x] 4.3 Run `openspec validate --all` and `openspec validate --archived`. Verify both
   pass, since the pull request requires them.
 - [x] 4.4 Confirm that `git diff --stat` against `main` shows **no file under
@@ -235,8 +243,39 @@ ordering this change most depends on.
 
 ## 5. Review, ship and observe
 
-- [ ] 5.1 Dispatch `ai-toolkit:change-code-reviewer` over this change's diff once 4.1–4.4
+- [x] 5.1 Dispatch `ai-toolkit:change-code-reviewer` over this change's diff once 4.1–4.4
   pass, and act on its verdict. Verify the round is recorded here with what it found.
+
+  **Result (2026-09-10), round 1, nine findings, all acted on.** No defect in the
+  Terraform and no weakened test; the review confirmed the deliberate differences
+  and matches against Decision 4, the lockfile's legitimacy, the four requirement
+  implementations, and that no workflow file is touched.
+
+  Two findings were substantive. **The dynamic inventory cannot see two Hetzner
+  projects** — a hazard this change's own Decision 1 creates and no artifact
+  recorded: `ansible/inventory/hcloud.yml` authenticates with one `HCLOUD_TOKEN`,
+  which reaches one project, so the `staging` group is empty under prod's token and
+  `prod` is empty under staging's. A play matching no host exits 0, so a converge
+  that reached nothing reads as success. Fixed in three places — the inventory
+  comment that still claimed adding staging was "a label value, not an inventory
+  rewrite", entry 50, which now owns it as work, and the README's step 4, which
+  prescribed the repo-root `.envrc` where task 1.8 prescribes a directory-scoped
+  one. **`server_type` unset** was confirmed as blocking: all three workflows run
+  `-input=false`, so the plan exits non-zero and `pr-validation.yml`'s conclusion
+  step fails the required check. It stays as it is — the branch is not pushed until
+  task 1.3 closes — and the reviewer's suggestion of a static check that every
+  `terraform.tfvars` assigns each no-default variable is queued rather than built.
+
+  Also fixed: four README passages and `.envrc.example` that describe the
+  repository at one environment in sentences containing no occurrence of the word
+  `staging`, which task 3.3's grep could not reach; entry 50 having dropped entry
+  49's secret set (Vault password, tailnet OAuth client, platform's eight); a
+  deferred-work entry written in the past tense about runs that have not happened;
+  `proposal.md` still saying entry 23's block was "lifted"; two `design.md`
+  pointers to the deleted entry 49; and `name = "staging-server"`, which the module
+  composes into the firewall name `staging-staging-server` — now `main-server`,
+  free for the same reason `main-data` is, with a row added to Decision 4's table
+  since it looks like it should differ.
 - [ ] 5.2 Open the pull request and read it against design.md Decision 9's list of what
   this run is **specified** to do — this pull request affects staging alone, so one plan
   comment is correct and two would be a defect. Verify, and record here: discovery

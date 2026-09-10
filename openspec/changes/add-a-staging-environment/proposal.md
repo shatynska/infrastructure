@@ -110,17 +110,21 @@ how many environments those specifications describe.
   `terraform.tfvars`, `versions.tf`, `ssh_key.tf`, `outputs.tf`, `pipeline.yml`,
   `.terraform.lock.hcl`).
 - **Modified**: `.github/dependabot.yml`, `README.md`, `AGENTS.md`,
-  `docs/change-queue.md` (entry 49 replaced by its remaining half; entry 23's
-  block lifted), `docs/deferred-work.md`, and the four specifications above.
+  `.envrc.example`, `ansible/inventory/hcloud.yml`,
+  `docs/change-queue.md` (entry 49 replaced by entry 50, its remaining half;
+  entry 23's block re-pointed at entry 50 rather than lifted, since staging is
+  not yet an Ansible target), `docs/bootstrap-a-new-host.md`,
+  `docs/deferred-work.md`, and the four specifications above.
 - **Unmodified, deliberately**: every file under `.github/workflows/`. That is
   the claim *Each Environment Declares Its Own Pipeline Configuration* makes, and
   this change is its first real test. A workflow edit turning out to be necessary
   is a finding, not a licence.
 - **Outside the repository**: a Hetzner Cloud project and two API tokens, an HCP
   Terraform workspace, a GitHub Environment and three secrets — plus provisioning
-  this working tree with staging's read-only token and HCP credentials, without
-  which the lockfile cannot be generated. These are operator steps; none can be
-  performed or verified by a commit.
+  this working tree with staging's read-only token for the plan. (Not for the
+  lockfile: `terraform init -backend=false` writes it with no credential at all,
+  which design.md Decision 6 records as a correction.) These are operator steps;
+  none can be performed or verified by a commit.
 - **Cost**: one 2-vCPU Hetzner instance plus a 10 GB volume, running
   continuously — roughly half prod's bill.
 - **Not affected**: `ansible/`, `platform/`. Staging is provisioned by this
