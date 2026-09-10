@@ -103,7 +103,10 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
    planning staging never leaves staging's token in the shell that plans prod.
 
    Without `direnv`, `source .envrc` from the repo root once per shell —
-   it is a plain `export`. The dynamic inventory needs `HCLOUD_TOKEN` too,
+   it is a plain `export`. That path loses the isolation above, since the
+   export outlives the directory: source the environment's own file in a
+   shell you do not reuse for another environment, or the next
+   `ansible -i inventory/hcloud.yml prod` silently resolves no hosts. The dynamic inventory needs `HCLOUD_TOKEN` too,
    not just Terraform: without it `ansible -i inventory/hcloud.yml prod`
    resolves no hosts. It resolves no hosts under the *wrong* environment's
    token either, and that failure is quiet — a play matching no host exits 0.

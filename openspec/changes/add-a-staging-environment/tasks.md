@@ -276,6 +276,29 @@ ordering this change most depends on.
   composes into the firewall name `staging-staging-server` — now `main-server`,
   free for the same reason `main-data` is, with a row added to Decision 4's table
   since it looks like it should differ.
+
+  **Round 2 (2026-09-10), one finding, and it was a regression the previous round
+  introduced.** Eight of the nine fixes held. The ninth did not: `main-server` was
+  the reviewer's round-1 suggestion and mine to apply without checking what else
+  consumes the value. `modules/server` sets the **server's** name from it and
+  composes only the **firewall's** as `<environment>-<name>`, and the hcloud
+  inventory plugin derives `inventory_hostname` from the server name — so
+  `main-server` would have given both environments one host name. That merges them
+  under any inventory reading both projects, and gives them one
+  `<inventory_hostname>-prune-host-images` heartbeat check, where prod's weekly
+  success masks a dead staging timer. `docs/bootstrap-a-new-host.md`, Appendix C,
+  already described that failure as a hypothetical about a company host; it would
+  have become true of this repository. Reverted to `staging-server`, accepting the
+  cosmetic firewall name `staging-staging-server`: a wart in a console beats a
+  silent one in an alarm. Decision 4's row records the trade, `terraform.tfvars`
+  says it where the value is set, and Appendix C now names staging as the reason
+  the warning is no longer hypothetical.
+
+  Also from round 2: the README's non-`direnv` path (`source .envrc`) loses the
+  directory-scoping the fix above relies on, since the export outlives the
+  directory — one clause added saying to use a shell you do not reuse. Round 2
+  confirmed the inventory fix holds and that entry 50 is a complete enough brief
+  that its author will not re-derive the problem.
 - [ ] 5.2 Open the pull request and read it against design.md Decision 9's list of what
   this run is **specified** to do — this pull request affects staging alone, so one plan
   comment is correct and two would be a defect. Verify, and record here: discovery

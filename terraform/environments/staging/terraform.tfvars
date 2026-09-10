@@ -2,7 +2,16 @@
 # Excludes State and Secrets requirement — CI needs these values present
 # in a clean checkout.
 
-name = "main-server"
+# NOT prod's "main-server", and the difference is load-bearing rather than
+# cosmetic. modules/server sets the SERVER's name from this value directly
+# (only the firewall carries the "<environment>-" prefix), and the hcloud
+# inventory plugin takes each host's `inventory_hostname` from the server name.
+# Two hosts sharing one would merge under any inventory that reads both
+# projects, and would share a single `<inventory_hostname>-prune-host-images`
+# heartbeat check -- where the live host's weekly success keeps the check green
+# while the other's timer is dead. docs/bootstrap-a-new-host.md, Appendix C,
+# names that masking failure; this is the first environment able to cause it.
+name = "staging-server"
 
 # server_type is DELIBERATELY UNSET until it has been read off the Hetzner
 # console for staging's own project (tasks.md task 1.3). Staging runs roughly
