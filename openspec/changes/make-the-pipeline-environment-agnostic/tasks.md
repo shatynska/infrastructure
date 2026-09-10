@@ -34,14 +34,21 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 
 ## 2. The per-environment declaration
 
-- [ ] 2.1 Decide and document the declaration file's name, format and fields, and
+- [x] 2.1 Decide and document the declaration file's name, format and fields, and
   record the choice in `design.md` Decision 1 if it differs from what is written
   there. Verify by writing the file for prod in 2.2 against it.
-- [ ] 2.2 Add prod's declaration under `terraform/environments/prod/`, naming
+- [x] 2.2 Add prod's declaration under `terraform/environments/prod/`, naming
   `HCLOUD_TOKEN` as its read-only secret, `production` as its GitHub Environment, and
   the destroy-policy gate as applicable. Verify that `terraform validate` and
   `terraform fmt -check` still pass for that directory — the file must not be picked
   up as Terraform configuration.
+
+  **Decided (2.1):** `pipeline.yml` in the environment's own directory, YAML, three
+  fields — `github_environment` and `read_only_secret` required, `destroy_policy_gate`
+  optional and defaulting to `true`. The gate field names the gate rather than its
+  inverse, per the delta's polarity rule. `.yml` keeps it out of Terraform's reach:
+  `terraform fmt -check` and `terraform validate` both pass unchanged in
+  `terraform/environments/prod/`. Suite 47 → 31 failures on this file alone.
 
 ## 3. Discovery and change detection
 
