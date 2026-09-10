@@ -1136,3 +1136,42 @@ reads `terraform.tfvars` for volume names and can lend its approach.
 covers was that change's own disclosed, in-flight state — writing the check that
 fails the tree you are still assembling is a different change than the one that
 assembled it.
+
+## 52. deploy-the-platform-stack-per-environment
+
+Recorded 2026-09-10 by `bootstrap-two-environments`, which needed to tell a
+company reader what their second server can and cannot have. Two of the three
+answers were already written down; this was the third and it was recorded
+nowhere.
+
+`.github/workflows/platform-deploy.yml` is single-environment by construction,
+in two places that must move together:
+
+- **`environment: production`** is a literal on the deploy job, where the
+  Terraform pipeline reads its environment from each environment's own
+  `pipeline.yml`. The workflow therefore cannot be pointed at a second
+  environment at all.
+- **`PLATFORM_DEPLOY_HOST`** names one host, and the eight `PLATFORM_*` secrets
+  around it are one set held in one GitHub Environment. A second environment
+  needs its own values for every one of them — its own deploy host, its own
+  Postgres credentials, its own Grafana password, its own ACME email.
+
+**Its relationship to entry 50, which is why this is a separate entry rather
+than a sixth bullet there.** Entry 50 is the *host* half: making a play target a
+second environment, giving the inventory a way to see two Hetzner projects,
+writing `group_vars/staging.yml`, and the first local converge. Its platform
+bullet says the stack has to reach the second host; **this** entry is the
+mechanism that would let it. They are separable — the Ansible work is useful
+without the workflow work, since a converged host is a prerequisite either way —
+and 50 is already large. Whichever is done second should check whether the other
+left it anything.
+
+The shape to copy is the one `make-the-pipeline-environment-agnostic` proved:
+the workflow reads what it needs from committed per-environment declarations and
+names no environment itself. `platform/` has no such declaration today, and
+whether it should reuse `terraform/environments/<name>/pipeline.yml` or grow one
+of its own is the first decision this change makes.
+
+**Blocked on 50**, or at least pointless before it: deploying a Compose stack to
+a host that has no Docker, no deploy user and no data volume mounted fails at
+the first step.
