@@ -265,6 +265,70 @@ Recorded here *and* in `docs/deferred-work.md`: a note kept only inside a change
 archived with it, and this one outlives the change (`AGENTS.md`, "A second change
 surfacing"). The same applies to the drift-heartbeat question under Open Questions.
 
+### 8. The apply stage runs over the environments that produced a plan, not over the merge's set
+
+**Added in review round 1 of the implementation**, which found that `apply.yml` as
+first built coupled every environment's apply to every environment's plan.
+
+`needs:` is scoped to a job, not to a matrix row. So an apply matrix declaring
+`needs: plan` is skipped in full whenever any plan row fails — `fail-fast: false`
+lets the other rows *run*, but it cannot stop their collective result from being
+`failure`. At N≥2 a broken staging plan therefore stops a correct prod change
+reaching production, and does so invisibly at N=1, where there is no second row to
+fail.
+
+*The obvious repair is worse than the defect.* Giving the apply matrix a condition
+that lets it start regardless makes every affected environment's apply job begin,
+including one with no saved plan — and a job declaring `environment:` requests that
+Environment's approval *before* any step of it runs, so the reviewer is asked to
+approve a run that will then fail on a missing artifact. That is precisely the empty
+approval prompt decision 2 exists to prevent, moved from the path filter to the
+apply stage.
+
+**So a third job resolves it.** After the plan matrix, declaring no `environment:`
+and running whatever the matrix concluded, a job reads which environments actually
+produced a saved plan and emits them; the apply matrix runs over that. An
+environment that failed to plan is simply not in the set, so no approval is raised
+for it and every environment that did plan is applied.
+
+*Why the run's own artifacts are the source of truth, rather than a job output:* a
+matrix job's `outputs:` are written by every row into one namespace, last writer
+wins, so a matrix cannot publish a per-row result at all. The saved plan artifact is
+already named per environment (it must be, so one environment's plan cannot be
+applied to another), and its presence is exactly the fact the apply stage needs.
+
+*Fail-closed, on the same reasoning as decision 2:* a resolution that did not
+conclude produces an empty set, and an empty set here means applying nothing while
+reporting green. It is refused rather than read as "nothing was planned".
+
+### 9. Plan jobs and apply jobs take separate concurrency groups
+
+**Also added in review round 1**, which found that moving `concurrency` to job level
+— which this change requires, because a workflow-level group cannot read a matrix
+value — costs the run its atomicity over that group.
+
+Under a workflow-level group the whole run held it, so a second merge could not plan
+until the first had applied. Per job, the group is acquired twice with a gap between,
+and a shared group buys neither of *Serialized Terraform Runs*' scenarios: both are
+about applies queueing behind applies.
+
+What a shared group does buy is a hazard. GitHub cancels a previously *pending* job
+in a group when a new one queues. If a job awaiting its Environment's protection
+rules counts as pending, a later merge's **plan** can cancel an approved, waiting
+**apply** — and a cancellation is not a failure, so nothing here would say so.
+
+*Whether it does count as pending was not established.* It is GitHub's behaviour,
+not this repository's, and it needs a deliberate experiment on a scratch workflow of
+the kind tasks 1.1 and 1.2 ran. Rather than run one, the pairing that could trigger
+it is removed: plans serialise with plans, applies with applies.
+
+*The cost, accepted and stated in the requirement:* with the groups separated, a
+plan can be computed while another run's apply is pending, and will then be refused
+as stale when it reaches its own apply. That is loud, happens after an approval was
+spent, and is corrected by re-running — and it is *Gated Production Apply Applies
+the Reviewed Plan*'s "Applied changes match the approved plan" working as written. A
+silently cancelled apply has no such backstop, which is what decides the trade.
+
 ## Risks / Trade-offs
 
 - **An abstraction built before its second consumer exists.** → Mitigated by deciding

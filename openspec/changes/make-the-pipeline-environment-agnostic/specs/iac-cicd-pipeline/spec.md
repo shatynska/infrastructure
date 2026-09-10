@@ -124,6 +124,12 @@ The apply workflow SHALL be structured as two jobs per environment in a single r
 
 This ensures the approving reviewer sees the exact diff that will be applied. A workflow that approves first and plans afterwards gives the reviewer no diff to evaluate, and the plan computed after approval may differ from the one reviewed on the pull request due to the merge commit, intervening drift, or a provider version change.
 
+**An environment SHALL be applied only where its own plan was produced, and an environment whose plan failed SHALL NOT prevent any other environment from being applied.** These are one obligation because a single mechanism decides both, and the two failures it stands between are opposite: an apply stage that begins for an environment with no saved plan raises that environment's approval request with nothing to approve, which this requirement forbids by name; an apply stage that waits on the plan stage as a whole stops every environment when any one of them fails, so a correct change does not reach production because an unrelated environment is broken.
+
+Declaring the apply stage dependent on the plan stage is therefore **not sufficient**, and the reason is mechanical rather than stylistic: such a dependency is scoped to the stage, not to the environment, so it cannot distinguish *this* environment's plan from another's. The set of environments to apply SHALL instead be resolved from which environments actually produced a saved plan.
+
+That resolution SHALL fail closed, for the reason the affected-environment resolution above already gives: where it cannot be determined, the workflow SHALL fail with a message identifying it as the cause, rather than resolve to the empty set and report a green run having applied nothing. It SHALL run outside any GitHub Environment, since it decides which Environments the run will ask for and so cannot be gated on one of them.
+
 The apply workflow SHALL be triggered only by pushes that can affect the Terraform configuration, identified by a workflow-level path filter. **An environment SHALL enter the run only where the merge could affect that environment**, determined by the same path rule the Pull Request Plan Visibility requirement states: a change under `terraform/modules/` affects every environment, a change under `terraform/environments/<name>/` affects only that environment. A merge that cannot change an environment's infrastructure SHALL NOT raise that environment's Environment approval request. An approval prompt that appears with nothing to approve trains the approver to grant it without reading, which defeats the gate it exists to enforce; out-of-band divergence remains covered by scheduled drift detection rather than by an approval request per merge.
 
 The set of affected environments SHALL be resolved fail-closed, and this workflow runs on `push`, where no pull-request diff is available and the base of the comparison may be absent — a first push to a branch, a force-push, or a merge whose `before` commit no longer resolves. Where that set cannot be determined, the workflow SHALL fail with a message identifying the resolution as the cause. Resolving it to the empty set instead would apply nothing for a merge that did change infrastructure, report a green run, and leave the divergence to be found by the next nightly drift sweep.
@@ -143,6 +149,14 @@ Because a saved plan file stores sensitive values in cleartext, the `tfplan` art
 #### Scenario: A shared module change reaches every environment
 - **WHEN** a pull request changing a file under `terraform/modules/` is merged to `main`
 - **THEN** each environment SHALL be planned and applied under its own GitHub Environment's protection rules
+
+#### Scenario: One environment's failed plan does not block another's apply
+- **WHEN** a merge affects two environments and one of them fails to plan
+- **THEN** the other environment SHALL still be applied under its own GitHub Environment's protection rules, and no approval SHALL be requested for the environment whose plan failed
+
+#### Scenario: An unresolvable set of planned environments fails the run
+- **WHEN** which environments produced a saved plan cannot be determined
+- **THEN** the workflow SHALL fail with a message identifying that resolution as the cause, and SHALL NOT proceed as though no environment had been planned
 
 #### Scenario: Reviewer sees the exact diff before approving
 - **WHEN** an apply job is pending approval
@@ -206,6 +220,10 @@ Workflows that run `terraform apply` against an environment SHALL declare a GitH
 
 The group SHALL be derived from the environment's own identity, so that two environments do not share one, and SHALL be declared **at job level** on the jobs that plan and apply an environment. A workflow-level `concurrency` declaration cannot read a per-environment value, so a workflow covering more than one environment cannot express this requirement there. State is per environment, so a run against one environment contends with nothing in another; a shared group would serialize them for no reason and make a slow apply in one environment delay another.
 
+**A plan job and an apply job SHALL NOT share a group.** Declaring the group per job rather than per workflow costs the run its atomicity over that group: the group is acquired twice with a gap between, so a shared one no longer holds a run's plan and its apply together and buys neither of this requirement's two scenarios, both of which are about applies. What it does buy is a hazard. GitHub cancels a *previously pending* job in a group when a new one queues, so a plan job that shares its environment's apply group can cancel an apply that is waiting on that environment's protection rules — an approved change then never reaches the cloud, and it does so as a *cancellation* rather than as a failure, which no alarm here reads. Applies contend with applies; plans contend with plans.
+
+The cost of that separation is stated rather than left to be discovered: a plan computed while another run's apply is pending may be stale by the time it reaches its own apply, and SHALL then be refused. That refusal is the Gated Production Apply Applies the Reviewed Plan requirement's scenario "Applied changes match the approved plan" working exactly as specified — loud, after an approval was granted, and correctable by re-running. It is preferred to a silently cancelled apply, which is the same change not reaching production with nothing said at all.
+
 State locking alone prevents concurrent state mutation but does not prevent two runs from applying out of order — the later merge's apply may acquire the lock first and be overwritten by the earlier one.
 
 #### Scenario: Two merges in quick succession apply in order
@@ -215,6 +233,10 @@ State locking alone prevents concurrent state mutation but does not prevent two 
 #### Scenario: Two environments do not queue behind each other
 - **WHEN** an apply against one environment is in progress and an apply against a different environment begins
 - **THEN** the second SHALL proceed without waiting on the first
+
+#### Scenario: A queued plan does not cancel an apply awaiting approval
+- **WHEN** an apply against an environment is waiting on that environment's protection rules and a later merge's plan for the same environment is queued
+- **THEN** the queued plan SHALL NOT cancel or displace the waiting apply, because the two do not share a concurrency group
 
 ### Requirement: Scheduled Drift Detection
 A scheduled GitHub Actions workflow SHALL run `terraform plan` against every environment on a recurring nightly schedule, without applying any changes, to surface divergence between the committed configuration and actual infrastructure state. These plans are read-only and reporting-only: they do not invoke the Destroy Policy Gate, which applies only to the apply workflow's plan (see that requirement).

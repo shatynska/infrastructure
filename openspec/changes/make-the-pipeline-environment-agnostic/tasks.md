@@ -139,6 +139,21 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   same-job comparison would compare a value with itself. Verify by running both step
   bodies standalone over known inputs, confirming equal inputs fail and unequal inputs
   pass, and that neither body prints either token.
+- [ ] 4.3b `apply.yml`: run the apply matrix over the environments that produced a
+  saved plan, not over the environments the merge affects, per design.md decision 8. A
+  job after the plan matrix, declaring no `environment:` and running whatever that
+  matrix concluded, resolves which environments have a plan artifact and emits them;
+  the apply matrix reads that. **Do not resolve it from a job output** — a matrix job's
+  outputs are written by every row into one namespace, so a matrix cannot publish a
+  per-row result at all. Fail closed on an unresolvable result, as decision 2 requires
+  of the other resolution. Verify by running its body standalone over a full set, a
+  partial set and an unresolvable one, and confirm that the apply job still depends on
+  a job that plans.
+- [ ] 4.3c `apply.yml`: give the plan jobs and the apply jobs separate per-environment
+  `concurrency` groups, per design.md decision 9, so a queued plan cannot cancel an
+  apply awaiting its Environment's protection rules. Verify that both still derive
+  their group from the matrix, that both still set `cancel-in-progress: false`, and
+  that the two groups cannot coincide for any environment name.
 - [x] 4.4 `apply.yml`: read the destroy-policy gate's applicability from the
   environment's declaration, treating an absent statement as applicable. Verify by
   running the gate's body standalone with the flag set both ways against a saved plan
@@ -226,6 +241,15 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   **red**; removing the gitleaks step entirely is *not* the verification, since that
   trips a different assertion first.
 
+- [ ] 5.5 Have the tests for the two amended requirements derived by an author other
+  than whoever implements them, as 5.1 did for the original deltas: the three scenarios
+  added by this revisit — *One environment's failed plan does not block another's
+  apply*, *An unresolvable set of planned environments fails the run*, and *A queued
+  plan does not cancel an apply awaiting approval* — plus the amended sentences they
+  sit under. Dispatch with the same test command and glob 5.1 used. Verify the tests
+  fail against the tree as it stands at the amendment's commit, before 4.3b and 4.3c
+  are implemented.
+
   **Result (5.1-5.4).** 5.1 was performed by the previous session; the derived
   module and `test-plan.md` are its output, and it went red against the unmodified
   tree (31 failures of 454, all in that module).
@@ -311,6 +335,10 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   secret *names* through workflow text and must move no secret value.
 - [ ] 7.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 7.2 and 7.3
   pass.
+- [ ] 7.4a Re-run 7.2 and 7.3 after the plan revisit's implementation lands, and
+  re-dispatch `ai-toolkit:change-code-reviewer`. Round 1's findings are recorded above;
+  this is round 2, and it reads the resolver job and the split concurrency groups that
+  round 1 asked for.
 - [ ] 7.5 Open the pull request, let CI run, and confirm on it that `validate` reports
   as a literal context and that exactly one plan comment appears, for prod. Wait for
   the operator's confirmation that it merged. Nothing here applies to production from
@@ -429,6 +457,22 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
     *Serialized Terraform Runs* as this change amends it prescribes the job-level shape
     and forbids the workflow-level one, so the gap is in the requirement as much as in
     the code.
+
+  **Plan revisit after review round 1 (operator's decision, 2026-09-10).** Both
+  findings above were put to the operator. The first — one environment's plan failure
+  blocking every environment's apply — was answered *revisit the plan and fix it now*,
+  on the ground that this change exists to make the pipeline correct for more than one
+  environment before a second one arrives, so shipping it with a known defect reachable
+  only at two environments would undercut its own purpose. The second was left to this
+  session's judgement and answered by separating the plan and apply concurrency groups:
+  both of *Serialized Terraform Runs*' scenarios are about applies queueing behind
+  applies, a shared group buys neither once the group is per job, and it is the only
+  thing that lets a queued plan cancel an approved apply — a loss with no backstop,
+  where the stale plan the separation admits is refused loudly by Terraform and is that
+  requirement's own scenario working as written.
+
+  `proposal.md`, `design.md` (decisions 8 and 9) and the `iac-cicd-pipeline` delta were
+  amended accordingly; tasks 4.3b, 4.3c, 5.5 and 7.4a carry the work.
 
 ## 8. Archive
 

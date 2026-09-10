@@ -48,8 +48,16 @@ very first `terraform apply` go through the pipeline instead of a workstation.
   N≥2 every environment's plan would run under prod's credential and report a
   meaningless diff.
 - Per-environment GitHub Environment names, `concurrency` groups and drift-issue
-  titles. The `concurrency` group is a rename only: *Serialized Terraform Runs* already
-  says "per environment"; only the workflow was singular.
+  titles. The `concurrency` group is more than a rename, though it began as one:
+  *Serialized Terraform Runs* already said "per environment" and only the workflow was
+  singular, but moving the declaration to job level — which a matrix value forces —
+  costs the run its atomicity over the group, so plan jobs and apply jobs are separated
+  into groups of their own rather than sharing one. See design.md decision 9.
+- **The apply stage runs over the environments that produced a plan**, not over the
+  environments the merge affects. `needs:` is scoped to a job rather than to a matrix
+  row, so an apply matrix depending on the plan matrix is skipped in full whenever any
+  single environment's plan fails — one broken environment would stop every other
+  environment's correct change reaching production. See design.md decision 8.
 - **The destroy-policy gate becomes a per-environment policy rather than a constant.**
   Requiring a `destroy-override` label to tear down staging is friction that will be
   routed around, and staging's disposability is most of its value. The gate stays
@@ -104,14 +112,19 @@ None.
   and *Scheduled Drift Detection* become per-environment, the latter two gaining
   scenarios for an environment-scoped path filter and per-environment issue dedup
   respectively, the first also gaining a fail-closed obligation on resolving which
-  environments a merge affects. *Credential Scoping by Privilege* replaces its two-row token table with
+  environments a merge affects. *Gated Production Apply* further gains an obligation
+  that an environment be applied only where its own plan was produced, and that a
+  failed plan for one environment not block another's apply — the two halves of one
+  mechanism, since a dependency scoped to the stage rather than to the environment can
+  only choose between them. *Credential Scoping by Privilege* replaces its two-row token table with
   a per-environment scheme while keeping intact the rule that no plan job declares an
   `environment:`, and adds an obligation that each GitHub Environment define
   `HCLOUD_TOKEN` — GitHub silently resolves an absent Environment secret to the
   repository secret of the same name — with an apply job required to establish it did
   not resolve that repository value. *Destroy Policy Gate* becomes a per-environment policy with prod's
   behaviour unchanged. *Serialized Terraform Runs* gains a scenario asserting that two
-  environments do not queue behind each other.
+  environments do not queue behind each other, and another that a queued plan does not
+  cancel an apply awaiting approval.
 
 ## Impact
 
