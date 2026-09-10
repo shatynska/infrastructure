@@ -1,16 +1,37 @@
 ---
-# Dynamic inventory via the hcloud plugin (hetzner.hcloud collection) — see
-# the "Dynamic Inventory via hcloud Plugin" requirement (iac-host-
-# configuration). Hosts are resolved live from Hetzner Cloud's API on every
-# run rather than from a committed hosts file, so a disabled/destroyed
-# server (server_enabled = false in terraform/environments/prod) yields no
-# stale inventory entry.
+# Prod's inventory source — see the "Dynamic Inventory via hcloud Plugin"
+# requirement (iac-host-configuration). Hosts are resolved live from Hetzner
+# Cloud's API on every run rather than from a committed hosts file, so a
+# disabled/destroyed server (server_enabled = false in
+# terraform/environments/prod) yields no stale inventory entry.
 #
-# Authenticates via the HCLOUD_TOKEN environment variable — the plugin's
-# `token` option falls back to it automatically, so it is intentionally not
-# set here. This is the same read-only token `terraform plan` already uses
-# locally; no separate token is introduced.
+# ONE SOURCE PER ENVIRONMENT, and each names its own credential. A Hetzner
+# token is scoped to one project and each environment has a project of its
+# own, so this file reaches prod's project and nothing else. Bringing a
+# further environment into inventory is adding a file beside this one and a
+# variable beside HCLOUD_TOKEN_PROD -- it is not an edit to this file.
+#
+# THE FILENAME IS CONSTRAINED, NOT CHOSEN. The plugin's `verify_file` accepts
+# a path only if it *ends with* `hcloud.yml` or `hcloud.yaml` -- a plain
+# suffix test. `prod.hcloud.yml` passes it; `hcloud-prod.yml` would not, and
+# the symptom is not a naming error but a source Ansible reports it cannot
+# parse.
 plugin: hetzner.hcloud.hcloud
+
+# HCLOUD_TOKEN_PROD, deliberately NOT the plugin's built-in HCLOUD_TOKEN
+# fallback. That name belongs to Terraform, whose provider reads it, and
+# docs/bootstrap-a-new-host.md §4.1 scopes it per environment DIRECTORY via
+# direnv -- so its value depends on which directory a shell is in. An Ansible
+# source resolving its project from that would make which project a run
+# reaches a property of shell state rather than of the file the run names.
+# Ansible's own credentials live in ansible/.envrc (see .envrc.example beside
+# it), which direnv loads here and which does not export HCLOUD_TOKEN at all.
+#
+# An absent, empty or rejected value fails the run rather than yielding an
+# environment with no host in it: ansible.cfg sets `any_unparsed_is_failed`,
+# without which this file would resolve to an empty `prod` group -- which is
+# indistinguishable from a destroyed server.
+api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_PROD') }}"
 
 # Groups hosts by the `environment` Hetzner label already applied to every
 # resource (see terraform/modules/server's ssh_key.tf) — this plugin has no
@@ -19,18 +40,10 @@ plugin: hetzner.hcloud.hcloud
 # name the label's value alone, e.g. `prod`, so a playbook run can target
 # the `prod` group directly.
 #
-# THIS FILE SEES ONE HETZNER PROJECT: the one `HCLOUD_TOKEN` is scoped to. A
-# Hetzner token cannot span projects, and since `add-a-staging-environment`
-# each environment has a project of its own — so under prod's token the
-# `staging` group is empty, and under staging's token `prod` is. The label
-# grouping is right; the reach is not.
-#
-# That matters because of how it fails. A play whose `hosts:` matches nothing
-# prints `skipping: no hosts matched` and EXITS 0 — a converge that did
-# nothing reads exactly like a converge that had nothing to do. Whoever gives
-# this repository a second inventory source, or a per-environment token, owns
-# that problem; `docs/change-queue.md` entry 50 records it as work rather than
-# leaving it here as a warning.
+# A group exists only where some host carries the label, so under this source
+# `groups['staging']` is a missing key rather than an empty list. The guard
+# play at the top of playbooks/host-baseline.yml is what turns that into a
+# refusal; without it a play matching no host exits 0.
 keyed_groups:
   - key: hcloud_labels.environment
     separator: ""

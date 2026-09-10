@@ -43,7 +43,18 @@ repos:
         # found. Without this, every role reference fails to resolve:
         # Ansible only looks for ansible.cfg in the current directory,
         # it does not search upward.
-        entry: bash -c 'set -euo pipefail; cd ansible && for f in playbooks/*.yml; do [ -e "$f" ] && ansible-playbook --syntax-check "$f"; done'
+        #
+        # `-e target_environment=...` because host-baseline.yml's second play
+        # takes its `hosts:` from that variable and is deliberately given no
+        # default (iac-host-configuration's "Host Configuration Names the
+        # Environment It Targets"). --syntax-check COMPILES the play, and an
+        # undefined variable in `hosts:` is a hard error there, so without a
+        # value this hook fails on every commit. The value names no
+        # environment on purpose, and .ansible-lint carries the same one under
+        # `extra_vars` for its own unskippable syntax-check rule -- the two
+        # tools must compile the play identically or one of them is testing
+        # something the other is not.
+        entry: bash -c 'set -euo pipefail; cd ansible && for f in playbooks/*.yml; do [ -e "$f" ] && ansible-playbook --syntax-check -e target_environment=syntax-check-only "$f"; done'
         pass_filenames: false
         files: ^ansible/playbooks/.*\.ya?ml$
 
