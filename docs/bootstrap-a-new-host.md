@@ -419,6 +419,8 @@ cp .envrc.example .envrc
 direnv allow
 ```
 
+**Without direnv**, `source .envrc` from `ansible/` once per shell — it is a plain `export`, exactly as at §4.1. Unlike there, that is a perfectly good way to run this one and not a fallback with a catch: §4.1's warning exists because the root and staging `.envrc` files both export `HCLOUD_TOKEN` with different values, so an export outliving its directory points Terraform at the wrong project. These two variables collide with nothing and mean the same thing wherever you stand, which is why each inventory source names its own rather than sharing Terraform's.
+
 Both are **Read Only** tokens. A wrong or missing one fails the run rather than producing an environment with no host in it, so a typo here cannot masquerade as a destroyed server.
 
 ### 6.1 Fill in the inventory variables
@@ -437,6 +439,21 @@ Edit `ansible/inventory/group_vars/<environment>.yml` — production's and stagi
 | `image_prune_heartbeat_ping_key` | Vault-encrypted, see below. **The play refuses to run without it** |
 
 **The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`).
+
+**Check the token before you encrypt it**, because a bad one is only discovered much later, at `docker compose pull`:
+
+```sh
+curl -sD - -o /dev/null -u <the github username> https://api.github.com/user \
+  | grep -i '^HTTP\|x-oauth-scopes'
+```
+
+It prompts for a password; paste the token there, so it stays out of your shell history and out of `ps`. You want `200` and an `x-oauth-scopes` header naming `read:packages`.
+
+- **`401`** — expired, revoked, or pasted truncated. These tokens are long; a missing tail looks exactly like a wrong token.
+- **`200` with no `x-oauth-scopes` header at all** — this is a *fine-grained* token, not a classic one. It authenticates and cannot pull packages. Generate a classic token instead.
+- **`200` with scopes that omit `read:packages`** — the right kind of token with the wrong scope.
+
+**None of this is a gate**, so do not let it stop you: an absent GHCR credential is tolerated by design. `deploy_user` guards the registry login with a `when:` and skips it, per *Host Authenticates to GHCR for Application Image Pulls* (`openspec/specs/iac-host-configuration/spec.md`) — a host converged without one simply cannot pull private images, which matters only once an application deploys to it. Leave the variable commented out and come back to it.
 
 Choose a Vault password **for this environment** — production and staging get different ones, so that whoever can converge staging does not thereby hold the password protecting production's secrets — store it in the password manager, then encrypt the token in place:
 
@@ -497,7 +514,32 @@ ansible-playbook playbooks/host-baseline.yml \
 
 Two prompts: the Vault password, and (if the key has one) the operator key's passphrase. A first run takes several minutes; Docker's installation is the slow part. A second run immediately afterwards should report `changed=0`; if it does not, something is not idempotent and worth understanding before moving on.
 
-Do not rely on `--check` for the first run: apt-based tasks report changes they did not make and later tasks then fail against a stale package cache. `--check --diff` is useful on every run after the first.
+Do not rely on `--check` for the first run: apt-based tasks report changes they did not make and later tasks then fail against a stale package cache.
+
+`--check --diff` is useful on every run after the first, with one thing to know before you read its output: **a healthy host reports `changed=2`, not zero.** Both are in the `tailscale` role — *Add the Tailscale apt signing key* and *Add the Tailscale apt repository* — and both are `get_url` tasks with no `checksum:`. Confirming such a file already matches would mean downloading it, which check mode will not do, so it reports "would change" every time and always will. Two is the baseline; compare against two. Anything else is worth reading. `docs/change-queue.md` entry 23, which would turn this flag into the host layer's drift detector, owns removing those two — and when it does, this paragraph changes with it.
+
+### 6.3a When the run fails partway
+
+It can, and the first converge of a host is where it is likeliest. What a failure leaves is a **partially-converged host**: every role ahead of the failing one has applied, the failing one and everything after it has not. That is recoverable and is not a reason to rebuild — **correct the input and run the same command again.** Every role here is idempotent, so the second run reports `ok` for the work already done and carries on from where it stopped.
+
+One failure hides its own cause, and it is the one most likely to bite on a first run. If *Bring the host onto the tailnet* fails, Ansible prints only:
+
+```
+fatal: [<host>]: FAILED! => {"censored": "the output has been hidden due to the
+fact that 'no_log: true' was specified for this result", "changed": true}
+```
+
+That masking is deliberate, not a defect: the task's command carries the auth key, and `no_log` is what keeps it out of the run's output — the role's own comment says so. Do not go looking for a way to turn it off. Go to the host instead, and run the same command by hand, where nothing is masked:
+
+```sh
+ssh -i ~/.ssh/<company>-root root@<the host's ipv4>
+systemctl is-active tailscaled          # expect: active
+tailscale status                        # expect: Logged out.
+tailscale up --authkey=tskey-auth-...   # this prints the real error
+journalctl -u tailscaled -n 30 --no-pager
+```
+
+The usual causes, in rough order: the key was already consumed, because it was generated single-use rather than **reusable** (§5.3); it expired; it was pasted truncated; or the tailnet policy requires a tag the key does not carry. Once `tailscale status` reports `Running`, `exit` and re-run the playbook — the `tailscale up` task will skip, its `when:` seeing the host already connected.
 
 ### 6.4 After the run
 
