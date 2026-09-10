@@ -344,19 +344,92 @@ ordering this change most depends on.
   directory — one clause added saying to use a shell you do not reuse. Round 2
   confirmed the inventory fix holds and that entry 50 is a complete enough brief
   that its author will not re-derive the problem.
-- [ ] 5.2 Open the pull request and read it against design.md Decision 9's list of what
+- [x] 5.2 Open the pull request and read it against design.md Decision 9's list of what
   this run is **specified** to do — this pull request affects staging alone, so one plan
   comment is correct and two would be a defect. Verify, and record here: discovery
   emitted two entries; the affected-environment narrowing selected staging and excluded
   prod; exactly one plan comment appeared, for staging; its plan authenticated under
   `HCLOUD_TOKEN_STAGING`, a secret name no run has resolved before; no job paused for an
   approval; every required check passed.
-- [ ] 5.3 On the operator's confirmation that it merged, record what the apply run did:
+
+  **Result (2026-09-10), PR #125, run 34457522320.** Every observation this task
+  asks for, read off the run:
+
+  - **Discovery emitted two entries** — `[{"name":"prod","github_environment":"production","read_only_secret":"HCLOUD_TOKEN","destroy_policy_gate":true},{"name":"staging","github_environment":"staging","read_only_secret":"HCLOUD_TOKEN_STAGING","destroy_policy_gate":false}]`. The first time this step has produced a set rather than a single-element list, and the distinctness rules it enforces had two names to compare rather than one.
+  - **The narrowing excluded prod** — `Affected environments (1): [staging]`. That path has existed since `make-the-pipeline-environment-agnostic` and until now had nothing it could exclude.
+  - **Exactly one plan comment**, for staging: `Plan: 4 to add, 0 to change, 0 to destroy`. Two would have been the defect; the round-1 plan review is what caught this task originally asking for two.
+  - **`HCLOUD_TOKEN_STAGING` resolved** — the matrix carried the name, the plan authenticated, and no run before this one had ever resolved a second read-only secret.
+  - **No job paused**, and no `production` approval was requested.
+  - Every required check passed, including seven Molecule scenarios and `validate`.
+
+  **One failure on the way, and it was not this change.** The first `plan (staging)`
+  died on `Error acquiring the state lock`, and the lock it collided with had been
+  created **120 ms earlier by a GitHub runner running a plan** — the same job. No
+  other run in the repository touched that workspace and no local `terraform`
+  process was alive, so the lock request reached HCP, its response was lost, and
+  the client's retry was refused by its own lock. The workspace was left `locked:
+  true` with `current-run: null`: a lock with no operation behind it, which every
+  later plan would keep failing against. `validate` then failed at exactly one step
+  — "Conclude on the plan matrix's behalf" — which is the required check doing its
+  job rather than a second fault.
+
+  Released via the HCP API after establishing there was nothing to protect: the
+  workspace had **no current state version at all** (404) and no run in flight, so
+  no concurrent writer could be corrupted. Re-ran the failed jobs; both passed.
+  Worth knowing for the next environment, since a first plan against a brand-new
+  workspace is where this appeared.
+- [x] 5.3 On the operator's confirmation that it merged, record what the apply run did:
   which environments entered it (staging only), that staging's apply ran without pausing
   — this repository's first apply reaching real infrastructure with no approval click —
   and that no `production` approval was requested. Verify against the run, not against
   the expectation.
-- [ ] 5.4 Confirm the effect with the operator: staging's server and volume exist in the
+
+  **Result (2026-09-10), run 34458573224, after five attempts.** `Apply complete!
+  Resources: 4 added, 0 changed, 0 destroyed` — `server_id = 165402032`,
+  `server_ipv4_address = 62.238.17.177`, `volume_id = 106839043`. Staging alone
+  entered the run; no `production` approval was requested; the apply did not pause.
+
+  **The four failures before it were one cause: the `staging` Environment's
+  `TF_API_TOKEN` was an HCP *organisation* token.** HCP issues three kinds and they
+  are not interchangeable — an organisation token administers workspaces, teams and
+  variables but cannot perform state operations, which a user token can. The
+  signature is what made it expensive: `terraform init` **succeeds**, because
+  reading a workspace is organisation administration, and the run then dies at
+  `Error acquiring the state lock / Error message: resource not found`, because HCP
+  reports the authorisation failure as a 404. The error names the lock; the cause is
+  the credential; every remedy the message suggests is the wrong one.
+
+  What identified it: the organisation token's `last-used` timestamp read
+  `2026-09-10T09:24:47.741Z`, and the failing job's `terraform init` ran at
+  09:24:47.74 with its lock failing at 09:24:49.66. Nothing else was talking to HCP
+  in that second. The asymmetry was visible throughout and was read too slowly — the
+  plan jobs, which use the *repository* copy of `TF_API_TOKEN`, locked the same
+  workspace successfully in every one of those runs.
+
+  **Two changes made while chasing it were unnecessary, and are disclosed rather
+  than presented as steps.** The workspace's `terraform-version` was changed from
+  HCP's creation default of `1.16.2` to `1.9.8`, matching the `~> 1.9` the pipeline
+  pins; harmless and arguably more accurate, and it is left in place. An empty state
+  version (`serial 1`, `resources: []`) was pushed by the operator to test whether a
+  workspace that had never held state was the cause; it was not, the apply overwrote
+  it as serial 2, and nothing depends on it. Neither belongs in the runbook, and the
+  runbook does not gain them.
+
+  **What does go in the runbook** is the token kind. `docs/bootstrap-a-new-host.md`
+  stage 2 previously offered an organisation token as an equivalent alternative to a
+  user token, which is what was followed; it now requires a user token from Account
+  settings → Tokens, names the two kinds that do not work, and carries the failure
+  signature and the `last-used` check that identifies it. The README's
+  adding-an-environment checklist and both secret tables say the same.
+
+  One further finding, from a wrong turn of mine: **`gh run rerun --failed` can never
+  repair a failed apply.** The plan job does not re-run, so no artifact is produced
+  for the new attempt, while the apply job derives the artifact name from the current
+  attempt number — the download fails with `Artifact not found for name:
+  tfplan-staging-attempt-2`. The workflow's own error message prescribes the remedy
+  (a fresh push to `main`); a full `gh run rerun` also works, since it re-runs the
+  plan job. Nothing states this where a person looks before trying.
+- [x] 5.4 Confirm the effect with the operator: staging's server and volume exist in the
   staging Hetzner project, prod's project is unchanged, and the **next nightly drift
   sweep** plans both environments in one run. That sweep is the genuine two-environment
   exercise this change reaches — two plan jobs, two read-only secrets, one shared
@@ -364,11 +437,45 @@ ordering this change most depends on.
   precisely so it contends with nothing (*Serialized Terraform Runs*). Verify by reading
   the run, and record whether the shared heartbeat behaved as `docs/deferred-work.md`
   assumes it does.
-- [ ] 5.5 Archive the change: bring the branch back to the freshly fetched trunk, commit
+
+  **Result (2026-09-10).** The operator confirmed staging's server and volume in the
+  staging Hetzner project, and prod unchanged. The sweep was **dispatched rather
+  than waited for**, so the observation is this change's own rather than tomorrow
+  morning's: run 34464225639, `workflow_dispatch`, green.
+
+  It is the two-environment exercise design.md Decision 9 names, and it did what
+  that decision predicted: **two plan jobs in one run** — `drift (prod)` and
+  `drift (staging)` — each authenticating under its own read-only secret, and a
+  single `report` job pinging the one shared `infrastructure-drift` heartbeat.
+  Staging reported `No changes. Your infrastructure matches the configuration`, so
+  the apply and the committed configuration agree, which is the drift sweep
+  confirming the apply rather than merely running. No concurrency group was
+  involved, as `drift.yml` declares none — the correction the plan review caught.
+
+  `docs/deferred-work.md`'s "Whether the drift heartbeat stays one check" now has
+  its first real evidence rather than reasoning: one heartbeat covered two
+  environments, and neither trigger that would force a split has fired.
+
+  A note for whoever reads the heartbeat's silence timer: this dispatch reset it,
+  as the 2026-09-10 06:00 UTC dispatch did before it.
+- [x] 5.5 Archive the change: bring the branch back to the freshly fetched trunk, commit
   the specification record, and open its own pull request. In that same commit, fix
   `openspec/specs/iac-state-management/spec.md`'s `## Purpose`, which describes "the
   dedicated Hetzner Cloud project for the prod environment" and survives the rename
   untouched — a delta rewrites requirements, not the capability's Purpose. Verify by
-  reading the archived capability's Purpose against its requirements. The branch and working tree are
+  reading the archived capability's Purpose against its requirements.
+
+  **Result (2026-09-10).** Branch rebased onto the freshly fetched trunk after
+  PR #125 merged, the record archived, and the capability Purpose corrected in the
+  same commit. The branch and its working tree are removed after this record's own
+  pull request merges — recorded here in prose because a task for them can never be
+  ticked in the file that contains them.
+
+  Two operator actions taken during this change live outside the repository and are
+  recorded here because nothing else holds them: the `infrastructure-staging`
+  workspace's `terraform-version` was set to `1.9.8` (from HCP's creation default of
+  `1.16.2`), and an empty state version was pushed to it before the first successful
+  apply. Both are disclosed in task 5.3 as unnecessary — neither was the cause of
+  the failures, and neither is a step the runbook now prescribes. The branch and working tree are
   removed afterwards, from the repository's main working tree — recorded here in prose
   because a task for them can never be ticked in the file that contains them.

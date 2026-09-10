@@ -72,15 +72,15 @@ Because the workspace's Execution Mode is Local, the destroy-policy gate, the sa
 
 This holds of every environment, not of production alone. An environment whose GitHub Environment requires no reviewer is not thereby exempt: the reviewer and the credential confinement are independent properties, and an unreviewed environment's write token reaching a workstation is the same bypass with a smaller blast radius rather than a permitted one.
 
-The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents. Where only one environment exists, a record naming that environment satisfies this; the record is generalised by the change that adds a second, at the point where there is a second token to confine.
+The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents. **That record SHALL state the prohibition over every environment rather than naming one.** A record naming a single environment is read as silent about the others, which is the reading that matters here: an environment named nowhere in the record is one whose write token a reader has been given no reason to treat as confined, and the environment most likely to be omitted is the one added last.
 
 #### Scenario: Local apply is refused by the API
-- **WHEN** an operator or coding agent runs `terraform apply` from a workstation against `terraform/environments/prod/`
-- **THEN** the Hetzner Cloud API SHALL reject the write, because the only token available locally is read-only
+- **WHEN** an operator or coding agent runs `terraform apply` from a workstation against any environment directory under `terraform/environments/`
+- **THEN** the Hetzner Cloud API SHALL reject the write, because the only token available locally is that environment's read-only one
 
 #### Scenario: Local plan remains available
-- **WHEN** an operator runs `terraform plan` from a workstation against `terraform/environments/prod/`
-- **THEN** it SHALL succeed using the read-only token, so that local iteration never requires write credentials
+- **WHEN** an operator runs `terraform plan` from a workstation against any environment directory under `terraform/environments/`
+- **THEN** it SHALL succeed using that environment's read-only token, so that local iteration never requires write credentials
 
 #### Scenario: A non-production environment's write token is confined identically
 - **WHEN** an environment exists whose GitHub Environment requires no reviewer
@@ -88,7 +88,11 @@ The prohibition SHALL be recorded where it is loaded without being sought: the r
 
 #### Scenario: An agent opening the repository is told the boundary
 - **WHEN** a coding agent begins work in this repository
-- **THEN** a repository-root `AGENTS.md` SHALL state that production changes reach Hetzner only through the gated pipeline and that `terraform apply` is not run locally
+- **THEN** a repository-root `AGENTS.md` SHALL state that infrastructure changes reach Hetzner only through the gated pipeline and that `terraform apply` is not run locally
+
+#### Scenario: The record covers an environment added after it was written
+- **WHEN** an environment is added to `terraform/environments/`
+- **THEN** the README runbook and `AGENTS.md` SHALL already state the prohibition in terms that cover it, rather than requiring an edit naming it before its write token is treated as confined
 
 ### Requirement: Automated Dependency Updates
 The repository SHALL configure Dependabot for the `terraform`, `github-actions` and `docker-compose` package ecosystems, opening pull requests when newer versions become available.

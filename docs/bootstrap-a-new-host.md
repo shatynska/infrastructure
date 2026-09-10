@@ -103,14 +103,20 @@ Terraform needs somewhere to keep its state file (the record of what it created)
 1. Register at app.terraform.io and create an organisation named `<company>`.
 2. Create a workspace: **CLI-driven workflow**, named `infrastructure-prod`. No VCS connection.
 3. In the workspace's Settings → General, set **Execution Mode** to **Local**. This is essential: the default, Remote, would run plans on HCP's machines and break the saved-plan flow the pipeline depends on.
-4. Create an API token: User Settings → Tokens → Create an API token (or an organisation token under Organisation Settings → API Tokens). One token; this tier has no way to split it by privilege, and the Hetzner token split in stage 1 is the real security boundary.
+4. Create an API token, and it **must be a USER token**: your avatar (top right) → **Account settings → Tokens → Create an API token**. One token; this tier has no way to split it by privilege, and the Hetzner token split in stage 1 is the real security boundary.
+
+   **Not an organisation token, and not a team token.** HCP issues three kinds and they are not interchangeable. An organisation token (Organisation settings → API token) administers organisation objects — workspaces, teams, variables — and **cannot perform state operations**. A team token is limited to that team's workspace permissions. Only a user token can lock a workspace and write state, which is what every job in this pipeline does.
+
+   **Its failure signature, because it does not look like a credential problem.** With an organisation token, `terraform init` *succeeds* — reading a workspace is organisation administration — and the run then dies at `Error acquiring the state lock / Error message: resource not found`. HCP reports the authorisation failure as a 404, so the error names the lock, not the token, and every plausible cause it suggests is the wrong one. If you see it, check the token kind first: in HCP, Organisation settings → API token shows a `last used` timestamp, and if it matches the failing run to the second, that is your answer.
+
+   This step previously offered an organisation token as an equivalent alternative. Following that cost an afternoon during `add-a-staging-environment`, whose record has the full diagnosis.
 5. On your workstation, run `terraform login` and paste the same token when asked. It is stored in `~/.terraform.d/credentials.tfrc.json`.
 
 **Secrets created in this stage**
 
 | Name | Value | Stored where (stage 3) |
 |---|---|---|
-| `TF_API_TOKEN` | The HCP Terraform API token | Repository secret **and** `production` Environment secret, identical value |
+| `TF_API_TOKEN` | The HCP Terraform **user** API token (Account settings → Tokens — not an organisation or team token) | Repository secret **and** `production` Environment secret, identical value |
 
 **Check:** the workspace shows Execution Mode: Local and has no runs.
 
@@ -180,7 +186,9 @@ The `production` Environment **must** define `HCLOUD_TOKEN`. GitHub resolves an 
 
 **Check:** four secrets set; `production` shows one required reviewer; the label exists; the repository is private.
 
-**Adding a *second* environment is out of this document's scope.** This is the procedure for the first host, and it assumes one environment throughout — one tailnet, one inventory group, one platform stack. What a second environment takes from the pipeline is in the README ("A staging environment…"); staging itself was added by the change `add-a-staging-environment`, and what its host still takes is `docs/change-queue.md` entry 50. Nothing in that list is a change to a file under `.github/workflows/`.
+**Adding a *second* environment is out of this document's scope.** This is the procedure for the first host, and it assumes one environment throughout — one tailnet, one inventory group, one platform stack.
+
+What it is, before anything else, is **a second server running permanently**: another instance and another volume billed monthly, another host to patch, converge and monitor, another tailnet member, and another token pair to rotate. The checklists elsewhere describe secrets and settings, which makes an environment read like configuration; it is a machine. Decide you want the standing cost before working through them, not after. What a second environment takes from the pipeline is in the README ("A staging environment…"); staging itself was added by the change `add-a-staging-environment`, and what its host still takes is `docs/change-queue.md` entry 50. Nothing in that list is a change to a file under `.github/workflows/`.
 
 ## Stage 4. First Terraform apply: the server exists
 
@@ -564,7 +572,7 @@ Every credential the system uses, in one place. "Env" means the `production` Git
 |---|---|---|---|---|
 | Hetzner Read Only token | `.envrc`; repo secret `HCLOUD_TOKEN` | 1 | Hetzner project → API tokens | Local plans, PR plans, drift detection, Ansible inventory |
 | Hetzner Read & Write token | Env secret `HCLOUD_TOKEN` | 1 | Same | The apply job |
-| `TF_API_TOKEN` | Repo secret and Env secret; `terraform login` locally | 2 | HCP Terraform → Tokens | Every Terraform job, and `terraform init` locally |
+| `TF_API_TOKEN` | Repo secret and Env secret; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |
 | Operator inspection key | Workstation | 0 | `ssh-keygen` | Daily unprivileged login |
 | Tailscale server auth key | Password manager | 5 | Tailscale → Keys | Joining the host to the tailnet (first run, rebuilds) |

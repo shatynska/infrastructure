@@ -421,6 +421,12 @@ its write credential lives; that is identical to prod's. It runs in a **separate
 Hetzner Cloud project**, which is what makes both safe and what frees it to
 reuse prod's `main-data` volume name, and therefore the same on-host mount path.
 
+**Two servers now run**, one per environment: prod's `cx33` (4 vCPU / 8 GB) and
+staging's `cx23` (2 vCPU), each with its own 10 GB `main-data` volume, in
+separate Hetzner projects. Two bills, two hosts to patch and converge, two
+tailnet members to keep track of — staging costs roughly half what prod does and
+is not free in either money or attention.
+
 What staging is *not*, yet: configured. It carries no Ansible group variables,
 no platform stack and no DNS records, so it is a provisioned host rather than a
 place applications deploy to. `docs/change-queue.md` records that half.
@@ -440,13 +446,22 @@ does still take is everything outside those files:
 - its own HCP Terraform workspace, and a `.github/dependabot.yml` entry for the
   lockfile `terraform init` creates in that folder;
 - a GitHub Environment of the declared name, holding `HCLOUD_TOKEN` (that
-  environment's **Read & Write** token) and `TF_API_TOKEN`. An Environment that
-  omits `HCLOUD_TOKEN` silently resolves to the repository secret of that name,
-  so the apply job refuses to apply where it detects that;
+  environment's **Read & Write** token) and `TF_API_TOKEN` (an HCP **user**
+  token, from Account settings → Tokens — an organisation token can read a
+  workspace but cannot write its state, and fails as
+  `Error acquiring the state lock: resource not found` long after `init`
+  succeeded). An Environment that omits `HCLOUD_TOKEN` silently resolves to the
+  repository secret of that name, so the apply job refuses to apply where it
+  detects that;
 - a repository secret of the declared read-only name, holding that
   environment's **Read Only** token;
 - whatever the environment is *for* — a host to configure, group variables, DNS.
-  For staging, `docs/change-queue.md` records what that half still needs.
+  For staging, `docs/change-queue.md` records what that half still needs;
+- and the thing the rest of this list does not say, because it is about secrets
+  and settings: **an environment is a second server, running permanently.**
+  Another instance and another volume on the bill every month, another host to
+  patch, converge, monitor and rebuild, and another set of credentials to rotate.
+  Adding one is a standing commitment rather than a one-off configuration.
 
 The `terraform/`/`ansible/`/`platform/` structure, and the pipeline boundary
 between the three, were established by the change
