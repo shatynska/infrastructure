@@ -214,7 +214,7 @@ All of these are in Settings on github.com, or via `gh`.
 
 ### 3.3 Secrets
 
-Repository secrets: Settings → Secrets and variables → Actions → Repository secrets. Environment secrets: Settings → Environments → *that environment* → Environment secrets. Or with `gh`, which reads each value from standard input — paste it, then press Ctrl-D:
+Repository secrets: Settings → Secrets and variables → Actions → Repository secrets. Environment secrets: Settings → Environments → *that environment* → Environment secrets. Or with `gh`, which prompts for each value and reads it when you press Enter:
 
 ```sh
 gh secret set HCLOUD_TOKEN                    # production Read Only
@@ -240,6 +240,8 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 | `TF_API_TOKEN` | `production` Environment | Stage 2, same value | Production's apply job |
 | `TF_API_TOKEN` | `staging` Environment | Stage 2, same value | Staging's apply job |
 
+**`.github/dependabot.yml` already lists both environment directories**, and it must keep listing exactly the ones that exist. Dependabot's terraform ecosystem has no discovery mechanism, so a directory the list omits is not partially covered — it is uncovered, and its provider pins rot with no signal. The CI suite compares that list against the lockfiles in the tree and fails the build if a lockfile-bearing directory is missing. If you drop the second environment, drop its entry with it; if you add a third, add one.
+
 **The two read-only secrets have different names on purpose.** A repository secret holds one value, and plan jobs declare no `environment:` — they can only reach repository secrets — so each environment needs a name of its own. Which name is read comes from that environment's own `pipeline.yml`, not from any workflow.
 
 **Where those names come from.** No environment name and no secret name is written in any workflow. Each is declared by that environment's own `pipeline.yml`, which the pipeline's discovery step reads. If you rename one, rename it there in the same change, or the plan job resolves an empty secret and the apply job attaches to an Environment that does not exist.
@@ -252,7 +254,11 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 
 ### 4.1 Prove both configurations locally
 
-Each environment needs its own read-only token in scope, because one token reaches one project. Put production's in the repo-root `.envrc` (copy `.envrc.example`), and staging's in an `.envrc` **inside** `terraform/environments/staging/` — directory-scoped, so planning staging never leaves staging's token in the shell that plans production. Both paths are gitignored. Then, for each environment in turn:
+Each environment needs its own read-only token in scope, because one token reaches one project. Put production's in the repo-root `.envrc` (copy `.envrc.example`), and staging's in an `.envrc` **inside** `terraform/environments/staging/` — directory-scoped, so planning staging never leaves staging's token in the shell that plans production. Both paths are gitignored.
+
+Run `direnv allow` in each directory that has one; direnv loads the nearest `.envrc` and does not merge the parent's, which is what keeps the two tokens apart. **Without direnv**, `source` the file for the environment you are about to work on, in a shell you do not then reuse for the other — the export outlives the directory, and carrying staging's token into `prod/` produces the misleading plan described below rather than an error.
+
+Then, for each environment in turn:
 
 ```sh
 cd terraform/environments/prod        # then repeat in staging/
@@ -266,11 +272,34 @@ Do not run `apply`: the read-only token would refuse it, and that refusal is the
 
 ### 4.2 Push, and approve production's apply
 
-Commit your work. If you took the **clean-history** variant in 3.1, this is the commit that variant's reconciliation waited for, so bring the license commit underneath it now — `git fetch origin` then `git rebase origin/main`. If you took the keep-history variant, you merged at 3.1 and there is nothing to do here.
+Commit your work:
 
-Then push to `main`.
+```sh
+git add -A
+git commit -m "chore: bootstrap <company> from the template"
+```
 
-Open Actions on github.com. **Terraform Apply** starts. (Ansible Verify starts too and does nothing useful on a push; PR Validation does not run at all — it is triggered by pull requests only.)
+`git add -A` rather than `git commit -a`: after the clean-history variant's fresh `init`, every file is untracked and `-a` would commit nothing.
+
+If you took the **clean-history** variant in 3.1, this is the commit its reconciliation waited for, so bring the license commit underneath it now:
+
+```sh
+git fetch origin
+git rebase origin/main
+```
+
+If you took the keep-history variant, you merged at 3.1 and there is nothing to do here. Then push:
+
+```sh
+git push -u origin main
+```
+
+`-u` sets the upstream, which the clean-history variant does not have — it used `remote add`, not a clone.
+
+Open Actions on github.com. **Two** workflows start, and only one of them is the one you want. PR Validation and Ansible Verify do not run at all — both are triggered by pull requests only.
+
+- **Terraform Apply** — this is the one. Read on.
+- **Platform Deploy** — triggered because this push adds the whole `platform/` tree, which is its path filter. Its `deploy` job attaches to the `production` Environment, so **it raises a second approval request that looks exactly like the one below**. Do not approve it. There is nothing to deploy yet: the host is not converged until stage 6, and every secret that job needs is created in stages 5 to 7. Cancel the run, or leave it pending and let it expire. Stage 7.4 is where the platform stack is deployed for the first time, deliberately and with its prerequisites in place.
 
 The run covers **both** environments, because this push changes files under both environment directories:
 
@@ -279,7 +308,7 @@ The run covers **both** environments, because this push changes files under both
 
 Neither environment's failure withholds the other's apply — that separation is deliberate, so a broken staging can never be the reason a correct production change cannot ship. This is the pipeline's specified behaviour; two applies in one run, one of them pausing, is a path this repository has specified and not yet observed, so read the run rather than assuming it.
 
-**If the run fails at "List the paths this merge changes"**, with a message about a push carrying no usable comparison base, the repository was created empty and this is its first push. That is the case step 1 of 3.1 avoids by initialising with a license. Recover by making one more commit and pushing again; do not force-push, which produces the same failure with a different message.
+**If the run fails at "List the paths this merge changes"**, with a message about a push carrying no usable comparison base, the repository was created empty and this is its first push. That is the case step 1 of 3.1 avoids by initialising with a license. Recover by making one more commit and pushing again — and that commit must touch a file **under each** `terraform/environments/<name>/`, because Terraform Apply is filtered to `terraform/**` at the workflow level and then narrowed to the environments whose own directories changed. A recovery commit touching neither starts no run at all, silently; one touching a single environment leaves the other server uncreated. Do not force-push: it produces the same failure with a different message.
 
 ### 4.3 Get the addresses and log in
 
@@ -307,7 +336,7 @@ There is no Terraform for DNS, deliberately — see "Managing DNS in Terraform" 
 
 **Secrets created in this stage:** none. The two `.envrc` files hold the two read-only tokens and are gitignored.
 
-**Check:** `terraform plan` says "No changes" locally in **both** environment directories; the nightly Drift Detection workflow, run once by hand from Actions → Drift Detection → Run workflow, reports no drift and covers **both** environments in one run; `ssh root@<prod ipv4>` works with the operator key and nothing else; both servers appear in their own Hetzner projects and neither project holds anything you created by hand.
+**Check:** `terraform plan` says "No changes" locally in **both** environment directories; the nightly Drift Detection workflow, run once by hand from Actions → Drift Detection → Run workflow, reports no drift for **both** environments in one run — its own `report` job will still fail at this stage, because `HEARTBEAT_PING_KEY` is not created until stage 7.3, so read the two `drift` jobs rather than the run's overall result; `ssh root@<prod ipv4>` works with the operator key and nothing else; both servers appear in their own Hetzner projects and neither project holds anything you created by hand.
 
 ## From here on, one host
 
@@ -319,7 +348,7 @@ You now have two servers. **Everything from stage 5 to stage 9 configures one of
 
 The first two are `docs/change-queue.md` entry 50; the third has an entry of its own there. Until those land, the staging server is a provisioned, reachable host with an attached unmounted volume, and that is all it is.
 
-**If you decide you do not want it yet**, delete `terraform/environments/staging/`, remove its two secrets and its GitHub Environment, and delete its Hetzner project and HCP workspace. Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
+**If you decide you do not want it yet**, delete `terraform/environments/staging/`, remove its `HCLOUD_TOKEN_STAGING` repository secret and its `staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
 
 ## Stage 5. Tailscale
 
@@ -431,7 +460,7 @@ You should see your server under `@prod`. If you see nothing, `HCLOUD_TOKEN` is 
 cd ansible
 ansible-playbook playbooks/host-baseline.yml \
   --vault-id prod@prompt \
-  --private-key ~/.ssh/<company>-prod \
+  --private-key ~/.ssh/<company>-root \
   -e tailscale_auth_key=<tskey-auth-... from stage 5>
 ```
 
@@ -445,7 +474,7 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
 2. Log in the way you will from now on, over the tailnet, unprivileged:
 
    ```sh
-   ssh -i ~/.ssh/<company>-prod-ops ops-<you>@100.x.y.z
+   ssh -i ~/.ssh/<company>-ops ops-<you>@100.x.y.z
    docker ps        # works: the account is in the docker group
    sudo -n true     # refused: the account has no sudo, by design
    ```
@@ -696,7 +725,7 @@ The graces are set against **observed** scheduling, not against the `cron:` line
 
 ## Appendix B. Rebuilding an existing host
 
-**This covers the production host** — the configured one. Rebuilding the staging server is stages 4.2 and 4.3 alone, because nothing else has been done to it.
+**This covers the production host** — the configured one. Rebuilding the staging server is `server_enabled` toggled off and on in its own `terraform.tfvars`, then reading its new address, because nothing else has been done to it.
 
 The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, 5.3's auth key if the old one expired, 6.3, 6.4 (new tailnet IP → `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by re-running the last Platform Deploy from Actions, 7.5, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/change-queue.md` entry 33 is what closes that, and entry 30 is the plan to turn this paragraph into a rehearsed runbook with timings.
 

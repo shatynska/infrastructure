@@ -84,6 +84,13 @@ which no test in this repository can detect.
 - [x] 2.7 Stage 3: the Dependabot entry obligation for both environment directories,
   which the CI suite already enforces by comparing that list against the tree. Verify by
   reading `.github/dependabot.yml` as committed.
+
+  **Result (2026-09-10).** Written into stage 3.3, beside the secret table: both
+  environment directories are already listed in the template's
+  `.github/dependabot.yml`, the list must keep naming exactly the directories that
+  exist, and a directory the list omits is uncovered rather than partly covered.
+  This tick was applied before the content existed, and code review caught it —
+  the paragraph was written in response.
 - [x] 2.7a Stage 3.1: the template edits, which double. Step 3's "ones that matter"
   list SHALL name **both** environments' `versions.tf` — the second one carries the
   template author's HCP `organization` exactly as prod's does, and a reader who
