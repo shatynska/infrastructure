@@ -295,21 +295,18 @@ tree, so where an entry cites a host fact, that is what `main-server` showed on
 
 ## 23. apply-host-configuration-through-a-gated-workflow
 
-**Unblocked once staging is actually converged, which is not the same day this
-was written.** It waited on a non-prod host to *converge* against.
-`configure-the-staging-host` supplied everything a converge needs from this
-repository on 2026-09-10 -- an inventory source, a `group_vars` of its own, a
-play that can name it -- The converge itself was operator work, and it
-happened: staging converged on 2026-09-10, and the values `staging.yml` was
-committed without were supplied in PR #130. This entry is unblocked in fact and
-not merely in principle.
+**Unblocked, in fact and not merely in principle.** It waited on a non-prod
+host to *converge* against. `configure-the-staging-host` supplied everything a
+converge needs from this repository on 2026-09-10 -- an inventory source, a
+`group_vars` of its own, a play that can name it -- and the converge itself,
+which was operator work, happened the same day: staging is configured, and the
+values `staging.yml` was committed without were supplied in PR #130.
 
-The block's history, since it has moved three times: recorded on 2026-09-09
-when staging was identified; re-pointed on 2026-09-10 when
+The block's history, since it moved three times before lifting: recorded on
+2026-09-09 when staging was identified; re-pointed on 2026-09-10 when
 `add-a-staging-environment` delivered staging's Terraform half; re-pointed
-again when `configure-the-staging-host` delivered the host half, at which point
-what remains between this entry and its prerequisite is a converge rather than
-any work in this repository.
+again when `configure-the-staging-host` delivered the host half; and lifted
+when that change's converge succeeded.
 
 This remains the one path to production this repository still leaves to a
 workstation.

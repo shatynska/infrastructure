@@ -127,6 +127,29 @@ duplicated facts is subject to the mechanism it exists to close; this task says
 so and then demonstrated it. Six facts now, and the instruction stands: rebuild
 the list by grep, do not trust it.
 
+**A second round of code review then found the deeper problem, which was not in
+the document but in how it was being edited: fixes were applied instance-wise
+where the findings were class-wise.** Two of that round's three majors were the
+first round's own defects recurring inside their own fixes — a per-environment
+imperative that is wrong on the second run was corrected for the ping key and
+left for the GHCR token three lines away; a private key generated into the tree
+was moved out for staging and left for production one row above, which the new
+paragraph then asserted was safe.
+
+So the remaining passes were run as **predicates swept across every candidate**,
+not as edits to the rows a reviewer named:
+
+| Predicate | Swept over | Found |
+|---|---|---|
+| For every creation imperative in stage 6, what does the second run do? | every `Generate` / `create` / `Choose` in §6 | one: the GHCR token. The Vault password and ping key already had their clauses |
+| For every `ssh-keygen`, where does the private half sit and what removes it? | all five rows of §0.3 | **two**, not the one reported: production's and each application's are generated into the tree too |
+| Re-derive completeness claims by grep rather than asserting them | the GHCR and ping-key facts | the previous round's "all four reconciled" was false — §6.4 was never touched |
+| Open every `§` reference and check the target says what the sentence claims | every cross-reference this change adds | none; §3.3 does set `TF_API_TOKEN` on both Environments, §4.4 does forbid a staging hostname |
+
+The third of those is the one worth keeping: a completeness claim asserted from
+memory is how a defect survives its own fix and reaches a commit message as
+fixed.
+
 ## 8. Ship
 
 - [ ] 8.1 Open the pull request once verification passes and the code review has cleared, and wait for the operator's confirmation that it merged.

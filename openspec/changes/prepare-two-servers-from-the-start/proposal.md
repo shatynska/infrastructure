@@ -65,10 +65,11 @@ into §6.1 missing a keypair.
   object of which the procedure creates one per environment — how many there are
   and what proves the count.
   It declares that boundary — **stages 0 to 6** — because a table read as
-  complete and not being so is worse than none, and it names the two things it
+  complete and not being so is worse than none, and it names the three things it
   deliberately leaves out: stage 7's platform-stack secrets, which are
-  production's alone until entry 52, and §0.3's own application-deploy-key row,
-  which belongs to stage 8.
+  production's alone until entry 52; `PLATFORM_DEPLOY_HOST`, created at stage 6.4
+  but belonging to that same production-only deploy path; and §0.3's own
+  application-deploy-key row, which belongs to stage 8.
 
   **Four of its rows were wrong in earlier drafts**, each in a way that read
   fluently, and they are named here because that is what a future reader needs
@@ -117,15 +118,20 @@ mechanism moves. The document is the only thing that changes.
 
 **Documentation.** `docs/bootstrap-a-new-host.md` — the end-state summary and
 time estimate at the top, §0.3, a new §0.4, §5.2, §5.3, the opening of stage 5,
-two rows in §0.1 and one in §0.2, **§6.4's "Secrets created in this stage"
-table** — which repeats §0.3's "delete the local file" instruction inside the
-stage that now runs once per environment — and **Appendix A**, whose Tailscale
-auth key, `PLATFORM_DEPLOY_SSH_KEY` and `PLATFORM_DEPLOY_HOST` rows are still
-singular or unscoped. That appendix is the
+two rows in §0.1 and one in §0.2, **§6's opening**, **§6.1** (the GHCR token and
+the ping key each gain a second-run clause, without which the second converge
+rotates a credential the first one depends on), **§6.4's two tables** — one
+repeating §0.3's "delete the local file" instruction inside a stage that now
+runs twice — **Appendix A**, whose Tailscale auth key, `PLATFORM_DEPLOY_SSH_KEY`
+and `PLATFORM_DEPLOY_HOST` rows are singular or unscoped, and **Appendix C**,
+which still tells a company reader that a configured second host is what they do
+not get. That appendix is the
 document's own "complete secret inventory", so leaving it would have this change
 create the drift it exists to remove, one appendix over.
 
-**Records.** One entry in `docs/change-queue.md`:
+**Records.** `docs/change-queue.md` entry 23, which still asserted staging's
+`group_vars` is committed incomplete and told a reader to check whether staging
+had converged — both overtaken by PR #130 and the converge. And one new entry:
 `ansible/inventory/group_vars/staging.yml` still carries a banner saying the
 file is incomplete and the host unconverged, above values that have since been
 supplied on a host that has since converged. Out of scope to fix here, and an
