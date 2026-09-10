@@ -460,3 +460,133 @@ loud, and removable by name.
 
 **Revisit when** a session is actually bitten by one of these, or when Molecule
 gains an error form for an unset interpolation.
+
+## Three `iac-cicd-pipeline` requirement names that now read narrower than they are
+
+Recorded by `make-the-pipeline-environment-agnostic`, whose `design.md`
+Decision 7 declined the rename. A note kept only inside a change is archived
+with it, and this one outlives the change.
+
+That change made the pipeline environment-agnostic without renaming three
+requirements whose names still name production alone:
+
+- *Gated Production Apply Applies the Reviewed Plan*, which now governs every
+  environment's apply, not production's;
+- *Credential Scoping by Privilege*, whose token table it replaced with a
+  per-environment scheme — the name is accurate but its scenarios read as
+  production's;
+- *Write Credentials Confined to the Gated Pipeline* (`iac-safety-hardening`),
+  now stated over each environment's own Read & Write token.
+
+Only the first is a genuine name/content mismatch; the other two are listed
+because the same sweep would touch them and a reader chasing one will find the
+others.
+
+**Why not renamed.** Requirement names are this repository's citation form
+(`AGENTS.md`, "Citing this repository's own specifications and change
+records"), and they are cited from comments in `apply.yml`, `drift.yml` and
+`pr-validation.yml`, from `docs/bootstrap-a-new-host.md`, and from archived
+change records. Renaming sweeps every one of those into a diff that already
+restructures three gated workflows at once — a mechanical rename mixed into the
+diff that most needs to be read closely.
+
+**Revisit when** a change modifies *Gated Production Apply Applies the Reviewed
+Plan* for a substantive reason and can carry the rename, or when a second
+environment exists and a reader has actually been misled by the name into
+believing the requirement does not bind it. The second is the signal that
+matters: until there is a second environment, the name and the content describe
+the same set.
+
+## Whether the drift heartbeat stays one check across all environments
+
+Recorded by `make-the-pipeline-environment-agnostic`, from that change's
+`design.md` Open Questions, for the same reason as the entry above: the
+question outlives the change that raised it.
+
+`drift.yml` now plans every environment in a matrix, but reports to a single
+external heartbeat check, `infrastructure-drift`, from a single `report` job.
+
+**The working assumption this change ships with is that one check is right.**
+What the heartbeat answers is *did the nightly sweep run at all*, which is a
+property of the run rather than of an environment: GitHub disables a
+schedule-triggered workflow after 60 days of repository inactivity and emits
+nothing when it does, and that silence is per workflow. Per-environment drift is
+already reported per environment — each environment gets its own deduplicated
+GitHub issue — so the heartbeat is not the mechanism carrying that signal.
+
+The cost of the assumption, stated plainly: the `report` job names every other
+job in `needs:` and pings `/fail` when any of them failed, so one environment's
+failed plan takes the whole heartbeat red. That is the correct polarity for an
+alarm and the wrong one for attribution — the alert says the sweep is unhealthy
+without saying which environment.
+
+**Revisit when** a second environment exists and one of two things happens: an
+environment's plan fails often enough that the shared heartbeat is muted in
+practice, which is the failure mode *Scheduled Drift Detection* already names
+for a persistently red job; or an environment is added whose sweep is
+deliberately allowed to fail, at which point one check cannot express both
+states. Neither is observable at one environment, which is why this ships as an
+assumption rather than a decision.
+
+## Whether a job awaiting an Environment's approval is "pending" for concurrency
+
+Recorded by `make-the-pipeline-environment-agnostic`, whose `design.md`
+Decision 9 declines to settle it. The delta names it as unestablished, but a
+delta is archived into the main specification and `design.md` is archived with
+its change — so without an entry here the question would quietly become settled
+fact the moment the change archives.
+
+**The question.** GitHub cancels a *previously pending* job in a concurrency
+group when a new one queues, and does so even under `cancel-in-progress: false`
+— that much is documented. What is not established is whether a job that is
+waiting on a GitHub Environment's protection rules counts as *pending* for that
+purpose, or as something else. If it counts as pending, then any job queuing
+into the same group can cancel an approved apply that is waiting for its
+reviewer, and it does so as a **cancellation** rather than a failure — which
+nothing in this repository reads as an alarm.
+
+**What was done instead.** `apply.yml`'s plan job and apply job were given
+separate per-environment groups, so a queued plan can no longer be the thing
+that cancels a waiting apply. That is correct under *both* answers: where a
+waiting apply is pending, the separation removes a silent-loss path; where it is
+not, the separation costs only a plan that Terraform later refuses as stale,
+loudly. The experiment would establish whether that cost is necessary, not
+whether the separation is right.
+
+**Why the experiment was not run.** Tasks 1.1 and 1.2 of that change ran exactly
+this kind of scratch-workflow probe for two matrix mechanisms, so the precedent
+exists. This one is more expensive: it needs a scratch GitHub Environment
+*carrying a required reviewer*, a merge to the trunk to trigger the apply path,
+and a second and third merge timed against a human approval — repository-settings
+churn well beyond what those probes needed, against a Migration Plan that
+promises none.
+
+**Revisit when** a second environment exists and applies queue often enough for
+the answer to matter, or when an approved apply is ever observed to have been
+cancelled rather than run. The second is the observation that settles it for
+free, and the entry below is where to look first if it happens.
+
+## An apply can still cancel another apply, silently
+
+Recorded by `make-the-pipeline-environment-agnostic`. Its `design.md` Decision 9
+argues from the hazard class above and closes only one pairing of it, so the
+residue is written down rather than left to read as closed.
+
+Separating the plan and apply concurrency groups stops a queued *plan* cancelling
+a waiting *apply*. It does nothing about an apply cancelling an apply: three
+merges affecting one environment in quick succession leave the second merge's
+pending apply liable to be cancelled by the third's, with the same property that
+makes it worth recording — a cancellation is not a failure, so a change that was
+reviewed, approved and never applied leaves a run that looks unremarkable.
+
+**This is pre-existing, not introduced.** The workflow-level `concurrency` group
+that change replaces had the same property at run level; only the granularity
+moved. It is out of that change's scope for the same reason.
+
+**Mitigation available today:** the nightly drift sweep detects the divergence a
+cancelled apply leaves behind, within a day, and opens an issue for it. That is
+the backstop, and it is why this is an entry rather than a change.
+
+**Revisit when** a cancelled apply is actually observed, or when the queue is
+deep enough that a third merge behind a pending approval stops being unusual —
+which needs either a busier trunk or an environment whose approval sits unread.

@@ -1,0 +1,48 @@
+---
+# This environment's pipeline configuration, read by .github/workflows/'s
+# discovery step -- see "Each Environment Declares Its Own Pipeline
+# Configuration" (openspec/specs/iac-cicd-pipeline/spec.md).
+#
+# It lives here, beside the terraform.tfvars it belongs to, so the folder is
+# self-describing: adding an environment is adding a directory, and changes no
+# file under .github/workflows/. Workflows SHALL NOT name an environment, map
+# one to its secrets, or condition on one -- everything they need about this
+# environment is below.
+#
+# `.yml` rather than `.tf`/`.tfvars` deliberately: Terraform must not read this
+# file. `terraform fmt`, `terraform validate` and `tflint` all ignore it.
+
+# The GitHub Environment this environment's apply job attaches to. REQUIRED.
+#
+# Whether that pauses for a human is a property of the Environment's protection
+# rules -- repository settings, which no file here can verify -- and not of the
+# workflow. `production` requires a reviewer.
+#
+# SHALL be distinct from every other environment's: two environments naming the
+# same GitHub Environment share its WRITE token and its protection rules, so an
+# environment meant to be ungated would hold this one's write credential.
+github_environment: production
+
+# The repository secret holding this environment's read-only Hetzner token.
+# REQUIRED.
+#
+# Plan and drift jobs declare no `environment:` -- so they can reach repository
+# secrets only -- and read this name out of the matrix. A repository secret
+# holds one value, so this name SHALL be distinct from every other
+# environment's, or two environments plan under one token.
+#
+# `HCLOUD_TOKEN` is the name prod already uses, which is what makes design.md
+# Decision 1's consequence true: nothing in repository settings moves at N=1.
+# A second environment takes a name of its own.
+read_only_secret: HCLOUD_TOKEN
+
+# Whether the Destroy Policy Gate applies to this environment. OPTIONAL;
+# absent means it applies, so a mistake in this file fails safe.
+#
+# POLARITY IS LOAD-BEARING AND LIVES IN THE NAME. This field names the GATE, so
+# `true` means the gate applies and a destructive plan needs the override label.
+# It is deliberately not named for the inverse: `disposable: true` and
+# `destroy_policy_gate: true` are the same value and opposite meanings, and
+# nothing in a value can tell a reader which was meant. An environment that
+# exists to be rebuilt may set this `false`; prod may not.
+destroy_policy_gate: true

@@ -309,9 +309,12 @@ The layers underneath need nothing. `modules/server`'s `delete_protection`
 variable names "a future staging environment" as its own reason for being
 parameterised. `ansible/inventory/hcloud.yml` keys groups on the `environment`
 Hetzner label and its comment already says adding staging "is a label value,
-not an inventory rewrite". On the Ansible side this is `hosts: prod` in
-`host-baseline.yml` becoming a parameter, and a `group_vars/<env>.yml` -- that
-is the whole of it.
+not an inventory rewrite".
+
+**The Ansible half is not here**, though this entry first placed it here. No
+workflow converges `ansible/` at all -- that is entry 23's whole subject -- so
+`hosts: prod` in `host-baseline.yml` is not pipeline work, and it has no second
+value to take until 49 creates a second host. It moves to 49.
 
 **Verifiable at N=1, which is why it goes first.** The generalisation runs with
 a matrix of one element and its acceptance test is that prod plans, applies and
@@ -364,6 +367,9 @@ second HCP workspace with Execution Mode set to Local (as prod's `versions.tf`
 records for `infrastructure-prod`), a `staging` GitHub Environment and its own
 secret set -- the Vault password, the tailnet OAuth client, and platform's
 eight -- a `group_vars/staging.yml`, and DNS records for the staging hostnames.
+It also carries the Ansible half moved here from 24: `hosts: prod` in
+`host-baseline.yml` becoming a parameter, which this is the first change to give
+a second value to.
 Those records are manual: DNS is in no repository (`docs/deferred-work.md`,
 "Managing DNS in Terraform").
 
