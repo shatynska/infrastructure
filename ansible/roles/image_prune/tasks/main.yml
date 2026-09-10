@@ -24,8 +24,8 @@
       deploy_apps was not supplied, or is not a list. This role has no default
       for it: it is the version-controlled enumeration of deployable
       applications, and the keep set is computed from it. Set it in
-      ansible/inventory/group_vars/prod.yml, where deploy_user already reads
-      it.
+      ansible/inventory/group_vars/<environment>.yml -- the file for the
+      environment this run targets, where deploy_user already reads it.
     quiet: true
 
 # Same shape and the same reasoning as the assertion above, for the input that
@@ -54,7 +54,8 @@
       the project ping key the scheduled unit reports its own liveness under,
       and without it the unit would run with nothing noticing when it fails,
       is killed, or stops being scheduled. Set it Vault-encrypted in
-      ansible/inventory/group_vars/prod.yml; a Molecule scenario supplies a
+      ansible/inventory/group_vars/<environment>.yml, the file for the
+      environment this run targets; a Molecule scenario supplies a
       fixture value alongside image_prune_heartbeat_base_url pointed at a
       local sink.
     quiet: true

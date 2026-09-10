@@ -1,0 +1,23 @@
+---
+# Staging's inventory source. Identical to prod.hcloud.yml but for the
+# credential it names -- read that file for why one source per environment,
+# why the filename must end in `hcloud.yml`, and why the credential is not
+# the plugin's bare HCLOUD_TOKEN fallback.
+#
+# Staging has a Hetzner project of its own (add-a-staging-environment), so
+# this source reaches staging's project and nothing else, exactly as prod's
+# reaches prod's.
+plugin: hetzner.hcloud.hcloud
+
+# Staging's read-only token, from ansible/.envrc. The same name the
+# HCLOUD_TOKEN_STAGING *repository secret* carries, so the local variable and
+# the CI secret do not have to be mentally translated between.
+#
+# Not to be confused with the HCLOUD_TOKEN that direnv exports inside
+# terraform/environments/staging/: that one is Terraform's, is staging's
+# token under the name its provider reads, and is scoped to that directory.
+api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_STAGING') }}"
+
+keyed_groups:
+  - key: hcloud_labels.environment
+    separator: ""

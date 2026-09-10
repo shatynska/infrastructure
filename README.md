@@ -105,12 +105,28 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
    Without `direnv`, `source .envrc` from the repo root once per shell —
    it is a plain `export`. That path loses the isolation above, since the
    export outlives the directory: source the environment's own file in a
-   shell you do not reuse for another environment, or the next
-   `ansible -i inventory/hcloud.yml prod` silently resolves no hosts. The dynamic inventory needs `HCLOUD_TOKEN` too,
-   not just Terraform: without it `ansible -i inventory/hcloud.yml prod`
-   resolves no hosts. It resolves no hosts under the *wrong* environment's
-   token either, and that failure is quiet — a play matching no host exits 0.
-   The inventory sees only the project its token belongs to.
+   shell you do not reuse for another environment.
+
+   **Ansible reads different variables, from a different file.**
+   `HCLOUD_TOKEN` above is Terraform's, and its value depends on which
+   directory you are in — no use to a tool always run from `ansible/`. Copy
+   `ansible/.envrc.example` to `ansible/.envrc` and fill in both read-only
+   tokens as `HCLOUD_TOKEN_PROD` and `HCLOUD_TOKEN_STAGING`; each is read by
+   one inventory source, so which project a run reaches is decided by the
+   `-i` it was given:
+
+   ```sh
+   cd ansible
+   cp .envrc.example .envrc && direnv allow    # fill in both tokens first
+   ansible-inventory -i inventory/prod.hcloud.yml --graph      # or staging
+   ```
+
+   `direnv allow` is not optional: direnv refuses to load an unallowed
+   `.envrc`, so a correctly filled file still yields
+   `Invalid Hetzner Cloud API Token` without it.
+
+   A missing or wrong token fails the run naming the source it could not
+   parse, rather than resolving to an environment with no host in it.
 
 5. To run the Ansible tests, install the pinned Molecule toolchain:
 
@@ -374,7 +390,7 @@ those emits no failure for anything else to notice.
 
 **This is only live once three things exist outside this repository**: the
 `HEARTBEAT_PING_KEY` repository secret, the same key Vault-encrypted in
-`ansible/inventory/group_vars/prod.yml`, and the checks' routing at the
+each converged environment's own `ansible/inventory/group_vars/<environment>.yml`, and the checks' routing at the
 observer. Until then the reporters fail loudly rather than quietly — a
 scheduled run turns red naming the missing secret, and a host converge refuses
 — but nothing is being watched. `docs/bootstrap-a-new-host.md` stage 6.1, stage

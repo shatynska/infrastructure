@@ -8,6 +8,7 @@
 #
 # hardening_web_allowed_cidrs defaults closed: a safe default for
 # this role in general, independent of what any particular environment's
-# group_vars sets it to (see ansible/inventory/group_vars/prod.yml for
-# this project's actual prod value).
+# group_vars sets it to (see ansible/inventory/group_vars/<environment>.yml
+# for each environment's actual value -- prod's is ["0.0.0.0/0"], staging's
+# is [], and both are mirrors of that environment's own terraform.tfvars).
 hardening_web_allowed_cidrs: []

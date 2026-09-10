@@ -53,7 +53,8 @@
       No platform_data_volume_device was supplied and no
       /dev/disk/by-id/scsi-0HC_Volume_* device was found on this host. Is the
       main-data Hetzner Volume actually attached (volume_enabled in
-      terraform/environments/prod/terraform.tfvars)?
+      terraform/environments/<environment>/terraform.tfvars, for the
+      environment this run targets)?
 
 - name: Format the data volume, if it has no filesystem yet
   community.general.filesystem:

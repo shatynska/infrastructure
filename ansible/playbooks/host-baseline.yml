@@ -1,12 +1,104 @@
 ---
-# Host configuration for the prod server: container runtime, host-level
-# hardening, and the restricted deploy account. See
+# THE TARGET GROUP MUST NOT BE EMPTY, AND NOTHING ELSE CHECKS THAT.
+#
+# A play whose `hosts:` matches no host is skipped and the run exits 0, so a
+# converge that reached nothing reports exactly what a converge with nothing
+# to do reports. Every way of reaching that state is a mistake: an environment
+# misspelled, a source whose project holds no such environment, a server that
+# does not exist. See iac-host-configuration's "A Run Whose Target Group
+# Resolves to No Host Refuses".
+#
+# THIS HAS TO BE ITS OWN PLAY. `pre_tasks` run on the hosts a play matched, so
+# a play matching nothing runs none of them -- the check must live somewhere
+# that runs when the target set is empty, and that is a play with a target of
+# its own.
+#
+# Distinct from each role's own input assertions, which this does not replace:
+# those reach a role acting on a host that resolved, and none of them runs
+# when no host resolved at all.
+#
+# TWO WAYS TO GET PAST IT, one closed here and one that cannot be:
+#
+#   --tags/--skip-tags   CLOSED by `tags: always` below, for every tag
+#                        selection EXCEPT `--skip-tags always`, which names
+#                        this mechanism and turns it off. That one is a
+#                        deliberate act rather than a slip, and no tag can be
+#                        immune to being skipped by name. Without the tag at
+#                        all, any ordinary selection deselects these untagged
+#                        asserts, the converge play matches nothing, and the
+#                        run exits 0 -- the exact outcome this guard exists to
+#                        prevent. platform_data_volume/tasks/main.yml carries
+#                        a comment about the same hazard biting a register.
+#
+#   --limit              NOT CLOSED, AND NOT CLOSEABLE FROM HERE. A limit
+#                        filters `localhost` out of this play, and Ansible has
+#                        no per-play exemption from it. A run with a --limit
+#                        naming a host in an empty group skips both plays and
+#                        exits 0, and with no target_environment supplied it
+#                        reports the raw `Error processing keyword 'hosts'`
+#                        rather than the diagnostic below. Do not pass --limit
+#                        to this playbook; there is nothing here to narrow,
+#                        since the environment already selects the host set.
+#                        docs/change-queue.md entry 54 records it.
+- name: Refuse before configuring anything if the target resolved to nothing
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  # `always`, so a --tags run cannot deselect the refusal. See the block above.
+  tags: always
+  tasks:
+    # Separate tasks, deliberately: a single compound assertion would report
+    # both causes with one message and leave the operator to work out which.
+    - name: Fail loudly if no environment was supplied
+      ansible.builtin.assert:
+        that:
+          - target_environment is defined
+          - target_environment is string
+          - target_environment | length > 0
+        fail_msg: >-
+          No target_environment was supplied, so there is nothing to
+          configure. This play has NO DEFAULT for it on purpose: a default
+          would make the environment a property of what was forgotten rather
+          than of what was asked for, and the environment a forgotten flag
+          would fall back to is the one whose misconfiguration is least
+          recoverable. Re-run with, for example,
+          `-e target_environment=staging`.
+        quiet: true
+
+    # `| default([])` is load-bearing. `keyed_groups` creates a group only
+    # where some host carries the label, so under prod's inventory source the
+    # key `staging` is not an empty list -- it is absent, and indexing
+    # `groups` raises a Jinja error instead of reaching this message.
+    - name: Fail loudly if the target environment resolved to no host
+      ansible.builtin.assert:
+        that:
+          - groups[target_environment] | default([]) | length > 0
+        fail_msg: >-
+          target_environment is "{{ target_environment }}", and that group
+          holds no host, so this run would configure nothing and exit 0.
+          Three things produce it: the environment is misspelled; the
+          inventory source named with -i belongs to a different Hetzner
+          project than this environment (each source reaches exactly one --
+          see ansible/inventory/); or the server does not exist
+          (server_enabled in that environment's terraform.tfvars). A
+          credential that was rejected outright is NOT one of them -- that
+          fails earlier, at inventory parse, because ansible.cfg sets
+          any_unparsed_is_failed.
+        quiet: true
+
+# Host configuration for one environment's server: container runtime,
+# host-level hardening, and the restricted deploy account. See
 # the change bootstrap-ansible-host-baseline for the full rationale.
 # Ansible's scope stops here -- it never templates platform/'s Compose
 # file or invokes a Compose lifecycle command (iac-platform-services'
 # "Platform Stack Deployment Is Not Ansible's Responsibility").
+#
+# `hosts:` is the environment supplied per run, with NO `| default(...)`.
+# The guard play above is what reports its absence; a default here would
+# silently converge whichever environment the default named.
 - name: Host baseline configuration
-  hosts: prod
+  hosts: "{{ target_environment }}"
   become: true
   roles:
     - role: docker

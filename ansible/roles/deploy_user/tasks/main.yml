@@ -34,8 +34,9 @@
     fail_msg: >-
       deploy_apps was not supplied, or is not a list. This role has no default
       for it -- there is no safe default set of applications permitted to
-      deploy to this host. Set it in ansible/inventory/group_vars/prod.yml
-      (see this role's defaults/main.yml and README).
+      deploy to this host. Set it in ansible/inventory/group_vars/<environment>.yml,
+      the file for the environment this run targets (see this role's
+      defaults/main.yml and README).
 
 - name: Create the deploy group
   ansible.builtin.group:

@@ -86,12 +86,14 @@ In **each** project: Security → API tokens → Generate API token. Check the p
 
 | Token | Permission | Where it goes | Never goes |
 |---|---|---|---|
-| Production Read Only | Read | Your workstation (the repo-root `.envrc`, stage 4) and the repository secret `HCLOUD_TOKEN` (stage 3) | Nowhere else |
+| Production Read Only | Read | Your workstation, **twice**: the repo-root `.envrc` as `HCLOUD_TOKEN` for Terraform (stage 4.1), and `ansible/.envrc` as `HCLOUD_TOKEN_PROD` for Ansible (stage 6.0). Plus the repository secret `HCLOUD_TOKEN` (stage 3) | Nowhere else |
 | Production Read & Write | Read & Write | The `production` Environment secret `HCLOUD_TOKEN` (stage 3) | Any local file, shell, or note. If you can run `terraform apply` from your laptop, this token is in the wrong place. |
-| Staging Read Only | Read | Your workstation (`terraform/environments/staging/.envrc`, stage 4) and the repository secret `HCLOUD_TOKEN_STAGING` (stage 3) | Nowhere else |
+| Staging Read Only | Read | Your workstation, **twice**: `terraform/environments/staging/.envrc` as `HCLOUD_TOKEN` for Terraform (stage 4.1), and `ansible/.envrc` as `HCLOUD_TOKEN_STAGING` for Ansible (stage 6.0). Plus the repository secret `HCLOUD_TOKEN_STAGING` (stage 3) | Nowhere else |
 | Staging Read & Write | Read & Write | The `staging` Environment secret `HCLOUD_TOKEN` (stage 3) | The same places. An ungated apply does not make its token less confined. |
 
 Each token is shown once. Put all four in the password manager immediately, each labelled with its project **and** its permission level.
+
+**Each read-only token is used by two tools under two different variable names**, and the duplication is deliberate. Terraform reads `HCLOUD_TOKEN`, whose value direnv scopes to the environment *directory* you are standing in. Ansible is always run from `ansible/`, so it cannot use a variable whose meaning depends on where you stand: each of its inventory sources names its own variable instead, and which project a run reaches is decided by the `-i` it was given rather than by shell state.
 
 The two read-only secrets have different **names** at the repository level, and that is required rather than stylistic: a repository secret holds one value, so two environments naming the same one would plan under a single credential. Discovery fails the pipeline, naming both offenders, if two environments ever declare the same read-only secret or the same GitHub Environment.
 
@@ -182,7 +184,7 @@ Terraform needs somewhere to keep its state file (the record of what it created)
    grep -rn 'shatynska' --exclude-dir=.git --exclude-dir=openspec .
    ```
 
-   The ones that matter: the `organization` in **both** `terraform/environments/prod/versions.tf` **and** `terraform/environments/staging/versions.tf` (your HCP organisation from stage 2), `ghcr_pull_username` in `ansible/inventory/group_vars/prod.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
+   The ones that matter: the `organization` in **both** `terraform/environments/prod/versions.tf` **and** `terraform/environments/staging/versions.tf` (your HCP organisation from stage 2), `ghcr_pull_username` in **each** `ansible/inventory/group_vars/<environment>.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
 
    Both `versions.tf` files carry it, and changing only production's is the easy miss: staging would then initialise against someone else's HCP organisation, and the error names a workspace rather than an organisation.
 
@@ -232,7 +234,7 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 
 | Name | Scope | Value from | Read by |
 |---|---|---|---|
-| `HCLOUD_TOKEN` | Repository | Stage 1, production Read Only | Production's PR plans, drift detection and apply-workflow plan job, and the Ansible inventory |
+| `HCLOUD_TOKEN` | Repository | Stage 1, production Read Only | Production's PR plans, drift detection and apply-workflow plan job. **Not Ansible** — no workflow runs Ansible, and the inventory reads `HCLOUD_TOKEN_PROD` from a local file (stage 6.0) |
 | `HCLOUD_TOKEN_STAGING` | Repository | Stage 1, staging Read Only | Staging's PR plans, drift detection and apply-workflow plan job |
 | `HCLOUD_TOKEN` | `production` Environment | Stage 1, production Read & Write | Production's apply job only, after approval. GitHub resolves an Environment secret ahead of a repository secret of the same name, which is the whole mechanism. |
 | `HCLOUD_TOKEN` | `staging` Environment | Stage 1, staging Read & Write | Staging's apply job, immediately on merge |
@@ -257,6 +259,8 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 Each environment needs its own read-only token in scope, because one token reaches one project. Put production's in the repo-root `.envrc` (copy `.envrc.example`), and staging's in an `.envrc` **inside** `terraform/environments/staging/` — directory-scoped, so planning staging never leaves staging's token in the shell that plans production. Both paths are gitignored.
 
 Run `direnv allow` in each directory that has one; direnv loads the nearest `.envrc` and does not merge the parent's, which is what keeps the two tokens apart. **Without direnv**, `source` the file for the environment you are about to work on, in a shell you do not then reuse for the other — the export outlives the directory, and carrying staging's token into `prod/` produces the misleading plan described below rather than an error.
+
+This paragraph is about **Terraform's** token only. Ansible has a third `.envrc`, in `ansible/`, holding both read-only tokens under names of their own; stage 6.0 sets it up, and it is immune to the mistake above because neither name is `HCLOUD_TOKEN`.
 
 Then, for each environment in turn:
 
@@ -324,7 +328,7 @@ Log in once as root to **the production host** with the operator key, which also
 ssh -i ~/.ssh/<company>-root root@<prod ipv4>
 ```
 
-The staging host answers the same key, and logging into it is worth doing once to confirm it is reachable. It needs no `known_hosts` entry, because nothing converges it: stage 6 configures the production host only.
+**Log into the staging host too, the same way** — `ssh -i ~/.ssh/<company>-root root@<staging ipv4>`. This is not optional and it is not just a reachability check: it records staging's host key in your `known_hosts`, and `ansible.cfg` sets `host_key_checking = True`, so without it stage 6's first converge of staging stops at connection time with `Host key verification failed` before a single role runs.
 
 ### 4.4 DNS
 
@@ -338,17 +342,24 @@ There is no Terraform for DNS, deliberately — see "Managing DNS in Terraform" 
 
 **Check:** `terraform plan` says "No changes" locally in **both** environment directories; the nightly Drift Detection workflow, run once by hand from Actions → Drift Detection → Run workflow, reports no drift for **both** environments in one run — its own `report` job will still fail at this stage, because `HEARTBEAT_PING_KEY` is not created until stage 7.3, so read the two `drift` jobs rather than the run's overall result; `ssh root@<prod ipv4>` works with the operator key and nothing else; both servers appear in their own Hetzner projects and neither project holds anything you created by hand.
 
-## From here on, one host
+## From here on, two hosts — but only one of them runs anything
 
-You now have two servers. **Everything from stage 5 to stage 9 configures one of them — the production host.** This is not an omission in the procedure; three mechanisms in this repository are single-environment by construction, and no step you can follow would change that:
+You now have two servers, and **stage 6 configures both**. It is written once and run once per environment: the inventory has a source per environment, and the host-baseline play takes the environment it targets as an input.
 
-- **`ansible/playbooks/host-baseline.yml` targets `hosts: prod`**, a literal rather than a parameter. No play can be pointed at a second environment.
-- **`ansible/inventory/hcloud.yml` authenticates with a single `HCLOUD_TOKEN`**, and a Hetzner token reaches one project. With a project per environment, the inventory sees one environment at a time — and the failure is quiet: a play whose `hosts:` matches nothing prints `skipping: no hosts matched` and **exits 0**, so a converge that reached no host reads exactly like one that had nothing to do.
-- **`.github/workflows/platform-deploy.yml` declares `environment: production`** and deploys to a single `PLATFORM_DEPLOY_HOST`. The platform stack has no per-environment path at all.
+**Stages 7 to 9 are still production's alone**, and one mechanism is why:
 
-The first two are `docs/change-queue.md` entry 50; the third has an entry of its own there. Until those land, the staging server is a provisioned, reachable host with an attached unmounted volume, and that is all it is.
+- **`.github/workflows/platform-deploy.yml` declares `environment: production`** and deploys to a single `PLATFORM_DEPLOY_HOST`. The platform stack has no per-environment path at all. That is `docs/change-queue.md`'s platform-per-environment entry.
 
-**If you decide you do not want it yet**, delete `terraform/environments/staging/`, remove its `HCLOUD_TOKEN_STAGING` repository secret and its `staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
+So after stage 6 the staging server is a **configured** host — Docker, UFW and fail2ban, on the tailnet, data volume mounted, operator account, deploy account — with no application stack on it. Its cloud firewall still opens no web port (`web_allowed_cidrs = []`), and it has no hostname and no certificate; those come with the stack, in the queue entry for staging's web exposure.
+
+Two things about staging in stage 6 that differ from production, both deliberate:
+
+- **Its own Vault password**, under the vault id `staging`. Reusing production's would mean anyone who can converge staging holds the password protecting production's secrets.
+- **Its own deploy keypair** for `platform`. One leaked private half must not deploy to both environments.
+
+**Its weekly image prune will report failure until the stack arrives**, and that is expected rather than a fault to chase: with nothing deployed, no application contributes an image and no container holds one, so the keep set is empty and the unit abandons by its own documented contract. See stage 6.5.
+
+**If you decide you do not want it yet**, delete `terraform/environments/staging/` and `ansible/inventory/staging.hcloud.yml` and `ansible/inventory/group_vars/staging.yml`, drop `HCLOUD_TOKEN_STAGING` from `ansible/.envrc`, remove its `HCLOUD_TOKEN_STAGING` repository secret and its `staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Then skip staging wherever stage 6 says "once per environment". Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
 
 ## Stage 5. Tailscale
 
@@ -394,15 +405,31 @@ Each application repository will need the same two OAuth values in stage 8; one 
 
 This stage is run from your workstation. It installs Docker, the host firewall and fail2ban, joins the tailnet, creates the `deploy` account with a forced-command key per application, creates your unprivileged operator account, mounts the data volume, and arms the weekly image prune.
 
+**Run it once per environment**, production first. Everything below takes the environment as an argument; `<environment>` means `prod` or `staging` throughout, and the two runs share no file, no token and no Vault password. Do production first because it is the one you will check most carefully, and staging second because by then you are repeating a procedure you have just seen work.
+
+### 6.0 The two tokens Ansible reads
+
+Ansible does not use the `HCLOUD_TOKEN` you set up for Terraform in stage 4.1. That variable is scoped per environment *directory* by direnv, so its value depends on where you are standing — fine for Terraform, which is always run from inside an environment directory, and wrong for Ansible, which is always run from `ansible/`.
+
+Instead, each environment has an inventory source of its own that names a credential of its own. Copy the example and fill in both read-only tokens from stage 1.2:
+
+```sh
+cd ansible
+cp .envrc.example .envrc
+direnv allow
+```
+
+Both are **Read Only** tokens. A wrong or missing one fails the run rather than producing an environment with no host in it, so a typo here cannot masquerade as a destroyed server.
+
 ### 6.1 Fill in the inventory variables
 
-Edit `ansible/inventory/group_vars/prod.yml`. Every value except the last two is non-secret and committed; those two are Vault-encrypted in place.
+Edit `ansible/inventory/group_vars/<environment>.yml` — production's and staging's are separate files with separate values, and staging's is written from scratch rather than copied from production's. Every value except the last two is non-secret and committed; those two are Vault-encrypted in place.
 
 | Variable | Set to |
 |---|---|
-| `hardening_ssh_allowed_cidrs` | Exactly the `ssh_allowed_cidrs` list from `terraform.tfvars`. They are kept in sync by hand; a mismatch makes the host firewall block what the cloud firewall allows. |
-| `hardening_web_allowed_cidrs` | Exactly `web_allowed_cidrs` from `terraform.tfvars` |
-| `deploy_apps` | One entry: `name: platform`, `public_key:` the `.pub` of the platform deploy key from stage 0. Applications are added here in stage 8. |
+| `hardening_ssh_allowed_cidrs` | Exactly the `ssh_allowed_cidrs` list from **that environment's** `terraform.tfvars`. They are kept in sync by hand; a mismatch makes the host firewall block what the cloud firewall allows. |
+| `hardening_web_allowed_cidrs` | Exactly `web_allowed_cidrs` from that environment's `terraform.tfvars`. Production's is `["0.0.0.0/0"]`; **staging's is `[]`**, and stays `[]` until the change that puts something behind those ports opens them in both files together. |
+| `deploy_apps` | One entry: `name: platform`, `public_key:` the `.pub` of that environment's platform deploy key. **Each environment gets its own keypair** — one leaked private half must not deploy to both. Applications are added here in stage 8. |
 | `ops_user_accounts` | One entry: `name: ops-<you>`, `public_key:` the `.pub` of your operator inspection key |
 | `platform_data_volume_subdirs` | Leave as is |
 | `ghcr_pull_username` | The GitHub username whose token is below. For an organisation, a dedicated machine user with read access to the application repositories is cleaner than a person's account. |
@@ -411,25 +438,25 @@ Edit `ansible/inventory/group_vars/prod.yml`. Every value except the last two is
 
 **The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`).
 
-Choose a Vault password, store it in the password manager, then encrypt the token in place:
+Choose a Vault password **for this environment** — production and staging get different ones, so that whoever can converge staging does not thereby hold the password protecting production's secrets — store it in the password manager, then encrypt the token in place:
 
 ```sh
 cd ansible
-ansible-vault encrypt_string --vault-id prod@prompt '<ghp_... token>' --name ghcr_pull_token
+ansible-vault encrypt_string --vault-id <environment>@prompt '<ghp_... token>' --name ghcr_pull_token
 ```
 
-Paste the output block into `group_vars/prod.yml` in place of the existing `ghcr_pull_token` value. The encrypted block is safe to commit; the Vault password is not written anywhere in the repository.
+Paste the output block into `group_vars/<environment>.yml` in place of the existing `ghcr_pull_token` value. The encrypted block is safe to commit; the Vault password is not written anywhere in the repository.
 
 Two things about `encrypt_string` that read as faults and are not:
 
-- **It prompts `New Vault password (prod):` even when the vault already exists.** That is its wording for the encrypt direction, not an offer to create a second vault. Type the password you chose above — or, when adding a value to a file that already has encrypted ones, the password those were encrypted with. Ansible cannot tell you afterwards which password made a block: two values encrypted under different passwords produce a file that fails to decrypt with either, naming neither.
+- **It prompts `New Vault password (<environment>):` even when that vault already exists.** That is its wording for the encrypt direction, not an offer to create a second vault. Type the password you chose above — or, when adding a value to a file that already has encrypted ones, the password those were encrypted with. Ansible cannot tell you afterwards which password made a block: two values encrypted under different passwords produce a file that fails to decrypt with either, naming neither.
 - **It only prints.** It writes to your terminal and edits nothing; copying its output into the file is a separate step you perform. The whole block goes in, `<name>: !vault |` line included.
 
 Whenever you add an encrypted value, confirm the file still decrypts as a whole — this prints the value's length, never the value:
 
 ```sh
 ansible localhost -m debug -a 'msg={{ <variable> | length }}' \
-  -e @inventory/group_vars/prod.yml --vault-id prod@prompt
+  -e @inventory/group_vars/<environment>.yml --vault-id <environment>@prompt
 ```
 
 **The heartbeat ping key.** The `image_prune` role installs a weekly unit that reports each activation to an external observer, and it **asserts this input before any role in the play changes the host** — so an absent key aborts `host-baseline.yml` rather than installing a scheduled unit nothing watches.
@@ -438,7 +465,7 @@ Create it now, at the heartbeat service from stage 0.1: **Settings → Ping key 
 
 ```sh
 cd ansible
-ansible-vault encrypt_string --vault-id prod@prompt '<ping key>' --name image_prune_heartbeat_ping_key
+ansible-vault encrypt_string --vault-id <environment>@prompt '<ping key>' --name image_prune_heartbeat_ping_key
 ```
 
 The key must be a bare token of letters, digits, `_` and `-`; the role refuses anything else by name, because the value is rendered into a shell file its reporting script sources and a quote in it would make that script fail silently.
@@ -449,20 +476,24 @@ The inventory is dynamic: it asks the Hetzner API which servers exist and groups
 
 ```sh
 cd ansible
-ansible-inventory -i inventory/hcloud.yml --graph
+ansible-inventory -i inventory/<environment>.hcloud.yml --graph
 ```
 
-You should see your server under `@prod`. If you see nothing, `HCLOUD_TOKEN` is not set in this shell.
+You should see that environment's server under `@<environment>`. If the command fails naming the source it could not parse, that environment's token in `ansible/.envrc` is missing or wrong — the run fails rather than showing you an empty inventory, which is the point.
 
 ### 6.3 Run the playbook
 
 ```sh
 cd ansible
 ansible-playbook playbooks/host-baseline.yml \
-  --vault-id prod@prompt \
+  -i inventory/<environment>.hcloud.yml \
+  -e target_environment=<environment> \
+  --vault-id <environment>@prompt \
   --private-key ~/.ssh/<company>-root \
   -e tailscale_auth_key=<tskey-auth-... from stage 5>
 ```
+
+**Do not add `--limit`.** The environment already selects the host set, there is nothing to narrow, and a limit filters the guard play's `localhost` out — so a run that reaches no host would exit 0 again, which is the failure the guard exists to end. `--tags` is safe — the guard is tagged `always` — with the single exception of `--skip-tags always`, which names that tag and switches the guard off.
 
 Two prompts: the Vault password, and (if the key has one) the operator key's passphrase. A first run takes several minutes; Docker's installation is the slow part. A second run immediately afterwards should report `changed=0`; if it does not, something is not idempotent and worth understanding before moving on.
 
@@ -483,39 +514,59 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
 
    ```sh
    cd ansible
-   ansible prod -m ansible.builtin.systemd_service \
-     -a "name=<unit> state=started" --vault-id prod@prompt
-   ansible prod -m ansible.builtin.command \
-     -a "journalctl -u <unit> -n 20 --no-pager" --vault-id prod@prompt
+   ansible <environment> -i inventory/<environment>.hcloud.yml \
+     --private-key ~/.ssh/<company>-root \
+     -m ansible.builtin.systemd_service \
+     -a "name=<unit> state=started" --vault-id <environment>@prompt
+   ansible <environment> -i inventory/<environment>.hcloud.yml \
+     --private-key ~/.ssh/<company>-root \
+     -m ansible.builtin.command \
+     -a "journalctl -u <unit> -n 20 --no-pager" --vault-id <environment>@prompt
    ```
 
    Plenty is still readable unprivileged: `systemctl is-active`, `systemctl show --property=…`, `systemctl list-timers`, `stat`, and any world-readable file.
 
-3. Commit and push `group_vars/prod.yml` through a pull request. The Molecule suite runs on it; that is the `ansible-verify` check.
+3. Commit and push `group_vars/<environment>.yml` through a pull request. The Molecule suite runs on it; that is the `ansible-verify` check.
 
 **Secrets created in this stage**
 
 | Name | Scope | Value from | Read by |
 |---|---|---|---|
-| Vault password | Password manager only | You chose it | Anyone running the playbook |
-| `ghcr_pull_token` | Encrypted inside `group_vars/prod.yml` | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
-| `image_prune_heartbeat_ping_key` | Encrypted inside `group_vars/prod.yml` | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3 |
+| Vault password, one per environment | Password manager only | You chose it | Anyone running that environment's playbook |
+| `ghcr_pull_token` | Encrypted inside `group_vars/<environment>.yml`, per environment | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
+| `image_prune_heartbeat_ping_key` | Encrypted inside `group_vars/<environment>.yml`, per environment | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3 |
 | `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository | The **private** half of the platform deploy key from stage 0. Store it now, then delete the local file. | `platform-deploy.yml`'s deploy job |
 | `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
-**Check** (the production host; the staging server is untouched by this stage): `sudo ufw status` as root shows default deny with 22, 80, 443 and the tailnet rules; `tailscale status` on the server shows `Running`; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
+**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status` on the server shows `Running`; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
+
+The web ports are where the two differ, and the difference is the check: **production shows 80 and 443, staging shows neither.** Staging carries `web_allowed_cidrs = []` at both layers, so a staging host with UFW rules for 80/443 means its `group_vars` has drifted from its `terraform.tfvars`.
 
 **Then prove the prune reports.** Its timer is weekly, so nothing reaches the heartbeat service until it fires — and a reporter that cannot reach the observer leaves a *successful* unit behind by design, so a green `systemctl status` is not evidence. Trigger one activation and read what it says:
 
 ```sh
 cd ansible
-ansible prod -m ansible.builtin.systemd_service \
-  -a "name=prune-host-images.service state=started" --vault-id prod@prompt
-ansible prod -m ansible.builtin.command \
-  -a "journalctl -u prune-host-images.service -n 20 --no-pager" --vault-id prod@prompt
+ansible <environment> -i inventory/<environment>.hcloud.yml \
+  --private-key ~/.ssh/<company>-root \
+  -m ansible.builtin.systemd_service \
+  -a "name=prune-host-images.service state=started" --vault-id <environment>@prompt
+ansible <environment> -i inventory/<environment>.hcloud.yml \
+  --private-key ~/.ssh/<company>-root \
+  -m ansible.builtin.command \
+  -a "journalctl -u prune-host-images.service -n 20 --no-pager" --vault-id <environment>@prompt
 ```
 
-The journal should carry `prune-host-images: considered N, removed M` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed. A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service; give it the period and grace from Appendix A.
+The journal should carry `prune-host-images: considered N, removed M` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed.
+
+A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service — `main-server-prune-host-images` and `staging-server-prune-host-images`, one per host and distinctly named because the two servers are named differently on purpose. **Give each the period and grace from Appendix A now.** A check created by its own first ping carries the *observer's* default period, not the unit's weekly one, so until you correct it the observer will call a perfectly healthy weekly job overdue within a day.
+
+### 6.5 Staging's prune fails, and that is the expected state
+
+On staging, the run above will not say `considered N, removed M`. It will report that the run was **abandoned** because the keep set is empty, exit non-zero, and ping `/fail`. Nothing is wrong.
+
+The prune protects images that a deployed application references or a running container holds. On a host where nothing is deployed there are neither, so an empty keep set is the honest answer — and the role treats it as a refusal rather than proceeding, because proceeding would mean `docker image prune -a`, weekly, reporting success. That guard is doing exactly what it exists to do.
+
+So `staging-server-prune-host-images` is red from the moment it exists until the platform stack reaches staging. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
 
 ## Stage 7. The platform stack
 
@@ -593,7 +644,7 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 ### 8.2 Infrastructure side
 
 1. Generate the application's deploy key (stage 0.3 table).
-2. Add to `deploy_apps` in `ansible/inventory/group_vars/prod.yml`:
+2. Add to `deploy_apps` in `ansible/inventory/group_vars/prod.yml` (and, once an application has a staging deploy path, to `staging.yml` with a keypair of its own):
 
    ```yaml
    - name: <app>
@@ -689,17 +740,17 @@ The Hetzner rows come in pairs, one per environment, because a Hetzner token rea
 
 | Name | Where | Created in | Value from | Breaks when wrong |
 |---|---|---|---|---|
-| Production Hetzner Read Only | repo-root `.envrc`; repo secret `HCLOUD_TOKEN` | 1 | The production Hetzner project → API tokens | Production's local plans, PR plans and drift detection; the Ansible inventory |
+| Production Hetzner Read Only | repo-root `.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_PROD`**; repo secret `HCLOUD_TOKEN` | 1 | The production Hetzner project → API tokens | Production's local plans, PR plans and drift detection; production's Ansible inventory source. **Rotating it means editing two local files, not one** — miss `ansible/.envrc` and the next converge dies at inventory parse |
 | Production Hetzner Read & Write | `production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
-| Staging Hetzner Read Only | `terraform/environments/staging/.envrc`; repo secret `HCLOUD_TOKEN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection |
+| Staging Hetzner Read Only | `terraform/environments/staging/.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_STAGING`**; repo secret `HCLOUD_TOKEN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection; staging's Ansible inventory source. Two local files here too |
 | Staging Hetzner Read & Write | `staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
 | `TF_API_TOKEN` | Repo secret and **both** Env secrets; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |
 | Operator inspection key | Workstation | 0 | `ssh-keygen` | Daily unprivileged login |
 | Tailscale server auth key | Password manager | 5 | Tailscale → Keys | Joining the host to the tailnet (first run, rebuilds) |
 | `TAILSCALE_OAUTH_CLIENT_ID` / `_SECRET` | Env secret, infrastructure and each app repo | 5 | Tailscale → OAuth clients | Every deploy job |
-| Vault password | Password manager | 6 | Chosen | Running the playbook |
-| `ghcr_pull_token` | Vault-encrypted in `group_vars/prod.yml` | 6 | GitHub classic PAT, `read:packages` | Pulling private images at deploy |
+| Vault password, one per environment | Password manager | 6 | Chosen | Running that environment's playbook |
+| `ghcr_pull_token` | Vault-encrypted in `group_vars/<environment>.yml`, one per environment | 6 | GitHub classic PAT, `read:packages` | Pulling private images at deploy |
 | `PLATFORM_DEPLOY_SSH_KEY` | Env secret | 6 | `ssh-keygen`, platform key | Platform deploys |
 | `PLATFORM_DEPLOY_HOST` | Env secret | 6 | Tailscale → Machines | Platform deploys, Grafana bind |
 | `PLATFORM_ACME_EMAIL` | Env secret | 7 | A mailbox | Certificate registration |
@@ -708,7 +759,7 @@ The Hetzner rows come in pairs, one per environment, because a Hetzner token rea
 | `PLATFORM_GRAFANA_ADMIN_PASSWORD` | Env secret | 7 | Generated | Grafana login |
 | `PLATFORM_SLACK_WEBHOOK_URL` | Env secret | 7 | Slack app | Alert delivery |
 | `PLATFORM_DEADMANSWITCH_URL` | Env secret | 7 | Heartbeat service | The external alarm |
-| `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in `group_vars/prod.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
+| `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in each `group_vars/<environment>.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
 | `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
 
 `HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.
@@ -719,13 +770,18 @@ The checks it addresses, and the settings each needs at the observer. A check co
 |---|---|---|---|
 | `infrastructure-drift` | `.github/workflows/drift.yml`, nightly | 1 day | 12 hours |
 | `infrastructure-pre-commit-autoupdate` | `.github/workflows/pre-commit-autoupdate.yml`, weekly | 7 days | 2 days |
-| `<inventory_hostname>-prune-host-images` | `prune-host-images.service` on the host, weekly | 7 days | 2 days |
+| `main-server-prune-host-images` | `prune-host-images.service` on the production host, weekly | 7 days | 2 days |
+| `staging-server-prune-host-images` | `prune-host-images.service` on the staging host, weekly | 7 days | 2 days |
 
-The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system. The host slug is templated per host, so a second host converged by the same role reports to a check of its own.
+The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system.
+
+The host slug is templated from `inventory_hostname`, which is why the two servers are named differently in their `terraform.tfvars` — sharing a name would merge them into one check, where the live host's weekly success would keep it green while the other's timer was dead. **Staging's check is expected to be red** until the platform stack reaches it; §6.5 says why, and that is a state to leave alone rather than mute.
 
 ## Appendix B. Rebuilding an existing host
 
-**This covers the production host** — the configured one. Rebuilding the staging server is `server_enabled` toggled off and on in its own `terraform.tfvars`, then reading its new address, because nothing else has been done to it.
+**This covers the production host**, which is the one running an application stack. Staging is rebuilt the same way as far as stage 6 — `server_enabled` toggled off and on in its own `terraform.tfvars`, its new address read, its host key re-recorded (4.3), a fresh tailnet auth key if the old one expired, then 6.3 — and stops there, having no stack to redeploy.
+
+An important consequence for staging specifically: its data volume is **not** wiped by a rebuild, and its `known_hosts` entry **is** invalidated. The second is the one that bites, because it presents as the converge failing at connection time rather than as a rebuild artefact.
 
 The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, 5.3's auth key if the old one expired, 6.3, 6.4 (new tailnet IP → `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by re-running the last Platform Deploy from Actions, 7.5, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/change-queue.md` entry 33 is what closes that, and entry 30 is the plan to turn this paragraph into a rehearsed runbook with timings.
 

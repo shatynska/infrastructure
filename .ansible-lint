@@ -9,6 +9,30 @@
 exclude_paths:
   - ansible/roles/geerlingguy.docker/
 
+# ansible/playbooks/host-baseline.yml's second play takes its `hosts:` from
+# `target_environment`, supplied per run and deliberately given no default
+# (iac-host-configuration's "Host Configuration Names the Environment It
+# Targets"). ansible-lint's `syntax-check` rule COMPILES that play, and an
+# undefined variable in a `hosts:` keyword is a hard error there:
+#
+#   Error processing keyword 'hosts': 'target_environment' is undefined
+#
+# That rule is tagged `unskippable` -- it cannot be disabled per-file, per-rule
+# or by a `# noqa`, so feeding it a value is the only way through. The same
+# value is passed by the `ansible-playbook --syntax-check` pre-commit hook, so
+# the two tools compile the play identically.
+#
+# THE VALUE NAMES NO ENVIRONMENT, ON PURPOSE. A real environment name here
+# would mean these tools resolve the play against an environment nobody asked
+# for, and a sentinel that drifted into being a real environment name would do
+# so invisibly. `.github/tests` asserts that it names none.
+#
+# This is NOT a default for `target_environment`. It is scoped to the two
+# tools that compile the play without running it; a real run supplies its own
+# and is refused by the playbook's first play if it does not.
+extra_vars:
+  target_environment: syntax-check-only
+
 # Every role referenced by name (e.g. `role: hardening`) needs mocking
 # here -- not just in each role's molecule/default/converge.yml, but also
 # in the real ansible/playbooks/host-baseline.yml. ansible-lint does not

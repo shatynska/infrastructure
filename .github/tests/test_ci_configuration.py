@@ -4665,7 +4665,7 @@ class TestChangeDetectionResolvesTheGatesInput(
         "ansible/requirements.yml",
         "ansible/requirements-test.txt",
         "ansible/ansible.cfg",
-        "ansible/inventory/hcloud.yml",
+        "ansible/inventory/prod.hcloud.yml",
     )
     NON_CONFIGURATION_PATHS = (
         "README.md",

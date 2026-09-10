@@ -38,7 +38,8 @@ uses constantly — the running `prom/alertmanager:v0.28.1` was created in March
 ## `deploy_apps` — the one required input
 
 Read from the same inventory variable `deploy_user` reads
-(`ansible/inventory/group_vars/prod.yml`), **not copied into a second one**: a
+(the targeted environment's `ansible/inventory/group_vars/<environment>.yml`),
+**not copied into a second one**: a
 divergence between two such lists would offer a live application's images for
 removal.
 

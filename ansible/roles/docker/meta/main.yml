@@ -34,7 +34,8 @@ galaxy_info:
 # This role now owns the daemon's configuration as well as its installation
 # (the change bound-host-log-growth-and-add-swap, design.md Decision 4). The
 # external role's `docker_daemon_options` is named HERE and nowhere else --
-# never from ansible/inventory/group_vars/prod.yml -- which is the direct
+# never from an environment's own ansible/inventory/group_vars/ file --
+# which is the direct
 # reference to the external role this wrapper exists to prevent, and which
 # would also turn a value safe for every host into one host's fact. A future
 # daemon option is added to the dictionary below, or supplied through

@@ -11,11 +11,16 @@ source of truth for this role's variables, and vice versa.** The two are
 maintained by hand in two separate places:
 
 - Cloud firewall (what's reachable from the internet at all):
-  `terraform/environments/prod/terraform.tfvars`'s `ssh_allowed_cidrs`
-  and `web_allowed_cidrs`.
+  that environment's `terraform/environments/<environment>/terraform.tfvars`'s
+  `ssh_allowed_cidrs` and `web_allowed_cidrs`.
 - Host firewall (defense-in-depth on top of whatever the cloud layer
-  already allows): `ansible/inventory/group_vars/prod.yml`'s
+  already allows): that environment's
+  `ansible/inventory/group_vars/<environment>.yml`'s
   `hardening_ssh_allowed_cidrs` and `hardening_web_allowed_cidrs`.
+
+The pair is per environment, and both environments must be checked: prod's
+`web_allowed_cidrs` is `["0.0.0.0/0"]` and staging's is `[]`, so a change made
+to one environment's pair says nothing about the other's.
 
 Whenever either side's CIDR list changes, check the other. Leaving UFW
 stricter than the cloud firewall silently blocks traffic the cloud layer

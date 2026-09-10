@@ -18,11 +18,14 @@
 #                                substring test, because a recorded action may
 #                                be short (`assert`) or fully qualified.
 #   message names the variable   SPECIFIED -- "SHALL fail naming that input".
-#   message names group_vars/    The clause "and how to supply it" is
-#   prod.yml                     SPECIFIED; the choice of that particular path
-#                                to satisfy it is DERIVED, from tasks.md 1.2,
-#                                which is where the Vault-encrypted value is
-#                                to be set. Same classification as
+#   message names                The clause "and how to supply it" is
+#   ansible/inventory/group_vars/ SPECIFIED; the choice of that particular path
+#   <environment>.yml            to satisfy it is DERIVED. It named prod.yml
+#                                until configure-the-staging-host gave this
+#                                repository a second group_vars, at which point
+#                                naming production's file was the wrong answer
+#                                for a staging run. Same classification, and
+#                                the same reasoning, as
 #                                hardening/molecule/absent-ssh-cidrs.
 #   nothing installed            SPECIFIED -- "before changing anything on the
 #                                host, and SHALL NOT install the unit with
@@ -110,13 +113,17 @@
       ansible.builtin.assert:
         that:
           - "'image_prune_heartbeat_ping_key' in absent_key_outcome.failed_msg"
-          - "'group_vars/prod.yml' in absent_key_outcome.failed_msg"
+          # The exact literal the role now emits -- see the sibling
+          # assertion in hardening's absent-ssh-cidrs scenario for why this
+          # is not loosened to 'group_vars/'.
+          - "'ansible/inventory/group_vars/<environment>.yml' in absent_key_outcome.failed_msg"
         fail_msg: >-
           The run failed at a check, but its message does not name both the
           input and where it is expected to be set:
           '{{ absent_key_outcome.failed_msg }}'. An operator reading it has to
           be told which input was not supplied and how to supply it -- the
-          value is Vault-encrypted in ansible/inventory/group_vars/prod.yml,
+          value is Vault-encrypted in the targeted environment's own
+          ansible/inventory/group_vars/<environment>.yml,
           and that is the whole difference between this diagnostic and the
           error it replaces.
         success_msg: >-

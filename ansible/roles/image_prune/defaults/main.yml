@@ -34,7 +34,7 @@ image_prune_heartbeat_base_url: https://hc-ping.com
 # misconfiguration to refuse rather than a mode to tolerate -- unlike the GHCR
 # credential, whose absence is a legitimate operating mode for a host that
 # pulls no private images. Supplied Vault-encrypted from
-# ansible/inventory/group_vars/prod.yml.
+# the targeted environment's own ansible/inventory/group_vars/<environment>.yml.
 # image_prune_heartbeat_ping_key:
 
 # Generous against a legitimate run, which enumerates a few dozen images and

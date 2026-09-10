@@ -1,0 +1,30 @@
+# Ansible's Hetzner credentials. Copy this file to ansible/.envrc (gitignored)
+# and fill in the real values:
+#   cp .envrc.example .envrc
+#   direnv allow
+#
+# BOTH ARE READ ONLY TOKENS. Never put a Read & Write token here: each
+# environment's lives exclusively in that environment's own GitHub Environment
+# secret, and an environment whose Environment requires no reviewer is no
+# exception. See AGENTS.md.
+#
+# ONE VARIABLE PER ENVIRONMENT, because a Hetzner token is scoped to one
+# project and each environment has a project of its own. Each name is read by
+# exactly one inventory source -- inventory/prod.hcloud.yml and
+# inventory/staging.hcloud.yml -- so which project a run reaches is decided by
+# the source it names with `-i`, not by what a shell happens to export.
+# Bringing a third environment into inventory adds a source and a line here.
+#
+# THIS FILE IS NOT THE REPOSITORY-ROOT .envrc, AND THE DIFFERENCE MATTERS.
+# That one exports HCLOUD_TOKEN, which is what the *Terraform* provider reads,
+# and docs/bootstrap-a-new-host.md §4.1 scopes it per environment directory --
+# production's at the root, staging's inside terraform/environments/staging/.
+# direnv loads the nearest .envrc and does not merge the parent's, so in this
+# directory HCLOUD_TOKEN is not set at all. That is deliberate: nothing Ansible
+# reads shares a name with a variable whose value depends on where you stand.
+#
+# A wrong or missing value fails the run rather than producing an environment
+# with no host in it -- ansible.cfg's `any_unparsed_is_failed`. Without that,
+# a typo here would look exactly like a destroyed server.
+export HCLOUD_TOKEN_PROD="your-read-only-hetzner-token-for-prods-project"
+export HCLOUD_TOKEN_STAGING="your-read-only-hetzner-token-for-stagings-project"

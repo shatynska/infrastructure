@@ -22,10 +22,16 @@
 #                                   short (`assert`) or fully qualified.
 #   message names the variable      SPECIFIED -- "a message naming that
 #                                   input".
-#   message names group_vars/       The clause "and how to supply it" is
-#   prod.yml                        SPECIFIED; the choice of that particular
-#                                   path to satisfy it is DERIVED, from
-#                                   tasks.md 2.4/4.1.
+#   message names                   The clause "and how to supply it" is
+#   ansible/inventory/group_vars/   SPECIFIED; the choice of that particular
+#   <environment>.yml               path to satisfy it is DERIVED. It named
+#                                   prod.yml until configure-the-staging-host,
+#                                   which gave this repository a second
+#                                   group_vars and so made naming production's
+#                                   file the wrong answer for a staging run.
+#                                   The full literal is asserted rather than a
+#                                   `group_vars/` substring, which would still
+#                                   match the prod-naming wording it replaced.
 #   ufw is not installed            SPECIFIED -- "the run SHALL fail before
 #                                   any task that acts on the host has
 #                                   changed it". `Ensure UFW is installed` is
@@ -115,7 +121,12 @@
       ansible.builtin.assert:
         that:
           - "'hardening_ssh_allowed_cidrs' in absent_cidrs_outcome.failed_msg"
-          - "'group_vars/prod.yml' in absent_cidrs_outcome.failed_msg"
+          # The exact literal the role now emits, not a loosened
+          # 'group_vars/' substring: the directory alone would still be
+          # present in the prod-naming message this change replaced, so a
+          # substring test would pass against the very wording it exists to
+          # rule out.
+          - "'ansible/inventory/group_vars/<environment>.yml' in absent_cidrs_outcome.failed_msg"
         fail_msg: >-
           The run failed at a check, but its message does not name both the
           input and where it is expected to be set:
