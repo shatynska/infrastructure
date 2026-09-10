@@ -522,7 +522,13 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
 
 ### 6.3a When the run fails partway
 
-It can, and the first converge of a host is where it is likeliest. What a failure leaves is a **partially-converged host**: every role ahead of the failing one has applied in full, the failing role has applied up to the task that failed, and nothing after it has run. That middle clause matters — in the case below, the failing task is the *last* one in its role, so Tailscale is installed and `tailscaled` is running even though the host never joined the tailnet. That is recoverable and is not a reason to rebuild — **correct the input and run the same command again.** One assumption behind that, worth knowing because it is not universal: `hardening` runs before `tailscale` and ends by enabling UFW, so at the moment of a tailscale failure the host is reachable on whatever `hardening_ssh_allowed_cidrs` allows, and the tailnet is precisely what has not come up. Both environments here set an operator ISP range, so public SSH still gets you in. On a host configured for tailnet-only SSH — which the role permits and which is stricter than what this repository runs — a failure at this point would leave no way in, and rebuilding *would* be the recovery. Every role here is idempotent, so the second run reports `ok` for the work already done and carries on from where it stopped.
+It can, and the first converge of a host is where it is likeliest. What a failure leaves is a **partially-converged host**: every role ahead of the failing one has applied in full, the failing role has applied up to the task that failed, and nothing after it has run.
+
+That middle clause matters. In the case below the failing task is the *last* one in its role, so Tailscale is installed and `tailscaled` is running even though the host never joined the tailnet.
+
+None of that is a reason to rebuild — **correct the input and run the same command again.** Every role here is idempotent, so the second run reports `ok` for the work already done and carries on from where it stopped.
+
+**That assumes you can still reach the host.** `hardening` runs before `tailscale` and ends by enabling UFW, so at the moment of a tailscale failure the host answers on whatever `hardening_ssh_allowed_cidrs` allows — and the tailnet, which is the other way in, is precisely what has not come up. Both environments here set an operator ISP range, so public SSH still gets you in. On a host configured for tailnet-only SSH, which the role permits and which is stricter than what this repository runs, a failure here would leave no way in at all, and rebuilding would be the recovery.
 
 One failure hides its own cause, and it is the one most likely to bite on a first run. If *Bring the host onto the tailnet* fails, Ansible prints only:
 
@@ -540,11 +546,12 @@ tailscale status                   # expect: Logged out.
 read -rs KEY                       # paste the key, press Enter; it is not echoed
 tailscale up --authkey="$KEY"      # this prints the real error
 journalctl -u tailscaled -n 30 --no-pager
+tailscale status --json | grep BackendState    # "Running" once it has joined
 ```
 
-`read -rs` rather than typing the key into the command, for the reason §6.1 gives about the GHCR token: an auth key on a command line lands in `root`'s shell history and, on a host that already has other accounts, in `ps`. This one is **reusable** and lives for 90 days (§5.3), so it is worth the extra line.
+`read -rs` keeps the key out of `root`'s shell history, which is worth the extra line for a credential that is **reusable** and lives for 90 days (§5.3). Be clear about what it does not do: `--authkey="$KEY"` is expanded by the shell before `tailscale` runs, so the key is in that process's arguments and readable from `/proc/<pid>/cmdline` for as long as the command takes. On a first converge there is no unprivileged account on the host to read it — `ops_user` runs after `tailscale` — but on a re-converge of a configured host there is. This is weaker than §6.1's `curl` prompt, which never puts the token in an argument at all.
 
-The usual causes, in rough order: the key was already consumed, because it was generated single-use rather than **reusable** (§5.3); it expired; it was pasted truncated; or the tailnet policy requires a tag the key does not carry. Once `tailscale status --json` reports `"BackendState": "Running"` — the same field the role's own guard reads, and the reason plain `tailscale status` will not show you that word — `exit` and re-run the playbook — the `tailscale up` task will skip, its `when:` seeing the host already connected.
+The usual causes, in rough order: the key was already consumed, because it was generated single-use rather than **reusable** (§5.3); it expired; it was pasted truncated; or the tailnet policy requires a tag the key does not carry. Once `BackendState` reads `Running`, `exit` and re-run the playbook. The `tailscale up` task will skip this time: its `when:` reads that same field, which is why the check above uses `--json` rather than plain `tailscale status`.
 
 ### 6.4 After the run
 

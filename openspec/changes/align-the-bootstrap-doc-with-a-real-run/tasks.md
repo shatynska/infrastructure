@@ -57,8 +57,16 @@ that a sentence is true; what follows is what does.
 
 **5.3 — stage 6 read end to end.** Every command in the stage has now been
 executed at least once, in `configure-the-staging-host`'s converge or in this
-session, with one exception: `direnv allow`, which is exercised by anyone who
-has direnv and whose absence is the case section 1 exists to handle.
+session, with these exceptions, named because this change holds itself to that
+standard explicitly:
+
+- `direnv allow`, exercised by anyone who has direnv, and whose absence is the
+  case section 1 exists to handle;
+- `read -rs KEY`, `tailscale up --authkey="$KEY"` and `tailscale status --json`,
+  which are round-2 rewordings of commands that *were* run — 10.2 ran
+  `tailscale up` with the key inline, 10.4 ran plain `tailscale status` — but
+  not in the form the document now prints. They sit inside the one section 6.2
+  waives as unobservable without deliberately breaking a converge.
 
 **Corrections made after code review, each a claim that was not true as first
 written.** Recorded rather than quietly fixed, because in a change whose subject
