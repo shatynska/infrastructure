@@ -52,32 +52,48 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 
 ## 3. Discovery and change detection
 
-- [ ] 3.1 Write the discovery step that enumerates `terraform/environments/*/`, reads
+- [x] 3.1 Write the discovery step that enumerates `terraform/environments/*/`, reads
   each declaration, and emits a matrix. Verify by running its body standalone against
   the working tree and confirming it emits exactly one entry, for prod.
-- [ ] 3.2 Make discovery fail closed on an absent, unparseable or incomplete
+- [x] 3.2 Make discovery fail closed on an absent, unparseable or incomplete
   declaration, on an empty result, and on **two environments declaring the same
   read-only secret name or the same GitHub Environment name**. Verify by running its
   body against a scratch tree carrying each of those five shapes and confirming each
   exits non-zero — the first three naming the directory and the missing field, the last
   two naming both colliding environments.
-- [ ] 3.3 Write the change-detection step mapping changed paths to affected
+- [x] 3.3 Write the change-detection step mapping changed paths to affected
   environments (`terraform/modules/**` → all; `terraform/environments/<name>/**` →
   that one), refusing an unresolvable filter result rather than reading it as "nothing
   changed". Verify by running its body standalone across each case.
-- [ ] 3.4 Keep both step bodies free of `${{ }}`, taking every input through `env:`, so
+- [x] 3.4 Keep both step bodies free of `${{ }}`, taking every input through `env:`, so
   `.github/tests` can extract and execute them — the constraint `ansible-verify.yml`'s
   gate and discovery bodies already observe, and the reason its tests can exist.
 
+  **Result (3.1-3.4).** One discovery body, duplicated verbatim into all three
+  workflows, and one resolution body duplicated into the two that narrow by changed
+  paths. Both are free of Actions expressions and take every input through `env:`,
+  so `.github/tests` executes them rather than reading them. Discovery is exercised
+  over six scratch trees by `TestDiscoveryFailsClosed` (the five refusals 3.2 names,
+  plus the clean two-environment tree that stops a census refusing everything from
+  satisfying them). The mapping 3.3 describes is exercised over both workflows by
+  `TestTheAffectedEnvironmentMappingIsRunRatherThanRead`, added under 5.2 - see
+  there for why it was not already covered.
+
+  The declaration is read with `sed`/`awk` rather than a YAML parser. It is a flat
+  mapping by design, and this keeps the body runnable with bash, jq and coreutils
+  alone - which is what the suite's own no-privileged-resource constraint requires
+  of anything it executes, and what `.pre-commit-config.yaml`'s gitleaks pin is
+  already read with.
+
 ## 4. The three workflows
 
-- [ ] 4.1 `pr-validation.yml`: move `terraform plan` into a matrix job over the affected
+- [x] 4.1 `pr-validation.yml`: move `terraform plan` into a matrix job over the affected
   environments, reading its Hetzner token as `secrets[<the matrix's declared read-only
   secret name>]` and declaring no `environment:`. **That job SHALL run gitleaks as a
   step before its plan step**, so the scan-before-plan ordering holds within the job
   where a plan actually runs. Verify that every job in the workflow running a
   `terraform plan` also runs gitleaks earlier in that same job.
-- [ ] 4.1a Keep `validate` as the registered context: leave its other steps and its
+- [x] 4.1a Keep `validate` as the registered context: leave its other steps and its
   literal name untouched, move `pull-requests: write` to whichever job now posts the
   plan comment and reduce `validate`'s own scope to `contents: read` and
   `pull-requests: read` if the posting step moved — **not** dropping the block, since its
@@ -94,11 +110,11 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   `success`, refusing a skip on a run that asked for the work, and refusing a
   `cancelled` either way. Verify by running the concluding step's body standalone across
   each row of that table.
-- [ ] 4.1b Set `fail-fast: false` on the plan matrix so one environment's failure does
+- [x] 4.1b Set `fail-fast: false` on the plan matrix so one environment's failure does
   not abandon the others, and confirm `validate` still concludes failure when any row
   failed. Verify by running the concluding step's body with a failed row among passing
   ones.
-- [ ] 4.2 `pr-validation.yml`: give each environment its own PR comment, keyed by a
+- [x] 4.2 `pr-validation.yml`: give each environment its own PR comment, keyed by a
   marker carrying the environment name, and move `pull-requests: write` to the job that
   posts it if the posting step moves with the plan. **The current `find-comment` uses
   `body-includes: "### Terraform Plan"` with `edit-mode: replace`, so N environments
@@ -106,14 +122,14 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   statically — an assertion that the find-comment marker is derived from the
   environment rather than constant — not by observing one comment at N=1, which the
   defect also produces.
-- [ ] 4.3 `apply.yml`: matrix the plan and apply jobs over the environments the merge
+- [x] 4.3 `apply.yml`: matrix the plan and apply jobs over the environments the merge
   affects, take each apply job's `environment:` from the matrix, and name the `tfplan`
   artifact per environment so one environment's plan cannot be applied to another.
   Move the `concurrency` group from workflow level to **job level** on the plan and
   apply jobs, derived from the environment — a workflow-level declaration cannot read a
   matrix value. Verify the workflow parses, that no environment name appears as a
   literal anywhere in it, and that the artifact name is derived rather than constant.
-- [ ] 4.3a `apply.yml`: detect an Environment that omits `HCLOUD_TOKEN`, per design.md
+- [x] 4.3a `apply.yml`: detect an Environment that omits `HCLOUD_TOKEN`, per design.md
   decision 4a. The **plan** job — which declares no `environment:` and therefore sees
   the repository-scoped read-only token — emits `sha256(token + github.run_id)` as a job
   output; the apply job computes the same digest over its own resolved `HCLOUD_TOKEN`
@@ -123,30 +139,52 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   same-job comparison would compare a value with itself. Verify by running both step
   bodies standalone over known inputs, confirming equal inputs fail and unequal inputs
   pass, and that neither body prints either token.
-- [ ] 4.4 `apply.yml`: read the destroy-policy gate's applicability from the
+- [x] 4.4 `apply.yml`: read the destroy-policy gate's applicability from the
   environment's declaration, treating an absent statement as applicable. Verify by
   running the gate's body standalone with the flag set both ways against a saved plan
   containing a delete.
-- [ ] 4.5 `drift.yml`: matrix the plan over every environment regardless of changed
+- [x] 4.5 `drift.yml`: matrix the plan over every environment regardless of changed
   paths, title each drift issue per environment, and ensure one environment's failure
   does not prevent the others being planned and reported. Verify the workflow parses,
   that the issue title is derived rather than literal, and that `report`'s `needs:`
   names every other job in the workflow — including any new discovery job — since a
   skipped dependency reads as non-failure to its heartbeat.
-- [ ] 4.6 Update every workflow comment that cites a requirement by name where this
+- [x] 4.6 Update every workflow comment that cites a requirement by name where this
   change altered what that requirement says. Verify by grepping the three workflows for
   requirement names and reading each against the delta spec.
 
+  **Result (4.1-4.6).** `pr-validation.yml` gains a `discover` job and a `plan`
+  matrix carrying its own gitleaks install and scan; `validate` keeps its literal
+  name, its other steps and its registered context, drops to `contents: read` plus
+  `pull-requests: read`, gains `needs: [discover, plan]` and `if: always()`, and
+  concludes last so every other check still runs and reports on a pull request whose
+  plan failed. `apply.yml` and `drift.yml` gain the same `discover` job and matrix
+  the plan and apply over it; `apply.yml`'s `concurrency` moved to job level on both.
+  No environment name appears in any of the three.
+
+  Three bodies were run standalone across their cases, and each verification is now
+  a committed test rather than a run someone did once: 4.1a/4.1b's conclusion over
+  eight rows (`TestThePlanAggregationDiscriminates`), 4.3a's digest pair
+  (`TestTheApplyJobEstablishesItResolvedItsOwnWriteToken`), and 4.4's gate with
+  applicability `true`, `false` and absent against a stubbed destructive plan - the
+  last confirming that only an explicit `false` exempts, that an absent value is
+  gated, and that the override label still lets a deliberate teardown through.
+
+  4.6: the three workflows' requirement citations were re-read against the delta.
+  All still hold; `apply.yml` gained an explicit citation of *Gated Production Apply
+  Applies the Reviewed Plan* naming the fact that it now governs every environment,
+  with the declined rename pointed at `docs/deferred-work.md`.
+
 ## 5. Tests
 
-- [ ] 5.1 Dispatch `ai-toolkit:change-test-writer` with this change's name, its
+- [x] 5.1 Dispatch `ai-toolkit:change-test-writer` with this change's name, its
   absolute `changeRoot` and artifact paths, this repository's convention files, the
   test command `python3 -m unittest discover --start-directory .github/tests` run from
   the repository root, and the test-path glob `.github/tests/*.py`. That is the only
   row of this project's three that applies: every property this change adds is a
   static read of a committed file. Verify that the tests it writes fail against the
   unmodified tree.
-- [ ] 5.2 Confirm the written tests cover, at minimum: that no workflow names an
+- [x] 5.2 Confirm the written tests cover, at minimum: that no workflow names an
   environment as a literal; that `validate` and `ansible-verify` remain literal job
   names with no workflow-level path filter; that every job running `terraform plan`
   declares no `environment:`; that every apply job does declare one; that prod's
@@ -158,7 +196,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   in discovery's shell; and the extracted
   step bodies of 3.1–3.3, 4.1a, 4.1b and 4.3a across their cases. Verify by reading the test file
   against the delta spec's scenarios and naming any scenario with no test.
-- [ ] 5.3 Re-express the existing assertions this change invalidates. First,
+- [x] 5.3 Re-express the existing assertions this change invalidates. First,
   `test_no_job_containing_a_secret_scanning_step_is_conditioned_on_terraform_changes`
   fails any job holding a gitleaks step whose `if:` mentions Terraform — which the plan
   matrix job's natural gate would. Resolve it by shaping the gate as an **empty matrix**
@@ -179,7 +217,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   declaration, no plan job declares one, each apply job depends on its plan job and
   applies that job's saved plan — rather than deleting or weakening them. Verify each
   re-expressed assertion fails against a workflow with the property removed.
-- [ ] 5.4 Strengthen `test_secret_scanning_precedes_any_terraform_plan_in_the_same_job`
+- [x] 5.4 Strengthen `test_secret_scanning_precedes_any_terraform_plan_in_the_same_job`
   so that a `terraform plan` step in a job carrying **no** preceding gitleaks step fails
   the test rather than being skipped. Today `if not scan_indices or not plan_indices:
   continue` means a plan moved into a job of its own makes the assertion vacuous rather
@@ -188,38 +226,87 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   **red**; removing the gitleaks step entirely is *not* the verification, since that
   trips a different assertion first.
 
+  **Result (5.1-5.4).** 5.1 was performed by the previous session; the derived
+  module and `test-plan.md` are its output, and it went red against the unmodified
+  tree (31 failures of 454, all in that module).
+
+  5.2 found the checklist covered with one exception, now closed: no committed test
+  executed 4.1a/4.1b's concluding body or 3.3's mapping. `test-plan.md` records the
+  second as "the largest gap in this pass" and both as deliberate, because the shape
+  in which each step's inputs arrive was not fixed when those tests were written.
+  The implementation fixes both shapes, so two classes were added to the derived
+  module - `TestThePlanAggregationDiscriminates` and
+  `TestTheAffectedEnvironmentMappingIsRunRatherThanRead` - locating each step by the
+  expressions its `env:` assigns rather than by any name this change chose. Both
+  were confirmed to go red against a copy of the tree with the property removed.
+
+  5.3 and 5.4 were performed as written, and each re-expression was confirmed to
+  fail against a tree with its property removed: no `environment:` on the apply job,
+  the Environment named as a literal, the apply no longer depending on the plan job,
+  and an apply recomputing instead of applying the saved plan. 5.4's strengthening
+  was confirmed red for a plan moved into a job with no scan while gitleaks remained
+  elsewhere in the workflow - the verification that task explicitly distinguishes
+  from removing the step entirely. The `always()` allowance is a shared predicate,
+  `job_condition_is_admissible`, pinned by `TestTheAdmittedJobConditionIsExactlyOneLiteral`
+  against all four spellings 5.3 names plus a bare `always()` on a job with no
+  `needs:`.
+
+  **One assertion was narrowed, and it is the only place two SPECIFIED tests in the
+  derived module could not both be satisfied.**
+  `TestNoWorkflowNamesAnEnvironment.test_no_terraform_workflow_maps_an_environment_to_a_secret`
+  as written failed any job declaring no `environment:` that reads
+  `secrets.<any environment's declared read-only secret>`. But
+  `TestTheApplyJobEstablishesItResolvedItsOwnWriteToken.test_the_guard_reads_the_repository_scoped_hcloud_token_by_that_name`
+  REQUIRES `secrets.HCLOUD_TOKEN` in exactly such a job, and both trace to delta
+  text: the omitted-write-token guard must digest `HCLOUD_TOKEN` by that name
+  ("because that is what GitHub falls back to") and must do it where the
+  repository-scoped value is visible, which is only a job with no `environment:`;
+  and prod declares `HCLOUD_TOKEN` as its own read-only secret, by decision 1, so
+  that nothing in repository settings moves at one environment. No workflow can
+  satisfy both readings. Three escapes were checked and each is closed by another
+  assertion: moving the guard into a job that declares an `environment:`, reading the
+  repository token under another spelling, and giving prod a different read-only
+  secret name.
+
+  The sweep is now scoped to the steps that invoke Terraform, plus the job-level
+  `env:` those steps inherit - which is what the requirement's own sentence is about
+  ("the secret a plan **runs under** comes from workflow text"). Confirmed still red
+  for a literal secret name bound at step level AND at job level. The reasoning is
+  written into the test's own docstring, because a reader of that test needs it more
+  than a reader of this file does.
+
 ## 6. Documentation
 
-- [ ] 6.1 Correct the README's staging paragraph. It says a second environment is "a
+- [x] 6.1 Correct the README's staging paragraph. It says a second environment is "a
   second `terraform/environments/<name>/` folder reusing the same modules"; after this
   change that is true of the pipeline but still incomplete — the folder also carries a
   declaration, and the environment needs its own HCP workspace, GitHub Environment and
   secrets. Verify by reading the corrected paragraph against what entry 49 records as
   outstanding.
-- [ ] 6.2 Record in `docs/bootstrap-a-new-host.md` what adding an environment now
+- [x] 6.2 Record in `docs/bootstrap-a-new-host.md` what adding an environment now
   requires, or state there that it is out of that document's scope and where it lives
   instead. Verify the document does not contradict 6.1.
-- [ ] 6.3 Add a `docs/deferred-work.md` entry for the requirement-name rename that
+- [x] 6.3 Add a `docs/deferred-work.md` entry for the requirement-name rename that
   design.md Decision 7 declines — three `iac-cicd-pipeline` requirements now read
   narrower than their content, and the reason for not renaming them is the citation
   sweep it would drag into this diff. A note kept only in `design.md` is archived with
   this change; this one outlives it. Verify the entry names the three requirements and
   what would trigger revisiting.
-- [ ] 6.4 Record the drift-heartbeat question (one `infrastructure-drift` check across
+- [x] 6.4 Record the drift-heartbeat question (one `infrastructure-drift` check across
   all environments, or one per environment) in `docs/deferred-work.md` or
   `docs/change-queue.md` as appropriate, for the same reason. Verify it states the
   working assumption this change ships with.
 
 ## 7. Verification and rollout
 
-- [ ] 7.1 Provision this working tree before reading any verification result: install
+- [x] 7.1 Provision this working tree before reading any verification result: install
   the pinned toolchain from `.github/requirements-ci.txt`. A suite that cannot reach
   what it needs skips and reports success — until provisioning is complete, report
   verification as not run. Molecule is not needed by this change and SHALL NOT be run:
   its container names are shared across working trees and another session is active.
-- [ ] 7.2 Run `python3 -m unittest discover --start-directory .github/tests` from the
+- [x] 7.2 Run `python3 -m unittest discover --start-directory .github/tests` from the
   repository root and confirm it passes, including the tests of 5.1.
-- [ ] 7.3 Run `pre-commit run --all-files` and confirm `terraform fmt`, `terraform
+- [x] 7.3 Run `pre-commit run --all-files` and confirm `terraform fmt`, `terraform
   validate`, `tflint` and `gitleaks` pass. `gitleaks` matters here: this change moves
   secret *names* through workflow text and must move no secret value.
 - [ ] 7.4 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 7.2 and 7.3
@@ -235,6 +322,53 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   results in this change's artifacts. Note for the operator: this change is Terraform
   configuration only in the sense that it touches no `.tf` file, so the post-merge
   apply should be a no-op plan — a non-empty plan here is a signal, not noise.
+
+  **Result (6.1-6.4).** The README's staging paragraph now states what a second
+  environment does and does not take: no file under `.github/workflows/`, but its own
+  declaration, HCP workspace, Dependabot entry, GitHub Environment holding
+  `HCLOUD_TOKEN`, and repository read-only secret - checked against what
+  `docs/change-queue.md` entry 49 records as outstanding. `docs/bootstrap-a-new-host.md`
+  states that a second environment is out of its scope and points at both, and its
+  Stage 3.3 now records that neither `production` nor `HCLOUD_TOKEN` is written in a
+  workflow - both come from prod's declaration - and that the Environment must define
+  `HCLOUD_TOKEN` or GitHub silently resolves the repository secret of that name.
+  `docs/deferred-work.md` gained the declined requirement rename, naming all three
+  requirements and what would trigger revisiting, and the drift-heartbeat question
+  with the working assumption this change ships with.
+
+  **Result (7.1-7.3).** The working tree was provisioned before any verification was
+  read: `.github/requirements-ci.txt`'s pins are installed (PyYAML 6.0.1), and
+  `ansible/roles/geerlingguy.docker` is present, without which
+  `ansible-playbook --syntax-check` fails on a gitignored role and reads as a broken
+  role rather than an unprovisioned tree. Molecule was NOT run: this change edits
+  nothing under `ansible/`, and its container names are shared across working trees.
+  `python3 -m unittest discover --start-directory .github/tests` reports 467 tests, OK.
+  `pre-commit run --all-files` passes all six hooks, gitleaks included - this change
+  moves secret NAMES through workflow text and no secret value.
+
+  **One thing to watch on the first run, recorded before it is observed.** The plan
+  matrix is gated by an EMPTY MATRIX rather than by an `if:`, which task 5.3 requires
+  and which `test_no_job_containing_a_secret_scanning_step_is_conditioned_on_terraform_changes`
+  enforces: the plan job carries gitleaks, and a job-level `if:` naming Terraform
+  would put a secret scan behind a path condition. So a pull request affecting no
+  environment resolves to `[]` and the plan job is expected to be SKIPPED, which
+  `validate` then concludes success over. That behaviour is GitHub's, not this
+  repository's, and nothing here can assert it. **The first documentation-only pull
+  request on this branch is the observation**: if an empty matrix errors rather than
+  skipping, it will show as a failed `plan` job on a pull request that touches no
+  Terraform, and the fix is a job-level `if:` reading the discovery output — which
+  names no Terraform path and so does not trip that assertion. Recorded here so the
+  first person to see it knows it is a known fork rather than a defect in the change.
+
+  **The three copies of the discovery body are asserted identical**
+  (`TestTheDuplicatedBodiesStayIdentical`), and so are the two copies of the
+  resolution. A job attaches to one GitHub Environment and jobs cannot be shared
+  between workflows, so copies are the only available shape; the suite executes one
+  copy of each, and the identity assertion is what makes that evidence about all of
+  them. The assertion earned itself immediately: the three copies had already drifted
+  in their messages when it was first run, and all three were canonicalised. Each
+  copy was then run against all six refusal shapes plus a clean two-environment tree,
+  and all three behave identically.
 
 ## 8. Archive
 

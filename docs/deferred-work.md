@@ -460,3 +460,70 @@ loud, and removable by name.
 
 **Revisit when** a session is actually bitten by one of these, or when Molecule
 gains an error form for an unset interpolation.
+
+## Three `iac-cicd-pipeline` requirement names that now read narrower than they are
+
+Recorded by `make-the-pipeline-environment-agnostic`, whose `design.md`
+Decision 7 declined the rename. A note kept only inside a change is archived
+with it, and this one outlives the change.
+
+That change made the pipeline environment-agnostic without renaming three
+requirements whose names still name production alone:
+
+- *Gated Production Apply Applies the Reviewed Plan*, which now governs every
+  environment's apply, not production's;
+- *Credential Scoping by Privilege*, whose token table it replaced with a
+  per-environment scheme — the name is accurate but its scenarios read as
+  production's;
+- *Write Credentials Confined to the Gated Pipeline* (`iac-safety-hardening`),
+  now stated over each environment's own Read & Write token.
+
+Only the first is a genuine name/content mismatch; the other two are listed
+because the same sweep would touch them and a reader chasing one will find the
+others.
+
+**Why not renamed.** Requirement names are this repository's citation form
+(`AGENTS.md`, "Citing this repository's own specifications and change
+records"), and they are cited from comments in `apply.yml`, `drift.yml` and
+`pr-validation.yml`, from `docs/bootstrap-a-new-host.md`, and from archived
+change records. Renaming sweeps every one of those into a diff that already
+restructures three gated workflows at once — a mechanical rename mixed into the
+diff that most needs to be read closely.
+
+**Revisit when** a change modifies *Gated Production Apply Applies the Reviewed
+Plan* for a substantive reason and can carry the rename, or when a second
+environment exists and a reader has actually been misled by the name into
+believing the requirement does not bind it. The second is the signal that
+matters: until there is a second environment, the name and the content describe
+the same set.
+
+## Whether the drift heartbeat stays one check across all environments
+
+Recorded by `make-the-pipeline-environment-agnostic`, from that change's
+`design.md` Open Questions, for the same reason as the entry above: the
+question outlives the change that raised it.
+
+`drift.yml` now plans every environment in a matrix, but reports to a single
+external heartbeat check, `infrastructure-drift`, from a single `report` job.
+
+**The working assumption this change ships with is that one check is right.**
+What the heartbeat answers is *did the nightly sweep run at all*, which is a
+property of the run rather than of an environment: GitHub disables a
+schedule-triggered workflow after 60 days of repository inactivity and emits
+nothing when it does, and that silence is per workflow. Per-environment drift is
+already reported per environment — each environment gets its own deduplicated
+GitHub issue — so the heartbeat is not the mechanism carrying that signal.
+
+The cost of the assumption, stated plainly: the `report` job names every other
+job in `needs:` and pings `/fail` when any of them failed, so one environment's
+failed plan takes the whole heartbeat red. That is the correct polarity for an
+alarm and the wrong one for attribution — the alert says the sweep is unhealthy
+without saying which environment.
+
+**Revisit when** a second environment exists and one of two things happens: an
+environment's plan fails often enough that the shared heartbeat is muted in
+practice, which is the failure mode *Scheduled Drift Detection* already names
+for a persistently red job; or an environment is added whose sweep is
+deliberately allowed to fail, at which point one check cannot express both
+states. Neither is observable at one environment, which is why this ships as an
+assumption rather than a decision.

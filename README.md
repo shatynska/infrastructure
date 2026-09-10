@@ -391,9 +391,30 @@ identity, scope, and non-goals are recorded in the change
 `project-foundation`'s design.md; every change since is recorded under
 `openspec/`.
 
-A staging environment (a second `terraform/environments/<name>/` folder reusing
-the same modules) is still anticipated as the next environment, but is not yet
-in scope.
+A staging environment is still anticipated as the next environment, but is not
+yet in scope. The pipeline no longer stands in its way: `pr-validation.yml`,
+`apply.yml` and `drift.yml` discover `terraform/environments/*/` and run per
+environment, so **adding one changes no file under `.github/workflows/`**. What
+it does still take is everything outside those files:
+
+- a `terraform/environments/<name>/` folder reusing the same modules, carrying
+  its own `pipeline.yml` — the committed declaration naming the GitHub
+  Environment its apply job attaches to, the repository secret holding its
+  read-only Hetzner token, and whether the destroy-policy gate applies to it.
+  Its read-only secret name and its GitHub Environment name must both be
+  distinct from every other environment's, and discovery fails the pipeline if
+  they are not;
+- its own HCP Terraform workspace, and a `.github/dependabot.yml` entry for the
+  lockfile `terraform init` creates in that folder;
+- a GitHub Environment of the declared name, holding `HCLOUD_TOKEN` (that
+  environment's **Read & Write** token) and `TF_API_TOKEN`. An Environment that
+  omits `HCLOUD_TOKEN` silently resolves to the repository secret of that name,
+  so the apply job refuses to apply where it detects that;
+- a repository secret of the declared read-only name, holding that
+  environment's **Read Only** token;
+- whatever the environment is *for* — a host to configure, group variables, DNS.
+  See `docs/change-queue.md` entry 49, which records the full list for staging
+  specifically.
 
 The `terraform/`/`ansible/`/`platform/` structure, and the pipeline boundary
 between the three, were established by the change

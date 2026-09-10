@@ -174,7 +174,13 @@ gh secret set TF_API_TOKEN --env production --body '<hcp token>'
 | `TF_API_TOKEN` | Repository | Stage 2 | Every Terraform job |
 | `TF_API_TOKEN` | `production` Environment | Stage 2, same value | The apply job |
 
+**Where those two names come from.** Neither `production` nor the repository secret name `HCLOUD_TOKEN` is written in any workflow. Both are declared by `terraform/environments/prod/pipeline.yml`, which the pipeline's discovery step reads; the workflows carry no environment name at all. If you rename either, rename it there in the same change, or the plan job resolves an empty secret and the apply job attaches to an Environment that does not exist.
+
+The `production` Environment **must** define `HCLOUD_TOKEN`. GitHub resolves an *absent* Environment secret to the repository secret of the same name rather than failing, so omitting it would make the apply job authenticate with the read-only token — or, once a second environment exists, with another environment's. The apply job detects that and refuses to apply, but the fix is here.
+
 **Check:** four secrets set; `production` shows one required reviewer; the label exists; the repository is private.
+
+**Adding a *second* environment is out of this document's scope.** This is the procedure for the first host, and it assumes one environment throughout — one tailnet, one inventory group, one platform stack. What a second environment takes from the pipeline is in the README ("A staging environment…"); what staging specifically takes beyond that is in `docs/change-queue.md` entry 49. Nothing in that list is a change to a file under `.github/workflows/`.
 
 ## Stage 4. First Terraform apply: the server exists
 
