@@ -1,0 +1,64 @@
+name: Scratch Matrix Probe
+
+# TEMPORARY. Verifies the two mechanism assumptions design.md decisions 4
+# and 5 rest on, before any workflow is edited to depend on them
+# (make-the-pipeline-environment-agnostic, tasks 1.1 and 1.2). Deleted by
+# task 1.3 together with the scratch-matrix-probe GitHub Environment.
+#
+# `push:` rather than `workflow_dispatch:` on purpose: dispatch resolves a
+# workflow through the default branch's listing, so a workflow that exists
+# only on this branch cannot be dispatched.
+on:
+  push:
+    branches: [make-the-pipeline-environment-agnostic]
+
+permissions:
+  contents: read
+
+jobs:
+  # Task 1.1 -- does `secrets[<matrix value>]` resolve a REPOSITORY secret
+  # in a job declaring no `environment:`? Decision 4 makes every plan job
+  # read its token this way.
+  indexed_secret:
+    name: indexed secret
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - environment_name: prod
+            ro_secret: HCLOUD_TOKEN
+    steps:
+      # Prints only whether the value is non-empty and its length -- never
+      # the value. A registered secret is masked in logs anyway; this does
+      # not rely on that.
+      - name: Resolve the indexed secret
+        env:
+          RESOLVED: ${{ secrets[matrix.ro_secret] }}
+          SECRET_NAME: ${{ matrix.ro_secret }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RESOLVED}" ]; then
+            echo "::error::secrets[matrix.ro_secret] resolved EMPTY for '${SECRET_NAME}'. Indexing the secrets context by a matrix value does not work as decision 4 assumes."
+            exit 1
+          fi
+          echo "RESOLVED: non-empty, ${#RESOLVED} characters, for secret name '${SECRET_NAME}'."
+          echo "Indexing the secrets context by a matrix value WORKS in a job declaring no environment."
+
+  # Task 1.2 -- can a matrix value supply a job's `environment:`? Decision 5
+  # makes every apply job attach to its environment this way.
+  matrix_environment:
+    name: matrix environment
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - environment_name: scratch-matrix-probe
+    environment: ${{ matrix.environment_name }}
+    steps:
+      - name: Report which environment this job attached to
+        env:
+          DECLARED: ${{ matrix.environment_name }}
+        run: |
+          set -euo pipefail
+          echo "This job ran with environment: ${DECLARED}."
+          echo "A matrix value CAN supply a job's environment: name."
