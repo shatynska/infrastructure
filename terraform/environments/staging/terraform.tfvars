@@ -13,15 +13,12 @@
 # names that masking failure; this is the first environment able to cause it.
 name = "staging-server"
 
-# server_type is DELIBERATELY UNSET until it has been read off the Hetzner
-# console for staging's own project (tasks.md task 1.3). Staging runs roughly
-# half prod's `cx33` (4 vCPU / 8 GB) tier, and no credential in this
-# repository or in a fresh working tree can confirm which 2-vCPU type name is
-# current. An unset required variable fails `terraform plan` by name, loudly
-# and destroying nothing; a plausible guess committed here would instead be
-# discovered at apply, against a project that already exists.
-#
-# server_type = "..."
+# Roughly half prod's `cx33` (4 vCPU / 8 GB). Read off the Hetzner console for
+# staging's own project by the operator (task 1.3) rather than guessed here: no
+# credential in this repository or in a fresh working tree can confirm which
+# 2-vCPU type name is current, and a wrong one is discovered at apply against a
+# project that already exists.
+server_type = "cx23"
 
 image    = "ubuntu-26.04"
 location = "hel1"

@@ -16,37 +16,37 @@ ordering this change most depends on.
 
 ## 1. Outside the repository, and first
 
-- [ ] 1.1 Create a Hetzner Cloud project dedicated to staging. Verify by its appearing in
+- [x] 1.1 Create a Hetzner Cloud project dedicated to staging. Verify by its appearing in
   the Hetzner console as a project separate from prod's, holding no resources.
-- [ ] 1.2 In that project, create a **Read Only** and a **Read & Write** API token.
+- [x] 1.2 In that project, create a **Read Only** and a **Read & Write** API token.
   Verify that both are listed in that project's security settings, and that neither is
   written to any file in this repository or exported in any shell — the Read & Write one
   is confined to a GitHub Environment secret and nowhere else (*Write Credentials
   Confined to the Gated Pipeline*, `openspec/specs/iac-safety-hardening/spec.md`).
-- [ ] 1.3 While in that project's console, record the current 2-vCPU shared-vCPU server
+- [x] 1.3 While in that project's console, record the current 2-vCPU shared-vCPU server
   type name and its monthly price, which design.md Decision 4 leaves open because this
   working tree holds no credential to read it with. Verify by writing the confirmed
   string into task 2.3's `terraform.tfvars` rather than a guess.
-- [ ] 1.4 Create the HCP Terraform workspace `infrastructure-staging` in the `shatynska`
+- [x] 1.4 Create the HCP Terraform workspace `infrastructure-staging` in the `shatynska`
   organization, CLI-driven (no VCS connection), and set its Execution Mode to **Local**.
   Verify both in the workspace's settings — the mode is per workspace and defaults to
   remote, so a workspace created and not adjusted is misconfigured
   (*Workspace Execution Mode Set to Local*, `openspec/specs/iac-state-management/spec.md`).
-- [ ] 1.5 Create the GitHub Environment `staging` with **no** required reviewer, holding
+- [x] 1.5 Create the GitHub Environment `staging` with **no** required reviewer, holding
   `HCLOUD_TOKEN` (staging's **Read & Write** token) and `TF_API_TOKEN` (the same HCP
   token value the `production` Environment holds). Verify that `HCLOUD_TOKEN` is defined
   *on the Environment*: an Environment that omits it silently resolves the repository
   secret of that name, which is prod's read-only token, and the apply job's guard exists
   for exactly that (*Credential Scoping by Privilege*,
   `openspec/specs/iac-cicd-pipeline/spec.md`).
-- [ ] 1.6 Create the **repository** secret `HCLOUD_TOKEN_STAGING` holding staging's
+- [x] 1.6 Create the **repository** secret `HCLOUD_TOKEN_STAGING` holding staging's
   **Read Only** token. Verify it is repository-scoped, not environment-scoped: plan and
   drift jobs declare no `environment:` and can reach repository secrets only.
-- [ ] 1.7 Confirm the whole set before anything is pushed: `gh secret list` shows
+- [x] 1.7 Confirm the whole set before anything is pushed: `gh secret list` shows
   `HCLOUD_TOKEN_STAGING` at repository scope, `gh secret list --env staging` shows
   `HCLOUD_TOKEN` and `TF_API_TOKEN`, and the `staging` Environment has no reviewer while
   `production` still has one.
-- [ ] 1.8 Provision **this working tree** for tasks 2.5–2.6: staging's **Read Only**
+- [x] 1.8 Provision **this working tree** for tasks 2.5–2.6: staging's **Read Only**
   token, and HCP credentials available to the Terraform CLI. A fresh working tree carries
   tracked files only and therefore no credential at all (`AGENTS.md`, "Provision before
   relying on any verification result"). `HCLOUD_TOKEN` is one environment variable and
@@ -75,7 +75,7 @@ ordering this change most depends on.
   analogue (design.md Decision 5). Verify `terraform fmt -check` passes for the directory
   and that `terraform plan` in 2.6 shows the toggles working by inspection of the
   variable defaults.
-- [ ] 2.3 Add `main.tf` and `terraform.tfvars`: the same `server` and `volume` modules
+- [x] 2.3 Add `main.tf` and `terraform.tfvars`: the same `server` and `volume` modules
   prod calls, `environment = "staging"`, the server type confirmed in 1.3,
   `location = "hel1"`, `ssh_allowed_cidrs = ["176.104.184.0/24"]`,
   `web_allowed_cidrs = []` (no web rule until something is behind it),
@@ -93,6 +93,11 @@ ordering this change most depends on.
   destroying nothing — where a plausible guess would be discovered at apply against
   a project that already exists. Ticking this task is task 1.3's operator writing
   the confirmed string in.
+
+  **Result (2026-09-10). Closed by task 1.3: `server_type = "cx23"`**, read off the
+  Hetzner console for staging's own project by the operator and written in with the
+  comment kept, so the next reader sees it was read rather than assumed. The plan in
+  2.6 accepted it.
 - [x] 2.4 Add `pipeline.yml` declaring `github_environment: staging`,
   `read_only_secret: HCLOUD_TOKEN_STAGING` and `destroy_policy_gate: false`, with
   comments explaining the last rather than restating the field. Verify both names differ
@@ -121,11 +126,34 @@ ordering this change most depends on.
   assumption. Neither the no-copy rule nor the disclosure contingency was needed;
   both stay written down for the case that genuinely needs the backend. Decision 6
   is corrected in place.
-- [ ] 2.6 **(operator, needs 1.8)** Run `terraform plan` in the new directory under
+- [x] 2.6 **(operator, needs 1.8)** Run `terraform plan` in the new directory under
   staging's **Read Only** token and read what the first apply will create. Verify it
   shows the server, its firewall, the SSH key and the volume, destroys nothing, and — the
   point of running it locally at all — that the read-only token is refused nothing a plan
   needs, so the pipeline's plan job will behave the same.
+
+  **Result (2026-09-10). `Plan: 4 to add, 0 to change, 0 to destroy.`** The four are
+  `hcloud_ssh_key.this` (named `staging`), `module.server[0].hcloud_firewall.this`,
+  `module.server[0].hcloud_server.this` and `module.volume[0].hcloud_volume.this`.
+  Every value the design fixes appears as declared: `cx23`, `ubuntu-26.04`, `hel1`,
+  `staging-server`, `delete_protection = false`, `rebuild_protection = false`,
+  `main-data` at 10 GB, and the `environment = "staging"` label on all four.
+
+  Two things the plan establishes that no file could. **The firewall carries exactly
+  one rule** — SSH from `176.104.184.0/24` — and no 80/443 rule at all, which is
+  `web_allowed_cidrs = []` working as Decision 4 says rather than as an empty list
+  that happens to render as an open one. And **the run was local**: the output
+  carries no "Running plan in HCP Terraform" banner, which is the observable
+  difference between Local and the remote default, so task 1.4's Execution Mode
+  setting took effect. Run under staging's Read Only token; nothing was refused.
+
+  Operator group 1 verified from this tree rather than taken on report:
+  `HCLOUD_TOKEN_STAGING` present at repository scope, `HCLOUD_TOKEN` and
+  `TF_API_TOKEN` present on the `staging` Environment, and that Environment's
+  `protection_rules` is `[]` with no branch policy — the absent reviewer Decision 2
+  requires, confirmed rather than assumed. `terraform init` reached
+  `infrastructure-staging` and reused the committed lockfile without changing it,
+  which retroactively confirms 2.5's `-backend=false` lockfile was the real one.
 - [x] 2.7 Add `/terraform/environments/staging` to `.github/dependabot.yml`'s terraform
   `directories`. Verify by running the CI-configuration suite, which compares that list
   against the tree and fails on divergence.
@@ -214,6 +242,23 @@ ordering this change most depends on.
   quoted the scenario as requiring "production changes", which this change's delta
   widens to "infrastructure changes". The fragments it matches survive the
   generalisation and still pass.
+
+  **A second test correction (2026-09-10), found by running the real
+  `terraform init`.** `test_no_environment_directory_holds_a_state_file` walked
+  `*.tfstate*` at every depth under an environment directory, so it failed the
+  moment a `cloud` backend was initialised: `terraform init` writes
+  `.terraform/terraform.tfstate`, which holds `{version, terraform_version,
+  backend}` and no `resources` key — the backend configuration cache, carrying
+  that name for historical reasons. The assertion would have failed on any machine
+  that ran the `terraform init` this repository's own README prescribes, which is
+  a defect in the check rather than a finding about the tree.
+
+  `.terraform/` is now excluded, and the assertion was **not** otherwise
+  weakened: it still fails on a `terraform.tfstate` at an environment directory's
+  root, which is where a local backend actually writes state. Verified by
+  injecting one — the test went red — and removing it again, red to green in the
+  same run. The exclusion is documented in the test's own docstring, including
+  what it still catches and which companion assertions cover the rest.
 
 - [x] 4.2 Run the rest of this repository's static verification over the new directory:
   `terraform fmt -check`, `terraform validate`, `tflint`, and the pre-commit hooks.

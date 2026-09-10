@@ -443,11 +443,30 @@ class TestEachEnvironmentHasAWorkspaceOfItsOwn(unittest.TestCase):
         Read as the presence of the file rather than as a `git ls-files` call:
         this suite spawns no command, and a `.tfstate` sitting in an environment
         directory is the offence whether or not it has been staged.
+
+        `.terraform/` is excluded, and the exclusion is a correction rather than
+        a concession. `terraform init` against a `cloud` backend writes
+        `.terraform/terraform.tfstate` in every environment directory it
+        initialises: that file holds `{version, terraform_version, backend}` and
+        no `resources` key at all -- it is the backend configuration cache, which
+        carries the name for historical reasons and is not state. Without this
+        exclusion the assertion fails on any machine that has run the `terraform
+        init` this repository's own README prescribes, which is a defect in the
+        check rather than a finding about the tree. It first fired on
+        `add-a-staging-environment`'s own first real init.
+
+        What it still catches is the whole offence: a local-backend
+        `terraform.tfstate` or `terraform.tfstate.backup` written at an
+        environment directory's root, which is where real state lands, at any
+        depth other than the initialisation cache. The companion assertions cover
+        the rest -- one reads the backend declaration, the other reads
+        `.gitignore`.
         """
         offenders = sorted(
             str(path.relative_to(ROOT))
             for directory in environment_directories()
             for path in directory.rglob("*.tfstate*")
+            if ".terraform" not in path.relative_to(directory).parts
         )
         self.assertEqual(
             [],
