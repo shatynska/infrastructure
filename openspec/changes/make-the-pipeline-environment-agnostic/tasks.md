@@ -8,21 +8,29 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 
 ## 1. Establish the mechanism before building on it
 
-- [ ] 1.1 Confirm that indexing the `secrets` context by a matrix-supplied name
+- [x] 1.1 Confirm that indexing the `secrets` context by a matrix-supplied name
   (`${{ secrets[matrix.<field>] }}`) resolves a repository secret, by running a
   scratch workflow on a branch that echoes only whether the value is non-empty —
   never the value. Decision 4 rests on this; if it does not hold, the read-only
   credential scheme needs rework before any workflow is edited.
-- [ ] 1.2 Create a scratch GitHub Environment with no protection rules and no secrets,
+- [x] 1.2 Create a scratch GitHub Environment with no protection rules and no secrets,
   and confirm that a `matrix` value can supply a job's `environment:` name against it.
   Decision 5 rests on this. The scratch workflow SHALL be `push:`-triggered, not
   `workflow_dispatch:` — dispatch resolves the workflow through the default branch's
   listing, so a branch-only workflow cannot be dispatched.
-- [ ] 1.3 Delete the scratch workflow **and the scratch GitHub Environment**, and
+- [x] 1.3 Delete the scratch workflow **and the scratch GitHub Environment**, and
   confirm both are absent — the workflow from the branch, the Environment from
   repository settings — before any other task's work is committed. The Environment is a
   repository-settings change existing only for tasks 1.1–1.2; leaving it behind would
   falsify design.md's Migration Plan.
+
+  **Result (2026-09-10, run 34431719684, both jobs green).** 1.1: `secrets[matrix.ro_secret]`
+  resolved a non-empty 64-character value for `HCLOUD_TOKEN` in a job declaring no
+  `environment:` — masked as `***` in the log, with only its length printed. 1.2: the job
+  declaring `environment: ${{ matrix.environment_name }}` attached to
+  `scratch-matrix-probe` and ran. Decisions 4 and 5 hold. Workflow deleted in this
+  branch; the GitHub Environment deleted via the API, leaving `production` as the only
+  one.
 
 ## 2. The per-environment declaration
 
