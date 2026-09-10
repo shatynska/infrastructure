@@ -153,9 +153,9 @@ ghcr_pull_username: shatynska
 # contract, it is accepted deliberately, and it ends when the platform stack
 # reaches staging.
 #
-# deploy_apps:
-#   - name: platform
-#     public_key: "ssh-ed25519 AAAA... deploy@platform-staging"
+deploy_apps:
+  - name: platform
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMCOPPlcE5sXqy1//8Cl8S3fac51+ceyD9YBnN4Vwq+ deploy@platform-staging"
 
 # A genuine secret (a read:packages-scoped GHCR token): Vault-encrypt it in
 # place, never plain text.
@@ -165,7 +165,14 @@ ghcr_pull_username: shatynska
 #     --name ghcr_pull_token
 #
 # and paste the whole block here, `ghcr_pull_token: !vault |` line included.
-# ghcr_pull_token:
+ghcr_pull_token: !vault |
+  $ANSIBLE_VAULT;1.2;AES256;staging
+  33333532616430316265336132636438316338633062633538333339666634663639383564663939
+  3839393261346565663664313464353535383665316139360a303135643765333431336636356561
+  39613262623165336537346165363334356665643939646661313961653331366435613361313030
+  6535313836316466390a343361656136636433353239336439666534386337666330653938653530
+  38326135343934613438653932303139643938333161633839303032666634633463383839633333
+  6166313765643832316631353666663263646439336131346364
 
 # The project ping key the weekly prune unit reports its own liveness under.
 # A genuine secret for the same reason: a party who holds it can suppress
@@ -186,4 +193,10 @@ ghcr_pull_username: shatynska
 # refuses anything else by name, because the value is rendered into a shell
 # file its reporting script sources and a quote in it would make that script
 # fail silently.
-# image_prune_heartbeat_ping_key:
+image_prune_heartbeat_ping_key: !vault |
+  $ANSIBLE_VAULT;1.2;AES256;staging
+  31613737663164376638663862393262303361323236636233326634613738386566613035343936
+  3233383263666161383039656361393437353365373637610a666435326538643837393039363032
+  37646434366662336238366237353264636431626466366162643530383236373332633666396461
+  6135313731343335390a613735343263366633346433386165383864666634623965613161323834
+  34343764333931633631653038396337643233336630636462363432393438353162
