@@ -219,16 +219,44 @@ which no test in this repository can detect.
 
 ## 6. Review and ship
 
-- [ ] 6.1 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 5.1–5.3 pass,
+- [x] 6.1 Dispatch `ai-toolkit:change-code-reviewer` over the diff once 5.1–5.3 pass,
   and record the round and its findings here.
-- [ ] 6.2 Open the pull request, let continuous integration run, and wait for the
+- [x] 6.2 Open the pull request, let continuous integration run, and wait for the
   operator's confirmation that it merged.
-- [ ] 6.3 Confirm the effect: the operator reads stages 0 to 4 and confirms they
+- [x] 6.3 Confirm the effect: the operator reads stages 0 to 4 and confirms they
   describe standing up two servers, with no step that cannot be followed and no claim
   that the second host can be configured today. **This is the only confirmation
   available** — the document's real test is the company setup, which has not happened,
   so this gate is a reading rather than an observation and says so.
-- [ ] 6.4 Archive the change: bring the branch back to the freshly fetched trunk, commit
+
+  **Result (2026-09-10). Confirmed as a reading, and stated as one.** PR #127 merged
+  at 11:03 UTC; every required check passed, and the plan job **skipped** because the
+  change touches no `terraform/` path — the affected-environment narrowing behaving
+  as it did when it excluded prod from staging's own pull request.
+
+  Read against the merged tree, every file, workspace name and declared value stages
+  0 to 4 name resolves: both `pipeline.yml`, both `versions.tf` (naming
+  `infrastructure-prod` and `infrastructure-staging`, distinct), both
+  `terraform.tfvars`, `.envrc.example`, and staging's dependabot entry. Staging's
+  declaration carries the three values stage 3.1 step 5 tells the reader to accept:
+  `github_environment: staging`, `read_only_secret: HCLOUD_TOKEN_STAGING`,
+  `destroy_policy_gate: false`.
+
+  **What this does not establish**, and the gate said so before it ran: nobody has
+  followed the document. Its real test is a company setup against a fresh Hetzner
+  account, a fresh HCP organisation and an empty GitHub repository, none of which
+  exists. Three of the four defects code review found in the rewrite were steps that
+  resolved every name and still could not be followed, which is exactly the class a
+  reading like this one cannot catch. The first person to run it should expect to
+  find something, and `docs/change-queue.md` is where what they find belongs.
+- [x] 6.4 Archive the change: bring the branch back to the freshly fetched trunk, commit
   the record, and open its own pull request. The branch and working tree are removed
   afterwards, from the repository's main working tree — in prose here, because a task
   for them can never be ticked in the file that contains them.
+
+  **Result (2026-09-10).** Rebased onto the trunk after PR #127 merged, record
+  archived, no specification deltas to merge (`skip_specs: true`). Three working
+  trees and branches are finished as of this change and are removed from the
+  repository's main working tree, not from inside any of them:
+  `make-the-pipeline-environment-agnostic`, `add-a-staging-environment`, and this
+  one once its own pull request merges.
