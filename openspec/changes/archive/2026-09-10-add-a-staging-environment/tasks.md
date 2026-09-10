@@ -429,7 +429,7 @@ ordering this change most depends on.
   tfplan-staging-attempt-2`. The workflow's own error message prescribes the remedy
   (a fresh push to `main`); a full `gh run rerun` also works, since it re-runs the
   plan job. Nothing states this where a person looks before trying.
-- [ ] 5.4 Confirm the effect with the operator: staging's server and volume exist in the
+- [x] 5.4 Confirm the effect with the operator: staging's server and volume exist in the
   staging Hetzner project, prod's project is unchanged, and the **next nightly drift
   sweep** plans both environments in one run. That sweep is the genuine two-environment
   exercise this change reaches — two plan jobs, two read-only secrets, one shared
@@ -437,11 +437,45 @@ ordering this change most depends on.
   precisely so it contends with nothing (*Serialized Terraform Runs*). Verify by reading
   the run, and record whether the shared heartbeat behaved as `docs/deferred-work.md`
   assumes it does.
-- [ ] 5.5 Archive the change: bring the branch back to the freshly fetched trunk, commit
+
+  **Result (2026-09-10).** The operator confirmed staging's server and volume in the
+  staging Hetzner project, and prod unchanged. The sweep was **dispatched rather
+  than waited for**, so the observation is this change's own rather than tomorrow
+  morning's: run 34464225639, `workflow_dispatch`, green.
+
+  It is the two-environment exercise design.md Decision 9 names, and it did what
+  that decision predicted: **two plan jobs in one run** — `drift (prod)` and
+  `drift (staging)` — each authenticating under its own read-only secret, and a
+  single `report` job pinging the one shared `infrastructure-drift` heartbeat.
+  Staging reported `No changes. Your infrastructure matches the configuration`, so
+  the apply and the committed configuration agree, which is the drift sweep
+  confirming the apply rather than merely running. No concurrency group was
+  involved, as `drift.yml` declares none — the correction the plan review caught.
+
+  `docs/deferred-work.md`'s "Whether the drift heartbeat stays one check" now has
+  its first real evidence rather than reasoning: one heartbeat covered two
+  environments, and neither trigger that would force a split has fired.
+
+  A note for whoever reads the heartbeat's silence timer: this dispatch reset it,
+  as the 2026-09-10 06:00 UTC dispatch did before it.
+- [x] 5.5 Archive the change: bring the branch back to the freshly fetched trunk, commit
   the specification record, and open its own pull request. In that same commit, fix
   `openspec/specs/iac-state-management/spec.md`'s `## Purpose`, which describes "the
   dedicated Hetzner Cloud project for the prod environment" and survives the rename
   untouched — a delta rewrites requirements, not the capability's Purpose. Verify by
-  reading the archived capability's Purpose against its requirements. The branch and working tree are
+  reading the archived capability's Purpose against its requirements.
+
+  **Result (2026-09-10).** Branch rebased onto the freshly fetched trunk after
+  PR #125 merged, the record archived, and the capability Purpose corrected in the
+  same commit. The branch and its working tree are removed after this record's own
+  pull request merges — recorded here in prose because a task for them can never be
+  ticked in the file that contains them.
+
+  Two operator actions taken during this change live outside the repository and are
+  recorded here because nothing else holds them: the `infrastructure-staging`
+  workspace's `terraform-version` was set to `1.9.8` (from HCP's creation default of
+  `1.16.2`), and an empty state version was pushed to it before the first successful
+  apply. Both are disclosed in task 5.3 as unnecessary — neither was the cause of
+  the failures, and neither is a step the runbook now prescribes. The branch and working tree are
   removed afterwards, from the repository's main working tree — recorded here in prose
   because a task for them can never be ticked in the file that contains them.

@@ -186,7 +186,9 @@ The `production` Environment **must** define `HCLOUD_TOKEN`. GitHub resolves an 
 
 **Check:** four secrets set; `production` shows one required reviewer; the label exists; the repository is private.
 
-**Adding a *second* environment is out of this document's scope.** This is the procedure for the first host, and it assumes one environment throughout — one tailnet, one inventory group, one platform stack. What a second environment takes from the pipeline is in the README ("A staging environment…"); staging itself was added by the change `add-a-staging-environment`, and what its host still takes is `docs/change-queue.md` entry 50. Nothing in that list is a change to a file under `.github/workflows/`.
+**Adding a *second* environment is out of this document's scope.** This is the procedure for the first host, and it assumes one environment throughout — one tailnet, one inventory group, one platform stack.
+
+What it is, before anything else, is **a second server running permanently**: another instance and another volume billed monthly, another host to patch, converge and monitor, another tailnet member, and another token pair to rotate. The checklists elsewhere describe secrets and settings, which makes an environment read like configuration; it is a machine. Decide you want the standing cost before working through them, not after. What a second environment takes from the pipeline is in the README ("A staging environment…"); staging itself was added by the change `add-a-staging-environment`, and what its host still takes is `docs/change-queue.md` entry 50. Nothing in that list is a change to a file under `.github/workflows/`.
 
 ## Stage 4. First Terraform apply: the server exists
 
