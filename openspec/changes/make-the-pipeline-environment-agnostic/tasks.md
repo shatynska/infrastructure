@@ -759,6 +759,35 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   wrong job and reported the apply edge as unguarded-but-passing. Retargeted; all four
   cases go red again.
 
+  **Pull request #121 opened 2026-09-10; CI green, and 7.5's three observations made.**
+  Runs 34441629493 (`ansible-verify`) and 34441629495 (`pr-validation`).
+
+  1. **`validate` reports as a literal context.** `gh pr checks` lists `validate`,
+     `ansible-verify`, `discover` (twice, one per workflow) and `plan (prod)`. The
+     registered name is unchanged, which is what branch protection points at; the
+     matrix-generated `plan (prod)` reports alongside it and is deliberately not the
+     registered one.
+  2. **Exactly one plan comment, for prod**, headed
+     ``### Terraform Plan — `terraform/environments/prod` `` — the marker carrying the
+     environment name rather than a constant.
+  3. **gitleaks ran before the plan, inside the plan job**: `Install gitleaks` →
+     `gitleaks` → `Setup Terraform` → `terraform plan`, in that order in
+     `plan (prod)`'s own step sequence.
+
+  Two further facts worth recording, because they are what a green run could otherwise
+  hide. The plan **actually planned**: the log shows HCP Terraform initialising, four
+  resources refreshed against Hetzner, and *"No changes. Your infrastructure matches the
+  configuration."* — a real plan under the read-only token, not a skipped step. And the
+  aggregation concluded on the right inputs: `DISCOVER_RESULT: success`,
+  `PLAN_RESULT: success`, `PLAN_EXPECTED: true` → *"Every affected environment was
+  planned and reported"*. Discovery emitted exactly one environment and the resolution
+  narrowed it to one affected.
+
+  **The empty-matrix question recorded above is NOT answered by this run.** This pull
+  request changes `terraform/environments/prod/pipeline.yml`, so the matrix is non-empty
+  and the skip-versus-error fork was never reached. It stays open until a pull request
+  touching no Terraform path runs against this workflow.
+
 ## 8. Archive
 
 - [ ] 8.1 Once the effect is confirmed, bring the branch back to the freshly fetched
