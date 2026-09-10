@@ -690,6 +690,75 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   does not close, an apply cancelling a pending apply, with the nightly drift sweep named
   as the backstop that makes it an entry rather than a change.
 
+  **Code review round 2 (7.4a). Seven findings; six applied, one refuted.**
+
+  The most serious was a fix from round 1 that does not execute. `set -uo pipefail`
+  does NOT clear `-e`: `set` turns on only the options it names, and a `run:` step is
+  executed as `bash -e`. Confirmed by running it. So in the pull-request plan step every
+  branch after `terraform init` and after `terraform plan` was unreachable — the shell
+  exited at the failing command, and the exit-status handling written to close round 1's
+  finding was dead code. Safety held, because `-e` failed the row anyway, but diagnosis
+  regressed against the trunk: a failing plan posted a contentless placeholder instead of
+  the error text. Statuses are now captured with `cmd || status=$?`, which is exempt from
+  `-e` because the command is the left operand of a list — the only reason that form
+  works, and now the only form used here.
+
+  Second, and reachable at one environment: the write-token digest was published from a
+  step *after* the plan and the destroy gate. A matrix job's `outputs:` merge across rows
+  last-writer-wins, so a row failing at either contributed an empty value able to
+  overwrite a good one — and every apply row would then refuse at the guard's
+  empty-digest branch, including cleanly planned environments. That is the coupling the
+  `planned` job removes, returning through the output graph instead of through `needs:`,
+  and intermittently, since which row finishes last is a race. The digest step is now the
+  plan job's FIRST step: it depends on nothing that varies by row, so every row writes
+  the same value and clobbering is harmless.
+
+  Third: the resolution read `runs/<id>/artifacts`, which spans re-run attempts. On a
+  re-run where an environment planned cleanly in attempt 1 and its gate refused in
+  attempt 2, attempt 1's artifact would still be listed — so the environment would enter
+  the planned set, raise its approval, and apply a plan this attempt's gate refused. The
+  requirement's "every check its plan job performs has passed" held within an attempt and
+  failed across them. Now scoped to `attempts/<n>/artifacts`, with `overwrite: true` on
+  the upload so re-running every job of a run does not fail on a name the run already
+  holds.
+
+  Fourth: the truncation guard defaulted `total_count` to the number of artifacts
+  returned, which compares a value with itself — the guard was a no-op on the one shape
+  it exists to catch, which is also the only silent one. A numeric `total_count` is now
+  required, in the same shape as the `has("artifacts")` assertion beside it.
+
+  Fifth and sixth, both small: the comment steps' condition is stated positively
+  (`outcome == 'success' || outcome == 'failure'`) rather than resting on a premise about
+  what an unreached step's `outcome` is; and every command substitution in the resolver
+  is guarded so a failure names the resolution as the cause rather than aborting mutely
+  under `set -e`.
+
+  Seventh, refuted rather than applied. The review held that the pairing between the
+  resolver's literal `tfplan-` prefix and the upload's name template is asserted nowhere,
+  and that a comment claiming otherwise was false — a `grep` for `tfplan` in the suite
+  finds no such assertion. The grep is right and the conclusion is not: the derived tests
+  read the template out of the upload step (`_artifact_template`) and build their fixture
+  listing from it (`_render`), so a rename of either side makes the resolver match
+  nothing and turns two executing tests red. **Verified** by renaming the template on a
+  scratch copy: `test_every_environment_that_produced_a_plan_is_in_the_resolved_set` and
+  `test_an_environment_whose_plan_failed_is_absent_and_the_others_remain` both fail. A
+  textual assertion written before checking this was removed as redundant — and it was
+  also too weak, matching `plan-` as a substring of `tfplan-` and passing over the very
+  drift it was written for. The comment now names the two tests that do the work and says
+  why grepping for the prefix finds nothing.
+
+  Two test-layer repairs, neither to an assertion. `_inputs` could not classify
+  `github.run_attempt` although the module's own `RUN_CONTEXT` already held it, so run
+  context is resolved from that one table now. And `TestThePlannedSetIsNeverResolvedFromAPartialListing`
+  inherited a `TestCase` and re-ran its parent's assertions under a second name; the
+  harness is a mixin now, which is the idiom this suite already uses twice.
+
+  One harness of this session's own was wrong and is recorded because it reported a false
+  green: the standalone check for task 5.3's re-expressed apply assertions mutated
+  `needs: [discover, plan]`, which the new `planned` job also declares — so it edited the
+  wrong job and reported the apply edge as unguarded-but-passing. Retargeted; all four
+  cases go red again.
+
 ## 8. Archive
 
 - [ ] 8.1 Once the effect is confirmed, bring the branch back to the freshly fetched

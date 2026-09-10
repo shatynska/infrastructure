@@ -524,24 +524,14 @@ class TestTheApplyStageRunsOverThePlanned(ApplyWorkflowMixin, unittest.TestCase)
         )
 
 
-class TestThePlannedSetResolutionIsRunRatherThanRead(
-    ApplyWorkflowMixin, unittest.TestCase
-):
-    """MODIFIED requirement: Gated Production Apply Applies the Reviewed Plan --
-    the fail-closed shape of the planned-set resolution, executed.
+class PlannedSetHarnessMixin(ApplyWorkflowMixin):
+    """Locating and executing the planned-set resolution body.
 
-    Reading establishes that a resolution exists; running establishes that it
-    DISCRIMINATES. The distinction is the whole of the fail-closed argument
-    here, and the delta draws it explicitly: an input that resolves to "no
-    environment planned" is accepted, an input that cannot be resolved at all is
-    refused. A body refusing both would satisfy the refusal below and apply
-    nothing, ever; a body accepting both would report a green apply workflow for
-    a run whose resolution never concluded.
-
-    The body is located through the workflow's own wiring -- the apply matrix
-    names the resolver job's output, the job's `outputs:` names the step that
-    wrote it -- so no step name is assumed. The four inputs are told apart by
-    the EXPRESSION each `env:` value carries, never by the variable's name.
+    A mixin rather than a base test case, which is this repository's own idiom
+    (`DeclarationTreeFixtureMixin`, and `ApplyWorkflowMixin` above): a second
+    test class inheriting a `TestCase` would re-run every assertion of the first
+    under a second name, reporting one property twice and doubling the cost of
+    every execution in it.
     """
 
     def setUp(self) -> None:
@@ -663,6 +653,15 @@ class TestThePlannedSetResolutionIsRunRatherThanRead(
             expression = compact(value)
             if not EXPRESSION.search(str(value)):
                 assignments[key] = str(value)
+            elif compact(EXPRESSION.sub(r"\1", str(value))) in RUN_CONTEXT:
+                # Every fact about the run this module already knows how to
+                # supply, resolved from one table rather than from a chain of
+                # names. `_render` reads the same table, so a run-context value
+                # the artifact name may be built from is by construction one this
+                # body may take through `env:` -- which is the property that let
+                # `github.run_attempt` sit in the table and be unclassifiable
+                # here at the same time.
+                assignments[key] = RUN_CONTEXT[compact(EXPRESSION.sub(r"\1", str(value)))]
             elif "github.run_id" in expression:
                 assignments[key] = RUN_ID
             elif "github.repository" in expression:
@@ -761,6 +760,27 @@ class TestThePlannedSetResolutionIsRunRatherThanRead(
             {"name": self._render(template, row), "expired": False, "id": index + 1}
             for index, row in enumerate(rows)
         ]
+
+
+class TestThePlannedSetResolutionIsRunRatherThanRead(
+    PlannedSetHarnessMixin, unittest.TestCase
+):
+    """MODIFIED requirement: Gated Production Apply Applies the Reviewed Plan --
+    the fail-closed shape of the planned-set resolution, executed.
+
+    Reading establishes that a resolution exists; running establishes that it
+    DISCRIMINATES. The distinction is the whole of the fail-closed argument
+    here, and the delta draws it explicitly: an input that resolves to "no
+    environment planned" is accepted, an input that cannot be resolved at all is
+    refused. A body refusing both would satisfy the refusal below and apply
+    nothing, ever; a body accepting both would report a green apply workflow for
+    a run whose resolution never concluded.
+
+    The body is located through the workflow's own wiring -- the apply matrix
+    names the resolver job's output, the job's `outputs:` names the step that
+    wrote it -- so no step name is assumed. The four inputs are told apart by
+    the EXPRESSION each `env:` value carries, never by the variable's name.
+    """
 
     # -- the four inputs ----------------------------------------------------
 
@@ -1148,7 +1168,7 @@ class TestThePlanAndApplyGroupsAreSeparate(ApplyWorkflowMixin, unittest.TestCase
 
 
 class TestThePlannedSetIsNeverResolvedFromAPartialListing(
-    TestThePlannedSetResolutionIsRunRatherThanRead
+    PlannedSetHarnessMixin, unittest.TestCase
 ):
     """MODIFIED requirement: Gated Production Apply Applies the Reviewed Plan --
     "Where the set can be neither read as a valid set nor read as an explicit
@@ -1164,9 +1184,10 @@ class TestThePlannedSetIsNeverResolvedFromAPartialListing(
     guarded by nothing. Both were confirmed to fail the resolution before being
     written down.
 
-    Inherits the harness above rather than restating it; every test of the
-    parent class runs again under this name, which is harmless and is the price
-    of reusing `_run` without editing a module this pass may only add to.
+    Takes the harness from `PlannedSetHarnessMixin` rather than from the test
+    class above it, so the assertions there run once rather than twice under two
+    names. That mixin was extracted for this, which is the idiom
+    `DeclarationTreeFixtureMixin` and `ApplyWorkflowMixin` already set here.
     """
 
     def test_a_listing_carrying_no_artifacts_at_all_fails_rather_than_emptying(self) -> None:

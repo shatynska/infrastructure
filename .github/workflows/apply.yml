@@ -406,6 +406,56 @@ jobs:
       # last-writer-wins hazard of a matrix job's outputs does not arise here.
       repository-token-digest: ${{ steps.token_digest.outputs.digest }}
     steps:
+      # Half of the guard against a GitHub Environment that omits `HCLOUD_TOKEN`.
+      #
+      # GitHub resolves an ABSENT Environment secret to the repository secret of
+      # the same name rather than failing, so an Environment created without it
+      # silently supplies whatever the repository holds — at more than one
+      # environment, a different environment's token and therefore a different
+      # Hetzner project.
+      #
+      # THIS JOB IS WHERE THE REPOSITORY VALUE IS VISIBLE. It declares no
+      # `environment:`, so this read is the repository-scoped one by
+      # construction; the apply job below cannot obtain it, because declaring an
+      # `environment:` resolves every read of that name to the Environment's
+      # value. The comparison therefore cannot be made inside the apply job
+      # alone.
+      #
+      # THE OPERAND IS `HCLOUD_TOKEN` SPECIFICALLY, not whatever this
+      # environment declares as its read-only secret. GitHub falls back to the
+      # repository secret OF THAT NAME, and the two coincide for at most one
+      # environment — digesting the declared name would compare against a value
+      # the apply job could never have fallen back to, leaving the guard passing
+      # in exactly the cases it exists to catch.
+      #
+      # Salted with this run's id, so the digest is useless outside the run that
+      # produced it and nothing durable about either secret reaches the
+      # workflow's output graph.
+      #
+      # FIRST STEP OF THIS JOB, and the position is load-bearing. This is a
+      # matrix job, and a matrix job's `outputs:` are merged across rows —
+      # last writer wins, and a row that never reached the step contributes
+      # nothing. Placed after the plan or the destroy-policy gate, a row that
+      # failed at either would leave an empty contribution able to overwrite a
+      # good one from a row that passed, and every apply row would then refuse
+      # at the guard's empty-digest branch — including cleanly planned
+      # environments, which is the coupling the `planned` job below exists to
+      # remove, returning through the output graph instead of through `needs:`.
+      # Intermittently, too, since which row finishes last is a race. First,
+      # this step depends on nothing but two values that do not vary by row,
+      # so every row that starts writes the same digest and clobbering is
+      # harmless.
+      - name: Digest the repository-scoped Hetzner token
+        id: token_digest
+        env:
+          REPOSITORY_SCOPED_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          digest=$(printf '%s' "${REPOSITORY_SCOPED_TOKEN}${RUN_ID}" | sha256sum | cut -d' ' -f1)
+          echo "digest=${digest}" >>"$GITHUB_OUTPUT"
+          echo "Digested the repository-scoped Hetzner token for this run; the apply job compares its own resolved token against this value."
+
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -603,42 +653,6 @@ jobs:
             exit 1
           fi
 
-      # Half of the guard against a GitHub Environment that omits `HCLOUD_TOKEN`.
-      #
-      # GitHub resolves an ABSENT Environment secret to the repository secret of
-      # the same name rather than failing, so an Environment created without it
-      # silently supplies whatever the repository holds — at more than one
-      # environment, a different environment's token and therefore a different
-      # Hetzner project.
-      #
-      # THIS JOB IS WHERE THE REPOSITORY VALUE IS VISIBLE. It declares no
-      # `environment:`, so this read is the repository-scoped one by
-      # construction; the apply job below cannot obtain it, because declaring an
-      # `environment:` resolves every read of that name to the Environment's
-      # value. The comparison therefore cannot be made inside the apply job
-      # alone.
-      #
-      # THE OPERAND IS `HCLOUD_TOKEN` SPECIFICALLY, not whatever this
-      # environment declares as its read-only secret. GitHub falls back to the
-      # repository secret OF THAT NAME, and the two coincide for at most one
-      # environment — digesting the declared name would compare against a value
-      # the apply job could never have fallen back to, leaving the guard passing
-      # in exactly the cases it exists to catch.
-      #
-      # Salted with this run's id, so the digest is useless outside the run that
-      # produced it and nothing durable about either secret reaches the
-      # workflow's output graph.
-      - name: Digest the repository-scoped Hetzner token
-        id: token_digest
-        env:
-          REPOSITORY_SCOPED_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          digest=$(printf '%s' "${REPOSITORY_SCOPED_TOKEN}${RUN_ID}" | sha256sum | cut -d' ' -f1)
-          echo "digest=${digest}" >>"$GITHUB_OUTPUT"
-          echo "Digested the repository-scoped Hetzner token for this run; the apply job compares its own resolved token against this value."
-
       # Named per environment, so one environment's plan cannot be applied to
       # another.
       - name: Upload plan artifact
@@ -647,6 +661,13 @@ jobs:
           name: tfplan-${{ matrix.environment.name }}
           path: terraform/environments/${{ matrix.environment.name }}/tfplan
           retention-days: 1 # tfplan holds sensitive values in cleartext
+          # Artifacts are scoped to the RUN, not to the attempt, so re-running
+          # every job of a run would otherwise fail here on a name this run
+          # already holds from its previous attempt. The resolution above reads
+          # this attempt's listing, so replacing the older artifact is what keeps
+          # the two agreeing: the plan that is downloaded is the plan this
+          # attempt's checks passed.
+          overwrite: true
 
   # Resolves which environments actually produced a saved plan — which is the
   # set the apply stage runs over, and NOT the set the merge affects. That
@@ -696,6 +717,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           CANDIDATES: ${{ needs.discover.outputs.environments }}
         run: |
           set -euo pipefail
@@ -704,7 +726,7 @@ jobs:
           # other fail-closed body in these workflows -- so `.github/tests` can
           # pull it out and run it across the inputs it must tell apart.
 
-          if [ -z "${CANDIDATES}" ] || [ -z "${REPOSITORY}" ] || [ -z "${RUN_ID}" ]; then
+          if [ -z "${CANDIDATES}" ] || [ -z "${REPOSITORY}" ] || [ -z "${RUN_ID}" ] || [ -z "${RUN_ATTEMPT}" ]; then
             echo "::error::The planned-environment resolution has no candidate set, repository or run id to work from, which means a step it depends on did not conclude. Refusing to read that as 'no environment was planned': that applies nothing for a merge that did change infrastructure and reports a green run."
             exit 1
           fi
@@ -713,13 +735,25 @@ jobs:
           # an API returning 502 is indistinguishable from "no plan was saved"
           # unless it is refused here; read as the second it applies nothing and
           # reports green, leaving the divergence to the nightly drift sweep.
+          # SCOPED TO THIS ATTEMPT, not to the run. `runs/<id>/artifacts` returns
+          # every attempt's artifacts, and a re-run is precisely where that
+          # matters: attempt 1 plans an environment cleanly and uploads its
+          # saved plan; the operator re-runs; in attempt 2 that environment's
+          # destroy-policy gate refuses -- a delete appeared, or the override
+          # label was removed -- so it uploads nothing. Attempt 1's artifact is
+          # still in a run-scoped listing, so the environment would enter the
+          # planned set, raise its approval, and apply a plan this attempt's
+          # gate refused. That is the requirement's "only where every check its
+          # plan job performs has passed" holding within an attempt and failing
+          # across them.
+          #
           # `per_page` rather than `--paginate`, deliberately: on an endpoint
           # returning an OBJECT, `--paginate` emits one JSON document per page
           # and the result is a stream rather than a document -- which the
           # identity check below would then read as malformed, or worse, read as
           # its first page alone. One page is asserted to be the whole listing
-          # instead, three lines down.
-          if ! listing=$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" 2>&1); then
+          # instead, a few lines down.
+          if ! listing=$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/artifacts?per_page=100" 2>&1); then
             echo "::error::Could not read this run's artifacts, so which environments produced a saved plan cannot be determined: ${listing}. Refusing to conclude that none did."
             exit 1
           fi
@@ -748,8 +782,19 @@ jobs:
           # because a run uploading one saved plan per environment cannot
           # plausibly fill a page -- so reaching this branch means something is
           # wrong rather than large.
-          returned=$(printf '%s' "$published" | jq 'length')
-          total=$(printf '%s' "$listing" | jq '.total_count // (.artifacts | length)')
+          # `total_count` is REQUIRED rather than defaulted. Defaulting it to the
+          # number of artifacts returned makes this comparison compare a value
+          # with itself, so the guard silently becomes a no-op on the one shape
+          # it exists to catch -- which is the same "could not tell, therefore
+          # fine" the destroy-policy gate refuses one requirement over.
+          if ! total=$(printf '%s' "$listing" | jq -e '.total_count | numbers' 2>&1); then
+            echo "::error::This run's artifact listing carries no numeric 'total_count', so whether it is complete cannot be established: ${total}. Refusing to resolve the planned environments from a listing that may be partial."
+            exit 1
+          fi
+          if ! returned=$(printf '%s' "$published" | jq 'length' 2>&1); then
+            echo "::error::Could not count the artifact names read from this run's listing: ${returned}. Refusing to resolve the planned environments."
+            exit 1
+          fi
           if [ "$returned" -ne "$total" ]; then
             echo "::error::This run's artifact listing reports ${total} artifacts and returned ${returned}, so it is truncated. Refusing to resolve the planned environments from a partial listing: an environment missing from it is a reviewed change that would never be applied."
             exit 1
@@ -757,13 +802,31 @@ jobs:
 
           # `tfplan-<environment>` is the name the plan job uploads under. The
           # prefix is spelled out here because this body may carry no Actions
-          # expression; `.github/tests` reads the template out of that upload
-          # step and fails this pairing if the two ever drift apart.
-          planned=$(printf '%s' "$CANDIDATES" \
+          # expression, while the upload builds the name from a template -- so
+          # the two are stated in two places and could drift. A drift makes this
+          # match nothing, resolve the empty set on every run, skip every apply
+          # and report the workflow GREEN, since an explicitly empty planned set
+          # is accepted by design. That is the most consequential silent failure
+          # in this file, so what guards it is named exactly rather than waved
+          # at: in `test_planned_environment_apply_stage`, `_artifact_template`
+          # reads the template out of the upload step and `_render` builds the
+          # fixture listing from it, so the tests that EXECUTE this body --
+          # `test_every_environment_that_produced_a_plan_is_in_the_resolved_set`
+          # and `test_an_environment_whose_plan_failed_is_absent_and_the_others_remain`
+          # -- go red on a rename of either side. The prefix appears in no
+          # assertion as a literal, which is why grepping the suite for it finds
+          # nothing while the guard is real all the same.
+          if ! planned=$(printf '%s' "$CANDIDATES" \
             | jq -c --argjson published "$published" \
-              'map(select(("tfplan-" + .name) as $artifact | $published | index($artifact) != null))')
+              'map(select(("tfplan-" + .name) as $artifact | $published | index($artifact) != null))' 2>&1); then
+            echo "::error::Could not match this run's saved plans against the discovered environments: ${planned}. Refusing to conclude which environments produced a plan."
+            exit 1
+          fi
 
-          count=$(printf '%s' "$planned" | jq 'length')
+          if ! count=$(printf '%s' "$planned" | jq 'length' 2>&1); then
+            echo "::error::Could not count the resolved planned environments: ${count}. Refusing to conclude which environments produced a plan."
+            exit 1
+          fi
 
           # An EXPLICITLY empty set is accepted, and that is a different
           # judgement from the refusals above rather than an inconsistency with

@@ -427,7 +427,17 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
           ENVIRONMENT_NAME: ${{ matrix.environment.name }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
+
+          # A STATUS THIS STEP MEANS TO INSPECT IS CAPTURED WITH `|| status=$?`,
+          # never by reading `$?` on the line after the command. A `run:` step is
+          # executed as `bash -e`, and `set` turns on only the options it names
+          # -- `set -uo pipefail` does NOT clear `-e`, however much it reads as
+          # though it replaces the whole option set. Under `-e` a failing command
+          # ends the shell at that line, so every branch below it is unreachable
+          # and the error handling that looks like the safety net is dead code.
+          # `cmd || status=$?` is exempt from `-e` because the command is the
+          # left operand of a list, which is the only reason this works.
 
           # The comment body is written FIRST, and then again with whatever the
           # plan produced. The steps below post it whenever this step ran at
@@ -440,8 +450,8 @@ jobs:
           printf '%s\n\nThis plan did not run to completion; see the job log.\n' \
             "$heading" >comment_body.md
 
-          terraform init >init_output.txt 2>&1
-          init_exit=$?
+          init_exit=0
+          terraform init >init_output.txt 2>&1 || init_exit=$?
           cat init_output.txt
           if [ "$init_exit" -ne 0 ]; then
             {
@@ -453,11 +463,12 @@ jobs:
               cat init_output.txt
               echo '```'
             } >comment_body.md
+            echo "::error::terraform init exited ${init_exit}, so this environment was not planned."
             exit 1
           fi
 
-          terraform plan -no-color -input=false -out=tfplan >plan_output.txt 2>&1
-          plan_exit=$?
+          plan_exit=0
+          terraform plan -no-color -input=false -out=tfplan >plan_output.txt 2>&1 || plan_exit=$?
           {
             echo "$heading"
             echo
@@ -483,13 +494,17 @@ jobs:
       # same comment, leaving one plan standing — and at one environment that
       # defect and the correct behaviour are indistinguishable, which is why
       # this is asserted statically rather than observed on a run.
-      # `steps.plan.outcome != ''` and NOT `!= 'skipped'`. The plan step carries
-      # no `if:`, so it can never be skipped and that comparison is always true
-      # -- including when an earlier step in this job failed, at which point
-      # `outcome` is the empty string and these steps would run against a body
-      # this job never wrote.
+      # Stated POSITIVELY -- the plan step ran and concluded one way or the
+      # other -- rather than as `!= 'skipped'` or `!= ''`. The plan step carries
+      # no `if:`, so it can never be skipped and `!= 'skipped'` is always true,
+      # including when an earlier step in this job failed and the plan step never
+      # ran at all; these steps would then post a body this job never wrote.
+      # `!= ''` closes that, but only on the premise that an unreached step's
+      # `outcome` is the empty string rather than some other value. The positive
+      # form needs no premise: it admits exactly the two outcomes that mean the
+      # body exists.
       - name: Find existing plan comment
-        if: always() && steps.plan.outcome != ''
+        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
         id: find_comment
         uses: peter-evans/find-comment@v4
         with:
@@ -498,7 +513,7 @@ jobs:
           body-includes: "### Terraform Plan — `terraform/environments/${{ matrix.environment.name }}`"
 
       - name: Post plan as PR comment
-        if: always() && steps.plan.outcome != ''
+        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
         uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
