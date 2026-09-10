@@ -12,7 +12,7 @@ A count nobody can check in a few minutes does not belong in §0.4.
 
 ## 2. §0.4 — what exists once and what exists twice
 
-- [ ] 2.1 Add a new §0.4 whose table lists **every credential, and every account or object of which the procedure creates one per environment**, with how many exist and what proves it. That wording rather than "credential", because four rows — the Hetzner projects, the HCP workspaces, the OAuth client — are not credentials.
+- [ ] 2.1 Add a new §0.4 whose table lists **every credential, and every account or object of which the procedure creates one per environment**, with how many exist and what proves it. That wording rather than "credential", because two rows — the Hetzner projects and the HCP workspaces — are not credentials.
 
       **Declare the boundary in the preamble: stages 0 to 6.** Carry the two facts outside it as clauses of that sentence rather than as rows: stage 7's platform-stack secrets are production's alone until entry 52, and §7.3 and Appendix A list them; and §0.3's own fourth row, one deploy key per application, belongs to stage 8. Naming both is what makes the boundary honest — a reader comparing §0.3's four rows against §0.4 otherwise meets a silent omission.
 
@@ -29,11 +29,11 @@ A count nobody can check in a few minutes does not belong in §0.4.
       | Tailscale auth key | 1 reusable key can serve both joins; this repository used 2 | §5.3, and `ansible/roles/tailscale/tasks/main.yml`, which consumes it once per run and skips on an already-joined host |
       | Tailscale OAuth client | 1 | §5.3 — one client serves every repository |
       | GHCR pull token | 1, shared | §6.1 permits the same token; both `group_vars` name the same `ghcr_pull_username` |
-      | Heartbeat project ping key | 1, shared — it addresses the five checks Appendix A and §7.1 list | `ansible/inventory/group_vars/staging.yml`: "the same project ping key prod uses… it addresses a DIFFERENT check because the check name is derived from `inventory_hostname`" |
+      | Heartbeat project ping key | 1, shared — it addresses the **four** periodic-job checks Appendix A lists. §7.1's Alertmanager check is not one of them: it has a ping URL of its own, held as `PLATFORM_DEADMANSWITCH_URL` | §7.1: "It addresses one check per periodic job, listed with its period and grace in Appendix A", whose table has four rows |
 
       Verify each against what is named before writing it. **Compare values, not lines**: `terraform/environments/prod/terraform.tfvars` pads its `=` for alignment and staging's does not, so a line comparison reports the two `ssh_public_key` entries as differing when the keys are byte-identical — confirmed by hashing the extracted values. The same applies to the `ops_user_accounts` keys. That mistake would put **2** in a row whose truth is **1, shared**.
 
-      Four rows have been corrected or cut rather than silently fixed, because in a table whose premise is correct counts the corrections are the substance. An "Ansible inventory credential | 2" row double-counted the read-only Hetzner tokens under their second variable names. `TF_API_TOKEN` was missing entirely. A "Platform stack secrets | 8" row matched nothing — §7.3's table has seven rows and the document says "the seven in 7.3", while every `PLATFORM_*` name in it numbers nine — and it is cut with the boundary moved to stage 6 rather than renumbered. A "Heartbeat checks | 5" row is folded into the ping-key row: §7.1 says the checks need no creating by hand, so a reader assembling credentials acts on the key and not on the count.
+      Four rows were wrong in earlier drafts — one double-counted, one missing, two with counts matching nothing — and the proposal records what each was and why it survived a reading. Read that before trusting any row here.
 
 - [ ] 2.2 **Point at §0.3's axis rather than restating it.** §0.3's paragraph — "each has a different holder and a different blast radius" — sits four lines above, and a second copy of a rationale is the cost this whole change is about. §0.4's preamble carries a pointer to it plus the one cause §0.3 does not state: **a Hetzner token reaches exactly one project**, so those come in pairs regardless of what they can do. The "What proves it" column carries the rest. §0.3 keeps the reasoning, §0.4 keeps the counts, and each is said once.
 
@@ -46,7 +46,7 @@ A count nobody can check in a few minutes does not belong in §0.4.
 - [ ] 3.1 **§6.4's "Secrets created in this stage" table carries the same destructive instruction task 1.2 fixes** — its `PLATFORM_DEPLOY_SSH_KEY` row reads "The **private** half of the platform deploy key from stage 0. Store it now, then delete the local file", inside the stage a reader now runs *once per environment*. Fixing §0.3 alone leaves the loss reachable by a second route. Mark that row and `PLATFORM_DEPLOY_HOST` production-only for now, and say where staging's private half goes until entry 52.
 
       An earlier draft of this task attributed that sentence to Appendix A, which is how §6.4 went unnoticed: Appendix A's cell in fact reads "`ssh-keygen`, platform key". Quote a document before correcting it.
-- [ ] 3.2 Update Appendix A's **Tailscale server auth key** row, which is singular, and its **`PLATFORM_DEPLOY_SSH_KEY`** row, which says "Env secret" with no environment named. `configure-the-staging-host`'s task 7.4 gave the Vault-password, GHCR and heartbeat rows "one per environment" and left these two behind. Without this the document's own "complete secret inventory" contradicts §0.3 and §5.3 the day this lands — the exact drift this change exists to remove, re-created one appendix over.
+- [ ] 3.2 Update Appendix A's **Tailscale server auth key** row, which is singular, and its **`PLATFORM_DEPLOY_SSH_KEY`** and **`PLATFORM_DEPLOY_HOST`** rows, which say "Env secret" with no environment named — both, not just the first, or the asymmetry with task 3.1 recreates in miniature the drift this task exists to close. `configure-the-staging-host`'s task 7.4 gave the Vault-password, GHCR and heartbeat rows "one per environment" and left these two behind. Without this the document's own "complete secret inventory" contradicts §0.3 and §5.3 the day this lands — the exact drift this change exists to remove, re-created one appendix over.
 
 ## 4. §5.2 and §5.3 — the tailnet, for two hosts
 
@@ -71,6 +71,18 @@ A count nobody can check in a few minutes does not belong in §0.4.
 - [ ] 7.1 `python3 -m unittest discover --start-directory .github/tests` from the repository root, passing.
 - [ ] 7.2 `pre-commit run --all-files`, passing. Neither this nor 7.1 establishes that a count is correct — task 2.1 is where that happens, one row at a time.
 - [ ] 7.3 Read stages 0 to 6 straight through as an operator holding nothing, and confirm that the credentials §0.3 and §0.4 tell them to create are exactly those stages 1 to 6 then ask for — no more, nothing missing, and nothing whose storage instruction is wrong for one environment.
+
+- [ ] 7.4 **Read every location of every fact this document states more than once, and confirm they agree.** This closes the defect class rather than the instances, and it is the check that would have caught the last two rounds' findings before a reviewer did: every major after the first round arose the same way — a fact stated in several places, corrected in one of them. The list, and it is short enough to walk:
+
+      | Fact | Stated at |
+      |---|---|
+      | Where a platform deploy key's private half lives | §0.3, §6.4's secrets table, Appendix A |
+      | How many Tailscale auth keys, and key expiry | §5.3's prose, §5.3's secrets table, Appendix A |
+      | Which hosts the inspection key is configured on | §0.3, §6.1 |
+      | What the heartbeat project ping key addresses | §6.1, §7.1, Appendix A |
+      | What stage 6 configures | the end-state summary, the time estimate, "From here on, two hosts" |
+
+      Note that §7.3 above reads stages 0 to 6, and three of these five have a location **outside** that range — which is how §6.4 and Appendix A were missed twice. This task is not bounded by stage.
 
 ## 8. Ship
 

@@ -61,8 +61,9 @@ into §6.1 missing a keypair.
   in stages 1 to 3 *and* a second converge in stage 6.
 - **A new §0.4, "What exists once and what exists twice."** This is the
   substantial addition, and it is the artifact this session most obviously
-  lacked: a single table saying, for every credential the procedure creates for
-  the infrastructure itself, how many of it there are and what proves the count.
+  lacked: a single table saying, for every credential — and every account or
+  object of which the procedure creates one per environment — how many there are
+  and what proves the count.
   It declares that boundary — **stages 0 to 6** — because a table read as
   complete and not being so is worse than none, and it names the two things it
   deliberately leaves out: stage 7's platform-stack secrets, which are
