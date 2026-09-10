@@ -70,6 +70,20 @@ into §6.1 missing a keypair.
   production's alone until entry 52, and §0.3's own application-deploy-key row,
   which belongs to stage 8.
 
+  **Four of its rows were wrong in earlier drafts**, each in a way that read
+  fluently, and they are named here because that is what a future reader needs
+  rather than the corrected values alone. An "Ansible inventory credential | 2"
+  row counted the two read-only Hetzner tokens a second time under the variable
+  names Ansible reads them by — which §1.2 says outright are the same tokens.
+  `TF_API_TOKEN` was missing from a table claiming to list every credential, and
+  it is the row the discarded rule below handled worst. A "Platform stack
+  secrets | 8" row matched nothing: §7.3's table has seven rows, the document
+  says "the seven in 7.3", and every `PLATFORM_*` name in it numbers nine. And a
+  "Heartbeat checks | 5" row was folded into the ping-key row, which then said
+  the key addresses five checks when it addresses four — the Alertmanager
+  dead-man's-switch has a ping URL of its own, so a rotation made on that row
+  would have left the one alarm nothing else catches behind.
+
   **The axis it sorts on is the one §0.3 already states**: a different holder and
   a different blast radius, plus the mechanical constraint that a Hetzner token
   reaches exactly one project. An earlier draft proposed a different rule — that
@@ -106,7 +120,8 @@ time estimate at the top, §0.3, a new §0.4, §5.2, §5.3, the opening of stage
 two rows in §0.1 and one in §0.2, **§6.4's "Secrets created in this stage"
 table** — which repeats §0.3's "delete the local file" instruction inside the
 stage that now runs once per environment — and **Appendix A**, whose Tailscale
-auth key and `PLATFORM_DEPLOY_SSH_KEY` rows are still singular. That appendix is the
+auth key, `PLATFORM_DEPLOY_SSH_KEY` and `PLATFORM_DEPLOY_HOST` rows are still
+singular or unscoped. That appendix is the
 document's own "complete secret inventory", so leaving it would have this change
 create the drift it exists to remove, one appendix over.
 

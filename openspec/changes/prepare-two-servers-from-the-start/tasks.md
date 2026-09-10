@@ -33,7 +33,7 @@ A count nobody can check in a few minutes does not belong in §0.4.
 
       Verify each against what is named before writing it. **Compare values, not lines**: `terraform/environments/prod/terraform.tfvars` pads its `=` for alignment and staging's does not, so a line comparison reports the two `ssh_public_key` entries as differing when the keys are byte-identical — confirmed by hashing the extracted values. The same applies to the `ops_user_accounts` keys. That mistake would put **2** in a row whose truth is **1, shared**.
 
-      Four rows were wrong in earlier drafts — one double-counted, one missing, two with counts matching nothing — and the proposal records what each was and why it survived a reading. Read that before trusting any row here.
+      Four rows were wrong in earlier drafts, each in a way that read fluently; the proposal's §0.4 bullet names them. Read that before trusting any row here.
 
 - [ ] 2.2 **Point at §0.3's axis rather than restating it.** §0.3's paragraph — "each has a different holder and a different blast radius" — sits four lines above, and a second copy of a rationale is the cost this whole change is about. §0.4's preamble carries a pointer to it plus the one cause §0.3 does not state: **a Hetzner token reaches exactly one project**, so those come in pairs regardless of what they can do. The "What proves it" column carries the rest. §0.3 keeps the reasoning, §0.4 keeps the counts, and each is said once.
 
@@ -77,10 +77,12 @@ A count nobody can check in a few minutes does not belong in §0.4.
       | Fact | Stated at |
       |---|---|
       | Where a platform deploy key's private half lives | §0.3, §6.4's secrets table, Appendix A |
-      | How many Tailscale auth keys, and key expiry | §5.3's prose, §5.3's secrets table, Appendix A |
+      | How many Tailscale auth keys, reusable versus single-use, and key expiry | §5.3's prose, §5.3's secrets table, **§6.3a twice** (the `read -rs` paragraph and the usual-causes list), **§6.4 step 1** (disable key expiry), Appendix A |
       | Which hosts the inspection key is configured on | §0.3, §6.1 |
       | What the heartbeat project ping key addresses | §6.1, §7.1, Appendix A |
-      | What stage 6 configures | the end-state summary, the time estimate, "From here on, two hosts" |
+      | What stage 6 configures | the end-state summary, the time estimate, **§6's own opening**, "From here on, two hosts" |
+
+      **Rebuild this list rather than trusting it**, by grepping each fact's distinctive phrase — `reusable`, `key expiry`, `delete the local file`, `ping key`, `once per environment`. A hand-written inventory of a document's duplicated facts is itself subject to the mechanism it exists to close, and this one was: two of its five rows were short when first written, both discovered by a reader rather than by the list.
 
       Note that §7.3 above reads stages 0 to 6, and three of these five have a location **outside** that range — which is how §6.4 and Appendix A were missed twice. This task is not bounded by stage.
 
