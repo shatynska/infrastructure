@@ -145,15 +145,50 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   matrix concluded, resolves which environments have a plan artifact and emits them;
   the apply matrix reads that. **Do not resolve it from a job output** — a matrix job's
   outputs are written by every row into one namespace, so a matrix cannot publish a
-  per-row result at all. Fail closed on an unresolvable result, as decision 2 requires
-  of the other resolution. Verify by running its body standalone over a full set, a
-  partial set and an unresolvable one, and confirm that the apply job still depends on
-  a job that plans.
-- [ ] 4.3c `apply.yml`: give the plan jobs and the apply jobs separate per-environment
+  per-row result at all.
+
+  Read the artifact **names** for this run, not their contents: a saved plan holds
+  sensitive values in cleartext, and a job that only needs to know which plans exist has
+  no business downloading them. `gh api repos/<owner>/<repo>/actions/runs/<id>/artifacts`
+  is that read, and it needs `actions: read` on the job — declare it, and nothing else,
+  per *Least-Privilege Workflow Permissions*.
+
+  Fail closed on a result that is neither a valid set nor an explicit empty one, and
+  **accept an explicit empty one**: a merge matching this workflow's path filter while
+  affecting no environment reaches this stage with nothing to apply, and so does a merge
+  every one of whose plans failed. Verify by running its body standalone over a full
+  set, a partial set, an explicitly empty one and an unresolvable one.
+- [ ] 4.3c `apply.yml`: attach the apply job to that resolved set, which is the half a
+  resolver alone does not settle and the half the original defect lives in. The apply
+  job SHALL keep the plan job in `needs:` **and** carry a condition of its own —
+  `!cancelled()` and the resolver having succeeded. Both halves are load-bearing:
+  without the condition the apply job is still skipped whenever the plan stage's
+  aggregate result is `failure`, which is the defect this revisit exists to remove and
+  which every other verification here would pass over; without `needs:` on the plan job,
+  `needs.<plan>.outputs` leaves scope and task 4.3a's omitted-write-token guard compares
+  against an empty string and passes, in exactly the configuration it exists to catch.
+  Verify by re-running 4.3a's standalone check afterwards, and by a static assertion
+  that no apply job's condition resolves through the plan stage's result. Name any
+  already-written assertion this shape invalidates — at minimum
+  `test_each_apply_job_depends_on_a_job_that_plans`, which this shape keeps green — and
+  re-express rather than weaken it if it does not.
+- [ ] 4.3d `apply.yml`: publish the saved plan artifact **only after every check in the
+  plan job has passed**, per design.md decision 8 and the delta's "A plan its own gate
+  refused is not applied". The upload SHALL be the last step of the plan job and SHALL
+  carry no condition, so a failed destroy-policy gate stops it by ordinary step
+  semantics. Verify by a static assertion that no step of the plan job runs after the
+  upload, and that neither the upload nor the gate carries an `if:` — the artifact's
+  presence is what the resolver reads, so a plan published before its own gate would be
+  applied behind an approval the gate exists because it does not trust.
+- [ ] 4.3e `apply.yml`: give the plan job and the apply job separate per-environment
   `concurrency` groups, per design.md decision 9, so a queued plan cannot cancel an
   apply awaiting its Environment's protection rules. Verify that both still derive
   their group from the matrix, that both still set `cancel-in-progress: false`, and
-  that the two groups cannot coincide for any environment name.
+  that the two groups cannot coincide for any environment name. **Neither group is for
+  a plan run anywhere else**: `pr-validation.yml`'s and `drift.yml`'s plan jobs are not
+  serialized by this requirement, and the nightly drift plan runs with `-lock=false`
+  precisely so it contends with nothing. Verify that neither of those workflows declares
+  a concurrency group naming an environment.
 - [x] 4.4 `apply.yml`: read the destroy-policy gate's applicability from the
   environment's declaration, treating an absent statement as applicable. Verify by
   running the gate's body standalone with the flag set both ways against a saved plan
@@ -241,15 +276,6 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   **red**; removing the gitleaks step entirely is *not* the verification, since that
   trips a different assertion first.
 
-- [ ] 5.5 Have the tests for the two amended requirements derived by an author other
-  than whoever implements them, as 5.1 did for the original deltas: the three scenarios
-  added by this revisit — *One environment's failed plan does not block another's
-  apply*, *An unresolvable set of planned environments fails the run*, and *A queued
-  plan does not cancel an apply awaiting approval* — plus the amended sentences they
-  sit under. Dispatch with the same test command and glob 5.1 used. Verify the tests
-  fail against the tree as it stands at the amendment's commit, before 4.3b and 4.3c
-  are implemented.
-
   **Result (5.1-5.4).** 5.1 was performed by the previous session; the derived
   module and `test-plan.md` are its output, and it went red against the unmodified
   tree (31 failures of 454, all in that module).
@@ -299,6 +325,22 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   written into the test's own docstring, because a reader of that test needs it more
   than a reader of this file does.
 
+- [ ] 5.5 Have the tests for the two amended requirements derived by an author other
+  than whoever implements them, as 5.1 did for the original deltas: the three scenarios
+  added by this revisit — *One environment's failed plan does not block another's
+  apply*, *An unresolvable set of planned environments fails the run*, and *A queued
+  plan does not cancel an apply awaiting approval* — plus the amended sentences they
+  sit under, together with *A plan its own gate refused is not applied*. Dispatch with
+  the same test command and glob 5.1 used. Verify the tests fail against the tree as it
+  stands at the commit holding the **approved amended plan**, before any of 4.3b–4.3e
+  is implemented — that commit moves if this review round produces further fixes, and
+  the baseline is the approved plan rather than the first draft of it.
+
+  The pass SHALL append its scenario accounting to `test-plan.md` rather than leaving
+  it, so the change's coverage record names the four scenarios this revisit adds.
+  Without that the record stays stale by exactly the scenarios nobody has yet mapped,
+  which is the one thing that file exists to make impossible.
+
 ## 6. Documentation
 
 - [x] 6.1 Correct the README's staging paragraph. It says a second environment is "a
@@ -316,10 +358,37 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   sweep it would drag into this diff. A note kept only in `design.md` is archived with
   this change; this one outlives it. Verify the entry names the three requirements and
   what would trigger revisiting.
+- [ ] 6.5 Add a `docs/deferred-work.md` entry for the concurrency question decision 9
+  declines to settle: whether a job awaiting a GitHub Environment's protection rules
+  counts as *pending* for concurrency. The delta now names it as unestablished, but the
+  delta is the durable artifact and `design.md` is archived with the change, so the
+  question needs a home that outlives both. State why the experiment was not run — it
+  needs a scratch Environment carrying a required reviewer, which is more
+  repository-settings churn than tasks 1.1–1.2's probes needed and than the Migration
+  Plan promises — and what would trigger revisiting.
+- [ ] 6.6 Add a `docs/deferred-work.md` entry for the hazard decision 9 does **not**
+  close: within the apply group, a third merge's queued apply can cancel a second
+  merge's pending apply, as a cancellation rather than a failure. Pre-existing rather
+  than introduced — the workflow-level group this change replaces had the same property
+  at run level — and out of this change's scope, but decision 9 argues from that hazard
+  class and would otherwise read as having closed it.
 - [x] 6.4 Record the drift-heartbeat question (one `infrastructure-drift` check across
   all environments, or one per environment) in `docs/deferred-work.md` or
   `docs/change-queue.md` as appropriate, for the same reason. Verify it states the
   working assumption this change ships with.
+
+  **Result (6.1-6.4).** The README's staging paragraph now states what a second
+  environment does and does not take: no file under `.github/workflows/`, but its own
+  declaration, HCP workspace, Dependabot entry, GitHub Environment holding
+  `HCLOUD_TOKEN`, and repository read-only secret - checked against what
+  `docs/change-queue.md` entry 49 records as outstanding. `docs/bootstrap-a-new-host.md`
+  states that a second environment is out of its scope and points at both, and its
+  Stage 3.3 now records that neither `production` nor `HCLOUD_TOKEN` is written in a
+  workflow - both come from prod's declaration - and that the Environment must define
+  `HCLOUD_TOKEN` or GitHub silently resolves the repository secret of that name.
+  `docs/deferred-work.md` gained the declined requirement rename, naming all three
+  requirements and what would trigger revisiting, and the drift-heartbeat question
+  with the working assumption this change ships with.
 
 ## 7. Verification and rollout
 
@@ -350,19 +419,6 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   results in this change's artifacts. Note for the operator: this change is Terraform
   configuration only in the sense that it touches no `.tf` file, so the post-merge
   apply should be a no-op plan — a non-empty plan here is a signal, not noise.
-
-  **Result (6.1-6.4).** The README's staging paragraph now states what a second
-  environment does and does not take: no file under `.github/workflows/`, but its own
-  declaration, HCP workspace, Dependabot entry, GitHub Environment holding
-  `HCLOUD_TOKEN`, and repository read-only secret - checked against what
-  `docs/change-queue.md` entry 49 records as outstanding. `docs/bootstrap-a-new-host.md`
-  states that a second environment is out of its scope and points at both, and its
-  Stage 3.3 now records that neither `production` nor `HCLOUD_TOKEN` is written in a
-  workflow - both come from prod's declaration - and that the Environment must define
-  `HCLOUD_TOKEN` or GitHub silently resolves the repository secret of that name.
-  `docs/deferred-work.md` gained the declined requirement rename, naming all three
-  requirements and what would trigger revisiting, and the drift-heartbeat question
-  with the working assumption this change ships with.
 
   **Result (7.1-7.3).** The working tree was provisioned before any verification was
   read: `.github/requirements-ci.txt`'s pins are installed (PyYAML 6.0.1), and
@@ -473,6 +529,49 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
 
   `proposal.md`, `design.md` (decisions 8 and 9) and the `iac-cicd-pipeline` delta were
   amended accordingly; tasks 4.3b, 4.3c, 5.5 and 7.4a carry the work.
+
+  **Plan review of the amendment (round 1): FIX REQUIRED, applied.** The reviewer's
+  finding was that the amendment specified *what* the resolver produces and was silent
+  on *how the apply stage attaches to it* — and that the fact it reads was not the fact
+  it needs.
+
+  The design finding: plan-artifact presence was made the sole precondition for applying
+  an environment, but the destroy-policy gate runs INSIDE the plan job and after the
+  plan exists, so a plan the gate refused is a plan that was produced. Presence and
+  "passed its own gates" are different facts, and reading the first as the second leaves
+  the gate defeated for exactly the plans it exists to stop. The implementation as built
+  already ordered the upload after the gate, but nothing required it — which is the
+  finding. The delta now obliges it, design.md decision 8 argues it, and task 4.3d
+  carries a static assertion so a later edit cannot reverse it without failing a check.
+
+  Three coherence findings, all from the same silence: the apply job's escape from
+  skip-propagation was unspecified, so an implementation satisfying every literal
+  instruction would have left the original defect intact; keeping the plan job in
+  `needs:` was unspecified, and dropping it would silently remove task 4.3a's
+  omitted-write-token guard's operand, passing in exactly the configuration that guard
+  exists to catch; and design.md refused an empty planned set where the delta refused
+  only an undeterminable one, which is a reachable input with opposite outcomes. Tasks
+  4.3c and 4.3d now name the shape and its verification, and both artifacts agree that
+  an explicitly empty planned set is accepted.
+
+  The minor findings were applied as written: the unestablished pending-cancellation
+  premise is now qualified in the delta rather than stated as fact, with the reasoning
+  that separation is correct under both answers and the experiment would establish only
+  whether its cost is necessary (6.5 records the question where it outlives the change);
+  the concurrency sentence is scoped to the apply workflow's own plan job, so the drift
+  sweep is not swept into it (4.3e); decision 9 now records the hazard it does not close
+  — an apply cancelling a pending apply — and 6.6 records it; the goal "prod's
+  observable behaviour unchanged at N=1" is narrowed to name the two exceptions this
+  change accepts, since the acceptance test rests on it; 4.3b names the resolver's
+  mechanism and the one permission it takes; and 5.5 requires the second derivation pass
+  to append its accounting to `test-plan.md` and pins its baseline to the commit holding
+  the approved amended plan rather than to the first draft of it.
+
+  The reviewer also considered and did not substantiate the concern that this file's
+  prose result blocks violate this project's task-list convention: that convention
+  governs post-archive steps, retroactive ticks and unperformed work, and does not
+  restrict recording what was done. Two blocks were nonetheless sitting under the wrong
+  group heading and were moved.
 
 ## 8. Archive
 

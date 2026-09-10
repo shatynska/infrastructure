@@ -28,8 +28,15 @@ new one; only plan, apply and drift were left behind.
 - Adding an environment requires no change to any file under `.github/workflows/`. It
   still requires that environment's own state workspace, GitHub Environment, secrets
   and Dependabot entry — see the delta's ADDED requirement, which bounds the claim.
-- Prod's observable behaviour, credentials and repository settings are unchanged at
-  N=1, so this change is verifiable before its second consumer exists.
+- Prod's Terraform behaviour, its credentials and its repository settings are
+  unchanged at N=1, so this change is verifiable before its second consumer exists.
+  **Two exceptions to that goal are accepted deliberately and are named here rather
+  than only where each is argued**, because the goal is what the acceptance test rests
+  on: `validate` is no longer cancelled when a push supersedes it (decision 3a), and a
+  second merge arriving while the first awaits approval may now have its plan refused
+  as stale (decision 9). Both are reachable at one environment. Neither changes what
+  prod's infrastructure is, what credential reaches which job, or what a reviewer is
+  asked to approve.
 - Every property above is asserted by `.github/tests/`, which is the only mechanism in
   this repository that can read a committed workflow file.
 
@@ -294,12 +301,57 @@ for it and every environment that did plan is applied.
 *Why the run's own artifacts are the source of truth, rather than a job output:* a
 matrix job's `outputs:` are written by every row into one namespace, last writer
 wins, so a matrix cannot publish a per-row result at all. The saved plan artifact is
-already named per environment (it must be, so one environment's plan cannot be
-applied to another), and its presence is exactly the fact the apply stage needs.
+already named per environment — it must be, so one environment's plan cannot be
+applied to another — so its presence is a fact the apply stage can read per
+environment, which is what nothing else in a matrix can give it.
 
-*Fail-closed, on the same reasoning as decision 2:* a resolution that did not
-conclude produces an empty set, and an empty set here means applying nothing while
-reporting green. It is refused rather than read as "nothing was planned".
+**Presence is only the right fact because the upload is placed where it is, and that
+placement is load-bearing rather than incidental.** The destroy-policy gate runs inside
+the plan job and *after* the plan exists, so a plan the gate refused is a plan that was
+produced. Were the artifact published before that gate, or conditionally on the job
+having merely reached it, the resolver would admit exactly the plans the gate stopped —
+and they would then be applied behind an approval the gate exists because it does not
+trust. The upload therefore comes last in the plan job and carries no condition, so a
+failed gate stops it by the ordinary step semantics. The delta states this as an
+obligation rather than leaving it to the ordering of a file, and `.github/tests`
+asserts the ordering, because it is a property a later edit could reverse without
+looking wrong.
+
+*Fail-closed, and with the same distinction decision 2 draws:* a resolution that did
+not conclude leaves a value that is neither a valid set nor an explicit empty one, and
+that is refused. An **explicitly empty** planned set is a different thing and is
+accepted — a merge matching `apply.yml`'s path filter while affecting no environment
+reaches this stage with nothing to apply, and so does a merge every one of whose plans
+failed, where the run is already red for that reason. Refusing an explicit empty set
+would turn the first into a failing apply workflow on a benign merge.
+
+*How the apply stage attaches to it, which is the half a resolver alone does not
+settle.* The apply matrix reads the resolved set, and the apply job keeps the plan job
+in `needs:` while carrying a condition of its own — `!cancelled()` and the resolver
+having succeeded. Both halves are necessary and neither is decorative:
+
+- **The condition** is what breaks the skip-propagation this decision exists to
+  remove. Without it the apply job is skipped whenever the plan stage's aggregate
+  result is `failure`, and every other part of the mechanism looks correct while the
+  defect survives intact.
+- **Keeping the plan job in `needs:`** is what keeps `needs.<plan>.outputs` in scope,
+  which decision 4a's omitted-write-token guard reads. Dropping it in favour of
+  depending on the resolver alone would silently remove the guard's operand — the guard
+  would compare against an empty string and pass, in exactly the configuration it
+  exists to catch.
+
+The rejected condition of the paragraph above is *not* this one, and the difference is
+which set the matrix runs over: a condition that lets rows start regardless raises
+approvals for unplanned environments only because those rows are still in the matrix.
+Once the rows come from the resolved set, no row exists for an environment that did not
+plan, and the condition raises nothing.
+
+*One output does survive the last-writer-wins collapse, and it is worth stating so that
+this decision is not read as contradicting decision 4a.* A matrix job cannot publish a
+per-row result, but it can publish a row-INVARIANT one, and 4a's digest is exactly
+that: `sha256` of the repository-scoped `HCLOUD_TOKEN` and this run's id, neither of
+which varies by row. Every row writes the same value, so which row wins does not
+matter.
 
 ### 9. Plan jobs and apply jobs take separate concurrency groups
 
@@ -328,6 +380,15 @@ as stale when it reaches its own apply. That is loud, happens after an approval 
 spent, and is corrected by re-running — and it is *Gated Production Apply Applies
 the Reviewed Plan*'s "Applied changes match the approved plan" working as written. A
 silently cancelled apply has no such backstop, which is what decides the trade.
+
+*What this does NOT remove, stated so the argument is not read as wider than it is.*
+The hazard class — a queuing job cancelling a previously pending one, as a cancellation
+rather than a failure — remains **within** the apply group: three merges in quick
+succession can leave the second merge's pending apply cancelled by the third's. That is
+pre-existing rather than introduced here, since the workflow-level group this change
+replaces had the same property at run level, and it is out of this change's scope to
+fix. It is recorded in `docs/deferred-work.md` rather than left implicit, because this
+decision argues from the hazard class and would otherwise read as having closed it.
 
 ## Risks / Trade-offs
 
