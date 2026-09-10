@@ -292,9 +292,9 @@ entry, which is where staging acquires DNS records — and that is the moment to
 weigh doing it in Terraform rather than by hand, since it is the first time the
 manual edit would be made twice. This trigger was entry 50's until
 `configure-the-staging-host` took that entry's host half and left the hostnames
-to the web-exposure entry. Entry 50 is deleted when that change archives, so
-the pointer was moved ahead of the deletion rather than left to dangle
-through it.
+to the web-exposure entry. Entry 50 went with that change's archiving, and the
+pointer was moved ahead of the deletion rather than left to dangle through
+it.
 
 **Revisit when** staging acquires its hostnames (the staging web-exposure
 entry), or when mail moves off this zone, or when a second hostname makes the
@@ -382,9 +382,9 @@ written from scratch and neither gap has acquired a real case. The trigger's own
 wording is what defers it — the condition is a `group_vars` written from
 scratch, not an environment existing — and that happens in the change recorded
 in the paragraph below. (That paragraph named `docs/change-queue.md` entry 50,
-which `configure-the-staging-host` deletes when it archives; the pointer is
-replaced rather than left to dangle, and what it pointed at is now named
-directly.)
+which `configure-the-staging-host` deleted on archiving; the pointer was
+replaced ahead of the deletion rather than left to dangle, and what it pointed
+at is now named directly.)
 
 **Revisited 2026-09-10 by `configure-the-staging-host`, the trigger firing at
 last, and both gaps stand.** `ansible/inventory/group_vars/staging.yml` was
@@ -783,7 +783,7 @@ entry 52, which puts the platform stack and a database on it. That is the moment
 say which host they mean.
 
 This trigger named entry 50 until 2026-09-10. `configure-the-staging-host`
-takes that entry's host half and deletes it on archiving, and the trigger
+took that entry's host half and deleted it on archiving, and the trigger
 followed the *subject* rather than the number: a persistent store arrives with the platform
 stack, which is entry 52's, not with staging's ports opening, which is the
 web-exposure entry's.

@@ -32,8 +32,8 @@ that lands and passes before staging is touched.
 ## 4. `ansible/inventory/group_vars/staging.yml`
 
 - [x] 4.1 Write the file from scratch — not copied from prod's and edited. `ansible_user: root`; `hardening_ssh_allowed_cidrs` mirroring `terraform/environments/staging/terraform.tfvars`'s `ssh_allowed_cidrs` exactly; `hardening_web_allowed_cidrs: []` mirroring its `web_allowed_cidrs = []`, stated rather than omitted because the mirror obligation in `ansible/roles/hardening/README.md` is what makes the pair checkable; `ops_user_accounts` with the operator's own entry; `platform_data_volume_subdirs` as prod's, because staging's volume is `main-data` too and `platform/docker-compose.yml` is unparameterised across environments by design. Verify `pre-commit run ansible-lint --all-files` passes over it.
-- [ ] 4.2 Add `deploy_apps` with a single `platform` entry carrying **staging's own** deploy public key (task 9.3), and a comment saying why it is not prod's and why `commerce-ops` is absent — design.md Decision 7. Verify the file parses: `ansible localhost -m debug -a 'msg={{ deploy_apps | length }}' -e @inventory/group_vars/staging.yml` prints 1.
-- [ ] 4.3 Add `ghcr_pull_username` in plain text and `ghcr_pull_token` Vault-encrypted under the `staging` vault id (task 9.2), and `image_prune_heartbeat_ping_key` likewise. Verify each decrypts without revealing it: `ansible localhost -m debug -a 'msg={{ <variable> | length }}' -e @inventory/group_vars/staging.yml --vault-id staging@prompt` prints a length, and confirm `gitleaks` in `pre-commit run --all-files` is clean.
+- [x] 4.2 Add `deploy_apps` with a single `platform` entry carrying **staging's own** deploy public key (task 9.3), and a comment saying why it is not prod's and why `commerce-ops` is absent — design.md Decision 7. Verify the file parses: `ansible localhost -m debug -a 'msg={{ deploy_apps | length }}' -e @inventory/group_vars/staging.yml` prints 1.
+- [x] 4.3 Add `ghcr_pull_username` in plain text and `ghcr_pull_token` Vault-encrypted under the `staging` vault id (task 9.2), and `image_prune_heartbeat_ping_key` likewise. Verify each decrypts without revealing it: `ansible localhost -m debug -a 'msg={{ <variable> | length }}' -e @inventory/group_vars/staging.yml --vault-id staging@prompt` prints a length, and confirm `gitleaks` in `pre-commit run --all-files` is clean.
 
 ## 5. Refusal diagnostics that name the environment
 
@@ -127,53 +127,125 @@ implementation, with 16 of them failing by design at that commit.
 
 **`pre-commit run --all-files`** passes, all hooks.
 
-## Not performed
+**10.1 — production's new invocation, in check mode.** Resolved `main-server`,
+`ok=76 changed=2 failed=0`, and `localhost : ok=2` — the guard passed and the
+run *proceeded*, which is the positive counterpart to 9.1a and the second
+scenario of *A Run Whose Target Group Resolves to No Host Refuses*.
 
-- **4.2 — `deploy_apps` seeded with staging's `platform` entry.**
-  Reason: it needs a keypair that does not exist yet. Generating it is task
-  9.3, the operator's, on their own workstation. The variable is left unset in
-  `ansible/inventory/group_vars/staging.yml` — not `[]`, which both consuming
-  roles read as a supplied value meaning "no application may deploy here" — so
-  `deploy_user` refuses until it is supplied.
-- **4.3 — the two Vault-encrypted values.**
-  Reason: they need staging's Vault password, which is task 9.2, the
-  operator's. `ghcr_pull_username` is committed; the two encrypted values are
-  not, and `image_prune` refuses on the ping key.
+The two `changed` were investigated rather than waved through, since nothing in
+this change alters host state. Both are in `tailscale`: *Add the Tailscale apt
+signing key* and *Add the Tailscale apt repository*, each an `ansible.builtin.get_url`
+with no `checksum:`. Reproduced against a local fixture: `get_url` to an
+existing destination without a checksum reports **changed** in check mode,
+because confirming the file matches would require downloading it and check mode
+will not. Not drift. Recorded against `docs/change-queue.md` entry 23, which
+proposes `--check --diff` as the host layer's drift detector and would inherit
+two permanent false positives.
 
-Both are prerequisites of the converge rather than of the pull request, and
-both are named in the file itself. **Until they are supplied there is no
-converged staging host**, no prune timer, and no
-`staging-server-prune-host-images` check — which is why tasks 10.4 to 10.7
-remain unticked and why nothing downstream may assume otherwise.
+**10.2 — staging's first converge**, local, as `docs/bootstrap-a-new-host.md`
+§6.3 prescribes. It failed once at *Bring the host onto the tailnet* with the
+output masked by `no_log`, was diagnosed by running `tailscale up` by hand on
+the host, and completed on re-run: `ok=76 changed=28 failed=0`, the same task
+count production reports.
+
+That failure left a **partially-converged host** — `docker` and `hardening` had
+applied, `tailscale` had not — which is the exposure `docs/deferred-work.md`'s
+"Two gaps in required-input validation that only the play could close"
+describes. It is the first time that state has occurred on a real host rather
+than in argument, and the recovery was exactly what that entry predicts:
+correct the input, re-run, every role idempotent. Its "revisit when a
+partially-converged host actually costs something" trigger has now been met
+once, at no cost.
+
+**10.3 — idempotence.** An immediate second run: `ok=75 changed=0 failed=0`.
+
+**10.4 — host state**, checked as `ops-claude` over the tailnet at
+`100.85.219.36`:
+
+| Checked | Result |
+|---|---|
+| `docker ps` | works, empty — account is in the `docker` group, nothing deployed |
+| `sudo -n true` | refused; `sudo ufw status` refused too. No sudo, by design |
+| `systemctl list-timers` | `prune-host-images.timer`, next 2026-09-13 04:13 UTC |
+| `/mnt/main-data` | mounted, `grafana` 472:472, `prometheus` 65534:65534, and `lost+found` — a real filesystem on the volume, not a directory on the root disk |
+| `ufw status verbose` (via Ansible as root) | default deny incoming; 22 from `176.104.184.0/24`; 22 and 3000 from `100.64.0.0/10`; **no 80, no 443** |
+
+That last row is the one that mattered most: it is the `web_allowed_cidrs = []`
+mirror holding at both layers at once, which is the pair most able to drift
+because it is hand-kept in two files.
+
+**10.6 — one prune activation, deliberately triggered.** It abandoned and
+reported failure, which is the accepted outcome of Decision 8. The journal
+establishes both halves:
+
+```
+prune-host-images: abandoned -- the keep set is empty; no enumerated
+application references an image and no container holds one
+prune-host-images-report[11213]: Created
+```
+
+The message names the **empty keep set** and not "the enumeration names no
+application", which proves `deploy_apps` reached the host. And `Created` is the
+observer's own reply to a ping for a check that did not exist — so the staging
+ping key works, the reporting path is sound end to end, and
+`staging-server-prune-host-images` now exists. A green `systemctl status` could
+have established neither.
+
+**10.5 and 10.7 — the two observer-side settings**, neither of which any
+converge performs. Key expiry disabled for `staging-server` in the tailnet, so
+the host does not silently drop off it in 180 days. And the new check set to
+**period 7 days, grace 2 days** per Appendix A — without which it would carry
+healthchecks' default and call a healthy weekly job overdue within a day, which
+is how a check becomes one nobody reads.
+
+## Performed later, in a pull request of its own
+
+**4.2 and 4.3 were disclosed as not performed when the implementation pull
+request merged**, because all three values needed credentials that existed
+nowhere in this repository. They were completed afterwards, in PR #130
+(`complete-staging-group-vars`), and are ticked above on that evidence:
+`ansible/inventory/group_vars/staging.yml` on the trunk now carries
+`deploy_apps` with staging's own `platform` key, and two `!vault` blocks
+carrying the `staging` vault id.
+
+That ordering is recorded rather than tidied away, because it is the shape
+this class of change has: repository work can be reviewed before any
+credential exists, and the credential-bearing half is a second, smaller
+review. Nothing was ticked before it was true.
+
+No task in this change went unperformed, so there is no `## Not performed`
+section: the two that were deferred are accounted for immediately above, and
+the heading exists to disclose work that never happened rather than work that
+happened late.
 
 ## 9. Operator prerequisites, out of band
 
-- [ ] 9.1 Create `ansible/.envrc` from the committed example with both read-only tokens, and `direnv allow`. Verify `ansible-inventory -i inventory/staging.hcloud.yml --graph` from `ansible/` shows the staging server under `@staging`, and `-i inventory/prod.hcloud.yml --graph` shows the production server under `@prod`.
-- [ ] 9.1a With both credentials working, verify the guard's remaining path — an empty group under a source that parsed cleanly, which 2.3 could not reach without a credential: `ansible-playbook playbooks/host-baseline.yml -i inventory/prod.hcloud.yml -e target_environment=staging` refuses at the first play naming `staging`. Confirm the message is the guard's empty-group one and not an inventory parse error — that distinction is what task 1.3a exists to preserve.
+- [x] 9.1 Create `ansible/.envrc` from the committed example with both read-only tokens, and `direnv allow`. Verify `ansible-inventory -i inventory/staging.hcloud.yml --graph` from `ansible/` shows the staging server under `@staging`, and `-i inventory/prod.hcloud.yml --graph` shows the production server under `@prod`.
+- [x] 9.1a With both credentials working, verify the guard's remaining path — an empty group under a source that parsed cleanly, which 2.3 could not reach without a credential: `ansible-playbook playbooks/host-baseline.yml -i inventory/prod.hcloud.yml -e target_environment=staging` refuses at the first play naming `staging`. Confirm the message is the guard's empty-group one and not an inventory parse error — that distinction is what task 1.3a exists to preserve.
 
       Run it in the same session as 9.1, immediately after its `--graph` showed the production server: **this task cannot establish on its own that prod's source resolved**. A source that parsed cleanly and returned no hosts — a token repointed at an empty project, a label no longer applied, `server_enabled = false` — produces this task's exact message and exit code. The positive counterpart is 10.1, where a non-empty group under the same source proceeds past the guard; 9.1a and 10.1 together cover both scenarios of *A Run Whose Target Group Resolves to No Host Refuses*, where 9.1a alone covers one of them twice.
 
       The direction is deliberate and safe: `hosts:` resolves to `staging`, which holds no host under prod's credential, so even a guard that failed to fire entirely could not reach production.
-- [ ] 9.2 Choose staging's Vault password, store it in the password manager, and encrypt staging's GHCR token and heartbeat ping key with `--vault-id staging@prompt` into `group_vars/staging.yml` (task 4.3). The GHCR token may be the same `read:packages` token prod uses; the ping key is the same project ping key, which addresses a different check because the host name differs.
-- [ ] 9.3 Generate a staging-only `platform` deploy keypair on the workstation. Commit the public half into `deploy_apps` (task 4.2); keep the private half in the password manager for entry 52, and put it in no GitHub secret in this change.
-- [ ] 9.4 Generate a Tailscale auth key for staging — reusable, not ephemeral, no tags — and keep it in the password manager. It is supplied at the prompt in 10.2 and never committed.
-- [ ] 9.5 Record staging's SSH host key in the operator's `known_hosts`, by logging in once: `ssh -i ~/.ssh/<company>-root root@<staging ipv4>`, the address from `terraform output` in `terraform/environments/staging/`. `ansible/ansible.cfg` sets `host_key_checking = True`, so without this the first converge fails at connection time with `Host key verification failed` before any role runs — the mid-run discovery this whole section exists to prevent. `docs/bootstrap-a-new-host.md` §4.3 currently says staging needs no such entry "because nothing converges it"; task 7.3 is what corrects that sentence, and this is what makes it false.
+- [x] 9.2 Choose staging's Vault password, store it in the password manager, and encrypt staging's GHCR token and heartbeat ping key with `--vault-id staging@prompt` into `group_vars/staging.yml` (task 4.3). The GHCR token may be the same `read:packages` token prod uses; the ping key is the same project ping key, which addresses a different check because the host name differs.
+- [x] 9.3 Generate a staging-only `platform` deploy keypair on the workstation. Commit the public half into `deploy_apps` (task 4.2); keep the private half in the password manager for entry 52, and put it in no GitHub secret in this change.
+- [x] 9.4 Generate a Tailscale auth key for staging — reusable, not ephemeral, no tags — and keep it in the password manager. It is supplied at the prompt in 10.2 and never committed.
+- [x] 9.5 Record staging's SSH host key in the operator's `known_hosts`, by logging in once: `ssh -i ~/.ssh/<company>-root root@<staging ipv4>`, the address from `terraform output` in `terraform/environments/staging/`. `ansible/ansible.cfg` sets `host_key_checking = True`, so without this the first converge fails at connection time with `Host key verification failed` before any role runs — the mid-run discovery this whole section exists to prevent. `docs/bootstrap-a-new-host.md` §4.3 currently says staging needs no such entry "because nothing converges it"; task 7.3 is what corrects that sentence, and this is what makes it false.
 
 ## 10. First converge, and confirming it
 
-- [ ] 10.1 Prove production's invocation still reaches production, before touching staging: `ansible-playbook playbooks/host-baseline.yml -i inventory/prod.hcloud.yml -e target_environment=prod --vault-id prod@prompt --check --diff`. Check mode, not a converge — `AGENTS.md` allows local production credentials for reading and not for applying. Confirm it resolves the host and proposes nothing beyond the known check-mode noise `docs/bootstrap-a-new-host.md` §6.3 already describes.
-- [ ] 10.2 Run staging's first converge locally: the same command against `staging.hcloud.yml` with `-e target_environment=staging --vault-id staging@prompt` and the auth key from 9.4. Not `--check` — §6.3 says a first run must not be, because apt tasks report changes they did not make and later tasks then fail against a stale cache. Record the play recap.
-- [ ] 10.3 Run it again immediately and confirm `changed=0`. A second run that reports changes means something is not idempotent, and is worth understanding before anything else is built on this host.
-- [ ] 10.4 Confirm the host state, as §6.4's checklist does for prod: `ufw status` shows default deny with 22 and the tailnet rules and **no** 80/443 rule, staging carrying `web_allowed_cidrs = []`; `tailscale status` reports Running and the machine appears in the tailnet; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted with `prometheus/` and `grafana/`; the `deploy` account exists with the forced-command entry for `platform` and no other; and the operator account logs in over the tailnet with `docker ps` working and `sudo -n true` refused.
-- [ ] 10.5 In the Tailscale admin, disable key expiry for the staging machine, and verify it reads as disabled afterwards. §6.4 step 1 performs this for prod and nothing performs it for staging; without it the host silently drops off the tailnet when the key expires, which is the state that makes a host unreachable with no error naming the cause. The verification belongs here rather than in 10.4's checklist, which runs before this task and cannot assert a state nothing has created yet.
-- [ ] 10.6 Trigger one prune activation and read what it reports: it will **abandon** on an empty keep set and report `/fail`, which is design.md Decision 8's stated and accepted outcome on a host with nothing deployed. Confirm the failure is that one and not a different one — the journal should name the empty keep set, not a missing enumeration or an unreachable observer — and that the check `staging-server-prune-host-images` now exists at the observer, distinct from prod's.
-- [ ] 10.7 Set that check's period and grace at the observer to the values Appendix A lists for the prune. A check the reporter creates by pinging it carries the **observer's default** period until corrected — Appendix A says so — so until this task the host prunes weekly while the observer calls it overdue in a day. Decision 8's "the window is short and known" is stated over the weekly cadence and is not true of the check as created. Verify by reading the check's configured period back, not by reading the unit's timer.
+- [x] 10.1 Prove production's invocation still reaches production, before touching staging: `ansible-playbook playbooks/host-baseline.yml -i inventory/prod.hcloud.yml -e target_environment=prod --vault-id prod@prompt --check --diff`. Check mode, not a converge — `AGENTS.md` allows local production credentials for reading and not for applying. Confirm it resolves the host and proposes nothing beyond the known check-mode noise `docs/bootstrap-a-new-host.md` §6.3 already describes.
+- [x] 10.2 Run staging's first converge locally: the same command against `staging.hcloud.yml` with `-e target_environment=staging --vault-id staging@prompt` and the auth key from 9.4. Not `--check` — §6.3 says a first run must not be, because apt tasks report changes they did not make and later tasks then fail against a stale cache. Record the play recap.
+- [x] 10.3 Run it again immediately and confirm `changed=0`. A second run that reports changes means something is not idempotent, and is worth understanding before anything else is built on this host.
+- [x] 10.4 Confirm the host state, as §6.4's checklist does for prod: `ufw status` shows default deny with 22 and the tailnet rules and **no** 80/443 rule, staging carrying `web_allowed_cidrs = []`; `tailscale status` reports Running and the machine appears in the tailnet; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted with `prometheus/` and `grafana/`; the `deploy` account exists with the forced-command entry for `platform` and no other; and the operator account logs in over the tailnet with `docker ps` working and `sudo -n true` refused.
+- [x] 10.5 In the Tailscale admin, disable key expiry for the staging machine, and verify it reads as disabled afterwards. §6.4 step 1 performs this for prod and nothing performs it for staging; without it the host silently drops off the tailnet when the key expires, which is the state that makes a host unreachable with no error naming the cause. The verification belongs here rather than in 10.4's checklist, which runs before this task and cannot assert a state nothing has created yet.
+- [x] 10.6 Trigger one prune activation and read what it reports: it will **abandon** on an empty keep set and report `/fail`, which is design.md Decision 8's stated and accepted outcome on a host with nothing deployed. Confirm the failure is that one and not a different one — the journal should name the empty keep set, not a missing enumeration or an unreachable observer — and that the check `staging-server-prune-host-images` now exists at the observer, distinct from prod's.
+- [x] 10.7 Set that check's period and grace at the observer to the values Appendix A lists for the prune. A check the reporter creates by pinging it carries the **observer's default** period until corrected — Appendix A says so — so until this task the host prunes weekly while the observer calls it overdue in a day. Decision 8's "the window is short and known" is stated over the weekly cadence and is not true of the check as created. Verify by reading the check's configured period back, not by reading the unit's timer.
 
 ## 11. Ship
 
-- [ ] 11.1 Open the change's implementation pull request once verification passes on the branch head and the code review has cleared, and wait for the operator's confirmation that it merged and that CI was green. Nothing here deploys: this change ships no workflow and no Terraform.
-- [ ] 11.2 The confirmation gate for this change is task 10 — a converged staging host, reachable over the tailnet, with the state 10.4 lists. It is not waivable: an observation can be made, and it has been proposed. Wait for the operator's confirmation rather than inferring it from a green pull request.
-- [ ] 11.3 Bring the branch back to the freshly fetched trunk, confirm 8.3 and 8.4 have re-homed everything that pointed at entry 50, delete entry 50 from `docs/change-queue.md`, and archive the change's record with `openspec archive`. Verify `openspec validate --archived` passes and that `python3 -m unittest discover --start-directory .github/tests` still passes, the citation-form check included.
+- [x] 11.1 Open the change's implementation pull request once verification passes on the branch head and the code review has cleared, and wait for the operator's confirmation that it merged and that CI was green. Nothing here deploys: this change ships no workflow and no Terraform.
+- [x] 11.2 The confirmation gate for this change is task 10 — a converged staging host, reachable over the tailnet, with the state 10.4 lists. It is not waivable: an observation can be made, and it has been proposed. Wait for the operator's confirmation rather than inferring it from a green pull request.
+- [x] 11.3 Bring the branch back to the freshly fetched trunk, confirm 8.3 and 8.4 have re-homed everything that pointed at entry 50, delete entry 50 from `docs/change-queue.md`, and archive the change's record with `openspec archive`. Verify `openspec validate --archived` passes and that `python3 -m unittest discover --start-directory .github/tests` still passes, the citation-form check included.
 
 Opening the record's own pull request, and removing the branch and the working
 tree once it merges, all happen after the commit that writes this file — so they
