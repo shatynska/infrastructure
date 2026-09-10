@@ -16,11 +16,33 @@
 # Distinct from each role's own input assertions, which this does not replace:
 # those reach a role acting on a host that resolved, and none of them runs
 # when no host resolved at all.
+#
+# TWO WAYS TO GET PAST IT, one closed here and one that cannot be:
+#
+#   --tags/--skip-tags   CLOSED, by `tags: always` below. Without it a tag
+#                        selection deselects these untagged asserts, the
+#                        converge play matches nothing, and the run exits 0 --
+#                        the exact outcome this guard exists to prevent.
+#                        platform_data_volume/tasks/main.yml carries a comment
+#                        about the same hazard biting a register.
+#
+#   --limit              NOT CLOSED, AND NOT CLOSEABLE FROM HERE. A limit
+#                        filters `localhost` out of this play, and Ansible has
+#                        no per-play exemption from it. A run with a --limit
+#                        naming a host in an empty group skips both plays and
+#                        exits 0, and with no target_environment supplied it
+#                        reports the raw `Error processing keyword 'hosts'`
+#                        rather than the diagnostic below. Do not pass --limit
+#                        to this playbook; there is nothing here to narrow,
+#                        since the environment already selects the host set.
+#                        docs/change-queue.md entry 54 records it.
 - name: Refuse before configuring anything if the target resolved to nothing
   hosts: localhost
   connection: local
   gather_facts: false
   become: false
+  # `always`, so a --tags run cannot deselect the refusal. See the block above.
+  tags: always
   tasks:
     # Separate tasks, deliberately: a single compound assertion would report
     # both causes with one message and leave the operator to work out which.

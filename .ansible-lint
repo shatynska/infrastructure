@@ -9,14 +9,6 @@
 exclude_paths:
   - ansible/roles/geerlingguy.docker/
 
-# Every role referenced by name (e.g. `role: hardening`) needs mocking
-# here -- not just in each role's molecule/default/converge.yml, but also
-# in the real ansible/playbooks/host-baseline.yml. ansible-lint does not
-# resolve role references via ansible.cfg's `roles_path = roles` the way
-# `ansible-playbook`/`ansible-galaxy` do; without this, standalone
-# ansible-lint reports a false-positive "role not found" even though the
-# role resolves correctly both at role-implementation time (roles_path)
-# and at molecule-test time (each molecule.yml's ANSIBLE_ROLES_PATH).
 # ansible/playbooks/host-baseline.yml's second play takes its `hosts:` from
 # `target_environment`, supplied per run and deliberately given no default
 # (iac-host-configuration's "Host Configuration Names the Environment It
@@ -41,6 +33,14 @@ exclude_paths:
 extra_vars:
   target_environment: syntax-check-only
 
+# Every role referenced by name (e.g. `role: hardening`) needs mocking
+# here -- not just in each role's molecule/default/converge.yml, but also
+# in the real ansible/playbooks/host-baseline.yml. ansible-lint does not
+# resolve role references via ansible.cfg's `roles_path = roles` the way
+# `ansible-playbook`/`ansible-galaxy` do; without this, standalone
+# ansible-lint reports a false-positive "role not found" even though the
+# role resolves correctly both at role-implementation time (roles_path)
+# and at molecule-test time (each molecule.yml's ANSIBLE_ROLES_PATH).
 mock_roles:
   - docker
   - image_prune

@@ -234,7 +234,7 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 
 | Name | Scope | Value from | Read by |
 |---|---|---|---|
-| `HCLOUD_TOKEN` | Repository | Stage 1, production Read Only | Production's PR plans, drift detection and apply-workflow plan job, and the Ansible inventory |
+| `HCLOUD_TOKEN` | Repository | Stage 1, production Read Only | Production's PR plans, drift detection and apply-workflow plan job. **Not Ansible** — no workflow runs Ansible, and the inventory reads `HCLOUD_TOKEN_PROD` from a local file (stage 6.0) |
 | `HCLOUD_TOKEN_STAGING` | Repository | Stage 1, staging Read Only | Staging's PR plans, drift detection and apply-workflow plan job |
 | `HCLOUD_TOKEN` | `production` Environment | Stage 1, production Read & Write | Production's apply job only, after approval. GitHub resolves an Environment secret ahead of a repository secret of the same name, which is the whole mechanism. |
 | `HCLOUD_TOKEN` | `staging` Environment | Stage 1, staging Read & Write | Staging's apply job, immediately on merge |
@@ -493,6 +493,8 @@ ansible-playbook playbooks/host-baseline.yml \
   -e tailscale_auth_key=<tskey-auth-... from stage 5>
 ```
 
+**Do not add `--limit`.** The environment already selects the host set, there is nothing to narrow, and a limit filters the guard play's `localhost` out — so a run that reaches no host would exit 0 again, which is the failure the guard exists to end. `--tags` is safe: the guard is tagged `always`.
+
 Two prompts: the Vault password, and (if the key has one) the operator key's passphrase. A first run takes several minutes; Docker's installation is the slow part. A second run immediately afterwards should report `changed=0`; if it does not, something is not idempotent and worth understanding before moving on.
 
 Do not rely on `--check` for the first run: apt-based tasks report changes they did not make and later tasks then fail against a stale package cache. `--check --diff` is useful on every run after the first.
@@ -513,9 +515,11 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
    ```sh
    cd ansible
    ansible <environment> -i inventory/<environment>.hcloud.yml \
+     --private-key ~/.ssh/<company>-root \
      -m ansible.builtin.systemd_service \
      -a "name=<unit> state=started" --vault-id <environment>@prompt
    ansible <environment> -i inventory/<environment>.hcloud.yml \
+     --private-key ~/.ssh/<company>-root \
      -m ansible.builtin.command \
      -a "journalctl -u <unit> -n 20 --no-pager" --vault-id <environment>@prompt
    ```
@@ -543,9 +547,11 @@ The web ports are where the two differ, and the difference is the check: **produ
 ```sh
 cd ansible
 ansible <environment> -i inventory/<environment>.hcloud.yml \
+  --private-key ~/.ssh/<company>-root \
   -m ansible.builtin.systemd_service \
   -a "name=prune-host-images.service state=started" --vault-id <environment>@prompt
 ansible <environment> -i inventory/<environment>.hcloud.yml \
+  --private-key ~/.ssh/<company>-root \
   -m ansible.builtin.command \
   -a "journalctl -u prune-host-images.service -n 20 --no-pager" --vault-id <environment>@prompt
 ```
@@ -734,9 +740,9 @@ The Hetzner rows come in pairs, one per environment, because a Hetzner token rea
 
 | Name | Where | Created in | Value from | Breaks when wrong |
 |---|---|---|---|---|
-| Production Hetzner Read Only | repo-root `.envrc`; repo secret `HCLOUD_TOKEN` | 1 | The production Hetzner project → API tokens | Production's local plans, PR plans and drift detection; the Ansible inventory |
+| Production Hetzner Read Only | repo-root `.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_PROD`**; repo secret `HCLOUD_TOKEN` | 1 | The production Hetzner project → API tokens | Production's local plans, PR plans and drift detection; production's Ansible inventory source. **Rotating it means editing two local files, not one** — miss `ansible/.envrc` and the next converge dies at inventory parse |
 | Production Hetzner Read & Write | `production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
-| Staging Hetzner Read Only | `terraform/environments/staging/.envrc`; repo secret `HCLOUD_TOKEN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection |
+| Staging Hetzner Read Only | `terraform/environments/staging/.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_STAGING`**; repo secret `HCLOUD_TOKEN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection; staging's Ansible inventory source. Two local files here too |
 | Staging Hetzner Read & Write | `staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
 | `TF_API_TOKEN` | Repo secret and **both** Env secrets; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |

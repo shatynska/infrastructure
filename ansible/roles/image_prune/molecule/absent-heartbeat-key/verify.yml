@@ -18,11 +18,14 @@
 #                                substring test, because a recorded action may
 #                                be short (`assert`) or fully qualified.
 #   message names the variable   SPECIFIED -- "SHALL fail naming that input".
-#   message names group_vars/    The clause "and how to supply it" is
-#   prod.yml                     SPECIFIED; the choice of that particular path
-#                                to satisfy it is DERIVED, from tasks.md 1.2,
-#                                which is where the Vault-encrypted value is
-#                                to be set. Same classification as
+#   message names                The clause "and how to supply it" is
+#   ansible/inventory/group_vars/ SPECIFIED; the choice of that particular path
+#   <environment>.yml            to satisfy it is DERIVED. It named prod.yml
+#                                until configure-the-staging-host gave this
+#                                repository a second group_vars, at which point
+#                                naming production's file was the wrong answer
+#                                for a staging run. Same classification, and
+#                                the same reasoning, as
 #                                hardening/molecule/absent-ssh-cidrs.
 #   nothing installed            SPECIFIED -- "before changing anything on the
 #                                host, and SHALL NOT install the unit with

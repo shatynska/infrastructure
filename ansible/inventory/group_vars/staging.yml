@@ -92,17 +92,44 @@ ghcr_pull_username: shatynska
 # password protecting production's secrets, which is what reusing prod's
 # vault id would mean.
 #
-# Until all three are here, `host-baseline.yml` refuses against staging, and
-# it is worth being exact about which absence does it. `deploy_apps` is left
-# UNSET below rather than set to `[]`, because an empty list is a *supplied*
-# value to both roles that read it -- their assertions say so in as many
-# words -- meaning "no application may deploy to this host". That would
-# converge, and would leave the weekly prune abandoning with "the
-# enumeration names no application", which is a different failure from the
-# one this environment is expected to have. Unset, `deploy_user` refuses by
-# name before any task changes the host, which is the intended state of this
-# file rather than a defect in it. `image_prune` refuses on the ping key the
-# same way.
+# THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET CONVERGED. Two of the three
+# below are what `host-baseline.yml` refuses on, and it is worth being exact
+# about which absence does what, because they are not alike:
+#
+#   deploy_apps                     REFUSES. Left UNSET rather than set to
+#                                   `[]`, because an empty list is a *supplied*
+#                                   value to both roles that read it -- their
+#                                   assertions say so in as many words --
+#                                   meaning "no application may deploy to this
+#                                   host". That would converge, and would leave
+#                                   the weekly prune abandoning with "the
+#                                   enumeration names no application", a
+#                                   different failure from the empty-keep-set
+#                                   one this environment is expected to have.
+#
+#   image_prune_heartbeat_ping_key  REFUSES, by name, the same way.
+#
+#   ghcr_pull_token                 DOES NOT REFUSE. An absent registry
+#                                   credential is a tolerated operating mode --
+#                                   iac-host-configuration's "Host
+#                                   Authenticates to GHCR for Application Image
+#                                   Pulls" requires the login to be SKIPPED
+#                                   rather than failed -- so leaving it out
+#                                   converges a host that cannot pull private
+#                                   images.
+#
+# WHERE THE REFUSAL LANDS, which is not "before anything happens": `deploy_user`
+# is the FOURTH role in the play. `docker`, `hardening` and `tailscale` run
+# first and all change the host, so an incomplete file here produces a
+# partially-converged host -- Docker installed, UFW enabled, tailnet joined --
+# and not an untouched one. That is recoverable by completing this file and
+# re-running, every role being idempotent, and it is the exposure
+# docs/deferred-work.md's "Two gaps in required-input validation that only the
+# play could close" describes.
+#
+# So this file's state is PENDING the operator, not finished. Until it is
+# completed there is no converged staging host, no prune timer and no
+# `staging-server-prune-host-images` check.
 # ---------------------------------------------------------------------------
 
 # Per-application deploy public keys (add-per-app-deploy-keys). Safe to

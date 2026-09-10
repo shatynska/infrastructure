@@ -290,10 +290,11 @@ only one zone's worth of records and nothing to rehearse a migration against.
 The trigger becomes live with `docs/change-queue.md`'s staging web-exposure
 entry, which is where staging acquires DNS records — and that is the moment to
 weigh doing it in Terraform rather than by hand, since it is the first time the
-manual edit would be made twice. It was entry 50's until
-`configure-the-staging-host` took entry 50's host half and left the hostnames
-to that entry; entry 50 is gone, and this pointer moved rather than dying with
-it.
+manual edit would be made twice. This trigger was entry 50's until
+`configure-the-staging-host` took that entry's host half and left the hostnames
+to the web-exposure entry. Entry 50 is deleted when that change archives, so
+the pointer was moved ahead of the deletion rather than left to dangle
+through it.
 
 **Revisit when** staging acquires its hostnames (the staging web-exposure
 entry), or when mail moves off this zone, or when a second hostname makes the
@@ -379,14 +380,16 @@ environment now exists, but that change is Terraform and pipeline only: staging
 has no `group_vars` and no play that can target it, so nothing has yet been
 written from scratch and neither gap has acquired a real case. The trigger's own
 wording is what defers it — the condition is a `group_vars` written from
-scratch, not an environment existing — and that happens in
-`docs/change-queue.md` entry 50.
+scratch, not an environment existing — and that happens in the change recorded
+in the paragraph below. (That paragraph named `docs/change-queue.md` entry 50,
+which `configure-the-staging-host` deletes when it archives; the pointer is
+replaced rather than left to dangle, and what it pointed at is now named
+directly.)
 
 **Revisited 2026-09-10 by `configure-the-staging-host`, the trigger firing at
 last, and both gaps stand.** `ansible/inventory/group_vars/staging.yml` was
 written from scratch in that change, so each gap now has the real case the
-condition was waiting for — and the case is met by the file being complete and
-reviewed rather than by a new check. The reasoning that deferred them is
+condition was waiting for. The reasoning that deferred them is
 untouched: what they produce is a partially-converged host rather than a damaged
 one, every role in the play is idempotent, and the play-scope fix would restate
 every role's required inputs in a second place nothing keeps in step with the
@@ -777,8 +780,8 @@ entry 52, which puts the platform stack and a database on it. That is the moment
 "this host" becomes genuinely ambiguous and the durability requirements have to
 say which host they mean.
 
-This trigger named entry 50 until 2026-09-10. `configure-the-staging-host` took
-entry 50's host half and deleted the entry, and the trigger followed the
-*subject* rather than the number: a persistent store arrives with the platform
+This trigger named entry 50 until 2026-09-10. `configure-the-staging-host`
+takes that entry's host half and deletes it on archiving, and the trigger
+followed the *subject* rather than the number: a persistent store arrives with the platform
 stack, which is entry 52's, not with staging's ports opening, which is the
 web-exposure entry's.

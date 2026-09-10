@@ -117,8 +117,13 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
 
    ```sh
    cd ansible
+   cp .envrc.example .envrc && direnv allow    # fill in both tokens first
    ansible-inventory -i inventory/prod.hcloud.yml --graph      # or staging
    ```
+
+   `direnv allow` is not optional: direnv refuses to load an unallowed
+   `.envrc`, so a correctly filled file still yields
+   `Invalid Hetzner Cloud API Token` without it.
 
    A missing or wrong token fails the run naming the source it could not
    parse, rather than resolving to an environment with no host in it.

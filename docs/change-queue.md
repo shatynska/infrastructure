@@ -380,10 +380,14 @@ this the forcing function for container resource limits (7).
 
 ## 23. apply-host-configuration-through-a-gated-workflow
 
-**No longer blocked.** It waited on a non-prod host to *converge* against, and
-`configure-the-staging-host` supplied one on 2026-09-10: staging now has an
-inventory source, a `group_vars` of its own, a play that can name it, and a
-first converge behind it. The block was recorded on 2026-09-09 when staging was
+**Unblocked once staging is actually converged, which is not the same day this
+was written.** It waited on a non-prod host to *converge* against.
+`configure-the-staging-host` supplied everything a converge needs from this
+repository on 2026-09-10 -- an inventory source, a `group_vars` of its own, a
+play that can name it -- but the converge itself is operator work against
+credentials that exist nowhere here, and `ansible/inventory/group_vars/staging.yml`
+is committed incomplete until it is done. **Check that staging is converged
+before starting this**, rather than inferring it from this entry. The block was recorded on 2026-09-09 when staging was
 identified, re-pointed on 2026-09-10 when `add-a-staging-environment` delivered
 staging's Terraform half, and lifted when that change's host half landed.
 
@@ -1117,11 +1121,110 @@ act by the operator, who can force the replacement in the same session. Worth
 writing that into the rotation step of whatever runbook covers it, which is a
 smaller piece of work than this entry and does not wait on it.
 
+## 51. assert-every-tfvars-assigns-its-required-variables
+
+Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the
+gap by falling into it.
+
+That change shipped `terraform/environments/staging/terraform.tfvars` with
+`server_type` deliberately unassigned, and `variables.tf` declares it with no
+default. Nothing in this repository detects that. The consequence is not subtle
+once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run
+Terraform with `-input=false`, so the plan exits non-zero with `No value for
+required variable`, the conclusion step fails the required check, and a nightly
+drift sweep would fail for that environment every night and take the shared
+heartbeat with it — but it is detected by a *plan*, which needs a credential, a
+workspace and a network. The same fact is a pure static read: for each
+environment directory, every variable `variables.tf` declares without a `default`
+appears as an assignment in `terraform.tfvars`.
+
+That places it squarely in `.github/tests`, whose subject is any property that is
+a static read of a committed file, and which may make no network call and invoke
+no Terraform binary. The parser is the only real work: `terraform.tfvars`
+assignments and `variable` blocks with and without defaults, without importing
+HCL machinery the suite does not have. `test_a_second_environment.py` already
+reads `terraform.tfvars` for volume names and can lend its approach.
+
+**Not blocked.** It was left out of `add-a-staging-environment` because the gap it
+covers was that change's own disclosed, in-flight state — writing the check that
+fails the tree you are still assembling is a different change than the one that
+assembled it.
+
+## 52. deploy-the-platform-stack-per-environment
+
+Recorded 2026-09-10 by `bootstrap-two-environments`, which needed to tell a
+company reader what their second server can and cannot have. Two of the three
+answers were already written down; this was the third and it was recorded
+nowhere.
+
+`.github/workflows/platform-deploy.yml` is single-environment by construction,
+in two places that must move together:
+
+- **`environment: production`** is a literal on the deploy job, where the
+  Terraform pipeline reads its environment from each environment's own
+  `pipeline.yml`. The workflow therefore cannot be pointed at a second
+  environment at all.
+- **`PLATFORM_DEPLOY_HOST`** names one host, and the eight `PLATFORM_*` secrets
+  around it are one set held in one GitHub Environment. A second environment
+  needs its own values for every one of them — its own deploy host, its own
+  Postgres credentials, its own Grafana password, its own ACME email.
+
+**Where this came from**, since the entry it was split out of is being
+deleted. It was recorded as a separate entry rather than a sixth bullet on
+entry 50,
+which held both halves of "configure the staging host": that entry's *host* half
+— a play that can target a second environment, an inventory that can see two
+Hetzner projects, `group_vars/staging.yml`, and the first local converge — is
+delivered by `configure-the-staging-host`, which deletes entry 50 when it
+archives. Its
+platform bullet said the stack has to reach the second host; **this** entry is
+the mechanism that would let it. The two were separable because a converged host
+is a prerequisite either way, and the host half was already large.
+
+What that change left here, so this entry does not re-derive it: staging's
+`deploy` account is already authorised for `platform` under a staging-only
+keypair, whose private half is in the operator's password manager and in no
+GitHub secret. `commerce-ops` is deliberately not authorised on staging — it has
+no staging deploy path in its own repository yet.
+
+The shape to copy is the one `make-the-pipeline-environment-agnostic` proved:
+the workflow reads what it needs from committed per-environment declarations and
+names no environment itself. `platform/` has no such declaration today, and
+whether it should reuse `terraform/environments/<name>/pipeline.yml` or grow one
+of its own is the first decision this change makes.
+
+**Unblocked by a converged staging host, which `configure-the-staging-host`
+made reachable rather than made true.** That change landed the inventory, the
+play and staging's `group_vars` on 2026-09-10; the converge is operator work and
+happens after it. Check the host before starting here.
+
+Once converged, staging's `deploy` account is authorised for `platform` under a
+staging-only keypair, so this entry needs no converge of its own to begin --
+**provided the operator supplied that keypair**, which is the same step the
+converge waits on. What was never left here is staging's `PLATFORM_*` secret
+set, which is this entry's to create in full.
+
+**Entry 53 is blocked on this one**, and the coupling is worth reading from this
+end too: 53 opens 80/443 on staging, and opening them before there is a stack
+behind them is the state `add-a-staging-environment` deliberately avoided. Do
+this first.
+
+**Staging's prune check will be red until this lands** -- from the converge
+that arms the timer, not from now. `staging-server-prune-host-images` does not
+exist until the unit's first activation pings it into being. Once it does, it
+reports failure every week, because a host with nothing deployed has an empty
+keep set, which the prune treats as a refusal rather than licence to remove
+everything. That was accepted deliberately and bounded by this entry; if it
+stays red long enough to be tuned out, that is the signal to revisit rather
+than to mute it.
+
 ## 53. expose-staging-on-the-web
 
 **The half of the former entry 50 that entry 52 does not claim.** Recorded
-2026-09-10 by `configure-the-staging-host`, which took entry 50's host half and
-deleted that entry; without this the work below would have gone with it, since
+2026-09-10 by `configure-the-staging-host`, which takes entry 50's host half and
+deletes that entry when it archives -- so between that change's two pull
+requests, entry 50 is still present above and still says staging is "configured
+by nothing". Without this entry the work below would go with it, since
 entry 52's own text scopes itself to `platform-deploy.yml`'s `environment:`
 literal and the eight `PLATFORM_*` secrets and mentions neither ports nor DNS.
 
@@ -1172,6 +1275,17 @@ So what exists today is a static assertion that the guard is *present* and
 correctly shaped, plus a manual run recorded in that change's task list. **A
 green pull request does not establish that the guard fires.**
 
+**One bypass is known and open, and a harness is what would have caught it.**
+`--limit` filters `localhost` out of the guard play, and Ansible has no per-play
+exemption from it, so `ansible-playbook … --limit <host>` against an empty group
+skips both plays and exits 0 — the very outcome the guard exists to prevent.
+With no `target_environment` supplied it also loses the designed diagnostic and
+reports the raw `Error processing keyword 'hosts'`. The sibling `--tags` bypass
+WAS closable and is closed (`tags: always`); this one can only be stated, in the
+play's header and in `docs/bootstrap-a-new-host.md`. A play-scope harness would
+be the thing that asserts the refusal under each of these invocation shapes
+rather than only the bare one.
+
 What a play-scope harness would cover, beyond this one guard: any play-level
 behaviour at all — role ordering, `when:` conditions on role inclusion, and the
 play-scope input validation `docs/deferred-work.md`'s "Two gaps in
@@ -1181,92 +1295,3 @@ currently deferred partly because nothing could test a fix for it.
 Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and
 whatever runner it needs, which is why it was not invented inside a change whose
 diff most needed reading closely.
-
-## 51. assert-every-tfvars-assigns-its-required-variables
-
-Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the
-gap by falling into it.
-
-That change shipped `terraform/environments/staging/terraform.tfvars` with
-`server_type` deliberately unassigned, and `variables.tf` declares it with no
-default. Nothing in this repository detects that. The consequence is not subtle
-once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run
-Terraform with `-input=false`, so the plan exits non-zero with `No value for
-required variable`, the conclusion step fails the required check, and a nightly
-drift sweep would fail for that environment every night and take the shared
-heartbeat with it — but it is detected by a *plan*, which needs a credential, a
-workspace and a network. The same fact is a pure static read: for each
-environment directory, every variable `variables.tf` declares without a `default`
-appears as an assignment in `terraform.tfvars`.
-
-That places it squarely in `.github/tests`, whose subject is any property that is
-a static read of a committed file, and which may make no network call and invoke
-no Terraform binary. The parser is the only real work: `terraform.tfvars`
-assignments and `variable` blocks with and without defaults, without importing
-HCL machinery the suite does not have. `test_a_second_environment.py` already
-reads `terraform.tfvars` for volume names and can lend its approach.
-
-**Not blocked.** It was left out of `add-a-staging-environment` because the gap it
-covers was that change's own disclosed, in-flight state — writing the check that
-fails the tree you are still assembling is a different change than the one that
-assembled it.
-
-## 52. deploy-the-platform-stack-per-environment
-
-Recorded 2026-09-10 by `bootstrap-two-environments`, which needed to tell a
-company reader what their second server can and cannot have. Two of the three
-answers were already written down; this was the third and it was recorded
-nowhere.
-
-`.github/workflows/platform-deploy.yml` is single-environment by construction,
-in two places that must move together:
-
-- **`environment: production`** is a literal on the deploy job, where the
-  Terraform pipeline reads its environment from each environment's own
-  `pipeline.yml`. The workflow therefore cannot be pointed at a second
-  environment at all.
-- **`PLATFORM_DEPLOY_HOST`** names one host, and the eight `PLATFORM_*` secrets
-  around it are one set held in one GitHub Environment. A second environment
-  needs its own values for every one of them — its own deploy host, its own
-  Postgres credentials, its own Grafana password, its own ACME email.
-
-**Where this came from**, since the entry it was split out of is gone. It was
-recorded as a separate entry rather than a sixth bullet on the former entry 50,
-which held both halves of "configure the staging host": that entry's *host* half
-— a play that can target a second environment, an inventory that can see two
-Hetzner projects, `group_vars/staging.yml`, and the first local converge — was
-delivered by `configure-the-staging-host` and archived on 2026-09-10. Its
-platform bullet said the stack has to reach the second host; **this** entry is
-the mechanism that would let it. The two were separable because a converged host
-is a prerequisite either way, and the host half was already large.
-
-What that change left here, so this entry does not re-derive it: staging's
-`deploy` account is already authorised for `platform` under a staging-only
-keypair, whose private half is in the operator's password manager and in no
-GitHub secret. `commerce-ops` is deliberately not authorised on staging — it has
-no staging deploy path in its own repository yet.
-
-The shape to copy is the one `make-the-pipeline-environment-agnostic` proved:
-the workflow reads what it needs from committed per-environment declarations and
-names no environment itself. `platform/` has no such declaration today, and
-whether it should reuse `terraform/environments/<name>/pipeline.yml` or grow one
-of its own is the first decision this change makes.
-
-**No longer blocked.** It waited on a converged host, and
-`configure-the-staging-host` delivered one on 2026-09-10 -- Docker, the deploy
-account, the mounted data volume, the tailnet. That change also left this one a
-`deploy` account already authorised for `platform` under a staging keypair, so
-no second converge is needed to begin. What it did *not* leave is staging's
-`PLATFORM_*` secret set, which is still this entry's to create in full.
-
-**Entry 53 is blocked on this one**, and the coupling is worth reading from this
-end too: 53 opens 80/443 on staging, and opening them before there is a stack
-behind them is the state `add-a-staging-environment` deliberately avoided. Do
-this first.
-
-**Staging's prune check is red until this lands.** `staging-server-prune-host-images`
-reports failure on every weekly activation because a host with nothing deployed
-has an empty keep set, which the prune treats as a refusal rather than licence
-to remove everything. That was accepted deliberately and bounded by this entry;
-if it stays red long enough to be tuned out, that is the signal to revisit
-rather than to mute it.
