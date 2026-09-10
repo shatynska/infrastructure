@@ -53,11 +53,16 @@ very first `terraform apply` go through the pipeline instead of a workstation.
   singular, but moving the declaration to job level — which a matrix value forces —
   costs the run its atomicity over the group, so plan jobs and apply jobs are separated
   into groups of their own rather than sharing one. See design.md decision 9.
-- **The apply stage runs over the environments that produced a plan**, not over the
+- **The apply stage runs over the environments whose plan passed**, not over the
   environments the merge affects. `needs:` is scoped to a job rather than to a matrix
   row, so an apply matrix depending on the plan matrix is skipped in full whenever any
   single environment's plan fails — one broken environment would stop every other
-  environment's correct change reaching production. See design.md decision 8.
+  environment's correct change reaching production. *Passed*, not merely *produced*:
+  the destroy-policy gate runs inside the plan job and after the plan exists, so a plan
+  the gate refused is a plan that was produced, and reading existence as success would
+  leave that gate defeated for exactly the plans it stops. The saved plan is therefore
+  published only once every check in its plan job has passed, and the apply stage reads
+  that. See design.md decision 8.
 - **The destroy-policy gate becomes a per-environment policy rather than a constant.**
   Requiring a `destroy-override` label to tear down staging is friction that will be
   routed around, and staging's disposability is most of its value. The gate stays
@@ -113,10 +118,14 @@ None.
   scenarios for an environment-scoped path filter and per-environment issue dedup
   respectively, the first also gaining a fail-closed obligation on resolving which
   environments a merge affects. *Gated Production Apply* further gains an obligation
-  that an environment be applied only where its own plan was produced, and that a
-  failed plan for one environment not block another's apply — the two halves of one
-  mechanism, since a dependency scoped to the stage rather than to the environment can
-  only choose between them. *Credential Scoping by Privilege* replaces its two-row token table with
+  that an environment be applied only where its own plan **passed every check its plan
+  job performs**, and that a failed plan for one environment not block another's apply —
+  the two halves of one mechanism, since a dependency scoped to the stage rather than to
+  the environment can only choose between them. It also gains the fail-closed shape that
+  resolution takes, which distinguishes a set that cannot be read from an **explicitly
+  empty** one: a merge matching the workflow's path filter while affecting no
+  environment reaches the apply stage with nothing to apply, and that is the correct
+  outcome rather than an error. *Credential Scoping by Privilege* replaces its two-row token table with
   a per-environment scheme while keeping intact the rule that no plan job declares an
   `environment:`, and adds an obligation that each GitHub Environment define
   `HCLOUD_TOKEN` — GitHub silently resolves an absent Environment secret to the

@@ -156,8 +156,14 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   Fail closed on a result that is neither a valid set nor an explicit empty one, and
   **accept an explicit empty one**: a merge matching this workflow's path filter while
   affecting no environment reaches this stage with nothing to apply, and so does a merge
-  every one of whose plans failed. Verify by running its body standalone over a full
-  set, a partial set, an explicitly empty one and an unresolvable one.
+  every one of whose plans failed.
+
+  **The body observes 3.4 like every other body this change writes** — free of `${{ }}`,
+  every input through `env:`, including the run id and the repository — so that
+  `.github/tests` can extract and execute it. Without that clause this becomes the one
+  fail-closed body in `apply.yml` with no executable test, and its verification degrades
+  into a run someone did once. Verify by running its body standalone over a full set, a
+  partial set, an explicitly empty one and an unresolvable one, as a committed test.
 - [ ] 4.3c `apply.yml`: attach the apply job to that resolved set, which is the half a
   resolver alone does not settle and the half the original defect lives in. The apply
   job SHALL keep the plan job in `needs:` **and** carry a condition of its own —
@@ -167,9 +173,17 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   which every other verification here would pass over; without `needs:` on the plan job,
   `needs.<plan>.outputs` leaves scope and task 4.3a's omitted-write-token guard compares
   against an empty string and passes, in exactly the configuration it exists to catch.
-  Verify by re-running 4.3a's standalone check afterwards, and by a static assertion
-  that no apply job's condition resolves through the plan stage's result. Name any
-  already-written assertion this shape invalidates — at minimum
+  Verify by a static assertion that no apply job's condition resolves through the plan
+  stage's result, and by a **second static assertion that each apply job's `needs:`
+  names its plan job and that the guard step's input references that job's published
+  output**. Re-running 4.3a's standalone check is not that verification and must not be
+  mistaken for it: that check executes the emitter and comparator bodies over inputs the
+  test supplies, so it passes whether or not `needs.<plan>.outputs` resolves inside the
+  workflow — which is precisely the property this task calls load-bearing. A guard that
+  can be disarmed by an edit no check sees is the defect class this whole revisit exists
+  to remove.
+
+  Name any already-written assertion this shape invalidates — at minimum
   `test_each_apply_job_depends_on_a_job_that_plans`, which this shape keeps green — and
   re-express rather than weaken it if it does not.
 - [ ] 4.3d `apply.yml`: publish the saved plan artifact **only after every check in the
@@ -180,6 +194,14 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   upload, and that neither the upload nor the gate carries an `if:` — the artifact's
   presence is what the resolver reads, so a plan published before its own gate would be
   applied behind an approval the gate exists because it does not trust.
+
+  **Ordering is not enough on its own, and the sibling omission is suppression.** A
+  `continue-on-error` on the gate step lets a refused plan reach an upload that is
+  correctly ordered and correctly unconditional, so every assertion above passes and the
+  gate is defeated anyway. Assert additionally that neither the plan job nor any step in
+  it declares a continue-on-error setting **in any form, including one whose value is an
+  expression** — the closed form this capability already holds its own record-validation
+  step to, for exactly this reason.
 - [ ] 4.3e `apply.yml`: give the plan job and the apply job separate per-environment
   `concurrency` groups, per design.md decision 9, so a queued plan cannot cancel an
   apply awaiting its Environment's protection rules. Verify that both still derive
@@ -358,6 +380,11 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   sweep it would drag into this diff. A note kept only in `design.md` is archived with
   this change; this one outlives it. Verify the entry names the three requirements and
   what would trigger revisiting.
+- [x] 6.4 Record the drift-heartbeat question (one `infrastructure-drift` check across
+  all environments, or one per environment) in `docs/deferred-work.md` or
+  `docs/change-queue.md` as appropriate, for the same reason. Verify it states the
+  working assumption this change ships with.
+
 - [ ] 6.5 Add a `docs/deferred-work.md` entry for the concurrency question decision 9
   declines to settle: whether a job awaiting a GitHub Environment's protection rules
   counts as *pending* for concurrency. The delta now names it as unestablished, but the
@@ -372,11 +399,6 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   than introduced — the workflow-level group this change replaces had the same property
   at run level — and out of this change's scope, but decision 9 argues from that hazard
   class and would otherwise read as having closed it.
-- [x] 6.4 Record the drift-heartbeat question (one `infrastructure-drift` check across
-  all environments, or one per environment) in `docs/deferred-work.md` or
-  `docs/change-queue.md` as appropriate, for the same reason. Verify it states the
-  working assumption this change ships with.
-
   **Result (6.1-6.4).** The README's staging paragraph now states what a second
   environment does and does not take: no file under `.github/workflows/`, but its own
   declaration, HCP workspace, Dependabot entry, GitHub Environment holding
@@ -528,7 +550,7 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   requirement's own scenario working as written.
 
   `proposal.md`, `design.md` (decisions 8 and 9) and the `iac-cicd-pipeline` delta were
-  amended accordingly; tasks 4.3b, 4.3c, 5.5 and 7.4a carry the work.
+  amended accordingly; tasks 4.3b through 4.3e, 5.5, 6.5, 6.6 and 7.4a carry the work.
 
   **Plan review of the amendment (round 1): FIX REQUIRED, applied.** The reviewer's
   finding was that the amendment specified *what* the resolver produces and was silent
@@ -572,6 +594,42 @@ disclosing what was not done"); the archive step itself is a task and is unaffec
   governs post-archive steps, retroactive ticks and unperformed work, and does not
   restrict recording what was done. Two blocks were nonetheless sitting under the wrong
   group heading and were moved.
+
+  **Plan review round 2: CONDITIONALLY APPROVED, conditions applied.** The reviewer
+  confirmed all four `[MAJOR]` findings closed on the mechanism rather than on the
+  description — that `!cancelled()` genuinely suppresses the implicit `success()` over
+  `needs:` so the apply job runs with the plan stage in `failure`, while keeping the
+  plan job in `needs:` holds 4.3a's operand in scope; and that "every check its plan job
+  performs has passed" is stated about the fact rather than about the mechanism, so no
+  implementation can publish a refused plan without violating it. It also observed that
+  4.3d's unconditional last-step upload makes an explicitly empty planned set safe to
+  accept: an environment can be absent from that set only where its plan row failed, was
+  cancelled, or never ran, each of which already colours the run.
+
+  Five `[MINOR]` conditions, applied here rather than in a further round, as this
+  project's rules provide for a conditional pass. Three were verifications weaker than
+  the instructions they check, and each is the same defect class this revisit exists to
+  remove — a property guarded by nothing that would notice its loss:
+
+  - 4.3c named "re-run 4.3a's standalone check" as the verification that the apply job
+    keeps the plan job in `needs:`. That check executes step bodies over inputs the test
+    supplies, so it passes whether or not `needs.<plan>.outputs` resolves in the
+    workflow at all. Replaced with a static assertion on the `needs:` edge and on the
+    guard step's reference to the plan job's published output.
+  - 4.3d asserted ordering and the absence of an `if:`, but not the absence of a
+    continue-on-error setting — the suppression sibling of the omission it closes. A
+    `continue-on-error` on the gate lets a refused plan reach a correctly ordered,
+    correctly unconditional upload, so every assertion passed and the gate was defeated
+    anyway. Now asserted in the closed form this capability already holds its own
+    record-validation step to: no continue-on-error in any form, expressions included.
+  - 4.3b did not bind the new resolver body to 3.4's constraint, which would have left
+    it the one fail-closed body in `apply.yml` with no executable test.
+
+  The other two: `proposal.md` had not been carried forward with the other three
+  artifacts and still summarised the amendment as its round-1 self — the same drift
+  round 1 caught in the Goals bullet — and the cross-reference naming which tasks carry
+  the work was stale. Both corrected, and 6.5 and 6.6 moved after 6.4 so the completed
+  group's result block ends it.
 
 ## 8. Archive
 
