@@ -387,9 +387,14 @@ repository on 2026-09-10 -- an inventory source, a `group_vars` of its own, a
 play that can name it -- but the converge itself is operator work against
 credentials that exist nowhere here, and `ansible/inventory/group_vars/staging.yml`
 is committed incomplete until it is done. **Check that staging is converged
-before starting this**, rather than inferring it from this entry. The block was recorded on 2026-09-09 when staging was
-identified, re-pointed on 2026-09-10 when `add-a-staging-environment` delivered
-staging's Terraform half, and lifted when that change's host half landed.
+before starting this**, rather than inferring it from this entry.
+
+The block's history, since it has moved three times: recorded on 2026-09-09
+when staging was identified; re-pointed on 2026-09-10 when
+`add-a-staging-environment` delivered staging's Terraform half; re-pointed
+again when `configure-the-staging-host` delivered the host half, at which point
+what remains between this entry and its prerequisite is a converge rather than
+any work in this repository.
 
 This remains the one path to production this repository still leaves to a
 workstation.

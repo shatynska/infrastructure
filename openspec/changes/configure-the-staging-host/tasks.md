@@ -87,6 +87,9 @@ From `ansible/`, no `-i`:
   selection deselected the untagged asserts and the converge play then matched
   nothing. `tags: always` on the guard play closes it; both now exit **2** with
   the empty-group message, and the bare invocation still exits 2.
+- `--skip-tags always` also exits **0**, and no tag can be immune to being
+  skipped by name. It is a deliberate act rather than a slip, so it is stated
+  in the play header and in §6.3 rather than treated as closable.
 - `--limit staging-server` exits **0** and cannot be fixed from inside the
   playbook: a limit filters `localhost` out of the guard play and Ansible has
   no per-play exemption. Stated in the play header and in

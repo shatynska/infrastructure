@@ -411,7 +411,7 @@ and re-run.
 
 **Revisit when** a third environment's `group_vars` is written, or when a
 partially-converged host actually costs something — the exposure is now
-observed rather than hypothetical, so the next occurrence is evidence rather
+reachable rather than hypothetical, so the next occurrence is evidence rather
 than a constructed case.
 
 ## Asserting that the README agrees with the tree
@@ -754,12 +754,14 @@ below already gives:
 - *Unprivileged Operator Accounts Support Interactive Host Inspection* — "on the
   prod host"
 
-Both are in `openspec/specs/iac-host-configuration/spec.md`, and both acquired a
-second subject the moment staging began converging with the same role set: a
-staging host joins the same tailnet and carries the same operator account, and
-the requirements describing that name only prod. Unlike the four above, these
-two now describe a mechanism that has *run* against a second host rather than
-one merely available to it.
+Both are in `openspec/specs/iac-host-configuration/spec.md`, and both acquire a
+second subject the moment staging converges with the same role set: a staging
+host joins the same tailnet and carries the same operator account, and the
+requirements describing that name only prod. Staging is not converged yet —
+`configure-the-staging-host` made a converge reachable and left the converge
+itself to the operator — so at the time of writing these two are in the same
+position as the four above. They part company from them the moment that run
+happens, and not before.
 
 The first two describe a mechanism both environments now use: staging declares
 `server_enabled` and `volume_enabled` with prod's semantics, and its rollback

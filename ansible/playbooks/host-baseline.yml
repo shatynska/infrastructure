@@ -19,12 +19,16 @@
 #
 # TWO WAYS TO GET PAST IT, one closed here and one that cannot be:
 #
-#   --tags/--skip-tags   CLOSED, by `tags: always` below. Without it a tag
-#                        selection deselects these untagged asserts, the
-#                        converge play matches nothing, and the run exits 0 --
-#                        the exact outcome this guard exists to prevent.
-#                        platform_data_volume/tasks/main.yml carries a comment
-#                        about the same hazard biting a register.
+#   --tags/--skip-tags   CLOSED by `tags: always` below, for every tag
+#                        selection EXCEPT `--skip-tags always`, which names
+#                        this mechanism and turns it off. That one is a
+#                        deliberate act rather than a slip, and no tag can be
+#                        immune to being skipped by name. Without the tag at
+#                        all, any ordinary selection deselects these untagged
+#                        asserts, the converge play matches nothing, and the
+#                        run exits 0 -- the exact outcome this guard exists to
+#                        prevent. platform_data_volume/tasks/main.yml carries
+#                        a comment about the same hazard biting a register.
 #
 #   --limit              NOT CLOSED, AND NOT CLOSEABLE FROM HERE. A limit
 #                        filters `localhost` out of this play, and Ansible has
