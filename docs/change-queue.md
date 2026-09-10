@@ -235,24 +235,6 @@ meant to prevent. The monitoring stack now collects exactly the data needed —
 dashboard. Let it run long enough to show real steady-state and peak, then size
 from observation.
 
-## 15. alert when the host prune stops working
-
-**Blocked on nothing.** `prune-unreferenced-host-images-periodically` shipped
-on 2026-09-08; this is the gap it named and deliberately left open.
-
-`prune-host-images` reports on every exit path and leaves a failed systemd unit
-when it abandons. Nothing scrapes either. `systemctl list-units --failed` is a
-manual read, and the outer backstop is `HostDiskPressure` at 90% full, which is
-very late — a prune that has silently done nothing for two months is invisible
-until the disk is nearly gone.
-
-Closing it needs node-exporter's textfile collector: a `--collector.textfile.directory`
-flag and a mount in `platform/docker-compose.yml`, the prune writing a `.prom`
-file, and an alert on staleness rather than on failure — a unit that stops being
-scheduled at all produces no failure to alert on. That is a `platform/` change,
-which is why `prune-unreferenced-host-images-periodically` named it a non-goal
-rather than folding it in.
-
 ## 16. report refused removals in the host prune
 
 `prune-host-images` reports `considered N, removed M`, where `considered` is
@@ -537,9 +519,11 @@ can close, not in all of them. `web_allowed_cidrs` reaches production only
 through the gated pipeline, where a human reviews the exact plan -- but
 `AGENTS.md`'s firewall split makes UFW the co-equal host-level layer, entry 23
 records that the playbook applying it is run by hand with no gate at all, and
-entry 32 records that a console-side change is caught only by a drift workflow
-that itself fails into silence. An outside check is the only thing that would
-see the other two.
+and a console-side change is caught only by the drift workflow. That workflow no
+longer fails into silence — `notice-when-a-periodic-job-stops-reporting` gave it
+a heartbeat whose quiet raises an alarm — but it still reports only what
+Terraform manages. An outside check is the only thing that would see the other
+two.
 
 *A DNS mistake* is not bounded by how often the zone is hand-edited.
 `docs/deferred-work.md` records that `shatynska.com` is served by third-party
@@ -620,36 +604,6 @@ step needs, and records the last rehearsal's date and duration is the
 deliverable. The rehearsal is the point; the document is how it survives.
 Entry 24's staging environment is where the rehearsal can happen without
 touching prod.
-
-## 32. notice-a-scheduled-workflow-that-goes-red
-
-**Not blocked.** Recorded by `open-autoupdate-pr-with-app-token`, whose
-`design.md` names it a non-goal.
-
-That change repairs `pre-commit-autoupdate.yml`, which had failed on every one
-of its last three scheduled runs -- 2026-08-24, 2026-08-31, 2026-09-07 -- with
-`GitHub Actions is not permitted to create or approve pull requests`. Each
-failure was red in the Actions tab and each sent GitHub's own failure email to
-the workflow file's last committer. Three weeks passed anyway. The signal
-existed and did not work.
-
-That is not a property of the workflow being repaired, and repairing it changes
-nothing about the next one. `drift.yml` runs nightly and `image_prune` runs
-weekly; both fail the same way, into the same silence. Entry 15 (*alert when the
-host prune stops working*) is the same concern reached from the host side and
-wants reconciling with this rather than solving twice -- the question is
-plausibly one mechanism covering every scheduled workflow, not one alert per
-workflow.
-
-It was not folded into `open-autoupdate-pr-with-app-token` because its blast
-radius is every scheduled workflow in the repository rather than the one being
-fixed, and because that change can be confirmed without it: its own confirm gate
-is a pull request that opens and reports its checks, which is observable
-directly.
-
-Worth deciding as part of it: whether the dead-man's-switch this project already
-runs for single-host observability is the right place, or whether a failing
-GitHub Actions run wants its own path.
 
 ## 33. move-commerce-ops-durable-data-to-supabase
 
@@ -790,9 +744,13 @@ incremental bumps it will then need start being missed again. The single-config
 argument strengthens as the manifest count rises; at four unwatched manifests it
 does not yet carry the trust cost.
 
-**Do not revisit before entry 32.** Adding a fifth automation to a repository
-where nothing notices a red scheduled run makes the observability gap worse, not
-better -- which is the lesson `open-autoupdate-pr-with-app-token` was.
+**The condition this waited on is met.** It said: do not add a fifth automation
+to a repository where nothing notices a red scheduled run, which is the lesson
+`open-autoupdate-pr-with-app-token` was. Something notices now —
+`notice-when-a-periodic-job-stops-reporting` gives every scheduled workflow a
+heartbeat check whose silence alarms, and its own coverage test obliges any
+workflow added later to carry one. The trust cost argued above is what remains
+to weigh.
 
 ## 38. upgrade-the-shared-postgres-major
 

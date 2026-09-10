@@ -276,7 +276,7 @@ Edit `ansible/inventory/group_vars/prod.yml`. Every value except the last two is
 | `platform_data_volume_subdirs` | Leave as is |
 | `ghcr_pull_username` | The GitHub username whose token is below. For an organisation, a dedicated machine user with read access to the application repositories is cleaner than a person's account. |
 | `ghcr_pull_token` | Vault-encrypted, see below |
-| `image_prune_heartbeat_ping_key` | Vault-encrypted, see below. **The play refuses to run without it**, so set it now rather than at stage 7 |
+| `image_prune_heartbeat_ping_key` | Vault-encrypted, see below. **The play refuses to run without it** |
 
 **The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`).
 
@@ -289,7 +289,21 @@ ansible-vault encrypt_string --vault-id prod@prompt '<ghp_... token>' --name ghc
 
 Paste the output block into `group_vars/prod.yml` in place of the existing `ghcr_pull_token` value. The encrypted block is safe to commit; the Vault password is not written anywhere in the repository.
 
-**The heartbeat ping key.** The `image_prune` role installs a weekly unit that reports each activation to an external observer, and it **asserts this input before any role in the play changes the host** — so an absent key aborts `host-baseline.yml` rather than installing a scheduled unit nothing watches. Create the project ping key at the heartbeat service now (it is the same value as the `HEARTBEAT_PING_KEY` repository secret in stage 7.3, and Appendix A carries the checks it addresses), then encrypt it the same way:
+Two things about `encrypt_string` that read as faults and are not:
+
+- **It prompts `New Vault password (prod):` even when the vault already exists.** That is its wording for the encrypt direction, not an offer to create a second vault. Type the password you chose above — or, when adding a value to a file that already has encrypted ones, the password those were encrypted with. Ansible cannot tell you afterwards which password made a block: two values encrypted under different passwords produce a file that fails to decrypt with either, naming neither.
+- **It only prints.** It writes to your terminal and edits nothing; copying its output into the file is a separate step you perform. The whole block goes in, `<name>: !vault |` line included.
+
+Whenever you add an encrypted value, confirm the file still decrypts as a whole — this prints the value's length, never the value:
+
+```sh
+ansible localhost -m debug -a 'msg={{ <variable> | length }}' \
+  -e @inventory/group_vars/prod.yml --vault-id prod@prompt
+```
+
+**The heartbeat ping key.** The `image_prune` role installs a weekly unit that reports each activation to an external observer, and it **asserts this input before any role in the play changes the host** — so an absent key aborts `host-baseline.yml` rather than installing a scheduled unit nothing watches.
+
+Create it now, at the heartbeat service from stage 0.1: **Settings → Ping key → create**. One key addresses every periodic job's check, and the same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3. Put it in the password manager, then encrypt it the same way:
 
 ```sh
 cd ansible
@@ -334,6 +348,18 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
    sudo -n true     # refused: the account has no sudo, by design
    ```
 
+   That refusal is real, and it means anything needing root — starting a unit, reading a unit's journal, reading a `0600` file — cannot go through this account. Reach for Ansible instead, which authenticates as `root` with the operator key you already hold:
+
+   ```sh
+   cd ansible
+   ansible prod -m ansible.builtin.systemd_service \
+     -a "name=<unit> state=started" --vault-id prod@prompt
+   ansible prod -m ansible.builtin.command \
+     -a "journalctl -u <unit> -n 20 --no-pager" --vault-id prod@prompt
+   ```
+
+   Plenty is still readable unprivileged: `systemctl is-active`, `systemctl show --property=…`, `systemctl list-timers`, `stat`, and any world-readable file.
+
 3. Commit and push `group_vars/prod.yml` through a pull request. The Molecule suite runs on it; that is the `ansible-verify` check.
 
 **Secrets created in this stage**
@@ -342,10 +368,23 @@ Do not rely on `--check` for the first run: apt-based tasks report changes they 
 |---|---|---|---|
 | Vault password | Password manager only | You chose it | Anyone running the playbook |
 | `ghcr_pull_token` | Encrypted inside `group_vars/prod.yml` | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
+| `image_prune_heartbeat_ping_key` | Encrypted inside `group_vars/prod.yml` | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3 |
 | `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository | The **private** half of the platform deploy key from stage 0. Store it now, then delete the local file. | `platform-deploy.yml`'s deploy job |
 | `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
 **Check:** `sudo ufw status` as root shows default deny with 22, 80, 443 and the tailnet rules; `tailscale status` on the server shows `Running`; `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
+
+**Then prove the prune reports.** Its timer is weekly, so nothing reaches the heartbeat service until it fires — and a reporter that cannot reach the observer leaves a *successful* unit behind by design, so a green `systemctl status` is not evidence. Trigger one activation and read what it says:
+
+```sh
+cd ansible
+ansible prod -m ansible.builtin.systemd_service \
+  -a "name=prune-host-images.service state=started" --vault-id prod@prompt
+ansible prod -m ansible.builtin.command \
+  -a "journalctl -u prune-host-images.service -n 20 --no-pager" --vault-id prod@prompt
+```
+
+The journal should carry `prune-host-images: considered N, removed M` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed. A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service; give it the period and grace from Appendix A.
 
 ## Stage 7. The platform stack
 
@@ -357,7 +396,9 @@ Traefik, PostgreSQL and monitoring, deployed by `platform-deploy.yml` on a merge
 
 **Heartbeat.** At healthchecks.io (or an equivalent), create a check named `<company>-prod alertmanager`. Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one. Copy the ping URL. Configure where that service should alert you when pings stop, ideally somewhere other than the same Slack workspace: this is the alarm for when everything else is down.
 
-**Periodic-job heartbeats.** In the same project, create a **project ping key** (Settings → Ping key) and keep it: it is the `HEARTBEAT_PING_KEY` **repository** secret in stage 7.3, and the Vault variable `image_prune_heartbeat_ping_key` in stage 6.1 — which is earlier than this stage, so on a first bootstrap create the key here before working 6.1, or the host play will refuse to run. It addresses one check per periodic job, listed with its period and grace in Appendix A. The jobs create their checks on first ping (`?create=1`), so nothing needs creating by hand here — but an auto-created check carries the vendor's **default** period, so set each one to the value Appendix A gives once it appears, or a weekly job will alarm daily. Route these checks to Slack `#alerts`, **not** to the destination the `alertmanager` check above alerts to: that one is the alarm for when everything is down and a weekly CI failure must not erode it.
+**Periodic-job heartbeats.** The project ping key already exists — stage 6.1 created it, because the host play refuses to run without it. It addresses one check per periodic job, listed with its period and grace in Appendix A, and it is also the `HEARTBEAT_PING_KEY` **repository** secret in stage 7.3.
+
+Nothing needs creating by hand: each job creates its own check on its first ping (`?create=1`). But an auto-created check carries the vendor's **default** period, so once each appears, set it to the value Appendix A gives — otherwise a weekly job alarms daily and you learn to ignore it. Route these checks to Slack `#alerts`, **not** to the destination the `alertmanager` check above alerts to: that one is the alarm for when everything is down, and a weekly continuous-integration failure must not erode it.
 
 ### 7.2 Generate the platform's own passwords
 
@@ -385,7 +426,7 @@ One more secret belongs to this stage and is **not** in the table above, because
 
 | Name | Where | Value from |
 |---|---|---|
-| `HEARTBEAT_PING_KEY` | **Repository** secret — Settings → Secrets and variables → Actions, *not* the `production` Environment | The project ping key from 7.1, the same value stage 6.1 put into Ansible Vault |
+| `HEARTBEAT_PING_KEY` | **Repository** secret — Settings → Secrets and variables → Actions, *not* the `production` Environment | The project ping key stage 6.1 created and put into Ansible Vault, unchanged |
 
 Scoping it to the `production` Environment would break it: a job reading an Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The scheduled workflows read it with no `environment:` declared, and they turn red naming it if it is absent.
 
@@ -494,9 +535,20 @@ Do these once the first pull requests have run, since branch protection can only
    ```
 
 2. **Dependabot** is configured by `.github/dependabot.yml` and starts on its own. Its pull requests go through the same checks.
-3. **Drift Detection** runs nightly. GitHub disables scheduled workflows after 60 days without commits; `README.md` says how to re-enable it.
-4. **Pre-commit autoupdate** runs weekly and opens a pull request.
-5. **Record what you built.** In the password manager, alongside each secret, note its expiry, the stage that created it, and what breaks when it expires. In the repository, update `README.md`'s Status section.
+3. **Drift Detection** runs nightly. GitHub disables scheduled workflows after 60 days without commits; `README.md` says how to re-enable it. That disabling now announces itself — the workflow reports to a heartbeat check on every run, and a check that stops being reported to alarms — but re-enabling is still a manual act, and a manual `workflow_dispatch` reports too, so it resets the silence timer. After dispatching one to recover a disabled workflow, confirm the schedule itself is enabled rather than reading the green check as evidence.
+4. **Pre-commit autoupdate** runs weekly and opens a pull request. Dispatch it once here, so its heartbeat check comes into existence and can be given the period and grace from Appendix A — otherwise the check first appears a week later, on its own schedule.
+5. **Prove that silence alarms.** Everything else you have tested proves a ping *arriving*. The whole design rests on the opposite — that a job which stops reporting is as loud as one that fails — and nothing in the repository can demonstrate it, because the alarm belongs to a third party's timeout.
+
+   At the heartbeat service, add a check named `scratch-delete-me`, period **5 minutes**, grace **1 minute**, routed to `#alerts`. Ping it once, then leave it alone:
+
+   ```sh
+   curl -fsS https://hc-ping.com/<its-uuid>
+   ```
+
+   Within about six minutes Slack should carry *"scratch-delete-me is DOWN. Reason: success signal did not arrive on time, grace time passed."* — with nothing having failed anywhere. Then delete the check; on a 5-minute period it will keep alarming.
+
+   If that message does not arrive, the routing works for failures and not for silence, and every periodic job on this host is unwatched in the one way that matters most.
+6. **Record what you built.** In the password manager, alongside each secret, note its expiry, the stage that created it, and what breaks when it expires. In the repository, update `README.md`'s Status section.
 
 ## Appendix A. Complete secret inventory
 
