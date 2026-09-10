@@ -120,9 +120,9 @@ mechanism moves. The document is the only thing that changes.
 time estimate at the top, §0.3, a new §0.4, §5.2, §5.3, the opening of stage 5,
 two rows in §0.1 and one in §0.2, **§6's opening**, **§6.1** (the GHCR token and
 the ping key each gain a second-run clause, without which the second converge
-rotates a credential the first one depends on), **§6.4's two tables** — one
-repeating §0.3's "delete the local file" instruction inside a stage that now
-runs twice — **Appendix A**, whose Tailscale auth key, `PLATFORM_DEPLOY_SSH_KEY`
+rotates a credential the first one depends on), **§6.4's secrets table and its step 1** — the
+table repeating §0.3's "delete the local file" instruction inside a stage that
+now runs twice, and step 1 naming "the server" where two are converged — **Appendix A**, whose Tailscale auth key, `PLATFORM_DEPLOY_SSH_KEY`
 and `PLATFORM_DEPLOY_HOST` rows are singular or unscoped, and **Appendix C**,
 which still tells a company reader that a configured second host is what they do
 not get. That appendix is the

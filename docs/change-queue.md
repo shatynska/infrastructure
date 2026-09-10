@@ -1259,3 +1259,31 @@ that reasoning is worth keeping in some form for whoever writes the next
 environment's `group_vars` from scratch.
 
 Not blocked, and small. It touches one file and no mechanism.
+
+## 56. assert-the-bootstrap-document's-static-conventions
+
+Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, whose code review
+identified two conventions that hold across `docs/bootstrap-a-new-host.md` and
+are checkable by a static read of it — which `AGENTS.md` says is asserted in
+`.github/tests` "or nowhere".
+
+- **Every `ssh-keygen -f` in the document writes under `~/.ssh/`.** A relative
+  path puts a passphrase-less private key in the repository root, where stage
+  4.2's `git add -A` can commit it; `.gitignore` carries no private-key
+  pattern. Three of the five key rows had one, and two were found only by
+  sweeping after a reviewer reported the third.
+- **Every `§N.N` cross-reference resolves to a heading that exists.** The
+  document carries dozens and they move when sections are inserted.
+
+Both have the property the citation-form check already exists for: correct when
+written, correct when reviewed, and wrong only later. Neither can be caught by
+an author or a reviewer reading the diff.
+
+**What this deliberately does not attempt.** The reference check is mechanical
+only — that the target exists, not that it says what the citing sentence
+claims. The semantic half has produced two defects and is not statically
+decidable; it stays with the editor's note at the head of the document, along
+with the second-run and re-derivation habits.
+
+Not blocked. One new module in `.github/tests`, whose constraints it fits: a
+static read of one committed file, no network, no credential, no container.

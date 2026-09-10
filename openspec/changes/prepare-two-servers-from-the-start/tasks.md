@@ -144,11 +144,25 @@ not as edits to the rows a reviewer named:
 | For every creation imperative in stage 6, what does the second run do? | every `Generate` / `create` / `Choose` in §6 | one: the GHCR token. The Vault password and ping key already had their clauses |
 | For every `ssh-keygen`, where does the private half sit and what removes it? | all five rows of §0.3 | **two**, not the one reported: production's and each application's are generated into the tree too |
 | Re-derive completeness claims by grep rather than asserting them | the GHCR and ping-key facts | the previous round's "all four reconciled" was false — §6.4 was never touched |
-| Open every `§` reference and check the target says what the sentence claims | every cross-reference this change adds | none; §3.3 does set `TF_API_TOKEN` on both Environments, §4.4 does forbid a staging hostname |
+| Open every `§` reference and check the target says what the sentence claims | every cross-reference this change adds | none **at the time it was run** — and that qualifier is the finding. Review then caught two references falsified by edits made *after* the sweep: §0.4 said "§6.1 permits reuse rather than requiring it" of a §6.1 the same commit had made imperative, and §5.3 pointed at §6.3a for an exposure §6.3a does not describe. A sweep is evidence about the text at the moment it ran, not about the commit |
 
 The third of those is the one worth keeping: a completeness claim asserted from
 memory is how a defect survives its own fix and reaches a commit message as
-fixed.
+fixed. The fourth carries the same lesson from the other side — a sweep run
+before the last edit is a claim about a text that no longer exists.
+
+**A fifth and sixth axis were found by review and swept here.** Both come from
+the same generator: a property that holds of the document read once, straight
+through, and fails of it read the way it is actually used.
+
+| Axis | Swept over | Found |
+|---|---|---|
+| Used for **rotation**, not assembly | the two "one value, stored twice" credentials | both: neither said what a rotation costs. Appendix A's Hetzner rows already carry that form — "editing two local files, not one" — and these lacked it. GHCR is two blocks under two Vault passwords; the ping key is three places |
+| Used by the **single-environment reader** | the escape hatch at the head of the document against §0.4 | one: it says "read every 'two' below as 'one'", and §0.4's counts are "4", "1 value… stored twice", "2 — `production` and `staging`". §0.4 now translates itself for that reader |
+
+A seventh — **read from the middle**, as Appendix B re-enters at §4.2, §4.3,
+§5.3, §6.3, §6.4, §7.4 and §7.5 — was swept and returned nothing, which is a
+result worth recording rather than an unrun check.
 
 ## 8. Ship
 
