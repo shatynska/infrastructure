@@ -1,48 +1,343 @@
-name: Terraform Apply (prod)
+name: Terraform Apply
 
-# Runs on merge to main. Split into two jobs in one run so the
-# approving reviewer sees the exact diff before approving, rather than
-# approving a not-yet-computed run. See design.md Decision 8.
-# Path-filtered so a merge that cannot change infrastructure does not raise a
-# `production` Environment approval request. An approval prompt that appears on
-# merges with nothing to approve trains the approver to grant it without
-# reading, which defeats the gate. `drift.yml` still detects out-of-band
-# divergence nightly.
+# Runs on merge to main. Split into two jobs per environment in one run so the
+# approving reviewer sees the exact diff before approving, rather than approving
+# a not-yet-computed run. This is the workflow the Gated Production Apply
+# Applies the Reviewed Plan requirement governs; that requirement now governs
+# EVERY environment's apply, and its name reads narrower than its content --
+# recorded in docs/deferred-work.md rather than renamed here.
+#
+# Path-filtered so a merge that cannot change infrastructure does not raise an
+# Environment approval request. An approval prompt that appears on merges with
+# nothing to approve trains the approver to grant it without reading, which
+# defeats the gate. `drift.yml` still detects out-of-band divergence nightly.
+#
+# The filter is coarse — every environment lives under `terraform/` — and the
+# `discover` job below narrows it to the environments this merge can actually
+# affect. Both halves are needed: the filter decides whether the workflow runs
+# at all, the resolution decides whose Environment approval is requested.
 #
 # This filter is permissible ONLY because this workflow is not a required
 # status check. The opposite rule governs `pr-validation.yml`, which IS one: a
 # workflow-level `paths:` filter there would leave non-matching pull requests
 # permanently pending and unmergeable. See the Required Status Checks Report on
 # Every Pull Request requirement, and do not copy this block into it.
+#
+# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE. Each environment's GitHub
+# Environment, its read-only secret and whether the destroy-policy gate applies
+# to it come from that environment's own `terraform/environments/<name>/pipeline.yml`.
+# See the Each Environment Declares Its Own Pipeline Configuration requirement.
 on:
   push:
     branches: [main]
     paths:
       - "terraform/**"
 
-# State locking alone doesn't prevent runs applying out of order; queue
-# them instead of allowing overlap or cancellation.
-concurrency:
-  group: terraform-prod
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
 env:
   # PR label that permits a plan containing a delete/replace action to
-  # proceed. Mechanism assumed per design.md's Open Questions; not yet
-  # settled as final policy.
+  # proceed, where the environment's declaration says the gate applies.
   DESTROY_OVERRIDE_LABEL: destroy-override
 
 jobs:
+  discover:
+    name: discover
+    runs-on: ubuntu-latest
+    # No `environment:` — this job resolves which Environments the run will ask
+    # for, so it cannot itself be gated on one of them.
+    permissions:
+      contents: read
+    outputs:
+      environments: ${{ steps.affected.outputs.environments }}
+    steps:
+      # `fetch-depth: 0` because the step below diffs the push's own commit
+      # range. On a shallow clone the base commit is absent and the diff fails
+      # rather than resolving — which the resolution refuses, failing the run
+      # loudly rather than applying the wrong set.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Deliberately names neither `terraform/modules` nor
+      # `terraform/environments`: it lists what changed, and the step after it
+      # decides what that means.
+      #
+      # FAILS CLOSED, and this workflow is where that matters most. It runs on
+      # `push`, where `github.event.before` is all zeroes on a branch's first
+      # push and unresolvable after a force-push or a history rewrite. Reading
+      # an unresolvable base as "nothing changed" would apply nothing for a
+      # merge that did change infrastructure, report a green run, and leave the
+      # divergence to be found by the next nightly drift sweep.
+      - name: List the paths this merge changes
+        id: changed
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          empty_tree="0000000000000000000000000000000000000000"
+          if [ -z "$BEFORE_SHA" ] || [ -z "$AFTER_SHA" ] || [ "$BEFORE_SHA" = "$empty_tree" ]; then
+            echo "::error::This push carries no usable comparison base (before='${BEFORE_SHA}', after='${AFTER_SHA}'), so the paths it changes cannot be listed. Refusing to read that as 'nothing changed': that applies nothing for a merge that did change infrastructure and reports green."
+            exit 1
+          fi
+          if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::The comparison base ${BEFORE_SHA} does not resolve in this checkout — a force-push or a rewritten history. Refusing to read that as 'nothing changed'."
+            exit 1
+          fi
+          if ! paths=$(git diff --name-only "${BEFORE_SHA}" "${AFTER_SHA}" 2>&1); then
+            echo "::error::git diff between ${BEFORE_SHA} and ${AFTER_SHA} failed: ${paths}. Refusing to read that as 'nothing changed'."
+            exit 1
+          fi
+          {
+            echo "paths<<CHANGED_PATHS_EOF"
+            printf '%s\n' "$paths"
+            echo "CHANGED_PATHS_EOF"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Discover the environments and their declarations
+        id: discover
+        run: |
+          set -euo pipefail
+
+          # Enumerates every environment directory, reads each one's committed
+          # pipeline declaration, and emits the matrix this workflow's jobs run
+          # over. Nothing here names an environment: adding one is adding a
+          # directory.
+          #
+          # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
+          # message that names the directory: an absent declaration, one missing
+          # a field the workflows read, and two environments colliding on a
+          # secret or on a GitHub Environment. A silently skipped environment is
+          # one that is planned by nothing, applied by nothing and drift-checked
+          # by nothing, which is indistinguishable from it not existing.
+          #
+          # THIS BODY IS IDENTICAL IN ALL THREE TERRAFORM WORKFLOWS, and
+          # `.github/tests` asserts that it stays so. A job attaches to one
+          # GitHub Environment and jobs cannot be shared between workflows, so
+          # the copies are the only available shape; only one of them is
+          # executed by the suite, and the identity assertion is what makes
+          # running that one evidence about all three. Edit them together.
+          #
+          # Free of Actions expressions on purpose -- it takes nothing from the
+          # event -- so `.github/tests` can pull this body out and run it
+          # against a scratch tree carrying each of those refusals. That is the
+          # constraint `ansible-verify.yml`'s discovery body already observes,
+          # and the reason its tests can exist at all. The prohibition includes
+          # naming the interpolation syntax in a comment, which is why this
+          # sentence spells it out in words.
+
+          environments_root="terraform/environments"
+          declaration_name="pipeline.yml"
+
+          if [ ! -d "$environments_root" ]; then
+            echo "::error::Environment discovery found no ${environments_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # One flat `key: value` line out of a declaration. The declaration is
+          # a flat mapping by design, so this reads it with no YAML parser --
+          # the same shape the gitleaks step uses to read its pin out of
+          # .pre-commit-config.yaml, and what keeps this body runnable with
+          # nothing but bash, jq and coreutils.
+          field() {
+            sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
+              | head -n 1 \
+              | sed -E "s/[[:space:]]+#.*\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/" \
+              | tr -d '[:space:]'
+          }
+
+          records=$(mktemp)
+          refused=0
+
+          for directory in "$environments_root"/*/; do
+            [ -d "$directory" ] || continue
+            name="$(basename "$directory")"
+            declaration="${directory}${declaration_name}"
+
+            if [ ! -f "$declaration" ]; then
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. An environment with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              refused=1
+              continue
+            fi
+
+            github_environment="$(field "$declaration" github_environment)"
+            read_only_secret="$(field "$declaration" read_only_secret)"
+            destroy_policy_gate="$(field "$declaration" destroy_policy_gate)"
+
+            incomplete=0
+            if [ -z "$github_environment" ]; then
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's apply job attaches to, and it has no safe default."
+              incomplete=1
+            fi
+            if [ -z "$read_only_secret" ]; then
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
+              incomplete=1
+            fi
+
+            # The one OPTIONAL field. Absent means the gate applies, so a
+            # mistake in a declaration fails safe. A value that is neither
+            # absent nor a boolean is a declaration this pipeline cannot read,
+            # not a default to fall back on: read wrongly, this field disables
+            # the strongest guard on an apply.
+            case "$destroy_policy_gate" in
+              "")
+                destroy_policy_gate=true
+                ;;
+              true | false) ;;
+              *)
+                echo "::error::${name}: ${declaration} states 'destroy_policy_gate: ${destroy_policy_gate}', which is neither true nor false. Refusing to guess which was meant."
+                incomplete=1
+                ;;
+            esac
+
+            if [ "$incomplete" -ne 0 ]; then
+              refused=1
+              continue
+            fi
+
+            printf '%s\t%s\t%s\t%s\n' \
+              "$name" "$github_environment" "$read_only_secret" "$destroy_policy_gate" >>"$records"
+          done
+
+          if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
+            echo "::error::Environment discovery found no environment under ${environments_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # Two collisions no assertion about workflow text can reach, because
+          # they live in committed data rather than in a workflow. Two
+          # environments sharing a read-only secret plan under one credential
+          # against different Hetzner projects; two sharing a GitHub Environment
+          # share its WRITE token and its protection rules, so an environment
+          # meant to be ungated would hold the reviewed one's write credential.
+          for secret in $(cut -f3 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every environment but one would report a meaningless diff."
+            refused=1
+          done
+
+          for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so an environment intended to be ungated would hold the reviewed environment's write credential."
+            refused=1
+          done
+
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::Environment discovery refused the committed declarations, so no environment enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            exit 1
+          fi
+
+          discovered=$(jq -R -s -c '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                name: .[0],
+                github_environment: .[1],
+                read_only_secret: .[2],
+                destroy_policy_gate: (.[3] == "true")
+              })
+          ' <"$records")
+          rm -f "$records"
+
+          echo "Discovered environments: ${discovered}"
+          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
+      # An environment enters this run ONLY where the merge could affect it.
+      # Without this narrowing, a merge touching one environment raises every
+      # other environment's approval request — an approval prompt with nothing
+      # to approve, which trains the approver to grant it without reading and
+      # defeats the gate it exists to enforce.
+      #
+      # FAILS CLOSED on an empty input, for the reason the changed-path step
+      # above states: an unresolvable result and a genuine "nothing affected"
+      # are indistinguishable, and reading the first as the second applies
+      # nothing while reporting success.
+      #
+      # Free of Actions expressions, both inputs through `env:`, so
+      # `.github/tests` can pull this body out and run it.
+      - name: Resolve which environments this merge affects
+        id: affected
+        env:
+          ENVIRONMENTS: ${{ steps.discover.outputs.environments }}
+          CHANGED_PATHS: ${{ steps.changed.outputs.paths }}
+        run: |
+          set -euo pipefail
+
+          # THIS BODY IS IDENTICAL IN BOTH WORKFLOWS THAT NARROW BY CHANGED
+          # PATHS, and `.github/tests` asserts that it stays so. A pull request
+          # and the merge of that same pull request must resolve the same
+          # environments, or the reviewer approves one plan and the pipeline
+          # applies another. What differs between the two is only where the
+          # changed paths come from, which is the step before this one.
+          #
+          # Free of Actions expressions, both inputs through `env:`, so
+          # `.github/tests` can pull this body out and run it.
+
+          if [ -z "${ENVIRONMENTS}" ]; then
+            echo "::error::Environment discovery produced no set of environments, so which of them this change affects cannot be resolved. Refusing to read that as 'no environment affected': that plans nothing, applies nothing and reports a green run."
+            exit 1
+          fi
+
+          if [ -z "${CHANGED_PATHS}" ]; then
+            echo "::error::The set of changed paths is empty, which means the step that resolves it did not conclude -- a change always changes at least one path. Refusing to read that as 'no environment affected'."
+            exit 1
+          fi
+
+          # The mapping the requirement states: a change under
+          # `terraform/modules/` affects every environment, because every
+          # environment consumes those modules; a change under
+          # `terraform/environments/<name>/` affects that environment alone.
+          selected=""
+          every=0
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            case "$path" in
+              terraform/modules/*)
+                every=1
+                ;;
+              terraform/environments/*/*)
+                candidate="${path#terraform/environments/}"
+                selected="${selected}${candidate%%/*}
+          "
+                ;;
+            esac
+          done <<CHANGED_PATHS_EOF
+          ${CHANGED_PATHS}
+          CHANGED_PATHS_EOF
+
+          if [ "$every" -eq 1 ]; then
+            affected="$ENVIRONMENTS"
+          else
+            names=$(printf '%s' "$selected" | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            affected=$(printf '%s' "$ENVIRONMENTS" | jq -c --argjson names "$names" 'map(select(.name as $name | $names | index($name)))')
+          fi
+
+          count=$(printf '%s' "$affected" | jq 'length')
+          if [ "$count" -gt 0 ]; then
+            expected=true
+          else
+            expected=false
+          fi
+
+          echo "Affected environments (${count}): ${affected}"
+          echo "environments=${affected}" >>"$GITHUB_OUTPUT"
+          echo "plan-expected=${expected}" >>"$GITHUB_OUTPUT"
   plan:
-    name: plan
+    name: plan (${{ matrix.environment.name }})
+    needs: discover
     runs-on: ubuntu-latest
     # No `environment:` here — this job must start immediately with the
-    # read-only token, not block on approval. See the Credential
-    # Scoping by Privilege and Pull Request Validation Requires No
-    # Manual Approval requirements (the same principle applies here).
+    # read-only token, not block on approval. See the Credential Scoping by
+    # Privilege requirement.
+    #
+    # It is ALSO the only job in this workflow that can see the
+    # REPOSITORY-scoped `HCLOUD_TOKEN`, which the omitted-write-token guard
+    # below depends on: a job declaring an `environment:` resolves every read of
+    # that name to its Environment's value and can never obtain the repository
+    # one to compare against.
     permissions:
       contents: read
       # The destroy-policy gate reads the merged PR's labels. A job-level
@@ -52,16 +347,33 @@ jobs:
       # commit->PR data not existing yet and cost several failed apply
       # runs before the real cause was found.
       pull-requests: read
+    # State locking alone doesn't prevent runs applying out of order; queue
+    # them instead of allowing overlap or cancellation. PER ENVIRONMENT, and at
+    # JOB level: state is per environment, so a run against one contends with
+    # nothing in another, and a workflow-level declaration cannot read a matrix
+    # value at all. See the Serialized Terraform Runs requirement.
+    concurrency:
+      group: terraform-${{ matrix.environment.name }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+    outputs:
+      # Consumed by the apply job's omitted-write-token guard. Every matrix row
+      # writes the same value — the digest is of the repository-scoped secret
+      # and this run's id, neither of which varies by row — so the usual
+      # last-writer-wins hazard of a matrix job's outputs does not arise here.
+      repository-token-digest: ${{ steps.token_digest.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       # HCP Terraform has no OIDC path for CLI-driven backend/state auth,
       # and this org's free tier has no team-scoped tokens to split by
-      # privilege — see design.md Decision 9. TF_API_TOKEN is a single
-      # static token, identical in both the repository and production
-      # Environment secrets; HCLOUD_TOKEN's split (below) is the real
-      # security boundary this job's separation into two jobs protects.
+      # privilege. TF_API_TOKEN is a single static token, identical in both the
+      # repository and each Environment's secrets; the Hetzner token's split
+      # (below) is the real security boundary this job's separation protects.
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
@@ -70,40 +382,73 @@ jobs:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: terraform init
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         run: terraform init
 
+      # `secrets[...]` indexed by the name this environment's own declaration
+      # states. A literal name binds one compile-time-known secret, so at more
+      # than one environment every plan would run under one environment's token
+      # and see none of the other's resources.
       - name: terraform plan
         id: plan
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
         run: terraform plan -no-color -input=false -out=tfplan
 
+      # The reviewer approving an Environment reads this summary and nothing
+      # else, so it names the environment it belongs to.
       - name: Write plan to job summary
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
+        env:
+          ENVIRONMENT_NAME: ${{ matrix.environment.name }}
         run: |
           {
-            echo '### Terraform Plan — `terraform/environments/prod`'
+            echo "### Terraform Plan — \`terraform/environments/${ENVIRONMENT_NAME}\`"
             echo
             echo '```'
             terraform show -no-color tfplan
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
 
-      # Fails the workflow if the plan shows any resource being deleted
-      # or replaced, unless the merged PR carries the override label.
-      # This gate applies only to this apply-workflow plan — not to the
-      # PR-time informational plan or the drift-detection plan. See the
-      # Destroy Policy Gate requirement.
+      # Fails the workflow if the plan shows any resource being deleted or
+      # replaced, unless the merged PR carries the override label.
+      #
+      # WHETHER THIS GATE APPLIES IS A PER-ENVIRONMENT POLICY, read out of the
+      # environment's own declaration rather than fixed here. An environment
+      # that exists to be rebuilt may declare it inapplicable; requiring a label
+      # to tear down a disposable environment is friction on the operation that
+      # environment exists to make cheap, and friction on a routine operation is
+      # routed around rather than heeded. An environment declaring nothing is
+      # gated, so a mistake in a declaration fails safe.
+      #
+      # This gate applies only to this apply-workflow plan — not to the PR-time
+      # informational plan or the drift-detection plan. See the Destroy Policy
+      # Gate requirement.
       - name: Destroy-policy gate
         id: destroy_gate
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          DESTROY_POLICY_GATE: ${{ matrix.environment.destroy_policy_gate }}
         run: |
           set -euo pipefail
+
+          # Applicability first, and read fail-safe: only an explicit `false`
+          # exempts. An absent or unreadable value is treated as though the gate
+          # applies, because reading it the other way silently removes the
+          # strongest guard on an apply.
+          case "$DESTROY_POLICY_GATE" in
+            false)
+              echo "This environment's declaration states the destroy-policy gate does not apply to it, so a destructive plan proceeds to its Environment's protection rules without an override label."
+              exit 0
+              ;;
+            true) ;;
+            *)
+              echo "::warning::This environment's declaration states 'destroy_policy_gate: ${DESTROY_POLICY_GATE}', which is neither true nor false. Treating the gate as applicable."
+              ;;
+          esac
 
           # This gate fails CLOSED. It proceeds only on a positive
           # determination that the plan holds no destructive action; every
@@ -218,30 +563,80 @@ jobs:
             exit 1
           fi
 
+      # Half of the guard against a GitHub Environment that omits `HCLOUD_TOKEN`.
+      #
+      # GitHub resolves an ABSENT Environment secret to the repository secret of
+      # the same name rather than failing, so an Environment created without it
+      # silently supplies whatever the repository holds — at more than one
+      # environment, a different environment's token and therefore a different
+      # Hetzner project.
+      #
+      # THIS JOB IS WHERE THE REPOSITORY VALUE IS VISIBLE. It declares no
+      # `environment:`, so this read is the repository-scoped one by
+      # construction; the apply job below cannot obtain it, because declaring an
+      # `environment:` resolves every read of that name to the Environment's
+      # value. The comparison therefore cannot be made inside the apply job
+      # alone.
+      #
+      # THE OPERAND IS `HCLOUD_TOKEN` SPECIFICALLY, not whatever this
+      # environment declares as its read-only secret. GitHub falls back to the
+      # repository secret OF THAT NAME, and the two coincide for at most one
+      # environment — digesting the declared name would compare against a value
+      # the apply job could never have fallen back to, leaving the guard passing
+      # in exactly the cases it exists to catch.
+      #
+      # Salted with this run's id, so the digest is useless outside the run that
+      # produced it and nothing durable about either secret reaches the
+      # workflow's output graph.
+      - name: Digest the repository-scoped Hetzner token
+        id: token_digest
+        env:
+          REPOSITORY_SCOPED_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          digest=$(printf '%s' "${REPOSITORY_SCOPED_TOKEN}${RUN_ID}" | sha256sum | cut -d' ' -f1)
+          echo "digest=${digest}" >>"$GITHUB_OUTPUT"
+          echo "Digested the repository-scoped Hetzner token for this run; the apply job compares its own resolved token against this value."
+
+      # Named per environment, so one environment's plan cannot be applied to
+      # another.
       - name: Upload plan artifact
         uses: actions/upload-artifact@v7
         with:
-          name: tfplan
-          path: terraform/environments/prod/tfplan
+          name: tfplan-${{ matrix.environment.name }}
+          path: terraform/environments/${{ matrix.environment.name }}/tfplan
           retention-days: 1 # tfplan holds sensitive values in cleartext
 
   apply:
-    name: apply
-    needs: plan
+    name: apply (${{ matrix.environment.name }})
+    needs: [discover, plan]
     runs-on: ubuntu-latest
-    environment: production # gates this job on required-reviewer approval
+    # Every apply job declares an `environment:`, taken from the environment's
+    # own declaration. Whether that PAUSES for a human is a property of that
+    # GitHub Environment's protection rules — repository settings, which no file
+    # here can verify — and not of this workflow. An environment whose
+    # Environment requires no reviewer is still gated in the sense that matters
+    # here: its write credential is confined to this job.
+    environment: ${{ matrix.environment.github_environment }}
     permissions:
       contents: read
+    concurrency:
+      group: terraform-${{ matrix.environment.name }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # This job declares `environment: production`, so HCLOUD_TOKEN
-      # resolves to the write-capable Environment secret. TF_API_TOKEN
-      # resolves to its Environment secret too, via the same shadowing
-      # mechanism, but that value is identical to the repository one —
-      # this org's free HCP Terraform tier has no privilege split to
-      # apply here. See design.md Decision 9.
+      # This job declares an `environment:`, so HCLOUD_TOKEN resolves to that
+      # Environment's write-capable secret. TF_API_TOKEN resolves to its
+      # Environment secret too, via the same shadowing mechanism, but that value
+      # is identical to the repository one — this org's free HCP Terraform tier
+      # has no privilege split to apply here.
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
@@ -249,20 +644,51 @@ jobs:
           terraform_wrapper: false
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
+      # The other half of the omitted-write-token guard. Recomputes the plan
+      # job's digest over its OWN resolved `HCLOUD_TOKEN` and refuses where the
+      # two match — which is precisely what a GitHub Environment that does not
+      # define `HCLOUD_TOKEN` produces.
+      #
+      # Live rather than dormant at one environment: on every apply the plan job
+      # holds the read-only token and this job holds the read-write one, so the
+      # digests differ and the check passes for the right reason. Were the
+      # Environment's secret ever removed, it would fire.
+      - name: Establish that this Environment supplied its own write token
+        env:
+          EXPECTED_REPOSITORY_DIGEST: ${{ needs.plan.outputs.repository-token-digest }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${EXPECTED_REPOSITORY_DIGEST}" ]; then
+            echo "::error::The plan job published no digest of the repository-scoped Hetzner token, so whether this Environment supplied its own write token cannot be established. Refusing to apply."
+            exit 1
+          fi
+
+          resolved=$(printf '%s' "${HCLOUD_TOKEN}${RUN_ID}" | sha256sum | cut -d' ' -f1)
+
+          if [ "${resolved}" = "${EXPECTED_REPOSITORY_DIGEST}" ]; then
+            echo "::error::This job resolved the REPOSITORY-scoped HCLOUD_TOKEN rather than its own Environment's, which is what GitHub supplies when an Environment does not define that secret. Applying would authenticate against whichever Hetzner project the repository token belongs to. Add HCLOUD_TOKEN to this GitHub Environment."
+            exit 1
+          fi
+
+          echo "This Environment supplied its own HCLOUD_TOKEN; it is not the repository-scoped value."
+
       - name: terraform init
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         run: terraform init
 
       # Fails cleanly (rather than applying a stale or missing plan) if
       # the plan job's tfplan artifact has already expired by the time
-      # approval is granted. See task 6.8.
+      # approval is granted.
       - name: Download plan artifact
         id: download
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          name: tfplan
-          path: terraform/environments/prod
+          name: tfplan-${{ matrix.environment.name }}
+          path: terraform/environments/${{ matrix.environment.name }}
 
       - name: Fail cleanly if the plan artifact is unavailable
         if: steps.download.outcome == 'failure'
@@ -271,7 +697,7 @@ jobs:
           exit 1
 
       - name: terraform apply
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: terraform apply -input=false tfplan

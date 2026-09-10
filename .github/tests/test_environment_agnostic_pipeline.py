@@ -62,6 +62,7 @@ are SHAPED so those settings can be applied safely, never that they were.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -924,7 +925,39 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
         environment to its secrets ... in workflow text". Distinct from the
         assertion above because a mapping can be written without spelling the
         environment's name -- a `case` over directory basenames, or a literal
-        read-only secret name that only one environment uses."""
+        read-only secret name that only one environment uses.
+
+        SCOPED TO THE STEPS THAT INVOKE TERRAFORM, and to the job-level `env:`
+        those steps inherit. This narrowing was made by the implementing author,
+        not by the author of this file, and the reason is recorded here rather
+        than in a commit message because it is the one place two SPECIFIED
+        assertions in this module could not both be satisfied.
+
+        As first written this read the whole job, and so failed `apply.yml`'s
+        plan job for the read of `secrets.HCLOUD_TOKEN` that
+        `TestTheApplyJobEstablishesItResolvedItsOwnWriteToken
+        .test_the_guard_reads_the_repository_scoped_hcloud_token_by_that_name`
+        REQUIRES to be there. That is not a resolvable tension in the
+        implementation: the Credential Scoping by Privilege requirement obliges
+        the omitted-write-token guard to digest `HCLOUD_TOKEN` by that exact
+        name ("The comparison is against that name specifically, because that is
+        what GitHub falls back to"), and obliges it to happen where the
+        REPOSITORY-scoped value is visible, which is only a job declaring no
+        `environment:`. Prod declares `HCLOUD_TOKEN` as its own read-only secret
+        (design.md Decision 1, so that nothing in repository settings moves at
+        one environment), so the guard's mandatory read and this sweep's subject
+        are the same string. No workflow can satisfy both readings.
+
+        What the requirement's sentence is about is which credential a plan RUNS
+        UNDER -- "the secret a plan runs under comes from workflow text rather
+        than from that environment's own declaration". So the sweep is scoped to
+        that: a step that invokes Terraform, plus the job-level `env:` such a
+        step inherits, may not bind a declared read-only secret by literal name.
+        A plan job that named its Hetzner credential literally still fails, at
+        step level or at job level; a step that digests a fixed repository
+        secret and publishes nothing but a salted hash of it does not, because
+        no plan runs under it.
+        """
         self.test_there_is_a_name_to_look_for()
         declared_secrets = sorted(
             {
@@ -939,6 +972,7 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
             "read nothing",
         )
         offenders = []
+        invoking_terraform = re.compile(r"terraform\s+[a-z]")
         for path in TERRAFORM_WORKFLOWS:
             workflow = load_yaml(path)
             for job_name, job in jobs(workflow).items():
@@ -947,17 +981,36 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
                     # GitHub Environment, so naming that secret there is the
                     # scheme working rather than a mapping in workflow text.
                     continue
-                body = uncommented(yaml.safe_dump(job, sort_keys=True))
-                for secret in declared_secrets:
-                    if re.search(rf"secrets\.{re.escape(secret)}(?![A-Za-z0-9_])", body):
-                        offenders.append(f"{path.name}:{job_name} reads `secrets.{secret}`")
+                # Read at job level too: a job-level `env:` reaches every step
+                # below it, so a literal placed there is bound into the plan
+                # exactly as one placed on the step would be.
+                inherited = uncommented(yaml.safe_dump(job.get("env") or {}, sort_keys=True))
+                for index, step in enumerate(job.get("steps") or []):
+                    if not invocation_lines(step.get("run", ""), invoking_terraform):
+                        continue
+                    body = inherited + uncommented(
+                        yaml.safe_dump(
+                            {
+                                "env": step.get("env"),
+                                "with": step.get("with"),
+                                "run": step.get("run"),
+                            },
+                            sort_keys=True,
+                        )
+                    )
+                    for secret in declared_secrets:
+                        if re.search(rf"secrets\.{re.escape(secret)}(?![A-Za-z0-9_])", body):
+                            offenders.append(
+                                f"{path.name}:{step_label(job_name, index, step)} runs "
+                                f"Terraform under `secrets.{secret}`"
+                            )
         self.assertEqual(
             [],
-            offenders,
-            "these jobs declare no `environment:` and yet read a specific "
-            "environment's read-only secret by name, so the secret a plan runs under "
-            "comes from workflow text rather than from that environment's own "
-            f"declaration: {offenders}",
+            sorted(set(offenders)),
+            "these steps invoke Terraform in a job declaring no `environment:` and "
+            "bind a specific environment's read-only secret by name, so the secret a "
+            "plan runs under comes from workflow text rather than from that "
+            f"environment's own declaration: {sorted(set(offenders))}",
         )
 
 
@@ -2601,6 +2654,450 @@ class TestTheDeclarationReaderIsARealReadOfTheFile(
             [],
             declaration_candidates(directory),
             "a Terraform variables file was read as a pipeline declaration",
+        )
+
+
+# --------------------------------------------------------------------------
+# Added by the implementing author, not by the author of the module above.
+#
+# Two things `test-plan.md` recorded as covered only structurally, and one of
+# them as "the largest gap in this pass". Both were left open there because the
+# shape in which a step's inputs arrive was not fixed by the change's plan, and
+# inventing one would have failed a legitimate implementation. The
+# implementation now fixes both shapes, so the behaviour is reachable, and the
+# verifications tasks.md 3.3, 4.1a and 4.1b describe are made durable here
+# rather than left as a run someone did once on a workstation.
+# --------------------------------------------------------------------------
+
+
+def _resolution_step_of(case: unittest.TestCase, path: Path):
+    """The affected-environment resolution step, and which of its `env:` keys
+    carries which input.
+
+    The inputs are told apart by the STEP each expression reads from, never by
+    the name the implementation gave the variable: the discovery input reads the
+    output of the step this module's discovery locator finds, and the
+    changed-path input reads some other step's.
+    """
+    workflow = load_yaml(path)
+    discovery_ids = {
+        str(step.get("id"))
+        for _, _, step in steps(workflow)
+        if step.get("run")
+        and step.get("id")
+        and "terraform/environments" in str(step["run"])
+        and "terraform/modules" not in str(step["run"])
+        and "GITHUB_OUTPUT" in str(step["run"])
+        and not ACTIONS_EXPRESSION.search(str(step["run"]))
+    }
+    case.assertEqual(
+        1,
+        len(discovery_ids),
+        f"expected exactly one identified discovery step in {path.name}, found "
+        f"{sorted(discovery_ids)}",
+    )
+    discovery_id = discovery_ids.pop()
+
+    candidates = []
+    for job_name, index, step in steps(workflow):
+        body = str(step.get("run") or "")
+        if not body or ACTIONS_EXPRESSION.search(body):
+            continue
+        if "terraform/environments" not in body or "terraform/modules" not in body:
+            continue
+        if "GITHUB_OUTPUT" not in body:
+            continue
+        inputs = {}
+        for key, value in (step.get("env") or {}).items():
+            expression = compact(value)
+            if f"steps.{discovery_id}.outputs." in expression:
+                inputs["environments"] = key
+            elif ACTIONS_EXPRESSION.search(str(value)):
+                inputs["paths"] = key
+        if {"environments", "paths"} <= set(inputs):
+            candidates.append((job_name, index, step, inputs))
+    case.assertEqual(
+        1,
+        len(candidates),
+        f"expected exactly one resolution step in {path.name} taking both the "
+        f"discovery step's output and a changed-path input through `env:`, found "
+        f"{len(candidates)}: "
+        + repr([step_label(j, i, s) for j, i, s, _ in candidates]),
+    )
+    return candidates[0]
+
+
+def _run_with(case: unittest.TestCase, script: str, assignments: dict):
+    """Run a step body with `$GITHUB_OUTPUT` pointed at a scratch file, and
+    return (result, the pairs it wrote)."""
+    scratch = Path(tempfile.mkdtemp(prefix="step-body-"))
+    case.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+    outputs = scratch / "github_output"
+    summary = scratch / "step_summary"
+    outputs.touch()
+    summary.touch()
+    environment = dict(
+        os.environ,
+        GITHUB_OUTPUT=str(outputs),
+        GITHUB_ENV=str(outputs),
+        GITHUB_STEP_SUMMARY=str(summary),
+        GITHUB_WORKSPACE=str(scratch),
+    )
+    environment.update(assignments)
+    return run_snippet(script, environment, scratch), github_output_pairs(outputs)
+
+
+PROD_ROW = {
+    "name": "prod",
+    "github_environment": "production",
+    "read_only_secret": "HCLOUD_TOKEN",
+    "destroy_policy_gate": True,
+}
+STAGING_ROW = {
+    "name": "staging",
+    "github_environment": "staging",
+    "read_only_secret": "HCLOUD_TOKEN_STAGING",
+    "destroy_policy_gate": False,
+}
+
+
+class TestTheAffectedEnvironmentMappingIsRunRatherThanRead(unittest.TestCase):
+    """MODIFIED requirements: Pull Request Plan Visibility; Gated Production
+    Apply Applies the Reviewed Plan.
+
+    "a change under `terraform/modules/` affects every environment, and a change
+    under `terraform/environments/<name>/` affects only that environment."
+
+    `TestTheAffectedEnvironmentSetIsResolvedFailClosed` executes the REFUSAL and
+    reads the mapping, and this change's `test-plan.md` records the unexecuted
+    mapping as that pass's largest gap — deliberately, because the input's shape
+    was not fixed when those tests were written. It is fixed now, and the three
+    scenarios that turn on the mapping are asserted at one environment only by
+    running it over a two-environment set. At N=1 every one of them is
+    unfalsifiable against the committed tree.
+    """
+
+    def setUp(self) -> None:
+        require_external_tools(
+            self, ("bash", "jq"), "execute the affected-environment mapping"
+        )
+        self.both = json.dumps([PROD_ROW, STAGING_ROW])
+
+    def _resolve(self, path: Path, changed: str):
+        _, _, step, inputs = _resolution_step_of(self, path)
+        result, written = _run_with(
+            self,
+            str(step["run"]),
+            {inputs["environments"]: self.both, inputs["paths"]: changed},
+        )
+        detail = (result.stdout + result.stderr).strip()[-600:]
+        self.assertEqual(
+            0, result.returncode, f"{path.name}: the resolution refused {changed!r}: {detail!r}"
+        )
+        emitted = [
+            value
+            for value in written.values()
+            if value.strip().startswith("[") or value.strip().startswith("{")
+        ]
+        self.assertEqual(
+            1,
+            len(emitted),
+            f"{path.name}: expected exactly one JSON output naming the affected "
+            f"environments, got {written!r}",
+        )
+        return sorted(entry["name"] for entry in json.loads(emitted[0]))
+
+    def test_a_shared_module_change_selects_every_environment(self) -> None:
+        """SPECIFIED -- scenarios "A shared module change is planned against
+        every environment" and "A shared module change reaches every
+        environment"."""
+        for path in (PR_VALIDATION, APPLY):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(
+                    ["prod", "staging"],
+                    self._resolve(path, "terraform/modules/server/main.tf\n"),
+                    "a change to a module every environment consumes selected fewer "
+                    "than every environment",
+                )
+
+    def test_an_environment_scoped_change_selects_that_environment_only(self) -> None:
+        """SPECIFIED -- scenarios "An environment-scoped change is planned
+        against that environment only" and "A merge affecting one environment
+        raises no other environment's approval". The second is the one that
+        matters most: an approval prompt raised with nothing to approve trains
+        the approver to grant it without reading."""
+        for path in (PR_VALIDATION, APPLY):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(
+                    ["staging"],
+                    self._resolve(path, "terraform/environments/staging/main.tf\n"),
+                    "a change confined to one environment selected another as well",
+                )
+
+    def test_changes_in_two_environments_select_both(self) -> None:
+        """SPECIFIED -- the same two scenarios, read forward: selecting "only
+        that environment" is a filter, not a choice of one."""
+        for path in (PR_VALIDATION, APPLY):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(
+                    ["prod", "staging"],
+                    self._resolve(
+                        path,
+                        "terraform/environments/prod/terraform.tfvars\n"
+                        "terraform/environments/staging/main.tf\n",
+                    ),
+                )
+
+    def test_a_change_touching_no_environment_selects_none(self) -> None:
+        """SPECIFIED -- "A pull request affecting no environment SHALL produce
+        no plan", and scenario "A merge that cannot change infrastructure raises
+        no approval request".
+
+        Distinct from the refusal `TestTheAffectedEnvironmentSetIsResolvedFailClosed`
+        exercises, and the distinction is the whole fail-closed argument: an
+        input that RESOLVED to nothing affected is accepted, an input that could
+        not be resolved is refused. A step that refused both would satisfy that
+        class and plan nothing, ever.
+        """
+        for path in (PR_VALIDATION, APPLY):
+            with self.subTest(workflow=path.name):
+                self.assertEqual([], self._resolve(path, "docs/bootstrap-a-new-host.md\n"))
+
+
+class TestThePlanAggregationDiscriminates(unittest.TestCase):
+    """MODIFIED requirement: Pull Request Plan Visibility; Required Status Checks
+    Report on Every Pull Request (carried through).
+
+    `TestTheAggregatingValidateJobCoversThePlanMatrix` reads the `needs:` edges
+    that let `validate` see the matrix's result. This runs the step that acts on
+    them, once per row of the table tasks.md 4.1a describes — the same
+    extract-and-run shape `test_ci_configuration.TestTheAggregatingGateDiscriminates`
+    uses for `ansible-verify`'s gate, and for the same reason: reading
+    establishes that a conclusion exists, running establishes that it
+    discriminates.
+
+    A green run here does NOT establish that this conclusion blocks anything.
+    Blocking is branch protection — repository settings this suite makes no
+    network call to read.
+    """
+
+    def setUp(self) -> None:
+        require_external_tools(self, ("bash",), "execute the plan aggregation's body")
+        self.workflow = load_yaml(PR_VALIDATION)
+
+    def _concluding_step(self):
+        """The `validate` job's concluding step, with its inputs identified by
+        the expressions its `env:` assigns rather than by their names."""
+        declared = jobs(self.workflow)
+        self.assertIn("validate", declared, "pr-validation.yml declares no `validate` job")
+        validate = declared["validate"]
+        planning = set(jobs_running(self.workflow, TERRAFORM_PLAN))
+        self.assertTrue(planning, "no job in pr-validation.yml runs `terraform plan`")
+
+        candidates = []
+        for index, step in expression_free_run_steps(validate):
+            inputs = {}
+            for key, value in (step.get("env") or {}).items():
+                expression = compact(value)
+                match = re.search(r"needs\.([A-Za-z0-9_-]+)\.result", expression)
+                if match:
+                    inputs["plan" if match.group(1) in planning else "discover"] = key
+                elif re.search(r"needs\.[A-Za-z0-9_-]+\.outputs\.", expression):
+                    inputs["expected"] = key
+            if {"plan", "discover", "expected"} <= set(inputs):
+                candidates.append((index, step, inputs))
+        self.assertEqual(
+            1,
+            len(candidates),
+            "expected exactly one expression-free `run:` step in `validate` whose "
+            "`env:` carries the plan matrix's result, the discovery job's result and a "
+            "discovery output saying whether a plan was owed — the step that concludes "
+            f"on the matrix's behalf — but found {len(candidates)}. The step's inputs "
+            "arrive through `env:` so that its body can be executed standalone; a "
+            "conclusion written as an `if:` expression cannot be exercised at all",
+        )
+        return candidates[0]
+
+    def _conclude(self, discover: str, plan: str, expected: str):
+        _, step, inputs = self._concluding_step()
+        result, _ = _run_with(
+            self,
+            str(step["run"]),
+            {
+                inputs["discover"]: discover,
+                inputs["plan"]: plan,
+                inputs["expected"]: expected,
+            },
+        )
+        return result
+
+    def test_a_planned_and_passing_run_concludes_success(self) -> None:
+        """SPECIFIED -- the ordinary case, and the converse every refusal below
+        needs: a conclusion that refused every row would satisfy all of them and
+        make every pull request unmergeable."""
+        result = self._conclude("success", "success", "true")
+        self.assertEqual(
+            0,
+            result.returncode,
+            "the conclusion refused a run whose discovery succeeded and whose plan "
+            f"matrix passed: {(result.stdout + result.stderr)[-600:]!r}",
+        )
+
+    def test_a_pull_request_affecting_no_environment_concludes_success(self) -> None:
+        """SPECIFIED -- "A pull request affecting no environment SHALL produce no
+        plan". The matrix is empty and therefore skipped, and that skip is the
+        correct outcome rather than a failure."""
+        result = self._conclude("success", "skipped", "false")
+        self.assertEqual(
+            0,
+            result.returncode,
+            "the conclusion refused a pull request that affects no environment, so "
+            "every documentation-only pull request would be unmergeable: "
+            f"{(result.stdout + result.stderr)[-600:]!r}",
+        )
+
+    def test_a_skipped_matrix_on_a_run_that_owed_a_plan_is_refused(self) -> None:
+        """SPECIFIED -- scenario "One environment's plan failure does not hide
+        the others", read at its limit: a skipped job is not a passing one, and
+        concluding success here reports a green required status check for a pull
+        request nothing planned."""
+        result = self._conclude("success", "skipped", "true")
+        self.assertNotEqual(
+            0,
+            result.returncode,
+            "the conclusion passed a run that resolved an affected environment and "
+            "then planned nothing",
+        )
+
+    def test_a_failed_or_cancelled_matrix_is_refused(self) -> None:
+        """SPECIFIED -- "the check SHALL report failure" where a plan failed. A
+        cancelled matrix is refused on both settings of whether a plan was owed:
+        it has verified nothing either way, and a run superseded by a newer push
+        reports on the older commit."""
+        for plan, expected in (
+            ("failure", "true"),
+            ("cancelled", "true"),
+            ("cancelled", "false"),
+        ):
+            with self.subTest(plan=plan, expected=expected):
+                result = self._conclude("success", plan, expected)
+                self.assertNotEqual(
+                    0,
+                    result.returncode,
+                    f"the conclusion passed a matrix that concluded {plan!r}",
+                )
+
+    def test_a_run_whose_discovery_did_not_succeed_is_refused(self) -> None:
+        """DERIVED (tasks.md 4.1a) -- no scenario states it. Discovery is read
+        FIRST because on its failure its outputs are empty strings, so the input
+        saying whether a plan was owed is "" and the matrix's result is
+        "skipped" — which the "nothing to plan" branch would otherwise pass,
+        concluding success on a run whose own precondition refused. Reconsider
+        this assertion, do not weaken it, if the aggregation learns to see
+        discovery's refusal another way."""
+        for discover in ("failure", "cancelled", "skipped"):
+            with self.subTest(discover=discover):
+                result = self._conclude(discover, "skipped", "")
+                self.assertNotEqual(
+                    0,
+                    result.returncode,
+                    f"the conclusion passed a run whose discovery concluded {discover!r} "
+                    "and therefore published nothing",
+                )
+
+
+class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
+    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    Configuration -- "Discovery SHALL fail closed."
+
+    DERIVED, and added by the implementing author: no scenario states it.
+
+    A job attaches to one GitHub Environment and a workflow's jobs cannot be
+    shared, so the discovery body exists three times -- once in each Terraform
+    workflow -- and the changed-path resolution twice. Every executing assertion
+    in this module runs ONE of those copies: `TestDiscoveryFailsClosed` runs
+    `pr-validation.yml`'s, and the other two are read but never executed. A copy
+    that drifted would keep every one of those assertions green while failing
+    closed differently, or not at all, in the workflow that applies to
+    production.
+
+    So the copies are asserted identical rather than each being exercised. That
+    is the assertion the suite can actually make -- it reads committed files and
+    may not spawn a Terraform binary or a runner -- and it is what makes running
+    one copy evidence about all three.
+
+    Reconsider this assertion, do not weaken it, if the bodies are ever factored
+    into a composite action or a called workflow, at which point there is one
+    copy and nothing to compare.
+    """
+
+    def _bodies(self, prefix: str) -> dict:
+        found = {}
+        for path in TERRAFORM_WORKFLOWS:
+            workflow = load_yaml(path)
+            matching = [
+                str(step["run"])
+                for _, _, step in steps(workflow)
+                if step.get("run") and str(step.get("name", "")).startswith(prefix)
+            ]
+            self.assertLessEqual(
+                len(matching),
+                1,
+                f"{path.name} carries {len(matching)} steps named {prefix!r}; each "
+                "workflow holds at most one copy of this body",
+            )
+            if matching:
+                found[path.name] = matching[0]
+        return found
+
+    def test_every_workflow_discovers_environments_the_same_way(self) -> None:
+        """DERIVED -- see the class docstring. Every Terraform workflow runs a
+        matrix over the discovered environments, so every one of them carries
+        this body; a workflow that lost it would run over nothing."""
+        bodies = self._bodies("Discover the environments")
+        self.assertEqual(
+            sorted(path.name for path in TERRAFORM_WORKFLOWS),
+            sorted(bodies),
+            "these Terraform workflows carry no environment-discovery step, so they "
+            f"cannot run over the discovered environments at all: {sorted(bodies)}",
+        )
+        distinct = {body for body in bodies.values()}
+        self.assertEqual(
+            1,
+            len(distinct),
+            "the discovery bodies have drifted apart. Only one of them is executed by "
+            "this suite, so a copy that fails closed differently would stay green here "
+            "and refuse -- or accept -- differently in the workflow that applies to "
+            f"production. Copies: {sorted(bodies)}",
+        )
+
+    def test_both_workflows_resolve_the_affected_set_the_same_way(self) -> None:
+        """DERIVED -- see the class docstring. `drift.yml` deliberately carries
+        no resolution: drift is divergence from what was committed, which no
+        diff predicts, so it plans every environment on every run."""
+        bodies = self._bodies("Resolve which environments")
+        self.assertEqual(
+            [APPLY.name, PR_VALIDATION.name],
+            sorted(bodies),
+            "the changed-path resolution is expected in exactly the two workflows that "
+            f"narrow by what changed, and was found in {sorted(bodies)}",
+        )
+        # The two differ only in the sentence naming what supplies the paths --
+        # a pull request's diff on one, a push's commit range on the other -- so
+        # they are compared on the code rather than on the prose.
+        stripped = {
+            "\n".join(
+                line for line in body.splitlines() if not line.strip().startswith("#")
+            ).strip()
+            for body in bodies.values()
+        }
+        self.assertEqual(
+            1,
+            len(stripped),
+            "the two changed-path resolutions have drifted apart in their code, so a "
+            "pull request and the merge of that same pull request could resolve "
+            "different environments -- the reviewer approving one plan and the pipeline "
+            f"applying another. Copies: {sorted(bodies)}",
         )
 
 

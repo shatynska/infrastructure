@@ -357,11 +357,27 @@ class TestSecretScanningIsUnconditional(unittest.TestCase):
 
     def test_secret_scanning_precedes_any_terraform_plan_in_the_same_job(self) -> None:
         """SPECIFIED -- scenario "PR with a leaked credential fails validation":
-        the workflow "SHALL fail before any `terraform plan` is executed".
-        Establishes the ordering half only; gitleaks' own detection is its
-        behavior, not this repository's."""
+        the workflow "SHALL fail before any `terraform plan` is executed", and
+        the MODIFIED *Pull Request Plan Visibility*: "**A secret scan SHALL
+        precede every plan, in the job that runs it.**"
+
+        STRENGTHENED by `make-the-pipeline-environment-agnostic`, not
+        re-expressed. Its previous body skipped any job in which it found no
+        gitleaks step (`if not scan_indices or not plan_indices: continue`), so
+        moving a plan into a job of its own made this assertion VACUOUS rather
+        than red -- which is exactly the restructure that change's design.md
+        Decision 3 forbids, and it was the only thing guarding it. A plan in a
+        job with no scan at all is now an offence, because a plan job with no
+        scan does not prevent a leaked credential reaching a cloud API or a pull
+        request comment any less than one with the scan in the wrong place.
+
+        A job holding a scan and NO plan is still not an offence: that is
+        `validate`, whose scan is unconditional precisely so that a pull request
+        planning nothing is still scanned.
+        """
         self.test_the_workflow_has_a_secret_scanning_step_at_all()
-        for job_name, job in jobs(self.workflow).items():
+        offenders = []
+        for job_name, job in sorted(jobs(self.workflow).items()):
             job_steps = job.get("steps") or []
             scan_indices = [
                 i for i, s in enumerate(job_steps) if "gitleaks" in step_text(s).lower()
@@ -371,13 +387,23 @@ class TestSecretScanningIsUnconditional(unittest.TestCase):
                 for i, s in enumerate(job_steps)
                 if re.search(r"terraform\s+plan\b", str(s.get("run", "")))
             ]
-            if not scan_indices or not plan_indices:
+            if not plan_indices:
                 continue
-            self.assertLess(
-                max(scan_indices),
-                min(plan_indices),
-                f"in job {job_name}, a `terraform plan` step runs before the secret scan",
-            )
+            if not scan_indices:
+                offenders.append(
+                    f"{job_name}: runs `terraform plan` and carries no secret scan at all"
+                )
+            elif max(scan_indices) > min(plan_indices):
+                offenders.append(
+                    f"{job_name}: plans at step {min(plan_indices)}, before the scan at "
+                    f"step {max(scan_indices)}"
+                )
+        self.assertEqual(
+            [],
+            offenders,
+            "the ordering is scoped to a job because that is where a failing step stops "
+            f"the next one; a scan in a different job stops nothing: {offenders}",
+        )
 
 
 class TestSecretScanVersionParity(unittest.TestCase):
@@ -1649,88 +1675,184 @@ class TestRequiredCheckIsNotPathFiltered(unittest.TestCase):
                     )
 
 
+class TestTheAdmittedJobConditionIsExactlyOneLiteral(unittest.TestCase):
+    """MODIFIED requirements: The Specification Record Is Verified in Continuous
+    Integration; The Continuous-Integration Configuration Is Itself Verified.
+
+    Both admit `always()` on a job declaring `needs:` "as that exact literal and
+    not as a class". The two assertions above consult
+    `job_condition_is_admissible` for that, and an allowance that admitted too
+    much would leave both of them green over a job that CAN be skipped -- which
+    is the whole property they exist to hold. So the predicate is pinned here,
+    against the exact spellings this change's tasks.md 5.3 names.
+    """
+
+    def test_a_job_with_no_condition_is_admitted(self) -> None:
+        """SPECIFIED -- the unamended case, which the allowance does not touch."""
+        self.assertTrue(job_condition_is_admissible({}))
+        self.assertTrue(job_condition_is_admissible({"needs": ["discover"]}))
+
+    def test_the_bare_and_wrapped_spellings_of_always_are_admitted(self) -> None:
+        """SPECIFIED -- "in either the bare or the `${{ }}`-wrapped spelling"."""
+        for spelling in ("always()", "${{ always() }}", "${{always()}}"):
+            with self.subTest(condition=spelling):
+                self.assertTrue(
+                    job_condition_is_admissible({"needs": ["discover"], "if": spelling}),
+                    f"{spelling!r} is the literal both requirements admit",
+                )
+
+    def test_always_is_refused_on_a_job_declaring_no_dependency(self) -> None:
+        """SPECIFIED -- "and only on a job declaring `needs:`". The allowance is
+        argued from a dependent job being skipped when a dependency fails; on a
+        job with no dependencies it buys nothing an absent key does not."""
+        self.assertFalse(job_condition_is_admissible({"if": "always()"}))
+
+    def test_every_other_condition_is_refused(self) -> None:
+        """SPECIFIED -- "No other expression is permitted by it, and neither is
+        `always()` joined to anything"."""
+        for spelling in (
+            "github.event_name == 'pull_request'",
+            "always() && github.event_name == 'pull_request'",
+            "${{ always() && steps.changes.outputs.terraform == 'true' }}",
+            "success() || failure()",
+            "!cancelled()",
+            "true",
+        ):
+            with self.subTest(condition=spelling):
+                self.assertFalse(
+                    job_condition_is_admissible({"needs": ["discover"], "if": spelling}),
+                    f"{spelling!r} was admitted; only the bare literal `always()` is",
+                )
+
+
 class TestSavedPlanIsWhatGetsApplied(unittest.TestCase):
     """MODIFIED requirement: Gated Production Apply Applies the Reviewed Plan.
 
     Regression guards for scenarios the delta carries through unchanged.
+
+    RE-EXPRESSED BY `make-the-pipeline-environment-agnostic`, not weakened.
+    Three of these located the apply job by `environment == "production"`, a
+    literal that change removes from the workflow -- the delta forbids a
+    workflow to "map an environment to its ... Environment name in workflow
+    text", so the old locator finds zero jobs and its assertion fails for a
+    reason that is the change working. Each now reads the shape the delta
+    describes instead: EVERY apply job declares an `environment:`, no plan job
+    declares one, each apply job depends on a job that plans, and each applies a
+    saved plan rather than recomputing one.
     """
 
     def setUp(self) -> None:
         self.workflow = load_yaml(APPLY)
         self.jobs = jobs(self.workflow)
 
-    def _job_with_environment(self, name: str):
+    def _jobs_running(self, pattern: str) -> list:
         return [
-            job_name
-            for job_name, job in self.jobs.items()
-            if str(job.get("environment", "")) == name
-            or (isinstance(job.get("environment"), dict) and job["environment"].get("name") == name)
+            name
+            for name, job in sorted(self.jobs.items())
+            if any(
+                re.search(pattern, str(step.get("run", "")))
+                for step in (job.get("steps") or [])
+            )
         ]
 
-    def test_exactly_one_job_declares_the_production_environment(self) -> None:
-        """SPECIFIED -- scenario "Merge does not apply immediately" and
-        "Apply credentials are inaccessible before approval": the plan job
-        declares no `environment:`; the apply job declares
-        `environment: production`."""
-        matches = self._job_with_environment("production")
+    def _declared_environment(self, job: dict):
+        value = job.get("environment")
+        if isinstance(value, dict):
+            return value.get("name")
+        return value
+
+    def test_every_apply_job_is_gated_on_a_github_environment(self) -> None:
+        """SPECIFIED -- scenarios "Merge does not apply immediately" and "Apply
+        credentials are inaccessible before approval", read over the shape the
+        delta states: "Every environment's apply job SHALL declare an
+        `environment:`", resolved from that environment's own declaration rather
+        than named here.
+
+        Replaces `test_exactly_one_job_declares_the_production_environment`,
+        whose count of one was a fact about there being one environment rather
+        than a property of the pipeline.
+        """
+        applying = self._jobs_running(r"terraform\s+apply\b")
+        self.assertTrue(applying, "no job in apply.yml runs `terraform apply`")
+        offenders = [
+            name for name in applying if self._declared_environment(self.jobs[name]) is None
+        ]
         self.assertEqual(
-            1,
-            len(matches),
-            f"expected exactly one job declaring `environment: production`, found {matches}",
+            [],
+            offenders,
+            "these jobs run `terraform apply` and declare no `environment:`, so a "
+            f"write-capable Hetzner token lives in an ungated job: {offenders}",
+        )
+        literal = [
+            f"{name}: {self._declared_environment(self.jobs[name])}"
+            for name in applying
+            if "${{" not in str(self._declared_environment(self.jobs[name]))
+        ]
+        self.assertEqual(
+            [],
+            literal,
+            "these apply jobs name their GitHub Environment as a literal rather than "
+            f"resolving it from the environment's own declaration: {literal}",
         )
 
     def test_the_planning_job_declares_no_environment(self) -> None:
         """SPECIFIED -- "A **plan job** that declares no `environment:`". This is
         what keeps the read-write token out of the pre-approval job."""
-        planning = [
-            name
-            for name, job in self.jobs.items()
-            if any(
-                re.search(r"terraform\s+plan\b", str(step.get("run", "")))
-                for step in (job.get("steps") or [])
-            )
-        ]
+        planning = self._jobs_running(r"terraform\s+plan\b")
         self.assertTrue(planning, "no job in apply.yml runs `terraform plan`")
         offenders = [name for name in planning if "environment" in self.jobs[name]]
         self.assertEqual([], offenders, f"planning jobs declaring `environment:`: {offenders}")
 
     def test_the_apply_job_depends_on_the_planning_job(self) -> None:
         """SPECIFIED -- "An **apply job** that depends on the plan job"."""
-        matches = self._job_with_environment("production")
-        self.assertEqual(1, len(matches), f"expected one production job, found {matches}")
-        needs = self.jobs[matches[0]].get("needs")
-        self.assertTrue(needs, f"job {matches[0]} declares no `needs:` on the plan job")
+        applying = self._jobs_running(r"terraform\s+apply\b")
+        planning = set(self._jobs_running(r"terraform\s+plan\b"))
+        self.assertTrue(applying, "no job in apply.yml runs `terraform apply`")
+        self.assertTrue(planning, "no job in apply.yml runs `terraform plan`")
+        offenders = []
+        for name in applying:
+            needs = self.jobs[name].get("needs") or []
+            needs = [needs] if isinstance(needs, str) else list(needs)
+            if not set(map(str, needs)) & planning:
+                offenders.append(f"{name}: needs {needs}")
+        self.assertEqual(
+            [],
+            offenders,
+            "these apply jobs depend on no job that plans, so nothing guarantees the "
+            f"reviewer had a diff to read before approving: {offenders}",
+        )
 
     def test_the_apply_job_applies_a_saved_plan_file(self) -> None:
         """SPECIFIED -- scenario "Applied changes match the approved plan": the
         apply job "SHALL apply the saved `tfplan` artifact produced by the plan
         job", rather than recomputing a plan after approval."""
-        matches = self._job_with_environment("production")
-        self.assertEqual(1, len(matches), f"expected one production job, found {matches}")
-        job = self.jobs[matches[0]]
-        applies = [
-            str(step.get("run"))
-            for step in (job.get("steps") or [])
-            if re.search(r"terraform\s+apply\b", str(step.get("run", "")))
-        ]
-        self.assertTrue(applies, f"job {matches[0]} runs no `terraform apply`")
-        for command in applies:
-            self.assertRegex(
-                command,
-                r"terraform\s+apply\b[^\n]*\btfplan\b",
-                "the apply job does not apply the saved plan file; a plan recomputed "
-                "after approval is not the diff the reviewer approved",
+        applying = self._jobs_running(r"terraform\s+apply\b")
+        self.assertTrue(applying, "no job in apply.yml runs `terraform apply`")
+        for name in applying:
+            job = self.jobs[name]
+            commands = [
+                str(step.get("run"))
+                for step in (job.get("steps") or [])
+                if re.search(r"terraform\s+apply\b", str(step.get("run", "")))
+            ]
+            for command in commands:
+                self.assertRegex(
+                    command,
+                    r"terraform\s+apply\b[^\n]*\btfplan\b",
+                    f"job {name} does not apply the saved plan file; a plan recomputed "
+                    "after approval is not the diff the reviewer approved",
+                )
+            plans_after_approval = [
+                str(step.get("run"))
+                for step in (job.get("steps") or [])
+                if re.search(r"terraform\s+plan\b", str(step.get("run", "")))
+            ]
+            self.assertEqual(
+                [],
+                plans_after_approval,
+                f"the approval-gated job {name} recomputes a plan; it must apply the "
+                "saved one",
             )
-        plans_after_approval = [
-            str(step.get("run"))
-            for step in (job.get("steps") or [])
-            if re.search(r"terraform\s+plan\b", str(step.get("run", "")))
-        ]
-        self.assertEqual(
-            [],
-            plans_after_approval,
-            "the approval-gated job recomputes a plan; it must apply the saved one",
-        )
 
 
 # --------------------------------------------------------------------------
@@ -1852,7 +1974,18 @@ class TestTheSuiteIsWiredIntoTheRequiredCheck(unittest.TestCase):
         """SPECIFIED -- scenario "The suite runs regardless of what a pull
         request touched", and the requirement's "unconditionally". Checks the
         step and its job, because moving the condition to the job would leave a
-        step-level assertion green while reopening the hole."""
+        step-level assertion green while reopening the hole.
+
+        THE TWO HALVES DIFFER, and the difference is the requirement's. The STEP
+        half is unchanged: no condition of any kind is admitted there. The JOB
+        half is re-expressed against the allowance the requirement now carries
+        -- "Where the enclosing job declares `needs:` ... it MAY carry the single
+        condition `always()` and no other" -- because
+        `make-the-pipeline-environment-agnostic` makes this job an aggregator,
+        and a dependent job with no `always()` is skipped whenever a dependency
+        fails, producing no status check context at all. See
+        `job_condition_is_admissible`.
+        """
         self.test_the_required_check_invokes_the_suite()
         step_offenders = [
             step_label(job, index, step)
@@ -1865,10 +1998,18 @@ class TestTheSuiteIsWiredIntoTheRequiredCheck(unittest.TestCase):
             f"these steps gate the suite behind an `if:`: {step_offenders}",
         )
         job_offenders = sorted(
-            {job for job, _, _ in self.invoking if jobs(self.workflow)[job].get("if") is not None}
+            {
+                job
+                for job, _, _ in self.invoking
+                if not job_condition_is_admissible(jobs(self.workflow)[job])
+            }
         )
         self.assertEqual(
-            [], job_offenders, f"these jobs gate the suite behind an `if:`: {job_offenders}"
+            [],
+            job_offenders,
+            "these jobs gate the suite behind a condition the requirement does not "
+            "admit -- it admits the single literal `always()`, and only on a job "
+            f"declaring `needs:`: {job_offenders}",
         )
 
     def test_the_step_invoking_the_suite_does_not_swallow_its_result(self) -> None:
@@ -3412,6 +3553,42 @@ def compact(value: object) -> str:
     `${{ needs.discover.result }}` and `${{needs.discover.result}}` are matched
     by the same substring."""
     return re.sub(r"\s+", "", str(value))
+
+
+# The ONE condition the two unconditionality requirements admit on the job
+# enclosing their checks, in either spelling and containing nothing else.
+#
+# `make-the-pipeline-environment-agnostic` makes `validate` an aggregator over a
+# plan matrix, and a job declaring `needs:` is otherwise skipped whenever a
+# dependency fails -- producing no status check context at all, which under
+# branch protection is a required check that never reports: the same
+# permanently-pending state a path filter produces. Both *The Specification
+# Record Is Verified in Continuous Integration* and *The Continuous-Integration
+# Configuration Is Itself Verified* were amended by that change to admit
+# `always()` and nothing else, on the argument that their intent is that the job
+# must not be SKIPPABLE and `always()` cannot evaluate false.
+#
+# Admitted as that exact literal rather than as a class of truthy expressions,
+# which is what keeps the closed form those requirements insist on: `always() &&
+# <anything>` stays forbidden, and so does `success() || failure()`, which is
+# equivalent in most runs and false for a cancelled one.
+ADMITTED_JOB_CONDITION = re.compile(r"\A(?:\$\{\{\s*always\(\)\s*\}\}|always\(\))\Z")
+
+
+def job_condition_is_admissible(job: dict) -> bool:
+    """Whether a job's `if:` is one the unconditionality requirements admit.
+
+    No `if:` at all is admissible. `always()` alone is admissible ONLY on a job
+    declaring `needs:` -- on a job with no dependencies it buys nothing the
+    absent key does not already give, so admitting it there would widen the
+    allowance past the argument that justifies it. Everything else is refused.
+    """
+    condition = job.get("if")
+    if condition is None:
+        return True
+    if not job.get("needs"):
+        return False
+    return bool(ADMITTED_JOB_CONDITION.match(str(condition).strip()))
 
 
 def require_external_tools(case: unittest.TestCase, tools, purpose: str) -> None:
@@ -7646,15 +7823,29 @@ class TestTheSpecificationRecordIsValidatedByTheRequiredCheck(unittest.TestCase)
     def test_the_job_enclosing_the_validating_step_is_unconditional(self) -> None:
         """SPECIFIED -- "The job enclosing the check SHALL itself be
         unconditional ... a step that cannot be skipped inside a job that can is
-        skippable"."""
+        skippable", together with the allowance the requirement now carries:
+        "Where the enclosing job declares `needs:` ... it MAY carry the single
+        condition `always()` and no other."
+
+        Re-expressed, not relaxed. Its previous body treated the PRESENCE of an
+        `if:` key as the offence, which the allowance makes wrong for one exact
+        literal and for nothing else -- see `job_condition_is_admissible`, whose
+        discrimination `TestTheAdmittedJobConditionIsExactlyOneLiteral` pins.
+        """
         self._require_located()
         offenders = sorted(
-            {job for job, _, _ in self.validating if "if" in (jobs(self.workflow)[job] or {})}
+            {
+                job
+                for job, _, _ in self.validating
+                if not job_condition_is_admissible(jobs(self.workflow)[job] or {})
+            }
         )
         self.assertEqual(
             [],
             offenders,
-            f"these jobs gate the record validation behind an `if:`: {offenders}",
+            "these jobs gate the record validation behind a condition the requirement "
+            "does not admit -- it admits the single literal `always()`, and only on a "
+            f"job declaring `needs:`: {offenders}",
         )
 
     def test_the_validating_step_runs_inside_a_registered_required_context(self) -> None:

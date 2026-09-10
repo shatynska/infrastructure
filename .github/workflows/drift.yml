@@ -1,5 +1,14 @@
 name: Drift Detection
 
+# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE. Each environment's read-only
+# secret comes from that environment's own
+# `terraform/environments/<name>/pipeline.yml`, and the sweep runs over whatever
+# `discover` finds. See the Each Environment Declares Its Own Pipeline
+# Configuration requirement.
+#
+# Unlike the two other Terraform workflows this one is NOT narrowed by changed
+# paths: drift is divergence from what was committed, which no diff predicts.
+# Every environment is planned on every run.
 on:
   schedule:
     - cron: "0 3 * * *" # nightly, 03:00 UTC
@@ -9,22 +18,188 @@ permissions:
   contents: read
 
 jobs:
-  drift:
-    name: drift
+  discover:
+    name: discover
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
+    outputs:
+      environments: ${{ steps.discover.outputs.environments }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # No `environment:` on this job, so TF_API_TOKEN resolves to its
-      # repository-scoped secret. It's a single unsplit HCP Terraform
-      # token (this org's free tier has no privilege split to apply) —
-      # this job never applies, so HCLOUD_TOKEN's Read Only token is
-      # what actually keeps it from mutating infrastructure. See
-      # design.md Decision 9.
+      - name: Discover the environments and their declarations
+        id: discover
+        run: |
+          set -euo pipefail
+
+          # Enumerates every environment directory, reads each one's committed
+          # pipeline declaration, and emits the matrix this workflow's jobs run
+          # over. Nothing here names an environment: adding one is adding a
+          # directory.
+          #
+          # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
+          # message that names the directory: an absent declaration, one missing
+          # a field the workflows read, and two environments colliding on a
+          # secret or on a GitHub Environment. A silently skipped environment is
+          # one that is planned by nothing, applied by nothing and drift-checked
+          # by nothing, which is indistinguishable from it not existing.
+          #
+          # THIS BODY IS IDENTICAL IN ALL THREE TERRAFORM WORKFLOWS, and
+          # `.github/tests` asserts that it stays so. A job attaches to one
+          # GitHub Environment and jobs cannot be shared between workflows, so
+          # the copies are the only available shape; only one of them is
+          # executed by the suite, and the identity assertion is what makes
+          # running that one evidence about all three. Edit them together.
+          #
+          # Free of Actions expressions on purpose -- it takes nothing from the
+          # event -- so `.github/tests` can pull this body out and run it
+          # against a scratch tree carrying each of those refusals. That is the
+          # constraint `ansible-verify.yml`'s discovery body already observes,
+          # and the reason its tests can exist at all. The prohibition includes
+          # naming the interpolation syntax in a comment, which is why this
+          # sentence spells it out in words.
+
+          environments_root="terraform/environments"
+          declaration_name="pipeline.yml"
+
+          if [ ! -d "$environments_root" ]; then
+            echo "::error::Environment discovery found no ${environments_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # One flat `key: value` line out of a declaration. The declaration is
+          # a flat mapping by design, so this reads it with no YAML parser --
+          # the same shape the gitleaks step uses to read its pin out of
+          # .pre-commit-config.yaml, and what keeps this body runnable with
+          # nothing but bash, jq and coreutils.
+          field() {
+            sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
+              | head -n 1 \
+              | sed -E "s/[[:space:]]+#.*\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/" \
+              | tr -d '[:space:]'
+          }
+
+          records=$(mktemp)
+          refused=0
+
+          for directory in "$environments_root"/*/; do
+            [ -d "$directory" ] || continue
+            name="$(basename "$directory")"
+            declaration="${directory}${declaration_name}"
+
+            if [ ! -f "$declaration" ]; then
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. An environment with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              refused=1
+              continue
+            fi
+
+            github_environment="$(field "$declaration" github_environment)"
+            read_only_secret="$(field "$declaration" read_only_secret)"
+            destroy_policy_gate="$(field "$declaration" destroy_policy_gate)"
+
+            incomplete=0
+            if [ -z "$github_environment" ]; then
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's apply job attaches to, and it has no safe default."
+              incomplete=1
+            fi
+            if [ -z "$read_only_secret" ]; then
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
+              incomplete=1
+            fi
+
+            # The one OPTIONAL field. Absent means the gate applies, so a
+            # mistake in a declaration fails safe. A value that is neither
+            # absent nor a boolean is a declaration this pipeline cannot read,
+            # not a default to fall back on: read wrongly, this field disables
+            # the strongest guard on an apply.
+            case "$destroy_policy_gate" in
+              "")
+                destroy_policy_gate=true
+                ;;
+              true | false) ;;
+              *)
+                echo "::error::${name}: ${declaration} states 'destroy_policy_gate: ${destroy_policy_gate}', which is neither true nor false. Refusing to guess which was meant."
+                incomplete=1
+                ;;
+            esac
+
+            if [ "$incomplete" -ne 0 ]; then
+              refused=1
+              continue
+            fi
+
+            printf '%s\t%s\t%s\t%s\n' \
+              "$name" "$github_environment" "$read_only_secret" "$destroy_policy_gate" >>"$records"
+          done
+
+          if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
+            echo "::error::Environment discovery found no environment under ${environments_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # Two collisions no assertion about workflow text can reach, because
+          # they live in committed data rather than in a workflow. Two
+          # environments sharing a read-only secret plan under one credential
+          # against different Hetzner projects; two sharing a GitHub Environment
+          # share its WRITE token and its protection rules, so an environment
+          # meant to be ungated would hold the reviewed one's write credential.
+          for secret in $(cut -f3 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every environment but one would report a meaningless diff."
+            refused=1
+          done
+
+          for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so an environment intended to be ungated would hold the reviewed environment's write credential."
+            refused=1
+          done
+
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::Environment discovery refused the committed declarations, so no environment enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            exit 1
+          fi
+
+          discovered=$(jq -R -s -c '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                name: .[0],
+                github_environment: .[1],
+                read_only_secret: .[2],
+                destroy_policy_gate: (.[3] == "true")
+              })
+          ' <"$records")
+          rm -f "$records"
+
+          echo "Discovered environments: ${discovered}"
+          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
+  drift:
+    name: drift (${{ matrix.environment.name }})
+    needs: discover
+    runs-on: ubuntu-latest
+    # No `environment:` on this job, so TF_API_TOKEN resolves to its
+    # repository-scoped secret. It's a single unsplit HCP Terraform
+    # token (this org's free tier has no privilege split to apply) —
+    # this job never applies, so the environment's own Read Only Hetzner token
+    # is what actually keeps it from mutating infrastructure.
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      # One environment's failure must not leave every other environment
+      # unchecked and unreported: a sweep that stops at the first failure is
+      # silence indistinguishable from no drift.
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
@@ -33,7 +208,7 @@ jobs:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: terraform init
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         run: terraform init
 
       # Runs with -lock=false: this plan writes nothing, and taking the
@@ -42,11 +217,15 @@ jobs:
       # diff, 1 = error, 2 = diff present. This workflow never applies
       # and does not invoke the destroy-policy gate — see the Scheduled
       # Drift Detection requirement.
+      #
+      # The Hetzner token is `secrets[...]` indexed by the name this
+      # environment's own declaration states, so each row authenticates to its
+      # own Hetzner project rather than to whichever one a literal named.
       - name: terraform plan
         id: plan
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
         run: |
           set +e
           terraform plan -lock=false -no-color -input=false -detailed-exitcode -out=tfplan >plan_output.txt 2>&1
@@ -54,14 +233,18 @@ jobs:
           set -e
           cat plan_output.txt
 
+      # The issue is identified PER ENVIRONMENT. With one title for every
+      # environment, a second environment's drift would overwrite the first's
+      # report and one environment's clean plan would close the other's.
       - name: Report drift as a deduplicated issue
-        working-directory: terraform/environments/prod
+        working-directory: terraform/environments/${{ matrix.environment.name }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+          ENVIRONMENT_NAME: ${{ matrix.environment.name }}
         run: |
           set -euo pipefail
-          issue_title="Terraform drift detected: terraform/environments/prod"
+          issue_title="Terraform drift detected: terraform/environments/${ENVIRONMENT_NAME}"
           existing=$(gh issue list --search "\"$issue_title\" in:title" --state open --json number --jq '.[0].number // empty')
 
           if [ "$EXIT_CODE" = "0" ]; then
@@ -101,6 +284,11 @@ jobs:
   # can reach -- GitHub disables a schedule-triggered workflow after 60 days of
   # repository inactivity and emits nothing at all when it does.
   #
+  # `needs:` names EVERY other job in this workflow, discovery included. A
+  # skipped dependency reads as non-failure to the reporter below, so a job this
+  # list omitted could fail, skip its dependants, and leave the heartbeat
+  # reporting a healthy sweep that planned nothing.
+  #
   # The period and grace that decide when silence becomes an alarm are the
   # observer's own configuration and are NOT readable from this file. They are
   # recorded in docs/bootstrap-a-new-host.md, Appendix A, beside the secret.
@@ -111,7 +299,7 @@ jobs:
   # change notice-when-a-periodic-job-stops-reporting, design.md Decision 7.
   report:
     name: report
-    needs: [drift]
+    needs: [discover, drift]
     # Runs whatever the rest of the workflow did, so an early failure reports
     # at once rather than waiting out the observer's silence timeout.
     if: always()

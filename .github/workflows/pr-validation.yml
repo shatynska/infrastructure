@@ -1,10 +1,18 @@
 name: PR Validation
 
-# Required status check. This job must always run and report a
-# conclusion — including on PRs that touch no Terraform files — so it
-# is NOT path-filtered at the workflow level. Terraform-specific steps
-# are instead conditioned on changed paths inside the job. See the
+# Required status check. The `validate` job must always run and report a
+# conclusion — including on PRs that touch no Terraform files — so this
+# workflow is NOT path-filtered at the workflow level. Terraform-specific
+# steps are instead conditioned on changed paths inside the job. See the
 # Required Status Checks Report on Every Pull Request requirement.
+#
+# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE, and that is a requirement
+# rather than a style: adding an environment is adding a directory under
+# `terraform/environments/`, and SHALL change no file under `.github/workflows/`.
+# The GitHub Environment each one attaches to, the repository secret holding
+# its read-only Hetzner token, and whether the destroy-policy gate applies to
+# it are declared by that directory's own `pipeline.yml`. See the Each
+# Environment Declares Its Own Pipeline Configuration requirement.
 on:
   pull_request:
     branches: [main]
@@ -17,12 +25,442 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: validate
+  # Runs on EVERY pull request, not only those touching Terraform: a repository
+  # state in which no environment carries a readable declaration has lost the
+  # thing that makes the plan matrix cover anything, and the pull request that
+  # produced it is not the only one that should stop.
+  discover:
+    name: discover
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write # only this job posts the plan comment
+    outputs:
+      environments: ${{ steps.affected.outputs.environments }}
+      plan-expected: ${{ steps.affected.outputs.plan-expected }}
+    steps:
+      # `fetch-depth: 0` because the step below diffs the pull request's base
+      # against its head. actions/checkout's default shallow clone has neither
+      # commit, and the diff would fail rather than resolve — which the
+      # resolution refuses, so this would fail the run loudly rather than plan
+      # the wrong set. Fetching in full is cheaper than making that a
+      # possibility.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Deliberately names neither `terraform/modules` nor
+      # `terraform/environments`: it lists what changed, and the step after it
+      # decides what that means. Keeping the two apart is what lets each be
+      # pulled out of this file and run on its own.
+      - name: List the paths this pull request changes
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "::error::This pull request supplied no base or head commit (base='${BASE_SHA}', head='${HEAD_SHA}'), so the paths it changes cannot be listed. Refusing to continue with an empty list, which reads as 'nothing changed' and plans nothing."
+            exit 1
+          fi
+          if ! paths=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" 2>&1); then
+            echo "::error::git diff between ${BASE_SHA} and ${HEAD_SHA} failed: ${paths}. Refusing to read that as 'nothing changed'."
+            exit 1
+          fi
+          {
+            echo "paths<<CHANGED_PATHS_EOF"
+            printf '%s\n' "$paths"
+            echo "CHANGED_PATHS_EOF"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Discover the environments and their declarations
+        id: discover
+        run: |
+          set -euo pipefail
+
+          # Enumerates every environment directory, reads each one's committed
+          # pipeline declaration, and emits the matrix this workflow's jobs run
+          # over. Nothing here names an environment: adding one is adding a
+          # directory.
+          #
+          # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
+          # message that names the directory: an absent declaration, one missing
+          # a field the workflows read, and two environments colliding on a
+          # secret or on a GitHub Environment. A silently skipped environment is
+          # one that is planned by nothing, applied by nothing and drift-checked
+          # by nothing, which is indistinguishable from it not existing.
+          #
+          # THIS BODY IS IDENTICAL IN ALL THREE TERRAFORM WORKFLOWS, and
+          # `.github/tests` asserts that it stays so. A job attaches to one
+          # GitHub Environment and jobs cannot be shared between workflows, so
+          # the copies are the only available shape; only one of them is
+          # executed by the suite, and the identity assertion is what makes
+          # running that one evidence about all three. Edit them together.
+          #
+          # Free of Actions expressions on purpose -- it takes nothing from the
+          # event -- so `.github/tests` can pull this body out and run it
+          # against a scratch tree carrying each of those refusals. That is the
+          # constraint `ansible-verify.yml`'s discovery body already observes,
+          # and the reason its tests can exist at all. The prohibition includes
+          # naming the interpolation syntax in a comment, which is why this
+          # sentence spells it out in words.
+
+          environments_root="terraform/environments"
+          declaration_name="pipeline.yml"
+
+          if [ ! -d "$environments_root" ]; then
+            echo "::error::Environment discovery found no ${environments_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # One flat `key: value` line out of a declaration. The declaration is
+          # a flat mapping by design, so this reads it with no YAML parser --
+          # the same shape the gitleaks step uses to read its pin out of
+          # .pre-commit-config.yaml, and what keeps this body runnable with
+          # nothing but bash, jq and coreutils.
+          field() {
+            sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
+              | head -n 1 \
+              | sed -E "s/[[:space:]]+#.*\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/" \
+              | tr -d '[:space:]'
+          }
+
+          records=$(mktemp)
+          refused=0
+
+          for directory in "$environments_root"/*/; do
+            [ -d "$directory" ] || continue
+            name="$(basename "$directory")"
+            declaration="${directory}${declaration_name}"
+
+            if [ ! -f "$declaration" ]; then
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. An environment with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              refused=1
+              continue
+            fi
+
+            github_environment="$(field "$declaration" github_environment)"
+            read_only_secret="$(field "$declaration" read_only_secret)"
+            destroy_policy_gate="$(field "$declaration" destroy_policy_gate)"
+
+            incomplete=0
+            if [ -z "$github_environment" ]; then
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's apply job attaches to, and it has no safe default."
+              incomplete=1
+            fi
+            if [ -z "$read_only_secret" ]; then
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
+              incomplete=1
+            fi
+
+            # The one OPTIONAL field. Absent means the gate applies, so a
+            # mistake in a declaration fails safe. A value that is neither
+            # absent nor a boolean is a declaration this pipeline cannot read,
+            # not a default to fall back on: read wrongly, this field disables
+            # the strongest guard on an apply.
+            case "$destroy_policy_gate" in
+              "")
+                destroy_policy_gate=true
+                ;;
+              true | false) ;;
+              *)
+                echo "::error::${name}: ${declaration} states 'destroy_policy_gate: ${destroy_policy_gate}', which is neither true nor false. Refusing to guess which was meant."
+                incomplete=1
+                ;;
+            esac
+
+            if [ "$incomplete" -ne 0 ]; then
+              refused=1
+              continue
+            fi
+
+            printf '%s\t%s\t%s\t%s\n' \
+              "$name" "$github_environment" "$read_only_secret" "$destroy_policy_gate" >>"$records"
+          done
+
+          if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
+            echo "::error::Environment discovery found no environment under ${environments_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # Two collisions no assertion about workflow text can reach, because
+          # they live in committed data rather than in a workflow. Two
+          # environments sharing a read-only secret plan under one credential
+          # against different Hetzner projects; two sharing a GitHub Environment
+          # share its WRITE token and its protection rules, so an environment
+          # meant to be ungated would hold the reviewed one's write credential.
+          for secret in $(cut -f3 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every environment but one would report a meaningless diff."
+            refused=1
+          done
+
+          for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so an environment intended to be ungated would hold the reviewed environment's write credential."
+            refused=1
+          done
+
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::Environment discovery refused the committed declarations, so no environment enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            exit 1
+          fi
+
+          discovered=$(jq -R -s -c '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                name: .[0],
+                github_environment: .[1],
+                read_only_secret: .[2],
+                destroy_policy_gate: (.[3] == "true")
+              })
+          ' <"$records")
+          rm -f "$records"
+
+          echo "Discovered environments: ${discovered}"
+          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
+      # Narrows the discovered set to what this pull request can actually
+      # affect. Without it, a pull request touching one environment plans every
+      # environment -- and on `apply.yml`, where the same resolution runs,
+      # raises an approval request with nothing to approve.
+      #
+      # FAILS CLOSED, and the polarity is the whole point: an unresolvable
+      # result and a genuine "nothing affected" are indistinguishable, so an
+      # empty input is refused rather than read as the second. Read as
+      # "nothing affected" it plans nothing and reports green.
+      #
+      # Free of `${{ }}`, both inputs through `env:`, for the same reason the
+      # discovery body above is.
+      - name: Resolve which environments this pull request affects
+        id: affected
+        env:
+          ENVIRONMENTS: ${{ steps.discover.outputs.environments }}
+          CHANGED_PATHS: ${{ steps.changed.outputs.paths }}
+        run: |
+          set -euo pipefail
+
+          # THIS BODY IS IDENTICAL IN BOTH WORKFLOWS THAT NARROW BY CHANGED
+          # PATHS, and `.github/tests` asserts that it stays so. A pull request
+          # and the merge of that same pull request must resolve the same
+          # environments, or the reviewer approves one plan and the pipeline
+          # applies another. What differs between the two is only where the
+          # changed paths come from, which is the step before this one.
+          #
+          # Free of Actions expressions, both inputs through `env:`, so
+          # `.github/tests` can pull this body out and run it.
+
+          if [ -z "${ENVIRONMENTS}" ]; then
+            echo "::error::Environment discovery produced no set of environments, so which of them this change affects cannot be resolved. Refusing to read that as 'no environment affected': that plans nothing, applies nothing and reports a green run."
+            exit 1
+          fi
+
+          if [ -z "${CHANGED_PATHS}" ]; then
+            echo "::error::The set of changed paths is empty, which means the step that resolves it did not conclude -- a change always changes at least one path. Refusing to read that as 'no environment affected'."
+            exit 1
+          fi
+
+          # The mapping the requirement states: a change under
+          # `terraform/modules/` affects every environment, because every
+          # environment consumes those modules; a change under
+          # `terraform/environments/<name>/` affects that environment alone.
+          selected=""
+          every=0
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            case "$path" in
+              terraform/modules/*)
+                every=1
+                ;;
+              terraform/environments/*/*)
+                candidate="${path#terraform/environments/}"
+                selected="${selected}${candidate%%/*}
+          "
+                ;;
+            esac
+          done <<CHANGED_PATHS_EOF
+          ${CHANGED_PATHS}
+          CHANGED_PATHS_EOF
+
+          if [ "$every" -eq 1 ]; then
+            affected="$ENVIRONMENTS"
+          else
+            names=$(printf '%s' "$selected" | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            affected=$(printf '%s' "$ENVIRONMENTS" | jq -c --argjson names "$names" 'map(select(.name as $name | $names | index($name)))')
+          fi
+
+          count=$(printf '%s' "$affected" | jq 'length')
+          if [ "$count" -gt 0 ]; then
+            expected=true
+          else
+            expected=false
+          fi
+
+          echo "Affected environments (${count}): ${affected}"
+          echo "environments=${affected}" >>"$GITHUB_OUTPUT"
+          echo "plan-expected=${expected}" >>"$GITHUB_OUTPUT"
+  # The plan, one job per affected environment.
+  #
+  # THREE THINGS ABOUT THIS JOB'S SHAPE, each load-bearing:
+  #
+  # 1. IT CARRIES ITS OWN SECRET SCAN. The Pull Request Plan Visibility
+  #    requirement obliges a scan to precede every plan IN THE JOB THAT RUNS IT,
+  #    because a failing step stops the next step in its own job and stops
+  #    nothing anywhere else. `validate` scans too, and unconditionally, which
+  #    is what covers a pull request that plans nothing at all.
+  #
+  # 2. IT IS GATED BY AN EMPTY MATRIX, NEVER BY AN `if:`. A pull request
+  #    affecting no environment resolves to `[]` and this job is skipped. A
+  #    job-level `if:` naming Terraform would put the secret scan behind a path
+  #    condition, which the Pull Request Validation Checks requirement forbids.
+  #
+  # 3. IT IS NOT THE REGISTERED STATUS CHECK. A matrix generates one context
+  #    name per row, so there is no stable name for branch protection to point
+  #    at; `validate` concludes on this job's behalf below.
+  plan:
+    name: plan (${{ matrix.environment.name }})
+    needs: discover
+    runs-on: ubuntu-latest
+    # No `environment:` — a plan job declaring one would both pause on that
+    # Environment's protection rules and resolve `HCLOUD_TOKEN` to the
+    # write-capable token in an ungated job. See the Credential Scoping by
+    # Privilege requirement, whose prohibition this implements.
+    permissions:
+      contents: read
+      pull-requests: write # this job, and only this job, posts the plan comment
+    strategy:
+      # One environment's plan failing must not abandon the others: a reviewer
+      # shown one failure and nothing about the rest cannot tell whether they
+      # were clean or merely unexamined.
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The same install `validate` runs, and deliberately not a shared step:
+      # the ordering this protects is scoped to a job, so a scan in another job
+      # protects nothing here. The version is read out of .pre-commit-config.yaml
+      # at run time rather than hardcoded, so neither copy can drift from the
+      # local hook or from the other.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          version=$(awk '/gitleaks\/gitleaks/{found=1} found && /rev:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' .pre-commit-config.yaml)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the pinned gitleaks revision from .pre-commit-config.yaml. Refusing to install an unverified version."
+            exit 1
+          fi
+          echo "Installing gitleaks ${version}, the revision .pre-commit-config.yaml pins."
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
+          rm gitleaks.tar.gz
+
+      # Before the plan, in this job. A plan authenticates to a cloud API and
+      # writes its output into a pull request comment; a leaked credential
+      # reaching either is what this ordering exists to prevent.
+      - name: gitleaks
+        run: |
+          "$RUNNER_TEMP/gitleaks" dir . --redact --exit-code 1
+
+      # HCP Terraform has no OIDC path for CLI-driven backend/state auth
+      # (its "dynamic credentials" feature authenticates providers during
+      # a remote-executed run, not the CLI itself), and this org's free
+      # tier has no team-scoped tokens to split by privilege either — see
+      # design.md Decision 9 of the change that introduced this pipeline.
+      # TF_API_TOKEN is a single static token; the Hetzner token's split
+      # remains the real security boundary.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      # `secrets[...]` indexed by the name this environment's own declaration
+      # states, which is the only construction that can resolve a DIFFERENT
+      # token per row: `${{ }}` is evaluated before a step runs, so a literal
+      # name binds one compile-time-known secret and a shell loop over N
+      # environments would hold one token for all of them.
+      - name: terraform plan
+        id: plan
+        working-directory: terraform/environments/${{ matrix.environment.name }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
+          ENVIRONMENT_NAME: ${{ matrix.environment.name }}
+        run: |
+          set -euo pipefail
+          terraform init
+          set +e
+          terraform plan -no-color -input=false -out=tfplan >plan_output.txt 2>&1
+          plan_exit=$?
+          set -e
+          {
+            echo "### Terraform Plan — \`terraform/environments/${ENVIRONMENT_NAME}\`"
+            echo
+            echo '```'
+            cat plan_output.txt
+            echo '```'
+          } >comment_body.md
+          cat plan_output.txt
+          if [ "$plan_exit" -eq 1 ]; then
+            exit 1
+          fi
+
+      # The marker carries the environment name. With a constant marker and
+      # `edit-mode: replace`, N environments would each find and overwrite the
+      # same comment, leaving one plan standing — and at one environment that
+      # defect and the correct behaviour are indistinguishable, which is why
+      # this is asserted statically rather than observed on a run.
+      - name: Find existing plan comment
+        if: always() && steps.plan.outcome != 'skipped'
+        id: find_comment
+        uses: peter-evans/find-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "### Terraform Plan — `terraform/environments/${{ matrix.environment.name }}`"
+
+      - name: Post plan as PR comment
+        if: always() && steps.plan.outcome != 'skipped'
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body-path: terraform/environments/${{ matrix.environment.name }}/comment_body.md
+
+  # THE REGISTERED REQUIRED STATUS CHECK. Its name is a literal, so branch
+  # protection has something stable to point at; the plan matrix's name is not,
+  # which is why this job concludes on the matrix's behalf below.
+  validate:
+    name: validate
+    needs: [discover, plan]
+    # Runs whatever its dependencies concluded. Without this the job is itself
+    # skipped when a dependency fails or is skipped -- and a skipped job
+    # produces no status check context, which under branch protection is a
+    # required check that never reports: the same permanently-pending state a
+    # path filter produces.
+    #
+    # `always()` ALONE, and nothing joined to it. Both the Specification Record
+    # Is Verified in Continuous Integration and the Continuous-Integration
+    # Configuration Is Itself Verified requirements oblige this job to be
+    # unconditional, and admit this exact literal on a job declaring `needs:`
+    # precisely because it cannot evaluate false. `always() && <anything>` is
+    # not admitted, and neither is any other expression.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `dorny/paths-filter` resolves the pull request's diff through the API
+      # and needs this read scope. Write moved to the plan job, which is the one
+      # that now posts the plan comment — see the Least-Privilege Workflow
+      # Permissions requirement.
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -129,7 +567,9 @@ jobs:
       # Unconditional. A secret scanner whose entire value is being
       # unconditional cannot be gated on a path filter -- a credential
       # committed under ansible/, platform/ or docs/ is exactly as exposed as
-      # one under terraform/. The version is read out of
+      # one under terraform/. This is also the scan that covers a pull request
+      # affecting no environment, where the plan matrix is empty and its own
+      # copy of these two steps never runs. The version is read out of
       # .pre-commit-config.yaml at run time rather than hardcoded, so the local
       # hook and this scan cannot drift apart; a comment asking people to keep
       # two numbers in sync is what produced the drift this replaces.
@@ -156,8 +596,7 @@ jobs:
       # Invokes the gitleaks CLI binary directly, not
       # gitleaks/gitleaks-action@v2 — that action requires a paid
       # GITLEAKS_LICENSE for org-owned repos and runs on Node 20, which
-      # GitHub-hosted runners drop on 2026-09-16. See design.md
-      # Decision 6.
+      # GitHub-hosted runners drop on 2026-09-16.
       # `dir` scans the working tree; `detect` (removed from the documented CLI
       # by 8.30.0, surviving only as an alias for `git`) scans history, and on
       # actions/checkout's default shallow clone a history scan sees one commit
@@ -170,13 +609,6 @@ jobs:
         run: |
           "$RUNNER_TEMP/gitleaks" dir . --redact --exit-code 1
 
-      # HCP Terraform has no OIDC path for CLI-driven backend/state auth
-      # (its "dynamic credentials" feature authenticates providers during
-      # a remote-executed run, not the CLI itself), and this org's free
-      # tier has no team-scoped tokens to split by privilege either — see
-      # design.md Decision 9. TF_API_TOKEN is a single static token,
-      # identical in both the repository and production Environment
-      # secrets; HCLOUD_TOKEN's split remains the real security boundary.
       - name: Setup Terraform
         if: steps.changes.outputs.terraform == 'true'
         uses: hashicorp/setup-terraform@v4
@@ -250,7 +682,6 @@ jobs:
           exit-code: "1"
           severity: "CRITICAL,HIGH"
 
-
       # Ansible's blocking tier. These run through `pre-commit` rather than
       # being re-expressed here: both hooks are already pinned in
       # .pre-commit-config.yaml with non-obvious arguments (ansible-lint needs
@@ -310,45 +741,49 @@ jobs:
         if: steps.changes.outputs.ansible == 'true'
         run: pre-commit run ansible-playbook-syntax-check --all-files --show-diff-on-failure
 
-      - name: terraform plan
-        if: steps.changes.outputs.terraform == 'true'
-        id: plan
-        working-directory: terraform/environments/prod
+      # Concludes for the plan matrix, whose generated job names branch
+      # protection cannot register. Last, so every check above still runs and
+      # reports on a pull request whose plan failed.
+      #
+      # DISCOVERY IS READ FIRST, and not for tidiness. When discovery fails its
+      # outputs are empty strings, so PLAN_EXPECTED is "" and PLAN_RESULT is
+      # "skipped" -- which the "nothing to plan" branch would otherwise pass,
+      # concluding success precisely on a run whose own precondition refused.
+      #
+      # `skipped` is refused where a plan was owed and accepted only where it
+      # was not. `cancelled` is refused either way: a cancelled matrix has
+      # planned nothing, and a run superseded by a newer push reports on the
+      # older commit rather than on the one being merged.
+      #
+      # Free of `${{ }}`: the inputs arrive through `env:`, so `.github/tests`
+      # can pull this body out and run it across every row of the table it
+      # implements.
+      - name: Conclude on the plan matrix's behalf
         env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_EXPECTED: ${{ needs.discover.outputs.plan-expected }}
         run: |
           set -euo pipefail
-          terraform init
-          set +e
-          terraform plan -no-color -input=false -out=tfplan >plan_output.txt 2>&1
-          plan_exit=$?
-          set -e
-          {
-            echo '### Terraform Plan — `terraform/environments/prod`'
-            echo
-            echo '```'
-            cat plan_output.txt
-            echo '```'
-          } >comment_body.md
-          cat plan_output.txt
-          if [ "$plan_exit" -eq 1 ]; then
+
+          if [ "$DISCOVER_RESULT" != "success" ]; then
+            echo "::error::Environment discovery concluded '${DISCOVER_RESULT}', not 'success'. Its outputs are empty, so whether a plan was owed cannot be read from them. Refusing to conclude success on a run whose own precondition did not hold."
             exit 1
           fi
 
-      - name: Find existing plan comment
-        if: steps.changes.outputs.terraform == 'true' && always() && steps.plan.outcome != 'skipped'
-        id: find_comment
-        uses: peter-evans/find-comment@v4
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          comment-author: "github-actions[bot]"
-          body-includes: "### Terraform Plan"
-
-      - name: Post plan as PR comment
-        if: steps.changes.outputs.terraform == 'true' && always() && steps.plan.outcome != 'skipped'
-        uses: peter-evans/create-or-update-comment@v5
-        with:
-          comment-id: ${{ steps.find_comment.outputs.comment-id }}
-          issue-number: ${{ github.event.pull_request.number }}
-          edit-mode: replace
-          body-path: terraform/environments/prod/comment_body.md
+          case "$PLAN_RESULT" in
+            success)
+              echo "Every affected environment was planned and reported (plan-expected=${PLAN_EXPECTED})."
+              ;;
+            skipped)
+              if [ "$PLAN_EXPECTED" = "true" ]; then
+                echo "::error::The plan matrix was skipped on a run that resolved at least one affected environment (plan-expected=true). A skipped job is not a passing one: concluding success here would report a green required status check for a pull request nothing planned."
+                exit 1
+              fi
+              echo "This pull request affects no environment, so no plan was owed and none ran. Concluding success having correctly done no work."
+              ;;
+            *)
+              echo "::error::The plan matrix concluded '${PLAN_RESULT}' (plan-expected=${PLAN_EXPECTED}). Only 'success', or a skip on a pull request that affects no environment, may conclude success."
+              exit 1
+              ;;
+          esac
