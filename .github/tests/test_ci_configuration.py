@@ -4237,11 +4237,17 @@ GATE_TABLE = (
         concludes_success=True,
     ),
     GateRow(
+        # REVERSED by the change `select-the-molecule-matrix-per-role`, and
+        # edited here rather than discovered red and relaxed. Once the matrix is
+        # fed a computed selection, a matrix that RAN while the run owed the
+        # suite nothing means the selection and the decision to run were
+        # computed from different things and have disagreed. Before that change
+        # the two could not disagree, and concluding success was right.
         "nothing under ansible/ changed and the suite ran anyway",
         discovery="success",
         changed="false",
         matrix_results=("success",),
-        concludes_success=True,
+        concludes_success=False,
     ),
     GateRow(
         "the suite failed or was cancelled although nothing under ansible/ changed",
@@ -4293,8 +4299,26 @@ class TestTheAggregatingGateDiscriminates(
         the implementation chose for them."""
         workflow = self._workflow()
         discovery_key, _ = self._discovery_job(workflow)
-        matrix_key, _ = self._matrix_job(workflow)
+        matrix_key, matrix_job = self._matrix_job(workflow)
         job_key, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
+        # PINNED TO MEANING, NOT TO ORDER. The discovery job publishes two
+        # outputs the gate reads, and a locator binding "the one matching
+        # `needs.<discover>.outputs.`" takes whichever comes last while leaving
+        # the other unset -- which, under the gate's own `set -u`, aborts it on
+        # rows that should have concluded and reads as a gate defect. The
+        # run-suite output is the one the matrix job gates itself on; the
+        # selection is the one its rows come from. Keying on what reads each
+        # survives either being renamed.
+        found = re.search(
+            rf"needs\.{re.escape(discovery_key)}\.outputs\.([A-Za-z0-9_-]+)",
+            compact(matrix_job.get("if", "")),
+        )
+        assert found, (
+            f"the matrix job `{matrix_key}` does not gate itself on an output of "
+            f"the discovery job `{discovery_key}`, so the gate's run-suite input "
+            "cannot be identified by what reads it"
+        )
+        RUN_SUITE_OUTPUT = found.group(1)
 
         candidates = []
         for index, step in enumerate(aggregating.get("steps") or []):
@@ -4307,9 +4331,18 @@ class TestTheAggregatingGateDiscriminates(
                     inputs["discovery"] = name
                 elif f"needs.{matrix_key}.result" in expression:
                     inputs["matrix"] = name
-                elif f"needs.{discovery_key}.outputs." in expression:
+                elif f"needs.{discovery_key}.outputs.{RUN_SUITE_OUTPUT}" in expression:
                     inputs["changed"] = name
-            if set(inputs) == {"discovery", "matrix", "changed"}:
+                elif f"needs.{discovery_key}.outputs." in expression:
+                    # Any FURTHER discovery output the gate takes -- the
+                    # selection, since `select-the-molecule-matrix-per-role`.
+                    # Collected rather than ignored: the gate body runs under
+                    # `set -u`, so an env name this harness leaves unset aborts
+                    # the gate on a row that should have concluded, and the
+                    # failure then reads as a gate defect rather than as a
+                    # harness that stopped supplying one of its inputs.
+                    inputs.setdefault("others", []).append(name)
+            if {"discovery", "matrix", "changed"} <= set(inputs):
                 candidates.append((index, step, inputs))
 
         self.assertEqual(
@@ -4349,6 +4382,13 @@ class TestTheAggregatingGateDiscriminates(
             env[inputs["discovery"]] = row.discovery
             env[inputs["changed"]] = row.changed
             env[inputs["matrix"]] = matrix_result
+            # Every other input the gate declares gets a value consistent with
+            # this row, so these assertions keep testing the three-way
+            # distinction they were written for rather than tripping over an
+            # input a later change added. A run owing the suite nothing owes an
+            # empty selection.
+            for name in inputs.get("others", []):
+                env[name] = "[]" if row.changed != "true" else '["docker"]'
             return subprocess.run(
                 ["bash", "-e", "-c", script],
                 cwd=scratch,
@@ -4473,14 +4513,59 @@ class TestChangeDetectionResolvesTheGatesInput(
     here, and is invisible to a test that feeds the gate its input directly.
     """
 
+    def _run_suite_output_name(self, workflow, discovery_key):
+        """The discovery output the matrix job gates on.
+
+        Structural rather than by name: whatever it is called, the run-suite
+        output is the one the matrix job's `if:` reads, and the selection is
+        the one its `strategy.matrix` reads. Keying on the meaning rather than
+        the spelling is what keeps these locators correct across a rename.
+        """
+        for job in (workflow.get("jobs") or {}).values():
+            condition = compact(job.get("if", ""))
+            matrix = compact(str(((job.get("strategy") or {}).get("matrix") or {})))
+            if not condition or not matrix:
+                continue
+            found = re.search(
+                rf"needs\.{re.escape(discovery_key)}\.outputs\.([A-Za-z0-9_-]+)",
+                condition,
+            )
+            if found:
+                return found.group(1)
+        raise AssertionError(
+            "no matrix job gates itself on an output of the discovery job "
+            f"`{discovery_key}`, so the run-suite output cannot be identified "
+            "by what reads it"
+        )
+
     def _resolution_step(self):
-        """The discovery job's change-detection resolution step, identified by
-        the `github.event_name` its `env:` block passes in."""
+        """The discovery job's change-detection resolution step.
+
+        PINNED TO THE OUTPUT IT WRITES, not to its position and not to the
+        `github.event_name` in its `env:` alone. More than one step in this job
+        branches on the event name -- the selection added by the change
+        `select-the-molecule-matrix-per-role` branches on it for the same
+        reason this one does -- so an `env:`-keyed locator silently binds to
+        whichever comes first. A test that keeps passing while changing subject
+        establishes nothing about either subject.
+
+        The run-suite output is the one the matrix job's `if:` reads; that is
+        what identifies it, and it survives the output being renamed.
+        """
         workflow = self._workflow()
         discovery_key, discovery_job = self._discovery_job(workflow)
+        run_suite_output = self._run_suite_output_name(workflow, discovery_key)
+        produced = compact((discovery_job.get("outputs") or {}).get(run_suite_output, ""))
+        producing = re.search(r"steps\.([A-Za-z0-9_-]+)\.outputs\.", produced)
+        self.assertIsNotNone(
+            producing,
+            f"the discovery job's `{run_suite_output}` output is not written by a "
+            f"step of that job; it reads {produced!r}",
+        )
+        wanted = producing.group(1)
         candidates = []
         for index, step in enumerate(discovery_job.get("steps") or []):
-            if not step.get("run"):
+            if not step.get("run") or step.get("id") != wanted:
                 continue
             inputs = {}
             for name, value in (step.get("env") or {}).items():
@@ -4489,17 +4574,25 @@ class TestChangeDetectionResolvesTheGatesInput(
                     inputs["event"] = name
                 elif re.search(r"steps\.[A-Za-z0-9_-]+\.outputs\.", expression):
                     inputs["filter"] = name
-            if "event" in inputs:
-                candidates.append((index, step, inputs))
+            candidates.append((index, step, inputs))
         self.assertEqual(
             1,
             len(candidates),
             "expected exactly one `run:` step in the discovery job "
-            f"`{discovery_key}` taking `github.event_name` through its `env:` block "
-            "-- the step that resolves whether the suite runs -- but found "
-            f"{len(candidates)}. Without it the workflow either performs no such "
-            "resolution, or expresses it as an Actions expression this suite cannot "
-            "execute, leaving the manual-run polarity asserted nowhere.",
+            f"`{discovery_key}` with `id: {wanted}` -- the step writing the "
+            f"`{run_suite_output}` output, which is the one the matrix job's `if:` "
+            f"reads -- but found {len(candidates)}. Without it the workflow either "
+            "performs no such resolution, or expresses it as an Actions expression "
+            "this suite cannot execute, leaving the manual-run polarity asserted "
+            "nowhere.",
+        )
+        self.assertIn(
+            "event",
+            candidates[0][2],
+            f"the step writing `{run_suite_output}` does not take "
+            "`github.event_name` through its `env:` block, so the polarity that "
+            "makes an event carrying no diff run the whole suite is not resolved "
+            "from the event at all.",
         )
         index, step, inputs = candidates[0]
         self.assertIn(
