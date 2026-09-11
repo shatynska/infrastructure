@@ -8,7 +8,7 @@
 # In production the role is pointed at whatever device path Terraform's
 # `hcloud_volume.linux_device` output resolves to
 # (terraform/modules/volume/outputs.tf) for the `main-data` volume
-# (terraform/environments/prod/terraform.tfvars's `volume_name`). This
+# (terraform/stacks/prod/terraform.tfvars's `volume_name`). This
 # scenario has no such device, so it builds one: a loop device backed by a
 # sparse file, associated at a FIXED, hardcoded minor number
 # (/dev/loop87) rather than the dynamically-allocated device

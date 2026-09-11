@@ -477,7 +477,7 @@ class TestEachEnvironmentHasAnInventorySourceOfItsOwn(unittest.TestCase):
         self.environments = {directory.name for directory in environment_directories()}
         self.assertTrue(
             self.environments,
-            "no environment directory was discovered under terraform/environments/, "
+            "no environment directory was discovered under terraform/stacks/, "
             "so every assertion in this class would pass having compared nothing",
         )
 

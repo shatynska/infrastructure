@@ -723,7 +723,7 @@ class PlannedSetHarnessMixin(ApplyWorkflowMixin):
 
         scratch = Path(tempfile.mkdtemp(prefix="planned-environments-"))
         self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
-        (scratch / "terraform" / "environments").mkdir(parents=True)
+        (scratch / "terraform" / "stacks").mkdir(parents=True)
         binaries = scratch / "bin"
         binaries.mkdir()
         stub = binaries / "gh"

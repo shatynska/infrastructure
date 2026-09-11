@@ -143,9 +143,9 @@ These are specific to this repository, not part of the generated workflow block 
 
 ### Infrastructure changes never bypass the pipeline
 
-`terraform apply` is never run locally against **any** environment directory under `terraform/environments/`. Infrastructure changes reach Hetzner only through the gated GitHub Actions pipeline: a PR-time plan for review, then an apply of that exact saved plan on merge to `main`. Local runs use that environment's read-only Hetzner token and are for `terraform plan`/`validate` only.
+`terraform apply` is never run locally against **any** stack directory under `terraform/stacks/`. Infrastructure changes reach Hetzner only through the gated GitHub Actions pipeline: a PR-time plan for review, then an apply of that exact saved plan on merge to `main`. Local runs use that stack's read-only Hetzner token and are for `terraform plan`/`validate` only.
 
-This holds of every environment, and the environments differ only in what happens *inside* the pipeline. Prod's apply waits for a human to approve the saved plan; staging's does not, because its GitHub Environment requires no reviewer. That difference is not an exemption from anything above: staging's **Read & Write** token still exists only in its own GitHub Environment's secrets and still never reaches a workstation, and what bounds an unreviewed apply is that the token belongs to a Hetzner project holding staging alone. An environment whose Environment requires no reviewer is the case this section is most easily read as silent about, so it is named.
+This holds of every stack, and the stacks differ only in what happens *inside* the pipeline. Prod's apply waits for a human to approve the saved plan; staging's does not, because its GitHub Environment requires no reviewer. That difference is not an exemption from anything above: staging's **Read & Write** token still exists only in its own GitHub Environment's secrets and still never reaches a workstation, and what bounds an unreviewed apply is that the token belongs to a Hetzner project holding staging alone. A stack whose GitHub Environment requires no reviewer is the case this section is most easily read as silent about, so it is named.
 
 ### Task lists, archived records, and disclosing what was not done
 

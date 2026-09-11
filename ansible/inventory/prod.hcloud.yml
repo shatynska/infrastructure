@@ -3,7 +3,7 @@
 # requirement (iac-host-configuration). Hosts are resolved live from Hetzner
 # Cloud's API on every run rather than from a committed hosts file, so a
 # disabled/destroyed server (server_enabled = false in
-# terraform/environments/prod) yields no stale inventory entry.
+# terraform/stacks/prod) yields no stale inventory entry.
 #
 # ONE SOURCE PER ENVIRONMENT, and each names its own credential. A Hetzner
 # token is scoped to one project and each environment has a project of its
@@ -12,7 +12,7 @@
 # variable beside HCLOUD_TOKEN_PRODUCTION -- it is not an edit to this file.
 #
 # THE NEW VARIABLE'S NAME IS NOT FREE. It SHALL be the same name that
-# environment's `terraform/environments/<name>/pipeline.yml` declares as its
+# environment's `terraform/stacks/<name>/pipeline.yml` declares as its
 # `read_only_secret` -- see the Dynamic Inventory via hcloud Plugin
 # requirement (openspec/specs/iac-host-configuration/spec.md). The
 # host-converge workflow holds the credential under the DECLARED name and has

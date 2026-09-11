@@ -7,7 +7,7 @@
 ansible_user: root
 
 # Non-secret prod configuration, mirroring
-# terraform/environments/prod/terraform.tfvars's ssh_allowed_cidrs and
+# terraform/stacks/prod/terraform.tfvars's ssh_allowed_cidrs and
 # web_allowed_cidrs exactly -- see ansible/roles/hardening/README.md for
 # why these two are hand-kept in sync rather than generated from
 # Terraform, and why that matters (they drifted once already: this

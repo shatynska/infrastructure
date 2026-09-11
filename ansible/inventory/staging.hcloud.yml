@@ -14,7 +14,7 @@ plugin: hetzner.hcloud.hcloud
 # the CI secret do not have to be mentally translated between.
 #
 # Not to be confused with the HCLOUD_TOKEN that direnv exports inside
-# terraform/environments/staging/: that one is Terraform's, is staging's
+# terraform/stacks/staging/: that one is Terraform's, is staging's
 # token under the name its provider reads, and is scoped to that directory.
 api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_STAGING') }}"
 

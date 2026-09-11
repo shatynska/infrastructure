@@ -2,8 +2,8 @@ name: Host Converge
 
 # The host layer's gated path to a host, and the last one this repository moved
 # off a workstation. Shaped like `platform-deploy.yml`: a credential-less job
-# that publishes what the merge changes, then a job per environment that
-# attaches to that environment's own GitHub Environment and holds every
+# that publishes what the merge changes, then a job per stack that
+# attaches to that stack's own GitHub Environment and holds every
 # credential a converge needs. See the Host Configuration Is Applied by a Gated
 # Workflow requirement (openspec/specs/iac-cicd-pipeline/spec.md).
 #
@@ -15,9 +15,9 @@ name: Host Converge
 # everything a converge applies is committed, so there is no provider computing
 # an unknown and no state file to disagree with.
 #
-# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE. Which environments exist comes
+# NO STACK IS NAMED ANYWHERE IN THIS FILE. Which stacks exist comes
 # from discovery over `ansible/inventory/`, and each one's GitHub Environment
-# and read-only secret from its own `terraform/environments/<name>/pipeline.yml`.
+# and read-only secret from its own `terraform/stacks/<name>/pipeline.yml`.
 # See the Each Environment Declares Its Own Pipeline Configuration requirement.
 #
 # THE WORKFLOW-LEVEL `paths:` FILTER IS PERMISSIBLE ONLY BECAUSE THIS IS NOT A
@@ -42,10 +42,10 @@ on:
       - "ansible/**"
   workflow_dispatch:
     inputs:
-      environment:
+      stack:
         description: >-
-          One environment to converge. Leave empty to converge every
-          environment discovery finds.
+          One stack to converge. Leave empty to converge every
+          stack discovery finds.
         required: false
         type: string
 
@@ -61,24 +61,24 @@ jobs:
     permissions:
       contents: read
     outputs:
-      environments: ${{ steps.discover.outputs.environments }}
+      stacks: ${{ steps.discover.outputs.stacks }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Discover the environments that can be converged
+      - name: Discover the stacks that can be converged
         id: discover
         env:
           # The ONLY thing this step takes from the event, and it arrives as a
           # variable rather than as an expression so the body below stays
           # executable off a runner. See that constraint's own comment there.
-          REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
+          REQUESTED_STACK: ${{ inputs.stack }}
         run: |
           set -euo pipefail
 
-          # Enumerates every environment that has a host configuration to apply,
+          # Enumerates every stack that has a host configuration to apply,
           # reads each one's committed pipeline declaration, and emits the matrix
-          # the converge job runs over. Nothing here names an environment.
+          # the converge job runs over. Nothing here names a stack.
           #
           # THIS IS DELIBERATELY NOT IDENTICAL TO THE TERRAFORM WORKFLOWS'
           # DISCOVERY BODY, and is therefore outside the assertion that holds
@@ -86,17 +86,17 @@ jobs:
           # exactly as it did. Two differences make it a different discovery
           # rather than a fourth copy of that one:
           #
-          #   THE ROOT. That body enumerates `terraform/environments/*/`. The set
+          #   THE ROOT. That body enumerates `terraform/stacks/*/`. The set
           #   this workflow runs over is the set of INVENTORY SOURCES, because an
-          #   environment with a Terraform directory and no source is one this
+          #   stack with a Terraform directory and no source is one this
           #   workflow cannot converge, and a matrix row for it would fail deep
           #   inside `ansible-playbook` on a `-i` path that does not exist.
           #
           #   THE CROSS-CHECK. Both directions are silent failures and both are
-          #   refused by name below: a source whose environment declares no
-          #   pipeline configuration is gated by nothing, and an environment
+          #   refused by name below: a source whose stack declares no
+          #   pipeline configuration is gated by nothing, and a stack
           #   declaring one but carrying no source is a host converged by
-          #   nothing -- which reads exactly like an environment with nothing to
+          #   nothing -- which reads exactly like a stack with nothing to
           #   converge. That body sees one of the two sets and can refuse
           #   neither.
           #
@@ -114,7 +114,7 @@ jobs:
           # naming the interpolation syntax in a comment, which is why this
           # sentence spells it out in words.
 
-          environments_root="terraform/environments"
+          stacks_root="terraform/stacks"
           inventory_root="ansible/inventory"
           group_vars_root="ansible/inventory/group_vars"
           declaration_name="pipeline.yml"
@@ -130,7 +130,7 @@ jobs:
           }
 
           if [ ! -d "$inventory_root" ]; then
-            echo "::error::Discovery found no ${inventory_root}/ directory at all, so no environment has a host configuration to apply. Refusing to report success having discovered nothing: an empty matrix skips the converge job and the run reports green having converged nothing."
+            echo "::error::Discovery found no ${inventory_root}/ directory at all, so no stack has a host configuration to apply. Refusing to report success having discovered nothing: an empty matrix skips the converge job and the run reports green having converged nothing."
             exit 1
           fi
 
@@ -148,34 +148,34 @@ jobs:
             # the `-i` path, the `--vault-id` label, `-e target_environment=`,
             # the concurrency group, and the tab-separated record built below,
             # which a tab in a filename would corrupt into another
-            # environment's row. Refused here for the same reason the two
+            # stack's row. Refused here for the same reason the two
             # fields are, and it takes a pathological committed filename to
             # reach.
             case "$name" in
               "" | *[!A-Za-z0-9_-]*)
-                echo "::error::${name}: '${inventory_root}/${base}' yields an environment name that is not letters, digits, underscores and dashes. That name becomes an inventory path, a vault-id label, a play variable and a concurrency group."
+                echo "::error::${name}: '${inventory_root}/${base}' yields a stack name that is not letters, digits, underscores and dashes. That name becomes an inventory path, a vault-id label, a play variable and a concurrency group."
                 refused=1
                 continue
                 ;;
             esac
 
-            directory="${environments_root}/${name}"
+            directory="${stacks_root}/${name}"
             declaration="${directory}/${declaration_name}"
             group_vars="${group_vars_root}/${name}.yml"
 
-            # An inventory source whose environment declares nothing. Its host is
+            # An inventory source whose stack declares nothing. Its host is
             # reachable and its converge is gated by no GitHub Environment, which
             # is the one combination worse than not being converged at all.
             if [ ! -f "$declaration" ]; then
-              echo "::error::${name}: ${inventory_root}/${base} exists but ${declaration} does not, so this environment's converge would attach to no GitHub Environment and run under a credential named nowhere."
+              echo "::error::${name}: ${inventory_root}/${base} exists but ${declaration} does not, so this stack's converge would attach to no GitHub Environment and run under a credential named nowhere."
               refused=1
               continue
             fi
 
             # A source with no variables of its own. The play would converge the
-            # host with none of that environment's own inputs.
+            # host with none of that stack's own inputs.
             if [ ! -f "$group_vars" ]; then
-              echo "::error::${name}: ${inventory_root}/${base} exists but ${group_vars} does not, so a converge of this environment would run with none of its own variables."
+              echo "::error::${name}: ${inventory_root}/${base} exists but ${group_vars} does not, so a converge of this stack would run with none of its own variables."
               refused=1
               continue
             fi
@@ -185,17 +185,17 @@ jobs:
 
             incomplete=0
             if [ -z "$github_environment" ]; then
-              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's converge job attaches to, and it has no safe default."
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this stack's converge job attaches to, and it has no safe default."
               incomplete=1
             fi
             if [ -z "$read_only_secret" ]; then
-              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, which the converge job exports under the name this environment's inventory source reads."
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this stack's read-only Hetzner token, which the converge job exports under the name this stack's inventory source reads."
               incomplete=1
             fi
 
             # A value that is present but unusable is refused by name rather than
             # passed on. The converge job indexes `secrets[...]` with this name
-            # and exports it as a process-environment variable, and a name GitHub
+            # and exports it as a process-stack variable, and a name GitHub
             # cannot resolve yields an EMPTY credential rather than an error --
             # the inventory then authenticates as nobody, far from the cause.
             case "$read_only_secret" in
@@ -214,7 +214,7 @@ jobs:
             # data rather than a live hole.
             case "$read_only_secret" in
               PATH | HOME | USER | SHELL | LANG | PWD | ANSIBLE_* | GITHUB_* | RUNNER_*)
-                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which the converge job would export as a process-environment variable of that name, overwriting the runner's own or Ansible's own."
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which the converge job would export as a process-stack variable of that name, overwriting the runner's own or Ansible's own."
                 incomplete=1
                 ;;
             esac
@@ -234,42 +234,42 @@ jobs:
             printf '%s\t%s\t%s\n' "$name" "$github_environment" "$read_only_secret" >>"$records"
           done
 
-          # The other direction, and the quieter of the two. An environment that
+          # The other direction, and the quieter of the two. A stack that
           # can be provisioned but not converged has a host that this repository
           # configures with nothing, and no provisioning run says so.
-          if [ -d "$environments_root" ]; then
-            for directory in "$environments_root"/*/; do
+          if [ -d "$stacks_root" ]; then
+            for directory in "$stacks_root"/*/; do
               [ -d "$directory" ] || continue
               name="$(basename "$directory")"
               [ -f "${directory}${declaration_name}" ] || continue
               if [ ! -f "${inventory_root}/${name}${source_suffix}" ]; then
-                echo "::error::${name}: ${directory}${declaration_name} exists but ${inventory_root}/${name}${source_suffix} does not, so this environment can be provisioned and its host configured by nothing."
+                echo "::error::${name}: ${directory}${declaration_name} exists but ${inventory_root}/${name}${source_suffix} does not, so this stack can be provisioned and its host configured by nothing."
                 refused=1
               fi
             done
           fi
 
           if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
-            echo "::error::Discovery found no inventory source under ${inventory_root}/, so no environment has a host configuration to apply. Refusing to report success having discovered nothing."
+            echo "::error::Discovery found no inventory source under ${inventory_root}/, so no stack has a host configuration to apply. Refusing to report success having discovered nothing."
             exit 1
           fi
 
           if [ "$refused" -ne 0 ]; then
-            echo "::error::Discovery refused the committed tree, so no environment enters the matrix. Every reason is reported above, each naming the environment it belongs to."
+            echo "::error::Discovery refused the committed tree, so no stack enters the matrix. Every reason is reported above, each naming the stack it belongs to."
             exit 1
           fi
 
-          # A run requested by hand may name ONE environment. Absent and empty
-          # are NOT refused and mean every environment discovered: every `push`
+          # A run requested by hand may name ONE stack. Absent and empty
+          # are NOT refused and mean every stack discovered: every `push`
           # supplies an empty value, so conflating empty with unresolvable would
           # fail discovery on every merge. Only a non-empty value is matched.
           # Trimmed -- leading and trailing only -- so a value that is only
-          # whitespace is EMPTY rather than an environment discovery did not
+          # whitespace is EMPTY rather than a stack discovery did not
           # find. The distinction below is absent-or-empty against named, and
           # this is the one input a human types by hand. NOT `tr -d`, which
           # deletes interior whitespace too and would silently accept a
-          # mistyped "pr od" as an environment rather than refusing it by name.
-          requested="$(printf '%s' "${REQUESTED_ENVIRONMENT:-}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+          # mistyped "pr od" as a stack rather than refusing it by name.
+          requested="$(printf '%s' "${REQUESTED_STACK:-}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
           if [ -n "$requested" ]; then
             if ! awk -F'\t' -v want="$requested" '$1 == want { found = 1 } END { exit !found }' "$records"; then
               echo "::error::This run was requested for '${requested}', which discovery did not find. What it did find: ${discovered_names}"
@@ -294,7 +294,7 @@ jobs:
           rm -f "$records"
 
           echo "Discovered: ${discovered}"
-          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
+          echo "stacks=${discovered}" >>"$GITHUB_OUTPUT"
 
   publish:
     name: publish
@@ -325,14 +325,14 @@ jobs:
             echo
             # A base that does not RESOLVE is the third case, and it must not be
             # allowed to fail this job. `converge` declares `needs: [discover,
-            # publish]`, so a failure here blocks every environment's converge —
+            # publish]`, so a failure here blocks every stack's converge —
             # and a force-push or a rewritten history is not a reason to stop
             # configuring hosts. It reads as the dispatch case does: no diff to
             # show, and the run applies the committed tree.
             #
             # `apply.yml` refuses on this same condition, and the difference is
             # deliberate: there, an unresolvable base means the set of affected
-            # environments cannot be computed, so applying the wrong set is the
+            # stacks cannot be computed, so applying the wrong set is the
             # risk. Here the set comes from discovery and the diff is a courtesy
             # to a reader.
             if [ -n "${BEFORE_SHA:-}" ] && [ "${BEFORE_SHA:-}" != "$empty_tree" ] \
@@ -349,29 +349,29 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
 
   converge:
-    name: converge (${{ matrix.environment.name }})
+    name: converge (${{ matrix.stack.name }})
     needs: [discover, publish]
     runs-on: ubuntu-latest
     # Every converge job declares an `environment:`, taken from that
-    # environment's own declaration. Whether it pauses for a human is a property
+    # stack's own declaration. Whether it pauses for a human is a property
     # of that Environment's protection rules — repository settings, which no
     # file here can verify — and not of this workflow.
-    environment: ${{ matrix.environment.github_environment }}
+    environment: ${{ matrix.stack.github_environment }}
     permissions:
       contents: read
-    # Per environment, and NOT cancelled in favour of a later run. A converge
+    # Per stack, and NOT cancelled in favour of a later run. A converge
     # interrupted mid-play leaves a partially-converged host, which
     # `docs/bootstrap-a-new-host.md` §6.3a treats as an exception; cancelling
     # one to start another would make it the normal case.
     concurrency:
-      group: host-converge-${{ matrix.environment.name }}
+      group: host-converge-${{ matrix.stack.name }}
       cancel-in-progress: false
     strategy:
-      # One environment's converge failing must not cancel every other
-      # environment's before it reported.
+      # One stack's converge failing must not cancel every other
+      # stack's before it reported.
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+        stack: ${{ fromJSON(needs.discover.outputs.stacks) }}
     # Every `run:` step of this job runs from `ansible/`, and that is not
     # cosmetic: Ansible loads `./ansible.cfg` from the current directory, so from
     # the repository root it loads NONE — `roles_path` stops resolving and
@@ -407,20 +407,20 @@ jobs:
       # have to come from the matrix — and Actions evaluates expressions in
       # `env:` VALUES, not in keys. `apply.yml`'s plan step is not the
       # counter-example it looks like: its key is the fixed literal every
-      # Terraform provider reads whatever environment it is planning, and the
+      # Terraform provider reads whatever stack it is planning, and the
       # Ansible sources deliberately do not have that property.
       #
-      # So it is written once, here, into the job's environment file, and is in
+      # So it is written once, here, into the job's stack file, and is in
       # scope for every step after this one exactly as a block entry would have
       # been.
-      - name: Export this environment's read-only Hetzner credential
+      - name: Export this stack's read-only Hetzner credential
         env:
-          CREDENTIAL_NAME: ${{ matrix.environment.read_only_secret }}
-          CREDENTIAL_VALUE: ${{ secrets[matrix.environment.read_only_secret] }}
+          CREDENTIAL_NAME: ${{ matrix.stack.read_only_secret }}
+          CREDENTIAL_VALUE: ${{ secrets[matrix.stack.read_only_secret] }}
         run: |
           set -euo pipefail
           if [ -z "${CREDENTIAL_VALUE:-}" ]; then
-            echo "::error::The repository secret '${CREDENTIAL_NAME}' this environment's declaration names resolved to nothing. Its inventory source would authenticate as nobody, and ansible.cfg's any_unparsed_is_failed would report that as a source it could not parse."
+            echo "::error::The repository secret '${CREDENTIAL_NAME}' this stack's declaration names resolved to nothing. Its inventory source would authenticate as nobody, and ansible.cfg's any_unparsed_is_failed would report that as a source it could not parse."
             exit 1
           fi
           # A unique delimiter, which is what makes the heredoc form safe: it
@@ -474,7 +474,7 @@ jobs:
 
       # The two credentials a converge needs, written under `umask 077` and
       # never echoed. `ANSIBLE_SSH_PRIVATE_KEY` is a dedicated `ansible-ci`
-      # keypair, one per environment and distinct from the operator's own root
+      # keypair, one per stack and distinct from the operator's own root
       # key so that rotating CI's does not re-key the human; no role manages
       # root's `authorized_keys`, so revoking it is an edit on the host.
       #
@@ -515,7 +515,7 @@ jobs:
       #   rather than a value. A wrong password exits 2 with "Attempt to use
       #   undecryptable variable".
       #
-      #   IT DERIVES THE ADDRESS, from the environment's own GROUP rather than
+      #   IT DERIVES THE ADDRESS, from the stack's own GROUP rather than
       #   from every host the source returns. The two coincide today and are not
       #   the same set: `_meta.hostvars` carries every server in that Hetzner
       #   project, and the play converges `hosts: {{ target_environment }}`. A
@@ -548,7 +548,7 @@ jobs:
       # a step named for what it was doing.
       - name: Prove the credentials, derive the address, and trust the host key
         env:
-          TARGET_ENVIRONMENT: ${{ matrix.environment.name }}
+          TARGET_ENVIRONMENT: ${{ matrix.stack.name }}
         run: |
           set -euo pipefail
 
@@ -563,7 +563,7 @@ jobs:
             exit 1
           fi
 
-          # TWO: an empty result is the environment's GROUP resolving to no
+          # TWO: an empty result is the stack's GROUP resolving to no
           # host. The play's own guard has a careful diagnostic for that, which
           # this step pre-empts by failing first -- so it says it here instead.
           # Selected from the group rather than from `_meta.hostvars`, so the
@@ -588,7 +588,7 @@ jobs:
               '.[$env].hosts[] as $host
                | ._meta.hostvars[$host].ansible_host
                | if type == "object" then (.__ansible_unsafe // empty) else . end' 2>/dev/null); then
-            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this environment's group names no host to converge. The environment is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different environment label."
+            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this stack's group names no host to converge. The stack is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different stack label."
             exit 1
           fi
 
@@ -613,7 +613,7 @@ jobs:
           if ! ansible -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" "$TARGET_ENVIRONMENT" \
               -c local -m debug -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"; then
-            echo "::error::$TARGET_ENVIRONMENT: templating this environment's variables failed, and Ansible names the variable above. Read that first: the cause this step exists for is a Vault password that is not the one these group_vars were encrypted under — reported as 'Attempt to use undecryptable variable' — but an undefined variable or a bad template in the same file fails here too. Left to the play, either would have surfaced four roles in, on an already-changed host."
+            echo "::error::$TARGET_ENVIRONMENT: templating this stack's variables failed, and Ansible names the variable above. Read that first: the cause this step exists for is a Vault password that is not the one these group_vars were encrypted under — reported as 'Attempt to use undecryptable variable' — but an undefined variable or a bad template in the same file fails here too. Left to the play, either would have surfaced four roles in, on an already-changed host."
             exit 1
           fi
 
@@ -629,7 +629,7 @@ jobs:
               # is listed because nothing else would suggest it, not because it
               # is the likeliest: a rebuild leaves the old node holding the bare
               # name while the new one joins suffixed.
-              echo "::error::${TARGET_ENVIRONMENT}: '${address}' matches no tailnet peer this runner can see. Either the host is not on the tailnet — which is the state of a host whose first converge has not run, and of a new environment's first merge; or the connection-address selection is not in effect, so this is a public address rather than a server name; or the server's name is not the name its peer carries, which task 7.4 exists to rule out; or a rebuild left a stale peer holding that name."
+              echo "::error::${TARGET_ENVIRONMENT}: '${address}' matches no tailnet peer this runner can see. Either the host is not on the tailnet — which is the state of a host whose first converge has not run, and of a new stack's first merge; or the connection-address selection is not in effect, so this is a public address rather than a server name; or the server's name is not the name its peer carries, which task 7.4 exists to rule out; or a rebuild left a stale peer holding that name."
               exit 1
             fi
             # The derived pair is the evidence that the address selection is in
@@ -668,15 +668,15 @@ jobs:
       # purpose — and the join then fails with the censored error
       # `docs/bootstrap-a-new-host.md` §6.3a describes. That is a loud failure on
       # an already-diagnosable host, and §6.3a is the procedure for it.
-      - name: Converge this environment's host
+      - name: Converge this stack's host
         env:
-          TARGET_ENVIRONMENT: ${{ matrix.environment.name }}
+          TARGET_ENVIRONMENT: ${{ matrix.stack.name }}
         run: |
           set -euo pipefail
           # `target_environment` is on the invocation's own line deliberately:
           # it is the play's one required input, the guard play refuses without
           # it, and a reader — human or static check — that takes the first line
-          # of this command must see which environment is being converged.
+          # of this command must see which stack is being converged.
           ansible-playbook playbooks/host-baseline.yml -e "target_environment=$TARGET_ENVIRONMENT" \
             -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" \
             --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password" \

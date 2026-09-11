@@ -10,7 +10,7 @@
 # ONE TOKEN, ONE ENVIRONMENT. A Hetzner token is scoped to one project and each
 # environment has a project of its own, so this value reaches exactly one of
 # them. This file at the repository root is prod's; staging's belongs in an
-# .envrc inside terraform/environments/staging/.
+# .envrc inside terraform/stacks/staging/.
 #
 # THIS VARIABLE IS TERRAFORM'S, and no longer Ansible's. Its value depends on
 # which directory you are standing in, which suits a tool always run from

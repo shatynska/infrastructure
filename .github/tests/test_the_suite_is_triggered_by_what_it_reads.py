@@ -729,13 +729,13 @@ class TestTheRelocatedScansMatchOverASuppliedFileList(unittest.TestCase):
             with self.subTest(marker=marker[:4]):
                 files = as_bytes(
                     {
-                        "terraform/environments/prod/main.tf": f'variable "t" {{ default = "{marker}" }}\n',
+                        "terraform/stacks/prod/main.tf": f'variable "t" {{ default = "{marker}" }}\n',
                         "README.md": "# infrastructure\n",
                     }
                 )
                 offenders = scan(files)
                 self.assertIn(
-                    "terraform/environments/prod/main.tf",
+                    "terraform/stacks/prod/main.tf",
                     offenders,
                     "a committed GitHub/GHCR token marker under `terraform/` was not "
                     f"reported; the scan returned {offenders}",
@@ -775,7 +775,7 @@ class TestTheRelocatedScansMatchOverASuppliedFileList(unittest.TestCase):
             {
                 "README.md": "# infrastructure\n",
                 "ansible/inventory/group_vars/prod.yml": "ops_user_accounts: []\n",
-                "terraform/environments/prod/main.tf": 'module "server" {}\n',
+                "terraform/stacks/prod/main.tf": 'module "server" {}\n',
             }
         )
         self.assertEqual([], list(suite_symbol("files_carrying_a_token_marker")(files)))

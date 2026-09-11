@@ -8,8 +8,8 @@ updates:
     # module or environment includes adding it here; the CI-configuration test
     # suite compares the two sets and fails if they diverge.
     directories:
-      - "/terraform/environments/prod"
-      - "/terraform/environments/staging"
+      - "/terraform/stacks/prod"
+      - "/terraform/stacks/staging"
       - "/terraform/modules/server"
       - "/terraform/modules/volume"
     schedule:

@@ -1,6 +1,6 @@
 # platform_data_volume
 
-Mounts the platform's dedicated data volume — the Terraform-provisioned `main-data` Hetzner Volume (`terraform/environments/<environment>/terraform.tfvars`, `terraform/modules/volume`) — at a fixed host path, formatting it if it has no filesystem yet, and persists the mount in `/etc/fstab` so it survives a reboot without a manual step. Also creates whatever subdirectories a `platform/` service needs to bind-mount, each with its own declared ownership and permissions, before that service can rely on them existing.
+Mounts the platform's dedicated data volume — the Terraform-provisioned `main-data` Hetzner Volume (`terraform/stacks/<environment>/terraform.tfvars`, `terraform/modules/volume`) — at a fixed host path, formatting it if it has no filesystem yet, and persists the mount in `/etc/fstab` so it survives a reboot without a manual step. Also creates whatever subdirectories a `platform/` service needs to bind-mount, each with its own declared ownership and permissions, before that service can rely on them existing.
 
 Implements `iac-host-configuration`'s ADDED "Platform Data Volume Is Mounted at a Fixed Host Path" requirement — see `openspec/specs/iac-host-configuration/spec.md`, and `add-platform-monitoring`'s `design.md`, for the full rationale, including why the volume's device path is discovered on-host rather than hand-copied from Terraform's output.
 
