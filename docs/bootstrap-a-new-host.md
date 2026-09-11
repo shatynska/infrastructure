@@ -710,6 +710,21 @@ Then delete the local private half, exactly as you do for the platform deploy ke
 
 **Check**, on the next merge that touches `ansible/`: the run shows the diff before any approval; staging converges unattended; production's job waits. Read staging's before approving production's — that is what makes staging the rehearsal rather than a second production.
 
+**What a healthy converge looks like**, so that a green tick is not the thing you read. Three lines, in this order:
+
+- `<environment>: converging '<server name>', resolved from the tailnet netmap` — a **bare name**. Anything else, a JSON fragment most of all, means the address derivation is wrong rather than the host.
+- `<server name> | SUCCESS => { "msg": <a number> }` — the preflight, which proves this environment's Vault password decrypts its `group_vars` before any role touches the host. A number, never a value.
+- `PLAY RECAP … <server name> : ok=<n> changed=0 failed=0` — **`changed=0` is the expected result on an already-converged host.** A non-zero `changed` is the host having drifted from what the repository says, and is worth understanding before you do anything else. It is not the `changed=2` of §6.3: that is check mode, and this is a real converge.
+
+**A merge that changes nothing under `ansible/` converges nothing, and that is correct.** The workflow is filtered to that directory, so a change to the workflow itself, to `.github/tests/` or to documentation triggers no converge — which is what you want, and is also the case most likely to leave you waiting for a run that is never coming. When you need one anyway — after fixing the workflow, or after rebuilding a host — dispatch it:
+
+```sh
+gh workflow run host-converge.yml --ref main -f environment=<environment>
+gh run list --workflow host-converge.yml --limit 1
+```
+
+Leave `-f environment=` off to converge every environment; name one to converge only that. A dispatched production converge waits for the same approval a merged one does — the gate is on the job, not on the trigger. This is also the only way to converge before any change to `ansible/` exists to carry one, which is the state you are in the first time you finish §6.6.
+
 **Secrets created in this step**
 
 | Name | Scope | Value from | Read by |
