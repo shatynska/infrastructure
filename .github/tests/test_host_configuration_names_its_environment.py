@@ -1257,7 +1257,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         one = self._source_from(
             "prod.hcloud.yml",
             "plugin: hetzner.hcloud.hcloud\n"
-            "api_token: \"{{ lookup('env', 'HCLOUD_TOKEN_PROD') }}\"\n"
+            "api_token: \"{{ lookup('env', 'HCLOUD_TOKEN_PRODUCTION') }}\"\n"
             "keyed_groups:\n  - key: hcloud_labels.environment\n    separator: ''\n",
         )
         same = self._source_from(

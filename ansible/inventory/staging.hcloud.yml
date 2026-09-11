@@ -18,6 +18,24 @@ plugin: hetzner.hcloud.hcloud
 # token under the name its provider reads, and is scoped to that directory.
 api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_STAGING') }}"
 
+# Identical to prod's block, and identical on purpose -- read that file for why
+# the default is the public address, why CI selects `hostname`, why this is
+# `compose:` rather than the plugin's own `connect_with:`, and why an
+# unrecognised value fails rather than falling back.
+strict: true
+compose:
+  ansible_host: >-
+    {'public_ipv4': ansible_host, 'hostname': hcloud_name}[
+      lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true)
+    ]
+
+# `strict: true` above reaches `keyed_groups` as well as `compose`, and the key
+# is left exactly as it was because that costs nothing. MEASURED rather than
+# assumed, against the live API: with the label absent, a strict parse does not
+# fail -- the host is simply not grouped, and is dropped from the plugin's own
+# `hcloud` group too. Either way it is not in the environment group a play
+# targets, which is what it was before, and the play's own guard refuses on an
+# empty group with a diagnostic naming the environment.
 keyed_groups:
   - key: hcloud_labels.environment
     separator: ""

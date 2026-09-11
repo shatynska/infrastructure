@@ -423,10 +423,25 @@ jobs:
       #
       # THE OPERAND IS `HCLOUD_TOKEN` SPECIFICALLY, not whatever this
       # environment declares as its read-only secret. GitHub falls back to the
-      # repository secret OF THAT NAME, and the two coincide for at most one
-      # environment — digesting the declared name would compare against a value
-      # the apply job could never have fallen back to, leaving the guard passing
-      # in exactly the cases it exists to catch.
+      # repository secret OF THAT NAME, and the two coincide for NO environment
+      # now — digesting the declared name would compare against a value the
+      # apply job could never have fallen back to, leaving the guard passing in
+      # exactly the cases it exists to catch.
+      #
+      # NO ENVIRONMENT DECLARES THAT NAME ANY MORE, AND THE GUARD IS UNCHANGED
+      # BY IT. `apply-host-configuration-through-a-gated-workflow` renamed
+      # prod's read-only secret, because a job declaring an `environment:` --
+      # the host converge -- resolved the old name to the Read & Write token.
+      #
+      # What THIS read resolves to is a separate question from what any
+      # declaration says, and the two are easy to run together: it is whatever
+      # the REPOSITORY secret of this name holds, declared by anyone or not.
+      # That secret is deleted as the last step of that change's migration, so
+      # before then this digests prod's real read-only token and afterwards the
+      # empty string. The guard is live in both states -- neither value is any
+      # Environment's write token -- which is the property that matters, and it
+      # is why the deletion could be sequenced after the first production
+      # converge rather than around this step.
       #
       # Salted with this run's id, so the digest is useless outside the run that
       # produced it and nothing durable about either secret reaches the
@@ -902,10 +917,13 @@ jobs:
       # two match — which is precisely what a GitHub Environment that does not
       # define `HCLOUD_TOKEN` produces.
       #
-      # Live rather than dormant at one environment: on every apply the plan job
-      # holds the read-only token and this job holds the read-write one, so the
-      # digests differ and the check passes for the right reason. Were the
-      # Environment's secret ever removed, it would fire.
+      # Live rather than dormant: on every apply the digesting job resolves the
+      # repository-scoped `HCLOUD_TOKEN` -- a real read-only token until that
+      # migration's last step deletes it, the empty string afterwards -- while
+      # this job holds its own Environment's write token, so the digests differ
+      # and the check passes for the right reason in both states. Were the
+      # Environment's secret ever removed, this job would resolve whichever of
+      # the two the repository holds, match it, and fire.
       - name: Establish that this Environment supplied its own write token
         env:
           EXPECTED_REPOSITORY_DIGEST: ${{ needs.plan.outputs.repository-token-digest }}

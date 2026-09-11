@@ -1,0 +1,61 @@
+# The Ansible the host-converge workflow runs. Pinned per this project's
+# external-dependency convention (AGENTS.md): never a floating range, for the
+# same reason an unpinned Galaxy role isn't actually pinned.
+#
+# Install with: pip install -r ansible/requirements.txt
+#
+# WHY THIS IS A SECOND FILE rather than a reuse of requirements-test.txt, which
+# already pins ansible-core: that manifest also installs Molecule and its docker
+# driver, and the converge job verifies nothing. A job that converges production
+# has no business carrying a test framework.
+#
+# THE VERSION IS NOT CHOSEN HERE. It SHALL equal the ansible-core pin in
+# requirements-test.txt, and `.github/tests` fails the build on a difference --
+# see "Host Configuration Is Applied by a Gated Workflow"
+# (openspec/specs/iac-cicd-pipeline/spec.md), whose "The version of Ansible a
+# converge runs SHALL be the version the role-verification suite runs" is what
+# this file exists to satisfy. A converge applying roles under a different
+# Ansible than the one the Molecule suite verified them under is verified by
+# nothing, and nothing else in this repository would notice the two drifting.
+#
+# READ THE CONSEQUENCE THE OTHER WAY ROUND BEFORE BUMPING EITHER FILE. The two
+# are coupled by that assertion, so a bump to requirements-test.txt that moves
+# ansible-core MUST move this file too -- the split buys no independence from
+# the test toolchain and was never meant to. What it buys is that the converge
+# installs no Molecule, and that such a movement arrives as a visible two-file
+# commit rather than as a silent consequence of a test-toolchain bump.
+# requirements-test.txt's own Molecule-driven constraints are therefore the
+# effective floor for this pin as well; that file records at length why its pins
+# move forward rather than backward.
+ansible-core==2.21.3
+
+# THE INVENTORY PLUGIN'S OWN PYTHON DEPENDENCIES, and they are not optional:
+# `hetzner.hcloud` declares them in its own `requirements.txt`, and
+# `ansible-galaxy collection install` does NOT install a collection's Python
+# requirements -- it installs the collection. `ansible-core` depends on
+# jinja2, PyYAML, cryptography, packaging and resolvelib, and on none of these;
+# `actions/setup-python` ships pip, setuptools and wheel. So a job that installs
+# `ansible-core` alone cannot resolve an inventory at all: the plugin raises
+# `missing_required_lib("requests")` at the first `ansible-inventory`.
+#
+# WHY NOTHING ELSE IN THIS REPOSITORY NEEDED THEM STATED. Both arrive
+# transitively through `molecule-plugins[docker]` in requirements-test.txt, so
+# `ansible-verify.yml` and a workstation that has run the local setup both have
+# them already. This manifest drops Molecule deliberately, and took the
+# dependency with it -- which is exactly the kind of thing that is invisible
+# until the first run on a clean runner.
+# Both values are CHOSEN rather than inherited from whatever the authoring
+# workstation happened to have, which is what the first draft of this file did.
+# The collection declares no floor for either, so the floor is this repository's
+# own judgement -- and two things argue against taking the older resolution:
+# `requests` before 2.32 carries advisories that do not look reachable on this
+# path but are not worth carrying for nothing, and a fresh `requirements-test.txt`
+# install resolves `requests` through `molecule-plugins[docker]` to 2.32 or
+# later. Pinning behind that would have the converge job and the verification
+# job running different versions of the library the inventory plugin depends on,
+# which is the same class of drift the `ansible-core` agreement exists to stop.
+#
+# Nothing moves these on their own: `docs/change-queue.md` entry 36 records that
+# no pip manifest here is under Dependabot, so each is a deliberate bump.
+requests==2.34.2
+python-dateutil==2.9.0.post0

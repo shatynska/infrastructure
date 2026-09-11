@@ -156,12 +156,24 @@ SECRET_KEY_HINTS = ("secret", "token")
 ENVIRONMENT_KEY_HINT = "environment"
 
 # Prod's own two declared values, asserted rather than assumed anywhere they
-# matter: design.md Decision 1's stated consequence is that "nothing in
-# repository settings changes for N=1", which holds only if prod declares the
-# repository secret it already uses and the GitHub Environment it already
-# attaches to.
+# matter.
+#
+# THE READ-ONLY NAME MOVED, AND THE OLD ONE WAS NOT MERELY RENAMED. This
+# constant read `HCLOUD_TOKEN` under the change that introduced this module,
+# justified by that change's "nothing in repository settings changes for N=1".
+# `apply-host-configuration-through-a-gated-workflow` retired that premise: the
+# host-converge job declares an `environment:` and reads the name this field
+# states, and every Environment defines `HCLOUD_TOKEN` as its Read & Write
+# token -- so the old value made a gated job resolve a write credential from a
+# field that says read-only. Prod now declares a name no Environment shadows,
+# and the rename is a repository-settings step that change's Migration Plan
+# sequences around the merge.
+#
+# The assertion below is therefore re-pointed at the proposition that replaced
+# it, not relaxed: prod still declares one specific secret and one specific
+# Environment, and a declaration drifting from either still fails.
 PROD_DIRECTORY = "prod"
-PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN"
+PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_PRODUCTION"
 PROD_GITHUB_ENVIRONMENT = "production"
 
 TERRAFORM_PLAN = re.compile(r"terraform\s+plan\b")
@@ -578,10 +590,18 @@ class TestEveryEnvironmentCarriesAPipelineDeclaration(unittest.TestCase):
         """SPECIFIED -- Credential Scoping by Privilege places each
         environment's Read Only token in "the read-only secret named by the
         environment's own pipeline declaration", and Gated Production Apply
-        requires the `production` Environment. design.md Decision 1 states the
-        consequence this asserts: at one environment nothing in repository
-        settings changes, which holds only if prod's declaration names the
-        secret and the Environment that already exist."""
+        requires the `production` Environment.
+
+        The method's NAME is now half wrong and is left alone deliberately: prod
+        declares the Environment it already uses and a read-only secret it does
+        not, `HCLOUD_TOKEN_PRODUCTION` having been created by
+        `apply-host-configuration-through-a-gated-workflow`'s Migration Plan.
+        Renaming the method would cost every reference to it in that change's
+        record and in this module's own history for no assertion gained. What
+        the assertion establishes is unchanged in kind: prod's declaration names
+        one specific secret and one specific Environment, and drift in either
+        fails. See `PROD_READ_ONLY_SECRET` above for why the value moved.
+        """
         self.assertIn(
             PROD_DIRECTORY,
             self.declarations,
@@ -927,6 +947,27 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
         environment's name -- a `case` over directory basenames, or a literal
         read-only secret name that only one environment uses.
 
+        THE EXEMPTION BELOW IS INERT AS OF
+        `apply-host-configuration-through-a-gated-workflow`, AND THE THIRD
+        ESCAPE IT NAMES IS THE ONE THAT WAS TAKEN. Read the rest of this
+        docstring as the history of why it exists, not as a description of what
+        it currently does: prod no longer declares `HCLOUD_TOKEN` as its
+        read-only secret, so `apply.yml`'s digest emitter no longer reads a
+        declared read-only secret name, so this sweep no longer flags it and
+        the exemption matches nothing. The count assertion at the end passes
+        over an empty list, which is why nothing here went red when the premise
+        expired -- the case this note exists to stop a reader mistaking for a
+        working guard.
+
+        It is kept rather than deleted because it is a closed form keyed on a
+        shape rather than on prod: were any environment ever to declare as its
+        read-only secret a name the omitted-write-token guard must also read,
+        the exemption would re-arm for exactly that step and nothing else. The
+        new check in `test_host_converge_workflow
+        .TestNoDeclarationNamesTheWriteTokensOwnName` now forbids the specific
+        name that made that true, so that is not a state this repository can
+        reach today.
+
         THE WHOLE JOB IS SWEPT, with ONE named exemption. That exemption was
         added by the implementing author, not by the author of this file, and
         the reason is recorded here rather than in a commit message because it
@@ -957,6 +998,14 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
         would additionally require creating a repository secret before the merge
         -- the exact repository-settings change design.md Decision 1 exists to
         avoid. So the exemption is made here.
+
+        The third escape was taken, deliberately, and the cost it names was paid
+        rather than avoided: `apply-host-configuration-through-a-gated-workflow`
+        gave prod the read-only secret name `HCLOUD_TOKEN_PRODUCTION`, re-pointed that
+        assertion at the new value, and created the repository secret before the
+        merge as a sequenced migration step. What made it worth paying is that
+        the old name was not merely inconvenient -- a job declaring an
+        `environment:` resolved it to the Read & Write token.
 
         IT IS A CLOSED FORM, not a scope reduction, which is the standard this
         capability holds its own suppression checks to. Exactly one step is

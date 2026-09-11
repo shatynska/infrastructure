@@ -2,7 +2,7 @@
 
 How everything this repository creates is named, and the one rule the scheme follows.
 
-> **NOT YET IN EFFECT.** This document records a decision taken on 2026-09-11; the repository does not match it yet. What it describes arrives through `docs/change-queue.md` entries 58, 59, 60 and 61, in that order. Whoever archives the last of the four deletes this banner — until then, read this as the target and the tree as the present. Entry 59's pull-request plan is what proves the Hetzner renames are in-place updates rather than replacements; nothing here asserts that in advance.
+> **NOT YET IN EFFECT.** This document records a decision taken on 2026-09-11; the repository does not match it yet. What it describes arrives through `docs/change-queue.md` entries 61, 62, 63 and 64, in that order. Whoever archives the last of the four deletes this banner — until then, read this as the target and the tree as the present. Entry 62's pull-request plan is what proves the Hetzner renames are in-place updates rather than replacements; nothing here asserts that in advance.
 
 ## The rule
 
@@ -82,7 +82,7 @@ An SSH key is not distinguished by rank. A second key here would be a deploy key
 
 `inventory_hostname` is `main-production` and the host's own hostname is `shatynska-main-production`. That divergence is the rule doing its job rather than an oversight: `inventory_hostname` lives inside a repository that belongs to one company, and the hostname is read on a laptop that serves two.
 
-**Nothing sets the hostname today.** Cloud-init sets it once, at creation, from the Hetzner server name — so renaming a server in Terraform does not rename the running host, and a stack renamed without an Ansible hostname task leaves the host answering to its old name forever. The task is part of entry 59 for that reason, and the hostname it templates is `{{ company }}-{{ inventory_hostname }}`, with `company` a single group variable that the company's clone changes once.
+**Nothing sets the hostname today.** Cloud-init sets it once, at creation, from the Hetzner server name — so renaming a server in Terraform does not rename the running host, and a stack renamed without an Ansible hostname task leaves the host answering to its old name forever. The task is part of entry 62 for that reason, and the hostname it templates is `{{ company }}-{{ inventory_hostname }}`, with `company` a single group variable that the company's clone changes once.
 
 ## The workstation
 
