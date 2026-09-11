@@ -76,8 +76,16 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      # `roles` is every role discovered; `selection` is the subset this run
+      # owes, and it is what the matrix consumes. The unfiltered set is
+      # published anyway, for two reasons: it is what a reader comparing a
+      # narrowed run against the whole suite needs, and `.github/tests` pins
+      # the discovery assertion to the step that writes it rather than to that
+      # step's position -- which is what stops a step inserted ahead of
+      # discovery from silently re-targeting that assertion.
       roles: ${{ steps.discover.outputs.roles }}
       run-suite: ${{ steps.gate.outputs.run-suite }}
+      selection: ${{ steps.select.outputs.selection }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -173,6 +181,12 @@ jobs:
           #
           # See the change `narrow-the-molecule-trigger-to-what-it-reads`.
           predicate-quantifier: 'some-with-excludes'
+          # The changed-file list the selection is computed from, and it comes
+          # from the filter that ALREADY runs rather than from a second
+          # mechanism. This action resolves a pull request's diff through the
+          # API, which is what the shallow checkout requires. What it emits is
+          # positives minus exclusions -- exactly the set the attribution wants.
+          list-files: json
           filters: |
             ansible:
               - 'ansible/**'
@@ -232,6 +246,19 @@ jobs:
       # skips the dependent job and the workflow concludes success having run
       # nothing, which is a green that verified nothing.
       #
+      # THIS REFUSAL READS THE TREE, NEVER THE SELECTION, and moving it behind
+      # the selection step below is the one edit that would quietly undo it. A
+      # tree in which no role carries scenarios has LOST the check that gates
+      # every merge -- a fact about the repository, not about this pull
+      # request's diff -- so the pull request that removed the last scenario is
+      # not the only one that should stop. Behind the selection it would become
+      # "this diff owed nothing", which the gate reports as a correct skip.
+      #
+      # It is therefore deliberately unfiltered, and the selection below
+      # narrows what RUNS without narrowing what is discovered. Two refusals
+      # over two different sets: this one, and the selector's own refusal to
+      # hand the matrix an empty list on a run that owed the suite.
+      #
       # Free of `${{ }}` on purpose, so it can be run standalone against a
       # scratch tree.
       - name: Discover roles carrying scenarios
@@ -256,6 +283,73 @@ jobs:
           echo "Discovered roles: ${roles}"
           echo "roles=${roles}" >>"$GITHUB_OUTPUT"
 
+      # The selector needs a YAML parser, from the same pinned manifest the
+      # static suite installs. An exact pin rather than a bare install: two
+      # installs at different times must not resolve different versions and
+      # silently change what is selected.
+      - name: Install the selector's toolchain
+        if: github.event_name != 'pull_request' || steps.gate.outputs.run-suite == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned parser
+        if: github.event_name != 'pull_request' || steps.gate.outputs.run-suite == 'true'
+        run: pip install -r .github/requirements-ci.txt
+
+      # WHICH of the discovered roles this run owes. The graph is derived from
+      # the scenarios in this checkout and nothing commits it -- a recorded
+      # graph is a list, and a list falling behind the scenarios it describes
+      # under-selects SILENTLY, which the gate below cannot see.
+      #
+      # THE POLARITY IS TO RUN. An unattributable path, a path nobody
+      # anticipated, a closure with nothing runnable left in it: each widens to
+      # every discovered role rather than narrowing to none. Wasteful is
+      # visible and correctable in one line; narrow is green and silent.
+      #
+      # `[]` where the suite is not owed, which is the one case the matrix is
+      # meant to be skipped for and which the gate below reads as such. The
+      # selector is not run there: there is no diff to attribute.
+      #
+      # Free of `${{ }}` on purpose -- both inputs arrive through `env:` -- so
+      # `.github/tests` can pull this body out and run it standalone, the same
+      # shape the two scripts around it use.
+      - name: Select the roles this run owes
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_SUITE: ${{ steps.gate.outputs.run-suite }}
+          CHANGED_FILES: ${{ steps.changes.outputs.ansible_files }}
+        run: |
+          set -euo pipefail
+          # THE BRANCH IS ON THE EVENT NAME, exactly as the resolution above
+          # branches, and for the same reason. On an event carrying no diff the
+          # change filter did not run, so every step output it would have
+          # written -- INCLUDING the run-suite this step could otherwise key
+          # on -- is the empty string. Keying the selection on that value would
+          # emit `[]` on precisely the trigger this repository uses to run the
+          # suite against the trunk, while the resolution above said the suite
+          # was owed: the two computed from different things, disagreeing, and
+          # the disagreement reported as a correct skip.
+          #
+          # So the selection is forced by the same branch that forces
+          # owed-ness. Below it, and only there, the run-suite value is a value
+          # the filter actually produced.
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$RUN_SUITE" != "true" ]; then
+            echo "The suite is not owed on this run, so there is nothing to select."
+            echo "selection=[]" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # An event carrying no diff leaves CHANGED_FILES empty, and the
+          # selector reads an empty changed-file list as "not attributable" and
+          # widens to every role it can run -- the same answer, reached by the
+          # same rule that widens an unrecognised path, rather than by a second
+          # branch that could come to disagree with this one.
+          selection=$(python3 ansible/scripts/select_molecule_roles.py \
+            --root . --changed-files "${CHANGED_FILES:-}")
+          echo "Selected roles: ${selection}"
+          echo "selection=${selection}" >>"$GITHUB_OUTPUT"
+
   molecule:
     name: molecule (${{ matrix.role }})
     needs: discover
@@ -270,7 +364,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        role: ${{ fromJSON(needs.discover.outputs.roles) }}
+        role: ${{ fromJSON(needs.discover.outputs.selection) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -343,11 +437,18 @@ jobs:
       # where it was not. `cancelled` is refused either way: a cancelled job
       # has verified nothing, and a run superseded by a newer push reports on
       # that older commit rather than on the one being merged.
+      #
+      # FOUR INPUTS NOW, NOT THREE. The selection joins them, and it is read
+      # for two things: naming the subset a narrowed run covered, and refusing
+      # a matrix that ran where nothing was owed. Neither weakens the three
+      # refusals above -- a narrowed matrix is still a matrix, and every way it
+      # can conclude other than `success` is still a failure here.
       - name: Conclude on the suite's behalf
         env:
           DISCOVER_RESULT: ${{ needs.discover.result }}
           MATRIX_RESULT: ${{ needs.molecule.result }}
           RUN_SUITE: ${{ needs.discover.outputs.run-suite }}
+          SELECTION: ${{ needs.discover.outputs.selection }}
         run: |
           set -euo pipefail
 
@@ -358,7 +459,23 @@ jobs:
 
           case "$MATRIX_RESULT" in
             success)
-              echo "The suite ran and passed (run-suite=${RUN_SUITE})."
+              # A matrix that RAN on a run owing the suite nothing means the
+              # selection and the decision to run were computed from different
+              # things. Unreachable while the matrix job stays gated on
+              # `run-suite` rather than on the selection -- which it does, just
+              # above -- and refused anyway, because the day someone keys that
+              # condition on the selection instead, this is the disagreement
+              # that would otherwise pass silently.
+              if [ "$RUN_SUITE" != "true" ]; then
+                echo "::error::The suite ran on a run that owed it nothing (run-suite=${RUN_SUITE}, selection=${SELECTION}). Those two are computed from different inputs and have disagreed. Refusing to conclude success rather than reporting a green check whose matrix nobody asked for."
+                exit 1
+              fi
+              # NAME THE SUBSET. A narrowed run is indistinguishable from a
+              # wrongly narrowed one in the check's summary unless the roles are
+              # written out, and a human reading this line is the only reader
+              # that can catch a graph defect the static checks did not model.
+              echo "The suite ran and passed on the roles this run owed: ${SELECTION}."
+              echo "That is a SUBSET of the discovered roles wherever the diff was confined to one role's directory -- it carries that role plus every role whose scenarios converge it. A shared manifest, the entry point, ansible.cfg, or any path the attribution does not recognise selects every role instead. See the selection step above and the change select-the-molecule-matrix-per-role."
               ;;
             skipped)
               if [ "$RUN_SUITE" = "true" ]; then

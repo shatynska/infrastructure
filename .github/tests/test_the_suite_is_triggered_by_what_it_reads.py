@@ -80,6 +80,7 @@ not re-litigated here.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -487,7 +488,21 @@ class GateBodyMixin(MoleculeWorkflowShapeMixin):
     def _gate_step(self):
         workflow = self._workflow()
         discovery_key, _ = self._discovery_job(workflow)
-        matrix_key, _ = self._matrix_job(workflow)
+        matrix_key, matrix_job = self._matrix_job(workflow)
+        # PINNED TO MEANING, NOT TO ORDER. The discovery job now publishes two
+        # outputs the gate reads, and a locator binding "the one matching
+        # `needs.<discover>.outputs.`" takes whichever comes last while leaving
+        # the other unset. The run-suite output is the one the matrix job gates
+        # itself on; the selection is the one its rows come from.
+        found = re.search(
+            rf"needs\.{re.escape(discovery_key)}\.outputs\.([A-Za-z0-9_-]+)",
+            compact(matrix_job.get("if", "")),
+        )
+        assert found, (
+            f"the matrix job `{matrix_key}` does not gate itself on an output of "
+            f"the discovery job `{discovery_key}`"
+        )
+        run_suite_output = found.group(1)
         _, aggregating = self._job_named(workflow, AGGREGATING_CONTEXT)
 
         candidates = []
@@ -501,9 +516,18 @@ class GateBodyMixin(MoleculeWorkflowShapeMixin):
                     inputs["discovery"] = name
                 elif f"needs.{matrix_key}.result" in expression:
                     inputs["matrix"] = name
-                elif f"needs.{discovery_key}.outputs." in expression:
+                elif f"needs.{discovery_key}.outputs.{run_suite_output}" in expression:
                     inputs["changed"] = name
-            if set(inputs) == {"discovery", "matrix", "changed"}:
+                elif f"needs.{discovery_key}.outputs." in expression:
+                    # Any FURTHER discovery output the gate takes -- the
+                    # selection, since `select-the-molecule-matrix-per-role`.
+                    # Collected rather than ignored: the gate body runs under
+                    # `set -u`, so an env name this harness leaves unset aborts
+                    # the gate on a row that should have concluded, and the
+                    # failure then reads as a gate defect rather than as a
+                    # harness that stopped supplying one of its inputs.
+                    inputs.setdefault("others", []).append(name)
+            if {"discovery", "matrix", "changed"} <= set(inputs):
                 candidates.append((index, step, inputs))
 
         self.assertEqual(
@@ -535,6 +559,11 @@ class GateBodyMixin(MoleculeWorkflowShapeMixin):
             env[inputs["discovery"]] = discovery
             env[inputs["changed"]] = changed
             env[inputs["matrix"]] = matrix
+            # As in `test_ci_configuration`: an input this harness does not set
+            # aborts the gate under `set -u`, and the failure would read as a
+            # gate defect rather than as a missing input.
+            for name in inputs.get("others", []):
+                env[name] = "[]" if changed != "true" else '["docker"]'
             return subprocess.run(
                 ["bash", "-e", "-c", script],
                 cwd=scratch,
