@@ -5,13 +5,7 @@ Verification commands referenced below, from this project's conventions:
 - `pre-commit run --all-files`, which carries `terraform fmt`, `tflint`, `terraform validate`, `gitleaks`, `ansible-lint` and `ansible-playbook --syntax-check`
 - `openspec validate --all`
 
-Sections 1–6 are repository work and land through this change's first pull
-request. Section 7 is the operator's, on their own workstation and in repository
-settings, against credentials that exist nowhere in this repository; the
-migration order in `design.md` is what sequences it against the merge. Removing
-the branch and the working tree happens after this record's own pull request
-merges, which is after the commit that writes this file, so those steps are
-recorded in prose in `proposal.md` and in `AGENTS.md` rather than as tasks here.
+Sections 1–6 are repository work and land through this change's first pull request. Section 7 is the operator's, on their own workstation and in repository settings, against credentials that exist nowhere in this repository; the migration order in `design.md` is what sequences it against the merge. Removing the branch and the working tree happens after this record's own pull request merges, which is after the commit that writes this file, so those steps are recorded in prose in `proposal.md` and in `AGENTS.md` rather than as tasks here.
 
 ## 1. The inventory chooses its connection address
 
