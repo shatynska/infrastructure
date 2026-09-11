@@ -166,9 +166,33 @@ result worth recording rather than an unrun check.
 
 ## 8. Ship
 
-- [ ] 8.1 Open the pull request once verification passes and the code review has cleared, and wait for the operator's confirmation that it merged.
-- [ ] 8.2 **The confirmation gate, which is answerable the day this merges and is not waived.** Not the company bootstrap: that exercises stages 1 to 6 and a gap it finds would not be attributable to this change. The decisive and immediately performable observation is a **cold read by someone other than the author** — read §0.3 and §0.4 having held none of these credentials, write down the set you would end up holding, and compare it with what §6.1, §6.3 and §6.4 ask for. It needs no Hetzner project and no console. A mismatch is this change failing at the only thing it does; a match is the confirmation. The company bootstrap is then a second, stronger observation of the whole procedure, and worth reporting when it happens, but it is not this gate.
-- [ ] 8.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`. Verify `openspec validate --archived` passes.
+- [x] 8.1 Open the pull request once verification passes and the code review has cleared, and wait for the operator's confirmation that it merged.
+- [x] 8.2 **The confirmation gate, which is answerable the day this merges and is not waived.** Not the company bootstrap: that exercises stages 1 to 6 and a gap it finds would not be attributable to this change. The decisive and immediately performable observation is a **cold read by someone other than the author** — read §0.3 and §0.4 having held none of these credentials, write down the set you would end up holding, and compare it with what §6.1, §6.3 and §6.4 ask for. It needs no Hetzner project and no console. A mismatch is this change failing at the only thing it does; a match is the confirmation. The company bootstrap is then a second, stronger observation of the whole procedure, and worth reporting when it happens, but it is not this gate.
+- [x] 8.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`. Verify `openspec validate --archived` passes.
+
+## Ship record
+
+**8.1** Pull request #133, merged as `c9c016e` on 2026-09-11. `PR Validation`
+and `Ansible Verify` both passed on the branch head `705c832`, the commit that
+merged. A docs-only change triggers no deploy: the Terraform workflows are
+path-filtered to `terraform/`, so there is no deploy to call healthy or
+unhealthy, and none is claimed here.
+
+**8.2 — the gate is answered, not waived.** The operator performed the cold
+read on 2026-09-11 — §0.3 and §0.4 read while holding none of these
+credentials, the resulting set written down and compared against what §6.1,
+§6.3 and §6.4 ask for — and reported that the two agree. That is the match this
+task names, obtained from someone other than the author, so the waivable
+classes were not reached and are not invoked.
+
+The company bootstrap remains the second and stronger observation of the whole
+procedure, worth reporting when it happens. It was never this gate, for the
+reason the task gives: a gap it finds in stages 1 to 6 would not be
+attributable to this change.
+
+**8.3** Branch fast-forwarded to the freshly fetched trunk at `c9c016e` —
+discarding nothing, the work already being on it — then archived with
+`openspec archive`, with `openspec validate --archived` passing.
 
 Opening the record's own pull request, and removing the branch and working tree
 once it merges, happen after the commit that writes this file, so they are
