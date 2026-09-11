@@ -77,7 +77,9 @@ Verification commands referenced below, from this project's conventions:
 
 ## 6. The observation
 
-- [ ] 6.1 The effect is visible on this change's own pull request, which touches `.github/`, `ansible/scripts/` and `openspec/` — `ansible/scripts/run-molecule`'s neighbour changing is an unattributable path, so this pull request SHALL run **every** role. That is the widening rule demonstrating itself, and it is the right first observation: a change to the selector that ran a narrowed suite would be the defect.
+- [x] 6.1 The effect is visible on this change's own pull request, which touches `.github/`, `ansible/scripts/` and `openspec/` — `ansible/scripts/run-molecule`'s neighbour changing is an unattributable path, so this pull request SHALL run **every** role. That is the widening rule demonstrating itself, and it is the right first observation: a change to the selector that ran a narrowed suite would be the defect.
+      **Observed 2026-09-11 on pull request #145**, run `34618647252`. The mechanism ran end to end: `discover` wrote `Selected roles: ["deploy_user", "docker", "hardening", "image_prune", "ops_user", "platform_data_volume", "swap"]`, the matrix took its rows from that, all seven jobs passed, and the gate named the subset back — *"The suite ran and passed on the roles this run owed"*. Seven of seven is the **correct** answer for this diff and is what makes it an observation rather than a formality: the change touches `ansible/scripts/`, which the attribution does not recognise, so the widening rule is what produced it. A narrowed suite here would have been the defect.
+
 - [ ] 6.2 The narrowing is observable only on a later pull request touching exactly one role. Propose that as the observation and say plainly that it cannot be made on this change's own pull request; where no qualifying pull request exists by the time this change would be archived, name the class and ask the operator to waive, recording the waiver here.
 
 ## 7. Archive
