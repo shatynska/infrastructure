@@ -45,11 +45,16 @@ github_environment: production
 # specifically, which is the checkable half; the general form is repository
 # settings and is unverifiable from here.
 #
-# This is also the name `ansible/.envrc.example` already uses for the same
-# token locally, and the name prod's inventory source reads -- which the
+# `PRODUCTION` rather than `PROD`, matching the GitHub Environment this
+# environment attaches to rather than its directory name. The directory stays
+# `prod`; this is the naming the repository is moving toward, and picking it
+# now costs nothing where renaming the secret again later would.
+#
+# It is also the name prod's inventory source reads and the one
+# `ansible/.envrc.example` names for the same token locally -- which the
 # Dynamic Inventory via hcloud Plugin requirement now obliges to match this
-# field.
-read_only_secret: HCLOUD_TOKEN_PROD
+# field, so the three move together or the build fails.
+read_only_secret: HCLOUD_TOKEN_PRODUCTION
 
 # Whether the Destroy Policy Gate applies to this environment. OPTIONAL;
 # absent means it applies, so a mistake in this file fails safe.

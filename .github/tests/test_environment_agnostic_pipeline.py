@@ -173,7 +173,7 @@ ENVIRONMENT_KEY_HINT = "environment"
 # it, not relaxed: prod still declares one specific secret and one specific
 # Environment, and a declaration drifting from either still fails.
 PROD_DIRECTORY = "prod"
-PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_PROD"
+PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_PRODUCTION"
 PROD_GITHUB_ENVIRONMENT = "production"
 
 TERRAFORM_PLAN = re.compile(r"terraform\s+plan\b")
@@ -594,7 +594,7 @@ class TestEveryEnvironmentCarriesAPipelineDeclaration(unittest.TestCase):
 
         The method's NAME is now half wrong and is left alone deliberately: prod
         declares the Environment it already uses and a read-only secret it does
-        not, `HCLOUD_TOKEN_PROD` having been created by
+        not, `HCLOUD_TOKEN_PRODUCTION` having been created by
         `apply-host-configuration-through-a-gated-workflow`'s Migration Plan.
         Renaming the method would cost every reference to it in that change's
         record and in this module's own history for no assertion gained. What
@@ -1001,7 +1001,7 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
 
         The third escape was taken, deliberately, and the cost it names was paid
         rather than avoided: `apply-host-configuration-through-a-gated-workflow`
-        gave prod the read-only secret name `HCLOUD_TOKEN_PROD`, re-pointed that
+        gave prod the read-only secret name `HCLOUD_TOKEN_PRODUCTION`, re-pointed that
         assertion at the new value, and created the repository secret before the
         merge as a sequenced migration step. What made it worth paying is that
         the old name was not merely inconvenient -- a job declaring an

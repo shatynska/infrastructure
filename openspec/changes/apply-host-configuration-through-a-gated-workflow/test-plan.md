@@ -158,7 +158,7 @@ Run, from the repository root:
 and expect 593 tests, OK. The red 32 map to tasks as follows:
 
 - tasks **1.1 / 1.2** (the `connect_with` selection, identical in both sources) → `TestTheConnectionAddressIsSelectableAndDefaultsToThePublicOne` (3).
-- tasks **2.1** (prod's `read_only_secret` becomes `HCLOUD_TOKEN_PROD`) → `TestNoDeclarationNamesTheWriteTokensOwnName.test_no_environment_declares_the_write_tokens_own_name` and `TestASourcesCredentialVariableIsTheNameTheEnvironmentDeclares.test_each_source_reads_the_name_its_declaration_states`. These are tasks 2.4's "present and red before 2.1 lands" — they are.
+- tasks **2.1** (prod's `read_only_secret` becomes `HCLOUD_TOKEN_PRODUCTION`) → `TestNoDeclarationNamesTheWriteTokensOwnName.test_no_environment_declares_the_write_tokens_own_name` and `TestASourcesCredentialVariableIsTheNameTheEnvironmentDeclares.test_each_source_reads_the_name_its_declaration_states`. These are tasks 2.4's "present and red before 2.1 lands" — they are.
 - tasks **2.2** → the two obsolete-test candidates above. Expect the first to go red at the same moment the two tests above go green.
 - tasks **3.1–3.6** (the workflow) → the six workflow-shape classes and the nine discovery tests (25 red on the file's absence).
 - tasks **3.4-0** (`ansible/requirements.txt`) → `TestTheConvergeRunsTheAnsibleTheRolesWereVerifiedUnder` (2). Both halves are required: the job's install step must **name** that manifest, resolved from its own working directory, and that manifest's `ansible-core` pin must equal `ansible/requirements-test.txt`'s (`2.21.3` today).

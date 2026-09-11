@@ -9,7 +9,7 @@
 # token is scoped to one project and each environment has a project of its
 # own, so this file reaches prod's project and nothing else. Bringing a
 # further environment into inventory is adding a file beside this one and a
-# variable beside HCLOUD_TOKEN_PROD -- it is not an edit to this file.
+# variable beside HCLOUD_TOKEN_PRODUCTION -- it is not an edit to this file.
 #
 # THE NEW VARIABLE'S NAME IS NOT FREE. It SHALL be the same name that
 # environment's `terraform/environments/<name>/pipeline.yml` declares as its
@@ -30,7 +30,7 @@
 # parse.
 plugin: hetzner.hcloud.hcloud
 
-# HCLOUD_TOKEN_PROD, deliberately NOT the plugin's built-in HCLOUD_TOKEN
+# HCLOUD_TOKEN_PRODUCTION, deliberately NOT the plugin's built-in HCLOUD_TOKEN
 # fallback. That name belongs to Terraform, whose provider reads it, and
 # docs/bootstrap-a-new-host.md §4.1 scopes it per environment DIRECTORY via
 # direnv -- so its value depends on which directory a shell is in. An Ansible
@@ -43,7 +43,7 @@ plugin: hetzner.hcloud.hcloud
 # environment with no host in it: ansible.cfg sets `any_unparsed_is_failed`,
 # without which this file would resolve to an empty `prod` group -- which is
 # indistinguishable from a destroyed server.
-api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_PROD') }}"
+api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_PRODUCTION') }}"
 
 # WHICH ADDRESS A RUN CONNECTS TO, chosen per run and defaulting to the
 # public one -- see "The Address a Converge Connects To Is Selected Per Run"
