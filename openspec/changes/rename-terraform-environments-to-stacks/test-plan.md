@@ -590,3 +590,23 @@ Four further failures, all in `host-converge.yml` and all cleared by the same sw
 7. **The dispatch input's `env:` entry** — the `REQUESTED_ENVIRONMENT: ${{ inputs.environment }}` mapping on the discovery step becomes a mapping of `inputs.stack`, under a key the body reads. Clears `TestTheDispatchInputStillReachesTheBodyThatValidatesIt` (1). Re-point `test_host_converge_workflow`'s `DISPATCH_INPUT` and `DISPATCH_INPUT_NAME` in the same commit, or three of that module's tests go red and a fourth goes quietly vacuous.
 
 **Expected end state: 762 tests, green.** A count below 762 is a module that failed to import, not a suite that got smaller.
+
+## Third pass — one repair, after the implementation landed
+
+The implementation is committed. The suite went to 761 of 762 green, with one failure: `TestThePathRuleAndItsConsumersFollowTheStackRoot.test_the_plan_comment_heading_and_the_comment_locator_agree_on_the_stack_root`, from the first pass.
+
+**It was a defect in the test's READ, not in what it asserts** — the third of the four failure states, and the one that has to be established by provenance rather than assumed, because "the test is broken" is otherwise available as a re-description of any failure at all. The provenance here is unambiguous: the mismatch was not in the expected value. The check harvested the heading with `stripped.partition("=")[2].strip().strip('"')` and never unescaped it. `pr-validation.yml` assigns the heading inside double quotes, so its backticks are written `\``, while the `body-includes` locator is YAML and carries bare ones. The two strings differed by two backslashes and by nothing else. The workflow is correct and finds its own comment; the check could not have gone green against any correct implementation.
+
+**The repair is to the read, and the assertion is untouched.** A new module-level helper, `shell_double_quoted_value`, removes one matched pair of surrounding double quotes and unescapes the four characters — `$`, a backtick, `"` and `\` — that a backslash is special before inside them, and nothing else. The comparison it feeds is the same one, unchanged: the `body-includes` locator must still be found inside the heading the plan step writes.
+
+**That it was not weakened was established, not asserted.** Two independent checks:
+
+1. **Four fixture-driven discriminators**, added permanently as `TestTheHeadingReadDiscriminates` — all DERIVED, none asserting anything about this change. They hold that the read returns what the shell will emit, that a backslash which is *not* an escape survives (a wider substitution would rewrite a literal and make two disagreeing headings compare equal), that only a matched pair of quotes is removed, and — the load-bearing one — that the repaired read still brings an agreeing heading and locator together **and still keeps a disagreeing pair apart**.
+2. **The repaired test method itself, run against deliberately mismatched material.** The repository's `pr-validation.yml` was not touched: a copy was mutated in a scratch directory and the module constant aimed at it for one run. Three mutations, three reds, with the failure arriving at the right assertion each time — a heading naming `terraform/plans/` (caught by the root assertion), a heading keeping the stack root but changing the separator, and a heading keeping the root at a deeper path (both caught by the heading-vs-locator comparison, which is the one the repair touches). The unmodified file, as a control, passes.
+
+### Counts
+
+    python3 -m unittest discover --start-directory .github/tests
+    Ran 766 tests — OK
+
+766 = 762 + the four discriminators this repair owes. **The expected end state recorded above as "762 tests, green" is superseded by this figure**, and by nothing else: no test was removed, none was renamed, and the one that was repaired keeps its name, its class and its assertion.

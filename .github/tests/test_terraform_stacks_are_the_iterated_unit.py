@@ -389,6 +389,36 @@ def normalised_interpolation(text: str) -> str:
     return compact(INTERPOLATION.sub("<value>", str(text)))
 
 
+# The four characters a backslash is special before INSIDE double quotes, and
+# the only ones. Anywhere else in a double-quoted string a backslash stands for
+# itself, so a substitution wider than this would silently rewrite a literal.
+DOUBLE_QUOTED_ESCAPE = re.compile(r'\\([$`"\\])')
+
+
+def shell_double_quoted_value(assignment: str) -> str:
+    """The right-hand side of `name="..."`, as the shell will actually emit it.
+
+    The plan-comment heading is assigned inside double quotes, so its backticks
+    are written `\\`` -- while the `body-includes` locator that has to find that
+    same comment is YAML and carries bare backticks. Harvested without
+    unescaping, the two differ by two backslashes and by nothing else, and the
+    check reports a disagreement between two surfaces that agree. That is a
+    defect in the READ, not in what is asserted: what the check exists to catch
+    is a heading and a locator naming different PATHS, and this repair leaves
+    that assertion exactly as strong -- see
+    `TestTheHeadingReadDiscriminates` at the foot of this module, which
+    establishes it on material of its own.
+
+    One matched pair of surrounding quotes is removed, rather than every
+    leading and trailing quote: a heading that legitimately ends in a quote
+    character is not a reason to eat it.
+    """
+    value = assignment.partition("=")[2].strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        value = value[1:-1]
+    return DOUBLE_QUOTED_ESCAPE.sub(r"\1", value)
+
+
 # --------------------------------------------------------------------------
 # iac-repo-foundations / Environment and Module Folder Structure,
 # Version Control Excludes State and Secrets
@@ -1321,7 +1351,7 @@ class TestThePathRuleAndItsConsumersFollowTheStackRoot(unittest.TestCase):
                 stripped = line.strip()
                 if stripped.startswith("heading=") and "Terraform Plan" in stripped:
                     headings.add(
-                        normalised_interpolation(stripped.partition("=")[2].strip().strip('"'))
+                        normalised_interpolation(shell_double_quoted_value(stripped))
                     )
         locators = {
             normalised_interpolation((step.get("with") or {}).get("body-includes", ""))
@@ -2091,6 +2121,79 @@ class TestTheseHostConvergeReadsDiscriminate(unittest.TestCase):
             "the new-spelling read matched the retired input, so the absence "
             "assertion and the presence assertion could be satisfied by one mapping",
         )
+
+
+class TestTheHeadingReadDiscriminates(unittest.TestCase):
+    """DERIVED. Nothing here asserts anything about this change.
+
+    `shell_double_quoted_value` was added to repair
+    `TestThePathRuleAndItsConsumersFollowTheStackRoot
+    .test_the_plan_comment_heading_and_the_comment_locator_agree_on_the_stack_root`,
+    which harvested the heading without unescaping and so compared a
+    backslash-bearing string against a bare one -- reporting a disagreement
+    where the two surfaces agreed.
+
+    A repair to a read is exactly the edit that can quietly turn a check into
+    one that cannot fail, so these run the repaired read over material this
+    test supplies: it must still tell two headings that name DIFFERENT paths
+    apart, which is the whole of what that check exists for.
+    """
+
+    HEADING = 'heading="### Terraform Plan — \\`terraform/stacks/${STACK_NAME}\\`"'
+    LOCATOR = "### Terraform Plan — `terraform/stacks/${{ matrix.stack.name }}`"
+
+    def test_the_read_unescapes_what_the_shell_would(self) -> None:
+        self.assertEqual(
+            "### Terraform Plan — `terraform/stacks/${STACK_NAME}`",
+            shell_double_quoted_value(self.HEADING),
+            "the read did not return the heading the shell will emit, so it "
+            "compares a backslash-bearing string against a bare one",
+        )
+
+    def test_a_backslash_that_is_not_an_escape_survives(self) -> None:
+        self.assertEqual(
+            r"a\b`c",
+            shell_double_quoted_value(r'heading="a\b\`c"'),
+            "the read stripped a backslash the shell keeps, so it would report "
+            "two headings as agreeing on a literal neither of them carries",
+        )
+
+    def test_only_a_matched_pair_of_quotes_is_removed(self) -> None:
+        self.assertEqual(
+            'ends in a quote"',
+            shell_double_quoted_value('heading="ends in a quote\\""'),
+        )
+        self.assertEqual(
+            "unquoted",
+            shell_double_quoted_value("heading=unquoted"),
+        )
+
+    def test_the_repaired_read_still_separates_two_paths(self) -> None:
+        """The load-bearing one. A repair that made the comparison pass on
+        agreement AND on disagreement would have satisfied the failing test
+        while destroying it."""
+        agreeing = normalised_interpolation(shell_double_quoted_value(self.HEADING))
+        self.assertIn(
+            normalised_interpolation(self.LOCATOR),
+            agreeing,
+            "the repaired read does not bring the heading and the locator "
+            "together on a pair that genuinely agree, so the check it repairs "
+            "would still be red against a correct workflow",
+        )
+        mismatched = normalised_interpolation(
+            shell_double_quoted_value(
+                self.HEADING.replace("terraform/stacks", "terraform/" + "environments")
+            )
+        )
+        self.assertNotIn(
+            normalised_interpolation(self.LOCATOR),
+            mismatched,
+            "the repaired read brings a heading and a locator naming DIFFERENT "
+            "roots together, so the check could no longer catch the state it "
+            "exists for: a heading the locator never finds, and a second "
+            "comment posted on every run",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
