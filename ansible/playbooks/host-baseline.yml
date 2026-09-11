@@ -97,6 +97,16 @@
 # `hosts:` is the environment supplied per run, with NO `| default(...)`.
 # The guard play above is what reports its absence; a default here would
 # silently converge whichever environment the default named.
+#
+# WHO RUNS THIS, which changed with `apply-host-configuration-through-a-gated-workflow`.
+# `.github/workflows/host-converge.yml` runs it on a merge to `main` touching
+# `ansible/`, one job per environment, each attached to that environment's own
+# GitHub Environment -- so production's waits for the same approval a Terraform
+# apply waits for. An operator runs it by hand in exactly one case: a host's
+# FIRST converge, and a rebuilt host's, because the workflow reaches a host over
+# the tailnet and joining the tailnet is what the `tailscale` role below does.
+# `docs/bootstrap-a-new-host.md` stage 6 is that case; stage 6.6 hands the rest
+# to the pipeline.
 - name: Host baseline configuration
   hosts: "{{ target_environment }}"
   become: true
