@@ -144,16 +144,26 @@ def _relative(path: Path, root: Path) -> str:
 
 
 class _AnsibleTolerantLoader(yaml.SafeLoader):
-    """`SafeLoader`, plus the tags Ansible's own YAML carries.
+    """`SafeLoader`, plus the two tags Ansible's own YAML carries.
 
     `!vault` and `!unsafe` are VALID Ansible YAML, not malformed, and
     `yaml.safe_load` rejects both. `!vault` is already live in
     `ansible/inventory/group_vars/`; nothing stops it appearing in a scenario.
-    Without this, such a file would fail to parse -- and a parse failure that
-    resolves to "no edges" loses coverage silently, which is the one direction
-    this module is written never to resolve in.
+    Without this, such a file would fail to parse -- and under `_documents`
+    below that is a refusal, so an ordinary scenario would turn the required
+    check red.
+
+    NAMED EXPLICITLY, never a catch-all. A multi-constructor over `!` would map
+    every unknown tag to `None`, which would undo the refusal `_documents`
+    exists to make: a tag this module has never seen would yield empty
+    documents rather than saying so.
     """
 
+
+for _tag in ("!vault", "!unsafe"):
+    _AnsibleTolerantLoader.add_constructor(
+        _tag, lambda loader, node: loader.construct_scalar(node)
+    )
 
 _AnsibleTolerantLoader.add_multi_constructor(
     "!", lambda loader, suffix, node: None
@@ -163,7 +173,7 @@ _AnsibleTolerantLoader.add_multi_constructor(
 )
 
 
-def _documents(path: Path):
+def _documents(path: Path, root: Path):
     """Every YAML document in a file.
 
     A FILE THAT CANNOT BE READ IS REFUSED, not passed over. Returning no
@@ -178,8 +188,9 @@ def _documents(path: Path):
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise DerivationRefused(
-            f"{path}: cannot be read ({error}), so whether it reaches a role is "
-            "unknown. Refused rather than treated as reaching nothing"
+            f"{_relative(path, root)}: cannot be read ({error}), so whether it "
+            "reaches a role is unknown. Refused rather than treated as reaching "
+            "nothing"
         ) from error
     try:
         return [
@@ -189,12 +200,12 @@ def _documents(path: Path):
         ]
     except yaml.YAMLError as error:
         raise DerivationRefused(
-            f"{path}: is not YAML this derivation can parse ({error}), so whether "
-            "it reaches a role is unknown. Refused rather than treated as "
-            "reaching nothing -- a file that silently contributes no edges is "
-            "how a role stops being tested with nothing reporting"
+            f"{_relative(path, root)}: is not YAML this derivation can parse "
+            f"({error}), so whether it reaches a role is unknown. Refused rather "
+            "than treated as reaching nothing -- a file that silently "
+            "contributes no edges is how a role stops being tested with nothing "
+            "reporting"
         ) from error
-
 
 def _is_literal(value) -> bool:
     """A name this derivation can close over: a plain string, no expression."""
@@ -267,13 +278,13 @@ def _refuse_redirected_scenario_plays(root: Path, role: str) -> None:
     if not molecule_root.is_dir():
         return
     for definition in sorted(molecule_root.glob("*/molecule.yml")):
-        for document in _documents(definition):
+        for document in _documents(definition, root):
             if not isinstance(document, dict):
                 continue
-            playbooks = (document.get("provisioner") or {})
-            if not isinstance(playbooks, dict):
+            provisioner = document.get("provisioner") or {}
+            if not isinstance(provisioner, dict):
                 continue
-            declared = playbooks.get("playbooks")
+            declared = provisioner.get("playbooks")
             if declared:
                 raise DerivationRefused(
                     f"{_relative(definition, root)}: declares "
@@ -329,7 +340,7 @@ def _escapes(value: str, origin: Path, role_root: Path) -> bool:
     return False
 
 
-def _walk_tasks(tasks, *, origin: Path, root: Path, role: str, edges: set[str]) -> None:
+def _walk_tasks(tasks, *, origin: Path, root: Path, edges: set[str], seen: set) -> None:
     """Collect role edges from a task list, refusing what cannot be closed over."""
     if not isinstance(tasks, list):
         return
@@ -347,46 +358,105 @@ def _walk_tasks(tasks, *, origin: Path, root: Path, role: str, edges: set[str]) 
                         "resolved or skipped -- resolving it would guess, and "
                         "skipping it would drop an edge with nothing reporting"
                     )
-                edges.add(str(name))
+                _add_edge(str(name), origin=origin, root=root, edges=edges)
             elif key in TASK_INCLUSION_KEYS:
                 target = value.get("file") if isinstance(value, dict) else value
-                # REFUSED WHATEVER IT NAMES, not only when it navigates. A
-                # task file included beside the converge can itself reach a
-                # role, and this walker does not read it -- `_scenario_play_files`
-                # globs plays, and a bare task list parsed as a play yields
-                # nothing. So a literal, role-local target is exactly as
-                # invisible as a `../` one, and refusing only the navigating
-                # form leaves the quieter half passing over.
-                raise DerivationRefused(
-                    f"{_relative(origin, root)}: `{key}` reaches {target!r}. "
-                    "The derivation has no rule for this construction and "
-                    "refuses rather than passing over it: the file it names is "
-                    "not read, so any role reached through it would contribute "
-                    "no edge and nothing would report that. No scenario in this "
-                    "repository uses this construction, which is what makes "
-                    "refusing free"
+                _follow_included_tasks(
+                    target, origin=origin, root=root, key=key, edges=edges, seen=seen
                 )
             elif key in COMMAND_KEYS:
                 _handle_nested_playbook(
-                    value, origin=origin, root=root, key=key, edges=edges
+                    value, origin=origin, root=root, key=key, edges=edges, seen=seen
                 )
         for block in BLOCK_KEYS:
             if block in task:
-                _walk_tasks(
-                    task[block], origin=origin, root=root, role=role, edges=edges
-                )
+                _walk_tasks(task[block], origin=origin, root=root, edges=edges, seen=seen)
 
+
+def _add_edge(name: str, *, origin: Path, root: Path, edges: set[str]) -> None:
+    """Record an edge, refusing a role named by path rather than by name.
+
+    Checked HERE rather than over the flattened edge set, so the refusal can
+    name the file holding the construction -- which is what the delta requires
+    of every refusal, and what a reader needs to act on one. `- role:
+    ../../other_role` satisfies every literal check; discarding it later for
+    containing a `.` would drop a real edge for a reason unrelated to why the
+    external-content filter exists.
+    """
+    if "/" in name:
+        raise DerivationRefused(
+            f"{_relative(origin, root)}: reaches a role by path ({name!r}) "
+            "rather than by name. The derivation resolves a role name to a role "
+            "directory and cannot do that for a path, so this is refused rather "
+            "than silently discarded by the external-content filter"
+        )
+    edges.add(name)
+
+
+def _follow_included_tasks(
+    target, *, origin: Path, root: Path, key: str, edges: set[str], seen: set
+) -> None:
+    """Read an included task file, or refuse where it cannot be read.
+
+    FOLLOWED WHERE IT CAN BE, refused where it cannot -- rather than refused
+    outright. Factoring a scenario's shared assertions into a second file
+    beside its converge is ordinary Molecule practice, not a design smell, so a
+    blanket refusal would cost an author of an ordinary scenario an edit to
+    this module. That is a different trade from the one made for a role's own
+    files reaching outside themselves, where the construction IS the smell.
+
+    The heavier route -- a nested `ansible-playbook` -- is followed when its
+    path is a literal, so refusing the lighter one outright would have left
+    this module answering the easier question more strictly than the harder.
+    """
+    if not _is_literal(target) or not isinstance(target, str):
+        raise DerivationRefused(
+            f"{_relative(origin, root)}: `{key}` names its file by something "
+            f"other than a literal ({target!r}), so the derivation cannot read "
+            "it. Refused rather than passed over: any role reached through it "
+            "would contribute no edge and nothing would report that"
+        )
+    scenario_root = origin.parent
+    resolved = (scenario_root / target).resolve()
+    try:
+        resolved.relative_to(scenario_root.resolve())
+    except ValueError:
+        raise DerivationRefused(
+            f"{_relative(origin, root)}: `{key}` reaches {target!r}, outside "
+            "this scenario's own directory. The derivation reads the files it "
+            "finds beside a scenario; one outside it is not read, so a role "
+            "reached through it would contribute no edge"
+        ) from None
+    if not resolved.is_file():
+        raise DerivationRefused(
+            f"{_relative(origin, root)}: `{key}` reaches {target!r}, which is "
+            "not a file. Refused rather than passed over -- an unresolvable "
+            "target and a target reaching nothing are indistinguishable here, "
+            "and one of them loses an edge"
+        )
+    if ("tasks", resolved) in seen:
+        return
+    seen.add(("tasks", resolved))
+    for document in _documents(resolved, root):
+        if isinstance(document, list):
+            _walk_tasks(document, origin=resolved, root=root, edges=edges, seen=seen)
 
 def _handle_nested_playbook(
-    value, *, origin: Path, root: Path, key: str, edges: set[str] | None = None
+    value,
+    *,
+    origin: Path,
+    root: Path,
+    key: str,
+    edges: set[str] | None = None,
+    seen: set | None = None,
 ) -> None:
     """Follow a nested `ansible-playbook`, or refuse where it cannot be followed.
 
-    Both dispositions are conformant; passing over is not. A literal path is
-    followable, so it is FOLLOWED and its edges attributed to the role holding
-    the invocation -- a scenario reaching another role this way couples them
-    exactly as `import_playbook` does. Only an expression is refused, and only
-    where no entry covers that instance.
+    Both dispositions are conformant; passing over is not. A literal path that
+    resolves is FOLLOWED and its edges attributed to the role holding the
+    invocation -- a scenario reaching another role this way couples them
+    exactly as `import_playbook` does. An expression is refused unless an entry
+    covers that instance; a literal that does not resolve is refused too.
 
     `edges` is None where the caller is scanning a role's own task or handler
     files, which may not reach outside the role at all: there, every nested
@@ -413,13 +483,41 @@ def _handle_nested_playbook(
                     "refused for the same reason an include of another role's "
                     "file is"
                 )
-            resolved = (origin.parent / target).resolve()
-            if resolved.is_file():
-                _collect_from_play_file(
-                    resolved, root=root, role="", edges=edges, seen=set()
+            # Two spellings resolve: relative to the file holding the
+            # invocation, and relative to the repository root -- which is what
+            # `ansible-playbook` itself resolves against, the controller's cwd,
+            # and therefore the natural spelling. Both are tried before
+            # refusing, so a correct invocation is followed rather than refused
+            # for being written the ordinary way.
+            candidates = [(origin.parent / target).resolve(), (Path(root) / target).resolve()]
+            resolved = next((path for path in candidates if path.is_file()), None)
+            if resolved is None:
+                raise DerivationRefused(
+                    f"{_relative(origin, root)}: runs `ansible-playbook` over "
+                    f"{target!r}, which resolves to no file either beside this "
+                    "file or from the repository root. Refused rather than "
+                    "passed over: a playbook this derivation cannot read is one "
+                    "whose every edge would be missing with nothing reporting"
                 )
+            # The CALLER'S `seen` is threaded through, never a fresh set. A new
+            # set per hop makes the cycle guard protect one hop only, and two
+            # playbooks invoking each other -- or one invoking itself, which is
+            # the shape `ops_user`'s steady-state re-converge already has --
+            # then recurse until the interpreter gives up. A RecursionError
+            # reads as a defect in this module rather than as a scenario that
+            # cannot be closed over.
+            _collect_from_play_file(
+                resolved,
+                root=root,
+                edges=edges,
+                seen=seen if seen is not None else set(),
+            )
             continue
-        entry = (_relative(origin, root), f"{key.rsplit('.', 1)[-1]}(ansible-playbook)", f"expr:{target}")
+        entry = (
+            _relative(origin, root),
+            f"{key.rsplit('.', 1)[-1]}(ansible-playbook)",
+            f"expr:{target}",
+        )
         if entry in PERMITTED_NESTED_PLAYBOOKS:
             continue
         raise DerivationRefused(
@@ -431,16 +529,19 @@ def _handle_nested_playbook(
             "never an exemption for the construction"
         )
 
-
 def _collect_from_play_file(
-    path: Path, *, root: Path, role: str, edges: set[str], seen: set[Path]
+    path: Path, *, root: Path, edges: set[str], seen: set
 ) -> None:
-    """Edges a play file contributes to `role`, following `import_playbook`."""
+    """Edges a play file contributes, following `import_playbook`.
+
+    `seen` is the caller's, shared across every hop, so a cycle through any
+    construction terminates rather than recursing.
+    """
     resolved = path.resolve()
-    if resolved in seen:
+    if ("play", resolved) in seen:
         return
-    seen.add(resolved)
-    for document in _documents(path):
+    seen.add(("play", resolved))
+    for document in _documents(path, root):
         if not isinstance(document, list):
             continue
         for play in document:
@@ -451,14 +552,18 @@ def _collect_from_play_file(
                 if not _is_literal(imported):
                     raise DerivationRefused(
                         f"{_relative(path, root)}: `import_playbook` names its "
-                        f"playbook by something other than a literal ({imported!r}), "
-                        "so the derivation cannot follow it"
+                        f"playbook by something other than a literal "
+                        f"({imported!r}), so the derivation cannot follow it"
                     )
                 target = (path.parent / str(imported)).resolve()
-                if target.is_file():
-                    _collect_from_play_file(
-                        target, root=root, role=role, edges=edges, seen=seen
+                if not target.is_file():
+                    raise DerivationRefused(
+                        f"{_relative(path, root)}: `import_playbook` names "
+                        f"{imported!r}, which resolves to no file. Refused "
+                        "rather than passed over -- every edge in the playbook "
+                        "it names would otherwise be missing silently"
                     )
+                _collect_from_play_file(target, root=root, edges=edges, seen=seen)
                 continue
             for entry in play.get("roles") or []:
                 if isinstance(entry, str):
@@ -474,18 +579,17 @@ def _collect_from_play_file(
                         f"{_relative(path, root)}: a `roles:` entry names a role "
                         f"by something other than a literal ({name!r})"
                     )
-                edges.add(str(name))
+                _add_edge(str(name), origin=path, root=root, edges=edges)
             for key in PLAY_TASK_KEYS:
                 _walk_tasks(
-                    play.get(key), origin=path, root=root, role=role, edges=edges
+                    play.get(key), origin=path, root=root, edges=edges, seen=seen
                 )
-
 
 def _refuse_routes_out_of_a_roles_own_files(root: Path, role: str) -> None:
     """Refuse any construction in a role's own files reaching outside it."""
     role_root = Path(root) / ROLES_DIRECTORY / role
     for path in _role_own_files(root, role):
-        for document in _documents(path):
+        for document in _documents(path, root):
             tasks = document if isinstance(document, list) else None
             if tasks is None:
                 continue
@@ -545,7 +649,7 @@ def derive_graph(root) -> dict[str, set[str]]:
         _refuse_redirected_scenario_plays(root, role)
         meta = root / ROLES_DIRECTORY / role / "meta" / "main.yml"
         if meta.is_file():
-            for document in _documents(meta):
+            for document in _documents(meta, root):
                 if not isinstance(document, dict):
                     continue
                 for entry in document.get("dependencies") or []:
@@ -566,27 +670,16 @@ def derive_graph(root) -> dict[str, set[str]]:
                             "dependency this derivation cannot close over is an "
                             "edge it would otherwise drop with nothing reporting"
                         )
-                    edges.add(str(name))
-        seen: set[Path] = set()
+                    _add_edge(str(name), origin=meta, root=root, edges=edges)
+        seen: set = set()
         for path in _scenario_play_files(root, role):
-            _collect_from_play_file(
-                path, root=root, role=role, edges=edges, seen=seen
-            )
-        # A role named by PATH is refused rather than filtered. `- role:
-        # ../../other_role` satisfies every literal check above, and the dotted
-        # filter below would then discard it for containing a `.` -- dropping a
-        # real edge for a reason that has nothing to do with why the filter
-        # exists. Refusing says so instead.
-        for edge in sorted(edges):
-            if "/" in edge:
-                raise DerivationRefused(
-                    f"{ROLES_DIRECTORY}/{role}: reaches a role by path "
-                    f"({edge!r}) rather than by name. The derivation resolves a "
-                    "role name to a role directory and cannot do that for a "
-                    "path, so this is refused rather than silently discarded by "
-                    "the external-content filter below"
-                )
-        # Two edges are then dropped rather than recorded. An external, dotted
+            _collect_from_play_file(path, root=root, edges=edges, seen=seen)
+        # A role named by PATH is refused where the edge is ADDED, in
+        # `_add_edge`, so the refusal can name the file holding it. Refusing
+        # here instead would name only this directory: the edge set is
+        # flattened by now and provenance is gone.
+        #
+        # Two edges are dropped rather than recorded. An external, dotted
         # Galaxy role is content this repository neither authors nor tests, so
         # it contributes nothing and is not a refusal -- `docker`'s
         # `meta/main.yml` names one today, and it is installed under a dotted
@@ -613,7 +706,7 @@ def reverse_closure(graph, seeds) -> set[str]:
     Terminates on a cycle rather than refusing one -- two roles' scenarios
     converging each other is legal, and nothing in this repository stops it.
     """
-    edges = {role: set(targets) for role, targets in dict(graph).items()}
+    edges = {role: set(targets) for role, targets in graph.items()}
     owed = set(seeds)
     frontier = list(owed)
     while frontier:

@@ -823,28 +823,48 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
         # test that keeps passing while changing subject establishes nothing
         # about either subject. The discovery step is the one writing the job's
         # roles output; that is what identifies it, whatever its position.
+        # The discovery step is the one writing a job output whose own
+        # expression reads a step output AND whose script enumerates roles.
+        # Identified by what it produces rather than by its position, because a
+        # step inserted ahead of it re-targets a positional locator silently --
+        # the assertion still passes, about a different script.
+        #
+        # NO FALLBACK. An earlier version of this fix fell back to the old
+        # positional predicate when the lookup failed, which meant a renamed
+        # output silently restored exactly the behaviour being removed. If the
+        # step cannot be identified, that is the finding.
         discovering = None
         for job_key, job_body in (self.workflow.get("jobs") or {}).items():
-            produced = compact((job_body.get("outputs") or {}).get("roles", ""))
-            found = re.search(r"steps\.([A-Za-z0-9_-]+)\.outputs\.", produced)
-            if found:
-                discovering = (job_key, found.group(1))
+            for produced in (job_body.get("outputs") or {}).values():
+                found = re.search(
+                    r"steps\.([A-Za-z0-9_-]+)\.outputs\.", compact(produced)
+                )
+                if not found:
+                    continue
+                for job, index, step in steps(self.workflow):
+                    if (
+                        job == job_key
+                        and step.get("id") == found.group(1)
+                        and step.get("run")
+                        and "molecule" in str(step.get("run"))
+                        and re.search(r"ansible/roles", str(step.get("run")))
+                    ):
+                        discovering = (job_key, found.group(1))
+            if discovering:
                 break
+        self.assertIsNotNone(
+            discovering,
+            "no step in ansible-verify.yml both enumerates roles under "
+            "ansible/roles/ and writes a job output. This assertion identifies "
+            "the discovery step by what it produces; if that has changed, "
+            "re-point it deliberately rather than letting it bind to whichever "
+            "step happens to come first.",
+        )
         candidates = [
             (job, index, step)
             for job, index, step in steps(self.workflow)
-            if step.get("run")
-            and discovering is not None
-            and job == discovering[0]
-            and step.get("id") == discovering[1]
+            if job == discovering[0] and step.get("id") == discovering[1]
         ]
-        if not candidates:
-            candidates = [
-                (job, index, step)
-                for job, index, step in steps(self.workflow)
-                if step.get("run") and "molecule" in str(step.get("run"))
-                and re.search(r"ansible/roles", str(step.get("run")))
-            ]
         self.assertTrue(
             candidates,
             "no step in ansible-verify.yml discovers roles under ansible/roles/",
