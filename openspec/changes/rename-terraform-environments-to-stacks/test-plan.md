@@ -19,13 +19,19 @@ The dispatched test-path glob was `.github/tests/*.py` and nothing was written o
     python3 -m unittest discover --start-directory .github/tests
     Ran 601 tests in 10.287s — OK
 
-That matches `design.md` decision 6's recorded baseline of 601 green on trunk `032f923`, so the plan commit itself changed no test outcome.
+That matched `design.md` decision 6's recorded baseline of 601 green on trunk `032f923`, so the plan commit itself changed no test outcome.
 
-After this pass, from the same command:
+**Re-baselined after rebasing onto trunk `74ea5b9`.** The figures above predate three of main's own continuous-integration changes — `narrow-the-molecule-trigger-to-what-it-reads`, `select-the-molecule-matrix-per-role` and `cache-the-apt-index-within-a-converge` — which between them added 111 tests and one module, `test_the_suite_is_triggered_by_what_it_reads.py`. Measured in a throwaway checkout of `74ea5b9`:
 
-    Ran 641 tests in 11.768s — FAILED (failures=72)
+    Ran 712 tests in 20.294s — OK
 
-641 − 601 = 40, which is exactly this module's test count. **Every failure is in the new module**; re-running and filtering the `FAIL:`/`ERROR:` lines for anything outside `test_terraform_stacks_are_the_iterated_unit` yields zero. The 601 pre-existing tests are still green. The 72 count exceeds 40 because eight of the new tests report per-workflow or per-tool `subTest` failures.
+And from this branch, with the derived module present:
+
+    Ran 752 tests in 20.511s — FAILED (failures=72)
+
+752 − 712 = 40, which is exactly this module's test count, unchanged by the rebase. **Every failure is in the new module**; filtering the `FAIL:`/`ERROR:` lines for anything outside `test_terraform_stacks_are_the_iterated_unit` yields zero. The 712 pre-existing tests are still green. The 72 count exceeds 40 because eight of the new tests report per-workflow or per-tool `subTest` failures.
+
+One measurement trap is worth recording, because it reads as three real regressions. Taking the 712 figure by moving the derived module aside **in this working tree** instead makes `test_ci_configuration`'s three repository-wide credential scans fail: `tracked_files()` raises `TrackedFilesUnavailable` when a tracked path is absent from the working tree, rather than scanning around it. That is the suite behaving as designed, and it is why the trunk figure was taken in a checkout of trunk.
 
 `terraform validate` was **not** run and no Molecule scenario was touched: this change touches no Terraform module and no Ansible role, which is `design.md` decision 6's own reading and the reason only the third of `AGENTS.md`'s three test rows was dispatched.
 
@@ -373,11 +379,11 @@ The single sentence this delta changes in *Automated Dependency Updates* is "add
 | GAP (uncovered, not a static read of a committed file) | 34 |
 | **Total** | **98** |
 
-No scenario was reached through a `REMOVED` or `RENAMED` delta: all twenty-one deltas are `MODIFIED`, and `design.md` decision 3 records that neither requirement names nor scenario names are renamed here.
+No scenario was reached through a `REMOVED` or `RENAMED` delta: all twenty-two deltas are `MODIFIED`, and `design.md` decision 3 records that neither requirement names nor scenario names are renamed here.
 
 ## Obsolete-test candidates
 
-All twenty-one deltas are `MODIFIED`, so this list is **applicable and non-empty**. Every entry is a **candidate for human confirmation, not a conclusion.** Nothing below was edited, deleted or disabled by this pass.
+All twenty-two deltas are `MODIFIED`, so this list is **applicable and non-empty**. Every entry is a **candidate for human confirmation, not a conclusion.** Nothing below was edited, deleted or disabled by this pass.
 
 **The word "obsolete" means something narrow here, and getting it wrong would be expensive.** These tests assert correct behaviour. What is superseded is the **vocabulary they assert it in**: each one keys on the literal `terraform/environments`, or on an identifier this change retires, and after the move it fails against a correct implementation. `tasks.md` 4.1 and 4.2 already assign their repair to the implementing author. **The action each one needs is a re-pointing, never a deletion**, and `tasks.md` 4.4 forbids renaming the module or the method while doing it.
 
@@ -454,4 +460,4 @@ In the order the failures will resolve:
 4. **`AGENTS.md`** clears `TestTheWriteCredentialRecordNamesTheStackRoot` (1).
 5. **The documentation and `direnv` sweep** (`tasks.md` 5.2–5.5 and 7.1–7.4) is what clears `TestNoCommittedFileStillNamesTheOldTerraformRoot` (1) — and it will not go green until `.github/tests`' own literals move too (`tasks.md` 4.1 and 4.2), because that sweep reads this suite's modules like any other committed file.
 
-**Expected end state: 641 tests, green.** A count below 641 is a module that failed to import, not a suite that got smaller.
+**Expected end state: 752 tests, green.** A count below 752 is a module that failed to import, not a suite that got smaller.
