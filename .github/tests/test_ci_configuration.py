@@ -816,13 +816,6 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
         requires. Reconsider this assertion, do not weaken it, if the
         implementation satisfies the scenario by another means.
         """
-        # PINNED TO THE OUTPUT IT WRITES, not to `candidates[0]`. This step was
-        # selected as the FIRST whose `run:` mentions both `molecule` and
-        # `ansible/roles`, so a step inserted ahead of discovery re-targets it
-        # silently -- the assertion still passes, about a different script. A
-        # test that keeps passing while changing subject establishes nothing
-        # about either subject. The discovery step is the one writing the job's
-        # roles output; that is what identifies it, whatever its position.
         # The discovery step is the one writing a job output whose own
         # expression reads a step output AND whose script enumerates roles.
         # Identified by what it produces rather than by its position, because a

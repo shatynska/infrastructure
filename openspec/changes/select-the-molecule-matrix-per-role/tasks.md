@@ -61,6 +61,16 @@ Verification commands referenced below, from this project's conventions:
 - [x] 4.3 `pre-commit run --all-files`, green. Provision first — a fresh working tree carries no Galaxy content and `ansible-playbook --syntax-check` then fails in a way that reads as a broken dependency rather than an unprovisioned tree.
 - [x] 4.4 `openspec validate --all`, green.
 
+## 4b. What the code review changed, and one deviation it forced
+
+- [x] 4b.1 **Three rounds of code review against the diff**, each finding routes that reached a role and were *passed over* — the disposition the delta names as the only non-conformant one. Rounds two and three found defects introduced by the previous round's fix rather than surviving it: a cycle guard minted per hop, which made two playbooks invoking each other recurse until the interpreter gave up; a follow-into that passed over what it could not resolve, when the unresolvable spelling was the natural one (`ansible-playbook` resolves against the controller's working directory, not the including file's); and a blanket refusal of `include_tasks` that answered the easy question more strictly than the hard one, since a literal nested `ansible-playbook` was being followed. The last round found the loader's catch-all constructors still installed **under a docstring asserting they had been deleted** — the shape this repository holds to be worse than an honest convention, since a reader auditing the module would have read the claim and stopped.
+- [x] 4b.2 **A second test module, written by the implementer rather than by the test author** — `.github/tests/test_the_derivation_follows_or_refuses_every_route.py`, 17 tests. This deviates from the workflow's rule that tests are derived by another author, and it is recorded here rather than only in that file because the rule being deviated from lives in the change's artifacts.
+
+      The reason: these cover behaviour *code review added*, which did not exist when the delta's tests were derived and which no author reading the delta alone would have written. The alternative was to leave seven refusals asserted by nothing, in a change whose own delta requires the derivation to be checked statically.
+
+      What it costs is stated in the module's own header and repeated here so a reader of this file need not go looking: written after the code by whoever wrote it, these tests establish that each refusal fires on material chosen to provoke it — **not that it is the right refusal**. That judgment rests on the delta and on the review that asked for them, neither of which is the implementer.
+- [x] 4b.3 **Three edits to tests this change did not write**, each tasked before it was made (3.4a–3.4c) and each disclosed in its commit: the `GATE_TABLE` row the delta reverses, and two locators binding an input to "whichever matched", which a second discovery output left unset under `set -u`. None weakens a test; the gate row strengthens an expectation and the locators are strictly more precise.
+
 ## 5. The record
 
 - [ ] 5.1 Delete `docs/change-queue.md` entry 67, which is this change, at the archive.

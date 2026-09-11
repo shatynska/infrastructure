@@ -310,6 +310,67 @@ class TestTheRemainingRoutes(unittest.TestCase):
             "a scenario carrying a `!vault` value failed to contribute its edges",
         )
 
+    def test_a_tag_this_module_has_never_seen_is_refused(self) -> None:
+        """The negative twin of the test above, and the one that establishes
+        the loader names its tags rather than swallowing all of them.
+
+        Without it, a catch-all multi-constructor over `!` passes the positive
+        test identically while mapping every unknown tag to `None` -- documents
+        come back empty, edges vanish, and `_documents`' refusal never fires.
+        That is the silent-narrowing direction, and it shipped once in this
+        change: the explicit constructors were added and the catch-alls were
+        not deleted, under a docstring asserting they had been.
+        """
+        tree = Tree(self)
+        tree.scenario("core", converge=converge_through_roles_list("- core"))
+        tree.scenario(
+            "user",
+            converge=(
+                "---\n- name: Converge\n  hosts: all\n  vars:\n"
+                "    surprise: !badtag whatever\n  roles:\n    - core\n"
+            ),
+        )
+        with self.assertRaises(symbol("DerivationRefused")) as raised:
+            graph_of(tree.root)
+        self.assertIn(
+            "user/molecule/default/converge.yml",
+            str(raised.exception),
+            "a tag this module has never seen was swallowed rather than "
+            f"refused; it said {str(raised.exception)!r}",
+        )
+
+    def test_a_helper_two_levels_deep_may_reach_back_into_its_scenario(self) -> None:
+        """The scenario boundary is the scenario's, fixed once.
+
+        Recomputed per hop it moves down with the included file, so a helper in
+        a subdirectory reaching a file beside the converge is refused as
+        "outside the scenario" while sitting inside it -- reimposing on a
+        two-level helper the cost the include narrowing removed from a
+        one-level one, with a message that is false.
+        """
+        tree = Tree(self)
+        tree.scenario("core", converge=converge_through_roles_list("- core"))
+        tree.scenario(
+            "user",
+            converge=_converge_with_task("ansible.builtin.include_tasks: sub/helper.yml"),
+        )
+        scenario = tree.role_dir("user") / "molecule" / "default"
+        (scenario / "sub").mkdir(parents=True, exist_ok=True)
+        (scenario / "sub" / "helper.yml").write_text(
+            "---\n- name: Reach back up\n  ansible.builtin.include_tasks: ../shared.yml\n",
+            encoding="utf-8",
+        )
+        (scenario / "shared.yml").write_text(
+            "---\n- name: Reach the sibling\n  ansible.builtin.include_role:\n    name: core\n",
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "core",
+            graph_of(tree.root).get("user", set()),
+            "a helper one directory deep, reaching a file beside the converge, "
+            "was refused or lost its edge. That file is inside the scenario",
+        )
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

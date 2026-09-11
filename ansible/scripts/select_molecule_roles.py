@@ -165,13 +165,6 @@ for _tag in ("!vault", "!unsafe"):
         _tag, lambda loader, node: loader.construct_scalar(node)
     )
 
-_AnsibleTolerantLoader.add_multi_constructor(
-    "!", lambda loader, suffix, node: None
-)
-_AnsibleTolerantLoader.add_multi_constructor(
-    "tag:", lambda loader, suffix, node: None
-)
-
 
 def _documents(path: Path, root: Path):
     """Every YAML document in a file.
@@ -206,6 +199,7 @@ def _documents(path: Path, root: Path):
             "contributes no edges is how a role stops being tested with nothing "
             "reporting"
         ) from error
+
 
 def _is_literal(value) -> bool:
     """A name this derivation can close over: a plain string, no expression."""
@@ -340,7 +334,9 @@ def _escapes(value: str, origin: Path, role_root: Path) -> bool:
     return False
 
 
-def _walk_tasks(tasks, *, origin: Path, root: Path, edges: set[str], seen: set) -> None:
+def _walk_tasks(
+    tasks, *, origin: Path, root: Path, edges: set[str], seen: set, scenario_root: Path
+) -> None:
     """Collect role edges from a task list, refusing what cannot be closed over."""
     if not isinstance(tasks, list):
         return
@@ -362,15 +358,34 @@ def _walk_tasks(tasks, *, origin: Path, root: Path, edges: set[str], seen: set) 
             elif key in TASK_INCLUSION_KEYS:
                 target = value.get("file") if isinstance(value, dict) else value
                 _follow_included_tasks(
-                    target, origin=origin, root=root, key=key, edges=edges, seen=seen
+                    target,
+                    origin=origin,
+                    root=root,
+                    key=key,
+                    edges=edges,
+                    seen=seen,
+                    scenario_root=scenario_root,
                 )
             elif key in COMMAND_KEYS:
                 _handle_nested_playbook(
-                    value, origin=origin, root=root, key=key, edges=edges, seen=seen
+                    value,
+                    origin=origin,
+                    root=root,
+                    key=key,
+                    edges=edges,
+                    seen=seen,
+                    scenario_root=scenario_root,
                 )
         for block in BLOCK_KEYS:
             if block in task:
-                _walk_tasks(task[block], origin=origin, root=root, edges=edges, seen=seen)
+                _walk_tasks(
+                    task[block],
+                    origin=origin,
+                    root=root,
+                    edges=edges,
+                    seen=seen,
+                    scenario_root=scenario_root,
+                )
 
 
 def _add_edge(name: str, *, origin: Path, root: Path, edges: set[str]) -> None:
@@ -394,7 +409,14 @@ def _add_edge(name: str, *, origin: Path, root: Path, edges: set[str]) -> None:
 
 
 def _follow_included_tasks(
-    target, *, origin: Path, root: Path, key: str, edges: set[str], seen: set
+    target,
+    *,
+    origin: Path,
+    root: Path,
+    key: str,
+    edges: set[str],
+    seen: set,
+    scenario_root: Path,
 ) -> None:
     """Read an included task file, or refuse where it cannot be read.
 
@@ -416,8 +438,14 @@ def _follow_included_tasks(
             "it. Refused rather than passed over: any role reached through it "
             "would contribute no edge and nothing would report that"
         )
-    scenario_root = origin.parent
-    resolved = (scenario_root / target).resolve()
+    # THE BOUNDARY IS THE SCENARIO'S, FIXED ONCE, not `origin.parent`. On the
+    # first hop those are the same; on the second `origin` is the included file
+    # and the boundary would move down with it, so a helper one directory deep
+    # reaching a file beside the converge would be refused as "outside the
+    # scenario" while sitting squarely inside it. That reimposes on a two-level
+    # helper exactly the cost the narrowing above removed from a one-level one,
+    # and says something false while doing it.
+    resolved = (origin.parent / target).resolve()
     try:
         resolved.relative_to(scenario_root.resolve())
     except ValueError:
@@ -439,7 +467,15 @@ def _follow_included_tasks(
     seen.add(("tasks", resolved))
     for document in _documents(resolved, root):
         if isinstance(document, list):
-            _walk_tasks(document, origin=resolved, root=root, edges=edges, seen=seen)
+            _walk_tasks(
+                document,
+                origin=resolved,
+                root=root,
+                edges=edges,
+                seen=seen,
+                scenario_root=scenario_root,
+            )
+
 
 def _handle_nested_playbook(
     value,
@@ -449,6 +485,7 @@ def _handle_nested_playbook(
     key: str,
     edges: set[str] | None = None,
     seen: set | None = None,
+    scenario_root: Path | None = None,
 ) -> None:
     """Follow a nested `ansible-playbook`, or refuse where it cannot be followed.
 
@@ -489,6 +526,13 @@ def _handle_nested_playbook(
             # and therefore the natural spelling. Both are tried before
             # refusing, so a correct invocation is followed rather than refused
             # for being written the ordinary way.
+            #
+            # Where BOTH resolve and name different files, the origin-relative
+            # one wins here and the root-relative one is what would actually
+            # run. The ambiguity is accepted rather than refused: it needs two
+            # files to exist at the same relative path from two different
+            # directories, and the cost of getting it wrong is a wider run
+            # rather than a narrower one.
             candidates = [(origin.parent / target).resolve(), (Path(root) / target).resolve()]
             resolved = next((path for path in candidates if path.is_file()), None)
             if resolved is None:
@@ -511,6 +555,7 @@ def _handle_nested_playbook(
                 root=root,
                 edges=edges,
                 seen=seen if seen is not None else set(),
+                scenario_root=scenario_root,
             )
             continue
         entry = (
@@ -529,8 +574,9 @@ def _handle_nested_playbook(
             "never an exemption for the construction"
         )
 
+
 def _collect_from_play_file(
-    path: Path, *, root: Path, edges: set[str], seen: set
+    path: Path, *, root: Path, edges: set[str], seen: set, scenario_root: Path | None = None
 ) -> None:
     """Edges a play file contributes, following `import_playbook`.
 
@@ -538,6 +584,12 @@ def _collect_from_play_file(
     construction terminates rather than recursing.
     """
     resolved = path.resolve()
+    # The scenario directory this walk is bounded by. Taken from the play file
+    # the caller handed in, and carried unchanged through every hop -- an
+    # imported or nested playbook belongs to the scenario that reached it, not
+    # to whatever directory it happens to sit in.
+    if scenario_root is None:
+        scenario_root = path.parent
     if ("play", resolved) in seen:
         return
     seen.add(("play", resolved))
@@ -563,7 +615,13 @@ def _collect_from_play_file(
                         "rather than passed over -- every edge in the playbook "
                         "it names would otherwise be missing silently"
                     )
-                _collect_from_play_file(target, root=root, edges=edges, seen=seen)
+                _collect_from_play_file(
+                    target,
+                    root=root,
+                    edges=edges,
+                    seen=seen,
+                    scenario_root=scenario_root,
+                )
                 continue
             for entry in play.get("roles") or []:
                 if isinstance(entry, str):
@@ -582,8 +640,14 @@ def _collect_from_play_file(
                 _add_edge(str(name), origin=path, root=root, edges=edges)
             for key in PLAY_TASK_KEYS:
                 _walk_tasks(
-                    play.get(key), origin=path, root=root, edges=edges, seen=seen
+                    play.get(key),
+                    origin=path,
+                    root=root,
+                    edges=edges,
+                    seen=seen,
+                    scenario_root=scenario_root,
                 )
+
 
 def _refuse_routes_out_of_a_roles_own_files(root: Path, role: str) -> None:
     """Refuse any construction in a role's own files reaching outside it."""
