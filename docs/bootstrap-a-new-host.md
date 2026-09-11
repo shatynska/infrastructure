@@ -18,28 +18,13 @@ What you will have at the end:
 
 ## Before you edit this document
 
-Two habits, learned by getting them wrong. Both are about the *kind* of mistake
-this document invites, which is not carelessness — every defect they exist to
-catch read fluently and survived a review.
+Two habits, learned by getting them wrong. Both are about the *kind* of mistake this document invites, which is not carelessness — every defect they exist to catch read fluently and survived a review.
 
-**A fact stated in several places must be corrected in all of them, and the
-list is rebuilt by grep, never remembered.** Where a deploy key's private half
-lives is stated in three places; the Tailscale auth key's reuse in five; what
-the heartbeat ping key addresses in three. A change that fixes one and asserts
-it fixed them all is how a defect reaches a commit message as fixed.
+**A fact stated in several places must be corrected in all of them, and the list is rebuilt by grep, never remembered.** Where a deploy key's private half lives is stated in three places; the Tailscale auth key's reuse in five; what the heartbeat ping key addresses in three. A change that fixes one and asserts it fixed them all is how a defect reaches a commit message as fixed.
 
-**A fix aimed at the row a reviewer named will recreate the defect one row
-over.** Ask instead what predicate produced it and sweep every candidate: *for
-each creation step in a per-environment stage, what does the second run do?*
-*For each `ssh-keygen`, where does the private half sit and what removes it?*
-Both of those, swept, found instances nobody had reported.
+**A fix aimed at the row a reviewer named will recreate the defect one row over.** Ask instead what predicate produced it and sweep every candidate: *for each creation step in a per-environment stage, what does the second run do?* *For each `ssh-keygen`, where does the private half sit and what removes it?* Both of those, swept, found instances nobody had reported.
 
-The generator behind both: **a property that holds when this document is read
-once, straight through, and fails when it is read the way it is actually used**
-— twice, once per environment; across elapsed time, with a `git add -A` in the
-middle; by following its own cross-references; on a rebuild, re-entering from
-the middle; by someone who wants one environment and is translating every "two"
-as they go. Each of those is a sweep, and each has caught something.
+The generator behind both: **a property that holds when this document is read once, straight through, and fails when it is read the way it is actually used** — twice, once per environment; across elapsed time, with a `git add -A` in the middle; by following its own cross-references; on a rebuild, re-entering from the middle; by someone who wants one environment and is translating every "two" as they go. Each of those is a sweep, and each has caught something.
 
 ## Stage 0. Accounts, tools and keys
 

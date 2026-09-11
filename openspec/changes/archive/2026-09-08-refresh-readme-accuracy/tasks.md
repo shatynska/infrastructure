@@ -79,24 +79,8 @@
 
 ## Branch and working tree removed
 
-Task 8.6 asked for the branch and working tree to be removed, and both were:
-verified 2026-09-08 by `make-openspec-validation-a-usable-gate` —
-`git ls-remote --heads origin` returns no `refresh-readme-accuracy` ref, no such
-branch exists locally, and no such working tree is registered. (Narrowed from an
-earlier wording that said the command returned `refs/heads/main` alone: that was
-true when run and stopped being true within the day, as Dependabot opened
-branches. A citation that cannot be re-run is what the correction rule in
-`AGENTS.md` exists to prevent, and this record should not be the first to break
-it.)
+Task 8.6 asked for the branch and working tree to be removed, and both were: verified 2026-09-08 by `make-openspec-validation-a-usable-gate` — `git ls-remote --heads origin` returns no `refresh-readme-accuracy` ref, no such branch exists locally, and no such working tree is registered. (Narrowed from an earlier wording that said the command returned `refs/heads/main` alone: that was true when run and stopped being true within the day, as Dependabot opened branches. A citation that cannot be re-run is what the correction rule in `AGENTS.md` exists to prevent, and this record should not be the first to break it.)
 
-The task is recorded here in prose rather than as a checkbox, and this is **not**
-a disclosure of unperformed work: it was performed. It could never have been
-ticked, because removal happens after the record's own pull request merges,
-which is after the commit that writes this file. A checkbox for it is unticked
-by construction and stays that way forever — which is exactly what
-`openspec validate --archived` reported, and the only reason this change was red.
+The task is recorded here in prose rather than as a checkbox, and this is **not** a disclosure of unperformed work: it was performed. It could never have been ticked, because removal happens after the record's own pull request merges, which is after the commit that writes this file. A checkbox for it is unticked by construction and stays that way forever — which is exactly what `openspec validate --archived` reported, and the only reason this change was red.
 
-The rule that follows from it now lives in `AGENTS.md`'s project conventions: a
-change's `tasks.md` ends at the archive commit. This is the only archived change
-that put a post-archive step in its task list, so the rule is written narrowly —
-the archive step itself belongs in `tasks.md` and is unaffected.
+The rule that follows from it now lives in `AGENTS.md`'s project conventions: a change's `tasks.md` ends at the archive commit. This is the only archived change that put a post-archive step in its task list, so the rule is written narrowly — the archive step itself belongs in `tasks.md` and is unaffected.

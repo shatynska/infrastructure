@@ -1,8 +1,4 @@
-Two steps this change owes are not in this list, because they happen after the
-commit that writes this file and so could never be ticked in it: removing the
-branch and removing the working tree, both after the record's own pull request
-has merged and every other pull request this change opened is merged. The
-archive step itself is task 6.5 below and is unaffected.
+Two steps this change owes are not in this list, because they happen after the commit that writes this file and so could never be ticked in it: removing the branch and removing the working tree, both after the record's own pull request has merged and every other pull request this change opened is merged. The archive step itself is task 6.5 below and is unaffected.
 
 ## 1. The alert rules
 
@@ -13,18 +9,9 @@ archive step itself is task 6.5 below and is unaffected.
 
 ## 2. Derived tests
 
-Written by an author other than whoever implements section 1, from the added
-requirement in this change's delta spec rather than from the rules as written.
-Test command: `python3 -m unittest discover --start-directory .github/tests`,
-run from the repository root; test-path glob `.github/tests/*.py`. The Terraform
-and Molecule rows of `AGENTS.md`'s testing table do not apply — this change
-touches neither a Terraform module nor an Ansible role.
+Written by an author other than whoever implements section 1, from the added requirement in this change's delta spec rather than from the rules as written. Test command: `python3 -m unittest discover --start-directory .github/tests`, run from the repository root; test-path glob `.github/tests/*.py`. The Terraform and Molecule rows of `AGENTS.md`'s testing table do not apply — this change touches neither a Terraform module nor an Ansible role.
 
-A `.github/tests` assertion is a static read of a committed file, so it cannot
-avoid naming the identifiers it reads. Naming a metric or a configuration key
-below is therefore a constraint of the test layer, not the plan handing the
-author its answers: what is left to the author is which properties are worth
-asserting, how each is expressed, and where in the suite they belong.
+A `.github/tests` assertion is a static read of a committed file, so it cannot avoid naming the identifiers it reads. Naming a metric or a configuration key below is therefore a constraint of the test layer, not the plan handing the author its answers: what is left to the author is which properties are worth asserting, how each is expressed, and where in the suite they belong.
 
 - [x] 2.1 Assert the `prometheus_rules` config declares an alert whose expression reads `traefik_tls_certs_not_after`, and whose annotations name the certificate rather than describing it generically. Derives from the requirement's first scenario. Verify the assertion fails against the file as it stands before section 1.
 - [x] 2.2 Assert the alert's threshold is strictly less than the renewal lead time it is stated against — a numeric read of the expression, compared with 30. Derives from the requirement's second normative paragraph and its "renewing normally raises no alert" scenario, which nothing else in this change holds. State in the test's own text where 30 comes from: it is Traefik's default renewal lead time, which holds only because the stack sets no `certificatesDuration`. Verify the assertion fails when the threshold is raised to 30 in a copy of the file.

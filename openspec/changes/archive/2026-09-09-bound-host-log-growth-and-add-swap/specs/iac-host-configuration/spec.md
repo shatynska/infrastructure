@@ -1,44 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Container Logs Are Bounded by the Host's Daemon Configuration
-Ansible SHALL configure the host's container runtime daemon so that a container
-the daemon subsequently creates writes a bounded on-disk log unless that
-container's own definition specifies its logging otherwise: a maximum size per
-log file and a maximum number of retained files, both recorded in the daemon's
-own configuration file on the host.
+Ansible SHALL configure the host's container runtime daemon so that a container the daemon subsequently creates writes a bounded on-disk log unless that container's own definition specifies its logging otherwise: a maximum size per log file and a maximum number of retained files, both recorded in the daemon's own configuration file on the host.
 
-The exception is what a daemon-level default is: a value a container's own
-definition may override. The obligation this requirement makes is that the
-default is bounded, so that a container which says nothing about its logging is
-bounded rather than unlimited — not that no container can ever choose
-otherwise.
+The exception is what a daemon-level default is: a value a container's own definition may override. The obligation this requirement makes is that the default is bounded, so that a container which says nothing about its logging is bounded rather than unlimited — not that no container can ever choose otherwise.
 
-**The bound SHALL be a property of the daemon, not of any application's
-service-definition file.** An application's Compose file can only bound the
-services its author remembered to annotate, and only for applications whose
-Compose files this repository is able to edit — which excludes every
-application deployed here from its own repository. A daemon-level default binds
-both, and binds a service added later without anyone editing it. Placing the
-bound at the daemon SHALL NOT be read as an exception to "Configuration Scope
-Stops at the Container Runtime": the daemon is the runtime, and configuring it
-is inside that boundary, whereas writing a `logging:` stanza into an
-application's Compose file would not be.
+**The bound SHALL be a property of the daemon, not of any application's service-definition file.** An application's Compose file can only bound the services its author remembered to annotate, and only for applications whose Compose files this repository is able to edit — which excludes every application deployed here from its own repository. A daemon-level default binds both, and binds a service added later without anyone editing it. Placing the bound at the daemon SHALL NOT be read as an exception to "Configuration Scope Stops at the Container Runtime": the daemon is the runtime, and configuring it is inside that boundary, whereas writing a `logging:` stanza into an application's Compose file would not be.
 
-**The bound SHALL be a ceiling rather than a retention target.** Its purpose is
-that no container can consume the host's root filesystem, not that logs be
-small. Where the host has no log aggregation, the runtime's own files are the
-only history an incident has to read, and a limit chosen to minimise disk
-rather than to bound it destroys that history for a resource the host has in
-surplus. The chosen values SHALL be justified against the host's actual free
-space, and revisited if log aggregation is introduced.
+**The bound SHALL be a ceiling rather than a retention target.** Its purpose is that no container can consume the host's root filesystem, not that logs be small. Where the host has no log aggregation, the runtime's own files are the only history an incident has to read, and a limit chosen to minimise disk rather than to bound it destroys that history for a resource the host has in surplus. The chosen values SHALL be justified against the host's actual free space, and revisited if log aggregation is introduced.
 
-**The guarantee SHALL be stated as reaching containers created after the
-configuration is applied.** The runtime resolves a container's log options when
-the container is created, so containers already running when the daemon is
-reconfigured retain the configuration they were created with, and a restart of
-the daemon does not change them. A converge SHALL NOT be reported, in this
-repository's documentation or its verification, as having bounded a container
-that predates it.
+**The guarantee SHALL be stated as reaching containers created after the configuration is applied.** The runtime resolves a container's log options when the container is created, so containers already running when the daemon is reconfigured retain the configuration they were created with, and a restart of the daemon does not change them. A converge SHALL NOT be reported, in this repository's documentation or its verification, as having bounded a container that predates it.
 
 #### Scenario: A container created after configuration has a bounded log
 - **WHEN** the container runtime daemon creates a container, whose definition specifies no logging options, on a host Ansible has configured
@@ -57,53 +28,19 @@ that predates it.
 - **THEN** it SHALL name the logging driver and both bounds, so that the guarantee is verifiable from the host's own configuration rather than inferred from each container
 
 ### Requirement: The Host Carries Swap That Survives a Reboot
-Ansible SHALL provide the configured host with swap space, and that swap SHALL
-be active after a converge and again after a reboot without a manual step.
+Ansible SHALL provide the configured host with swap space, and that swap SHALL be active after a converge and again after a reboot without a manual step.
 
-Swap SHALL be backed by a file on the host's root filesystem rather than by a
-partition or an attached volume: a partition cannot be added to an already
-provisioned host without repartitioning it, and an attached network volume makes
-the kernel's last-resort memory tier depend on a network device — the
-dependency least able to tolerate the pressure that makes swap necessary. The
-host's dedicated data volume in particular SHALL NOT be used.
+Swap SHALL be backed by a file on the host's root filesystem rather than by a partition or an attached volume: a partition cannot be added to an already provisioned host without repartitioning it, and an attached network volume makes the kernel's last-resort memory tier depend on a network device — the dependency least able to tolerate the pressure that makes swap necessary. The host's dedicated data volume in particular SHALL NOT be used.
 
-**The swap file SHALL be readable and writable only by `root`.** Its contents
-are whatever the kernel evicted from process memory, so it is a file that can
-hold any secret any process on the host held. This obligation is stated here
-rather than inherited: the existing "Secrets Never Committed in Plaintext and
-Never Left World-Readable on Host" requirement reaches a file that a task
-renders a protected value into, which a swap file is not. The reason is the
-same one, and this host has an unprivileged interactive account for which the
-difference is not academic.
+**The swap file SHALL be readable and writable only by `root`.** Its contents are whatever the kernel evicted from process memory, so it is a file that can hold any secret any process on the host held. This obligation is stated here rather than inherited: the existing "Secrets Never Committed in Plaintext and Never Left World-Readable on Host" requirement reaches a file that a task renders a protected value into, which a swap file is not. The reason is the same one, and this host has an unprivileged interactive account for which the difference is not academic.
 
-**The kernel's swap tendency SHALL be set so that swap is an overflow reserve
-rather than a routine memory tier, and that setting SHALL persist across a
-reboot.** Swap exists here to convert an out-of-memory kill — which selects its
-victim by resident size rather than by which process leaked, so on this host it
-would most likely stop a database or the monitoring stack rather than the
-culprit — into a slowdown that the host's memory-pressure alerting has time to
-report. A default tendency that pages out a working set the host has room for
-serves neither purpose.
+**The kernel's swap tendency SHALL be set so that swap is an overflow reserve rather than a routine memory tier, and that setting SHALL persist across a reboot.** Swap exists here to convert an out-of-memory kill — which selects its victim by resident size rather than by which process leaked, so on this host it would most likely stop a database or the monitoring stack rather than the culprit — into a slowdown that the host's memory-pressure alerting has time to report. A default tendency that pages out a working set the host has room for serves neither purpose.
 
-**Configuring swap SHALL be separable from activating it.** Activation writes to
-the kernel, and the swap-tendency setting is not namespaced, so on any host
-sharing a kernel with others — a container, and therefore this project's
-role-verification harness — activation reaches state the run does not own.
-Splitting the two means the configuration can be verified where activation
-cannot be performed safely, and obliges this repository to state which of the
-two any given verification established.
+**Configuring swap SHALL be separable from activating it.** Activation writes to the kernel, and the swap-tendency setting is not namespaced, so on any host sharing a kernel with others — a container, and therefore this project's role-verification harness — activation reaches state the run does not own. Splitting the two means the configuration can be verified where activation cannot be performed safely, and obliges this repository to state which of the two any given verification established.
 
-**Persistence SHALL be established by the records the host reads at boot** —
-the boot-time mount table and the kernel-parameter directory — and this
-repository SHALL state whether a given verification observed those records or
-observed an actual boot. The two are not the same claim, and the weaker one is
-what a configuration run can make.
+**Persistence SHALL be established by the records the host reads at boot** — the boot-time mount table and the kernel-parameter directory — and this repository SHALL state whether a given verification observed those records or observed an actual boot. The two are not the same claim, and the weaker one is what a configuration run can make.
 
-**A converge against a host whose swap is already active SHALL NOT reformat or
-recreate the backing file.** Writing a fresh swap signature over a file the
-kernel is currently swapping to corrupts the pages it holds, so the run SHALL
-establish the file's current state before acting on it rather than acting
-unconditionally and relying on the file's absence.
+**A converge against a host whose swap is already active SHALL NOT reformat or recreate the backing file.** Writing a fresh swap signature over a file the kernel is currently swapping to corrupts the pages it holds, so the run SHALL establish the file's current state before acting on it rather than acting unconditionally and relying on the file's absence.
 
 #### Scenario: Swap is active after a converge
 - **WHEN** the host-baseline playbook completes against a host with no swap

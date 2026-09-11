@@ -1,18 +1,7 @@
-Verification for a docs-only change is the static suite from the repository
-root and `pre-commit run --all-files`. Neither reads prose for truth, so each
-task below states the evidence its sentence rests on — and the four findings do
-not all rest on the same kind:
+Verification for a docs-only change is the static suite from the repository root and `pre-commit run --all-files`. Neither reads prose for truth, so each task below states the evidence its sentence rests on — and the four findings do not all rest on the same kind:
 
-- **Sections 2 and 3 are behavioural** and cite `configure-the-staging-host`'s
-  converge, recorded under `## Verification record` in that change's archived
-  task list (10.2 and 10.1 respectively). Check the citations there; do not take
-  them from here.
-- **Sections 1 and 4 are documentary** and cite nothing but the committed files:
-  §4.1 has a `source` fallback and §6.0 has none, and §6.1 offers no way to
-  check the token it tells you to create. Both are verifiable by reading, need
-  no run, and would be just as true had the converge gone perfectly. A machine
-  without direnv and a truncated-paste `401` are what made them noticeable, not
-  what makes them true.
+- **Sections 2 and 3 are behavioural** and cite `configure-the-staging-host`'s converge, recorded under `## Verification record` in that change's archived task list (10.2 and 10.1 respectively). Check the citations there; do not take them from here.
+- **Sections 1 and 4 are documentary** and cite nothing but the committed files: §4.1 has a `source` fallback and §6.0 has none, and §6.1 offers no way to check the token it tells you to create. Both are verifiable by reading, need no run, and would be just as true had the converge gone perfectly. A machine without direnv and a truncated-paste `401` are what made them noticeable, not what makes them true.
 
 ## 1. §6.0 — the `source` fallback, and why it is safe here
 
@@ -51,61 +40,24 @@ not all rest on the same kind:
 
 ## Verification record
 
-**5.1** `python3 -m unittest discover --start-directory .github/tests` — 557,
-OK. **5.2** `pre-commit run --all-files` — all hooks pass. Neither establishes
-that a sentence is true; what follows is what does.
+**5.1** `python3 -m unittest discover --start-directory .github/tests` — 557, OK. **5.2** `pre-commit run --all-files` — all hooks pass. Neither establishes that a sentence is true; what follows is what does.
 
-**5.3 — stage 6 read end to end.** Every command in the stage has now been
-executed at least once, in `configure-the-staging-host`'s converge or in this
-session, with these exceptions, named because this change holds itself to that
-standard explicitly:
+**5.3 — stage 6 read end to end.** Every command in the stage has now been executed at least once, in `configure-the-staging-host`'s converge or in this session, with these exceptions, named because this change holds itself to that standard explicitly:
 
-- `direnv allow`, exercised by anyone who has direnv, and whose absence is the
-  case section 1 exists to handle;
-- `read -rs KEY`, `tailscale up --authkey="$KEY"` and `tailscale status --json`,
-  which are round-2 rewordings of commands that *were* run — 10.2 ran
-  `tailscale up` with the key inline, 10.4 ran plain `tailscale status` — but
-  not in the form the document now prints. They sit inside the one section 6.2
-  waives as unobservable without deliberately breaking a converge.
+- `direnv allow`, exercised by anyone who has direnv, and whose absence is the case section 1 exists to handle;
+- `read -rs KEY`, `tailscale up --authkey="$KEY"` and `tailscale status --json`, which are round-2 rewordings of commands that *were* run — 10.2 ran `tailscale up` with the key inline, 10.4 ran plain `tailscale status` — but not in the form the document now prints. They sit inside the one section 6.2 waives as unobservable without deliberately breaking a converge.
 
-**Corrections made after code review, each a claim that was not true as first
-written.** Recorded rather than quietly fixed, because in a change whose subject
-is documentary accuracy the corrections are the substance:
+**Corrections made after code review, each a claim that was not true as first written.** Recorded rather than quietly fixed, because in a change whose subject is documentary accuracy the corrections are the substance:
 
-- §6.3a said "the failing one and everything after it has not [applied]".
-  False, and self-contradicted thirteen lines later by the instruction to expect
-  `tailscaled` active: *Bring the host onto the tailnet* is the **last** task in
-  `ansible/roles/tailscale/tasks/main.yml`, so the keyrings directory, both
-  `get_url` tasks, the pinned package and the enabled unit have all applied.
-- §6.3a told the operator to wait for `tailscale status` to report `Running`.
-  It never does. `Running` is `BackendState` in `tailscale status --json`, which
-  is the field the role's own `when:` reads. §6.4 carried the same error from an
-  earlier change and is corrected with it.
-- §6.3a put the auth key on a command line, contradicting the standard §6.1
-  sets ninety lines earlier for the GHCR token. Now `read -rs`.
-- §6.3's "compare against two" was true and incomplete: two is the baseline for
-  what check mode can *see*. Seven `command` tasks skip and five
-  `geerlingguy.docker` tasks swallow failures, which entry 23 already records
-  and §6.3 did not.
-- §6.1's `grep -i '^HTTP\|x-oauth-scopes'` uses a GNU BRE extension that prints
-  nothing on the macOS workstations §0.2 supports — indistinguishable from the
-  fine-grained-token diagnosis it would be read as. Now `grep -iE`, and `curl
-  -sS` so a transport failure says so rather than looking like the same thing.
-- §6.1 claimed a fine-grained token "cannot pull packages". Plausible, and
-  evidenced by nothing in this repository; the confirmation gate cannot produce
-  it either, since the operator's token is classic. Softened to what is
-  checkable.
-- The end-state summary at the top of the document still promised "a staging
-  server that is provisioned and not configured". `configure-the-staging-host`
-  updated the section that says otherwise and missed the summary above it.
+- §6.3a said "the failing one and everything after it has not [applied]". False, and self-contradicted thirteen lines later by the instruction to expect `tailscaled` active: *Bring the host onto the tailnet* is the **last** task in `ansible/roles/tailscale/tasks/main.yml`, so the keyrings directory, both `get_url` tasks, the pinned package and the enabled unit have all applied.
+- §6.3a told the operator to wait for `tailscale status` to report `Running`. It never does. `Running` is `BackendState` in `tailscale status --json`, which is the field the role's own `when:` reads. §6.4 carried the same error from an earlier change and is corrected with it.
+- §6.3a put the auth key on a command line, contradicting the standard §6.1 sets ninety lines earlier for the GHCR token. Now `read -rs`.
+- §6.3's "compare against two" was true and incomplete: two is the baseline for what check mode can *see*. Seven `command` tasks skip and five `geerlingguy.docker` tasks swallow failures, which entry 23 already records and §6.3 did not.
+- §6.1's `grep -i '^HTTP\|x-oauth-scopes'` uses a GNU BRE extension that prints nothing on the macOS workstations §0.2 supports — indistinguishable from the fine-grained-token diagnosis it would be read as. Now `grep -iE`, and `curl -sS` so a transport failure says so rather than looking like the same thing.
+- §6.1 claimed a fine-grained token "cannot pull packages". Plausible, and evidenced by nothing in this repository; the confirmation gate cannot produce it either, since the operator's token is classic. Softened to what is checkable.
+- The end-state summary at the top of the document still promised "a staging server that is provisioned and not configured". `configure-the-staging-host` updated the section that says otherwise and missed the summary above it.
 
-**6.2 — the confirmation observations.** Two are already satisfied from this
-session: `ansible/.envrc` sourced with no direnv hook, after which
-`ansible-inventory -i inventory/staging.hcloud.yml --graph` resolved
-`staging-server`; and the token check returning `200`. The third — a check-mode
-run against **staging** reporting `changed=2` on the two named tasks — is
-outstanding, and matters because 10.1 established that figure on production
-only, where it could still have been a coincidence of one host.
+**6.2 — the confirmation observations.** Two are already satisfied from this session: `ansible/.envrc` sourced with no direnv hook, after which `ansible-inventory -i inventory/staging.hcloud.yml --graph` resolved `staging-server`; and the token check returning `200`. The third — a check-mode run against **staging** reporting `changed=2` on the two named tasks — is outstanding, and matters because 10.1 established that figure on production only, where it could still have been a coincidence of one host.
 
 ## 6. Ship
 
@@ -123,65 +75,27 @@ only, where it could still have been a coincidence of one host.
 
 ## Ship record
 
-**6.1** Pull request #132, merged as `93fd6e4` on 2026-09-11. Nothing here
-deploys, and none is claimed: a docs-only change matches no path filter in the
-Terraform workflows.
+**6.1** Pull request #132, merged as `93fd6e4` on 2026-09-11. Nothing here deploys, and none is claimed: a docs-only change matches no path filter in the Terraform workflows.
 
 **6.2 — three observations made, one part waived.** The gate is answered.
 
-- **§6.0's fallback.** Satisfied in the authoring session: `ansible/.envrc`
-  sourced in a shell with no direnv hook, after which `ansible-inventory -i
-  inventory/staging.hcloud.yml --graph` resolved `staging-server`. Re-confirmed
-  in this session, in a freshly provisioned working tree, with the same result.
-- **§6.1's token check.** Satisfied in the authoring session: `200` with an
-  `x-oauth-scopes` header naming `read:packages`.
-- **§6.3's check-mode baseline, which was the outstanding one.** Run on
-  2026-09-11 against the converged staging host:
+- **§6.0's fallback.** Satisfied in the authoring session: `ansible/.envrc` sourced in a shell with no direnv hook, after which `ansible-inventory -i inventory/staging.hcloud.yml --graph` resolved `staging-server`. Re-confirmed in this session, in a freshly provisioned working tree, with the same result.
+- **§6.1's token check.** Satisfied in the authoring session: `200` with an `x-oauth-scopes` header naming `read:packages`.
+- **§6.3's check-mode baseline, which was the outstanding one.** Run on 2026-09-11 against the converged staging host:
 
       ansible-playbook playbooks/host-baseline.yml \
         -i inventory/staging.hcloud.yml -e target_environment=staging \
         --vault-id staging@<file> --private-key ~/.ssh/<company>-root \
         --check --diff
 
-  `PLAY RECAP` — `staging-server : ok=74 changed=2 unreachable=0 failed=0
-  skipped=22`, and `localhost : ok=2 changed=0`, the guard play. The two
-  changed tasks are *Add the Tailscale apt signing key* and *Add the Tailscale
-  apt repository* — the two §6.3 names and no others, extracted from the run's
-  own output rather than assumed from the count. This is what the task wanted
-  and `configure-the-staging-host` 10.1 could not give: the figure holding on a
-  second host, so two is the role's property rather than a coincidence of
-  production.
+  `PLAY RECAP` — `staging-server : ok=74 changed=2 unreachable=0 failed=0 skipped=22`, and `localhost : ok=2 changed=0`, the guard play. The two changed tasks are *Add the Tailscale apt signing key* and *Add the Tailscale apt repository* — the two §6.3 names and no others, extracted from the run's own output rather than assumed from the count. This is what the task wanted and `configure-the-staging-host` 10.1 could not give: the figure holding on a second host, so two is the role's property rather than a coincidence of production.
 
-  The run used a password file rather than `staging@prompt` because this
-  session cannot answer an interactive prompt. The file was written by the
-  operator outside the repository, read once, and shredded; the password
-  appears in no transcript, no history and no committed file. The document is
-  unchanged and still prints `@prompt`, which is the right instruction for a
-  human at a terminal.
+  The run used a password file rather than `staging@prompt` because this session cannot answer an interactive prompt. The file was written by the operator outside the repository, read once, and shredded; the password appears in no transcript, no history and no committed file. The document is unchanged and still prints `@prompt`, which is the right instruction for a human at a terminal.
 
-**The waived part, named as the task requires.** §6.3a's failed-converge
-recovery cannot be observed without deliberately breaking a converge, which is
-the first waivable class — *no observation can actually be made*. **The
-operator waived it on 2026-09-11**, on the grounds the task itself records:
-that path is already evidenced by a failure that happened for real, in
-`configure-the-staging-host`'s task 10.2, where a failure at `tailscale up`
-left `docker` and `hardening` applied and the corrected re-run completed at
-`ok=76 changed=28 failed=0`. No successor change is intended, so the waiver
-names none: there is nothing outstanding to carry, only an observation that
-cannot be manufactured.
+**The waived part, named as the task requires.** §6.3a's failed-converge recovery cannot be observed without deliberately breaking a converge, which is the first waivable class — *no observation can actually be made*. **The operator waived it on 2026-09-11**, on the grounds the task itself records: that path is already evidenced by a failure that happened for real, in `configure-the-staging-host`'s task 10.2, where a failure at `tailscale up` left `docker` and `hardening` applied and the corrected re-run completed at `ok=76 changed=28 failed=0`. No successor change is intended, so the waiver names none: there is nothing outstanding to carry, only an observation that cannot be manufactured.
 
-The waiver covers that section alone. The other three additions were observed,
-and a waiver of the whole change on the grounds that the next stage-6 execution
-is an unscheduled company bootstrap is what an earlier draft of 6.2 attempted
-and this task list already refused.
+The waiver covers that section alone. The other three additions were observed, and a waiver of the whole change on the grounds that the next stage-6 execution is an unscheduled company bootstrap is what an earlier draft of 6.2 attempted and this task list already refused.
 
-**6.3** The change's own branch and working tree were removed before this step,
-so the archive was committed from a new branch cut from the freshly fetched
-trunk at `416b80c` rather than from the branch #132 merged. Nothing is
-discarded by that: the work is on the trunk, which is what the branch would
-have been brought back to. `openspec validate --archived` passes.
+**6.3** The change's own branch and working tree were removed before this step, so the archive was committed from a new branch cut from the freshly fetched trunk at `416b80c` rather than from the branch #132 merged. Nothing is discarded by that: the work is on the trunk, which is what the branch would have been brought back to. `openspec validate --archived` passes.
 
-Opening the record's own pull request, and removing the branch and working tree
-once it merges, happen after the commit that writes this file, so they are
-recorded here in prose rather than as tasks that could never be ticked in the
-file containing them.
+Opening the record's own pull request, and removing the branch and working tree once it merges, happen after the commit that writes this file, so they are recorded here in prose rather than as tasks that could never be ticked in the file containing them.

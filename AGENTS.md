@@ -62,7 +62,7 @@ Always write the family prefix: `plan:reviewing` and `build:reviewing` dispatch 
 
 _Claude Code binding:_ dispatch `ai-toolkit:change-plan-reviewer` once every artifact the change calls for is complete. Do not use `/code-review` for this gate — it reads a diff, and at this point there is none. On `FIX REQUIRED` fix and re-dispatch; on `CONDITIONALLY APPROVED` apply the `[MINOR]` fixes and continue; on `APPROVED` continue; on `REJECTED` stop and raise it.
 
-**commit** — suggest committing the approved plan before tests are derived from it; the tests map to that baseline. Where the commit is declined, report that the next step is blocked on it and stop there, rather than proceeding without it.
+**commit** — commit the approved plan before tests are derived from it; the tests map to that baseline.
 
 **derive tests** — have an author other than whoever writes the implementation derive tests from the approved specification deltas, not from implementation code. That author needs this project's test command and test-path glob; both are in this project's own conventions.
 
@@ -111,7 +111,7 @@ Remove the branch locally and on the remote, and the working tree from the repos
 
 ### Throughout
 
-**Commits.** Prefer small, focused commits over large ones bundling unrelated concerns. After a meaningful milestone, proactively suggest a commit rather than waiting to be asked. Before committing: look at the diff, run the verification relevant to what changed, and check that no secret or unintended file is included. Suggest the commit; do not make it without confirmation.
+**Commits.** Prefer small, focused commits over large ones bundling unrelated concerns. After a meaningful milestone, proactively create a commit rather than waiting to be asked. Before committing: look at the diff, run the verification relevant to what changed, and check that no secret or unintended file is included.
 
 While applying, the derived tests fail by design until the implementation is complete, so the verification above cannot pass and a hook running it blocks the commit. Commit with `--no-verify`, and read that failure as expected rather than as a defect. It suspends the pre-commit check, not the gate: `verify` still runs before any completion claim.
 
@@ -122,7 +122,7 @@ While applying, the derived tests fail by design until the implementation is com
 - Where the change in progress **depends** on it: record the dependency and the wait in the current change's own artifacts, then at most open the identified change and recommend it be continued in a separate session.
 - Where it **does not**: record it in `docs/change-queue.md`, creating that file if absent, or open the identified change.
 
-*Opening* one means a branch of its own and a `handoff.md`, with no proposal — why the change was identified, what bears on it, and what it must not undo. Place it in the new change's own directory in this project's change-record layout — for OpenSpec, `openspec/changes/<name>/handoff.md`. The session that takes it up writes the proposal. Propose committing that branch at once; where the commit is declined, say that the handoff is unsaved and stop, rather than continuing and leaving it to be lost.
+*Opening* one means a branch of its own and a `handoff.md`, with no proposal — why the change was identified, what bears on it, and what it must not undo. Place it in the new change's own directory in this project's change-record layout — for OpenSpec, `openspec/changes/<name>/handoff.md`. The session that takes it up writes the proposal. Commit that branch at once: the session that opened it is not returning to it, so no later commit of its own will carry the handoff.
 
 Such a branch is created and left: it takes no working tree and does not become the branch this session works on.
 
@@ -133,6 +133,8 @@ Both sit outside the change that recorded them, because a note kept inside one i
 **Assumptions.** Do not silently invent a requirement that was not stated and cannot reasonably be inferred; where an important decision cannot be inferred, ask rather than guess. Record significant decisions in this project's own artifacts rather than in conversation history alone.
 
 **The repository is the source of truth.** Do not rely on earlier conversation context for information the repository itself can supply. Prefer reading a file, a spec or a commit over recalling what a previous exchange said about it.
+
+**Markdown prose.** Do not hard-wrap prose. Keep each paragraph on a single line whatever its length. Use a line break only where Markdown's own structure requires one.
 <!-- /ai-toolkit:development-workflow -->
 
 ## Project conventions
@@ -170,68 +172,26 @@ So two of the three end at a reviewer, and the wording below is what they review
 
 ### Namespacing Molecule per working tree
 
-This is the binding the shared-service rule above promises. Molecule is the one
-shared service this project's verification writes to, and it shares **two**
-handles across every working tree on the machine, both stable per role:
+This is the binding the shared-service rule above promises. Molecule is the one shared service this project's verification writes to, and it shares **two** handles across every working tree on the machine, both stable per role:
 
 - **The instance name**, a literal in each scenario's `platforms[].name`.
-- **The ephemeral directory**, `$ANSIBLE_HOME/tmp/molecule.<id>.<scenario>`,
-  whose `<id>` is a checksum of the role directory's **basename** rather than of
-  its path — so it is identical across working trees by construction, and moving
-  a working tree does not escape it.
+- **The ephemeral directory**, `$ANSIBLE_HOME/tmp/molecule.<id>.<scenario>`, whose `<id>` is a checksum of the role directory's **basename** rather than of its path — so it is identical across working trees by construction, and moving a working tree does not escape it.
 
-`~/.cache/molecule/<role>` is **not** a third handle under the pinned
-`molecule==26.8.0`, whatever an older note may say.
+`~/.cache/molecule/<role>` is **not** a third handle under the pinned `molecule==26.8.0`, whatever an older note may say.
 
-**Run the suite through `ansible/scripts/run-molecule`.** It derives this
-working tree's namespace deterministically from the tree's own path, points
-`ANSIBLE_HOME` at `.molecule-home/` inside the tree, and names the shared
-`collections` path explicitly. `ansible/scripts/run-molecule --print-namespace`
-computes it and runs nothing.
+**Run the suite through `ansible/scripts/run-molecule`.** It derives this working tree's namespace deterministically from the tree's own path, points `ANSIBLE_HOME` at `.molecule-home/` inside the tree, and names the shared `collections` path explicitly. `ansible/scripts/run-molecule --print-namespace` computes it and runs nothing.
 
     ansible/scripts/run-molecule test --all      # from a role directory
 
-`ANSIBLE_HOME` rather than `MOLECULE_EPHEMERAL_DIRECTORY`, and the difference
-matters: the latter names *one* directory outright, with no per-scenario suffix,
-so a single exported value collapses every scenario of every role into it —
-reintroducing the shared state inside a single `molecule test --all`. The former
-moves the tree and leaves the `molecule.<id>.<scenario>` split intact.
+`ANSIBLE_HOME` rather than `MOLECULE_EPHEMERAL_DIRECTORY`, and the difference matters: the latter names *one* directory outright, with no per-scenario suffix, so a single exported value collapses every scenario of every role into it — reintroducing the shared state inside a single `molecule test --all`. The former moves the tree and leaves the `molecule.<id>.<scenario>` split intact.
 
-Collections are shared rather than namespaced, being read-only content pinned by
-`ansible/requirements.yml`. They must be named explicitly all the same, because
-relocating `ANSIBLE_HOME` relocates `$ANSIBLE_HOME/collections` with it. On a
-machine that has never installed them, the entry point says so and stops; the
-one-time install is `ansible-galaxy collection install -r
-ansible/requirements.yml`, which is the manifest that pins them — naming the
-collections individually would both miss `community.general`, which `hardening`
-and `platform_data_volume` need at converge, and resolve floating versions this
-project's own pinning rule forbids. Without that check the run fails deep inside `create` with
-`couldn't resolve module/action 'community.docker.docker_login'`, which reads as
-a broken mechanism rather than an unprovisioned machine.
+Collections are shared rather than namespaced, being read-only content pinned by `ansible/requirements.yml`. They must be named explicitly all the same, because relocating `ANSIBLE_HOME` relocates `$ANSIBLE_HOME/collections` with it. On a machine that has never installed them, the entry point says so and stops; the one-time install is `ansible-galaxy collection install -r ansible/requirements.yml`, which is the manifest that pins them — naming the collections individually would both miss `community.general`, which `hardening` and `platform_data_volume` need at converge, and resolve floating versions this project's own pinning rule forbids. Without that check the run fails deep inside `create` with `couldn't resolve module/action 'community.docker.docker_login'`, which reads as a broken mechanism rather than an unprovisioned machine.
 
-**Bringing your namespace to the project's initial state**, which the rule above
-requires as much as taking one: `ansible/scripts/run-molecule destroy --all`, run from each role
-directory, removes this tree's containers — `--all` for the same reason it is
-required above, since without it Molecule destroys only that role's `default`
-scenario and leaves every sibling up; and its ephemeral directories are `.molecule-home/tmp/`
-inside the tree — removable wholesale, since nothing outside the tree reads
-them. Molecule does not clear that directory itself, even after a run that
-exits 0, so a tree resumed after a crashed run starts from whatever the crash
-left. Nothing reclaims the namespace of a working tree that has been removed;
-its `.molecule-home/` goes with the tree, and any container it left is named
-after it and can be removed by name.
+**Bringing your namespace to the project's initial state**, which the rule above requires as much as taking one: `ansible/scripts/run-molecule destroy --all`, run from each role directory, removes this tree's containers — `--all` for the same reason it is required above, since without it Molecule destroys only that role's `default` scenario and leaves every sibling up; and its ephemeral directories are `.molecule-home/tmp/` inside the tree — removable wholesale, since nothing outside the tree reads them. Molecule does not clear that directory itself, even after a run that exits 0, so a tree resumed after a crashed run starts from whatever the crash left. Nothing reclaims the namespace of a working tree that has been removed; its `.molecule-home/` goes with the tree, and any container it left is named after it and can be removed by name.
 
-**A run that supplies no namespace refuses.** Each scenario's name defaults to a
-value carrying a colon, which Docker forbids in a container name, so `create`
-fails and echoes the name back. That is deliberate and load-bearing: Molecule's
-interpolator substitutes *empty* for an unset `${VAR}` and has no `:?` error
-form, so without a refusing default a forgotten variable would silently restore
-the shared name. `.github/tests` fails the build on a default Docker would
-accept, and on a scenario whose name carries no namespace at all.
+**A run that supplies no namespace refuses.** Each scenario's name defaults to a value carrying a colon, which Docker forbids in a container name, so `create` fails and echoes the name back. That is deliberate and load-bearing: Molecule's interpolator substitutes *empty* for an unset `${VAR}` and has no `:?` error form, so without a refusing default a forgotten variable would silently restore the shared name. `.github/tests` fails the build on a default Docker would accept, and on a scenario whose name carries no namespace at all.
 
-Each platform also declares an explicit short `hostname`. The driver otherwise
-derives one from the instance name, and Linux caps a host name at 64 bytes — a
-namespaced name crosses it on this repository's own working-tree names.
+Each platform also declares an explicit short `hostname`. The driver otherwise derives one from the instance name, and Linux caps a host name at 64 bytes — a namespaced name crosses it on this repository's own working-tree names.
 
 ### Testing
 
@@ -259,36 +219,20 @@ One cause, three presentations, which is what makes it read as three unrelated d
 
 ### Citing this repository's own specifications and change records
 
-A change's planning artifacts move when it is archived — from
-`openspec/changes/<name>/` to `openspec/changes/archive/<date>-<name>/` — and the
-archive date does not exist until archiving happens. A citation of the
-pre-archive path therefore cannot be written correctly in advance, and breaks in
-the same commit that proves the change worked. Cite by what you are pointing at:
+A change's planning artifacts move when it is archived — from `openspec/changes/<name>/` to `openspec/changes/archive/<date>-<name>/` — and the archive date does not exist until archiving happens. A citation of the pre-archive path therefore cannot be written correctly in advance, and breaks in the same commit that proves the change worked. Cite by what you are pointing at:
 
 | What you are citing | How to write it |
 |---|---|
 | A requirement | `openspec/specs/<capability>/spec.md`, plus the requirement's own name |
 | Rationale or history that lives only inside a change — its `proposal.md`, `design.md`, `test-plan.md`, `test-manifest.md` | The change's name and the artifact's name, in prose, with no path |
 
-Archiving merges a change's delta specifications into the main specification, so
-the first form's path is permanent — and it names the requirement as it stands
-now, rather than as one change once proposed it. The second form has no path to
-break. Once a change is archived you may also give its location as
-`openspec/changes/archive/<date>-<name>/…`, which is stable.
+Archiving merges a change's delta specifications into the main specification, so the first form's path is permanent — and it names the requirement as it stands now, rather than as one change once proposed it. The second form has no path to break. Once a change is archived you may also give its location as `openspec/changes/archive/<date>-<name>/…`, which is stable.
 
-Do not write a path naming a change's own directory under `openspec/changes/`,
-whether or not a further path component follows the change's name. Over a third
-of the citations this rule replaced named the change and stopped there.
+Do not write a path naming a change's own directory under `openspec/changes/`, whether or not a further path component follows the change's name. Over a third of the citations this rule replaced named the change and stopped there.
 
-One interval is accepted. Where a change introduces a **new** capability,
-archiving is what creates `openspec/specs/<capability>/spec.md`, so a citation of
-it does not resolve until that change is archived. That is bounded by the
-change's own life and is not rot.
+One interval is accepted. Where a change introduces a **new** capability, archiving is what creates `openspec/specs/<capability>/spec.md`, so a citation of it does not resolve until that change is archived. That is bounded by the change's own life and is not rot.
 
-`.github/tests/test_ci_configuration.py` asserts this, because no author or
-reviewer can catch a violation: the citation is correct when written, correct
-when reviewed, and wrong only once the change it cites has succeeded. The
-previous sweep of these paths changed no rule and re-accumulated in three weeks.
+`.github/tests/test_ci_configuration.py` asserts this, because no author or reviewer can catch a violation: the citation is correct when written, correct when reviewed, and wrong only once the change it cites has succeeded. The previous sweep of these paths changed no rule and re-accumulated in three weeks.
 
 ### Development tooling
 
