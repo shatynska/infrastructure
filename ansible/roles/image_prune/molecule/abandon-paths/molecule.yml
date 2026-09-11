@@ -50,6 +50,14 @@ platforms:
     # carries. See ansible/roles/docker/molecule/default/molecule.yml for why a
     # digest and not a version tag, and for how to refresh it;
     # .github/tests fails the build on a partial refresh.
+    # The apt staleness bound hardening and image_prune declare depends on
+    # THIS image's recorded apt-fetch time being older than that bound. As
+    # pinned, it is: no update-success-stamp, no 15update-stamp hook, and
+    # /var/lib/apt/lists empty with a build-date mtime, so the first install of
+    # a converge fetches and later ones reuse. Observed against this digest on
+    # 2026-09-11; see the change cache-the-apt-index-within-a-converge,
+    # design.md Decision 1. A pin bumped to a freshly built image would make
+    # the bound inert and the failure would name a package, not the pin.
     image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
     pre_build_image: true
     command: /lib/systemd/systemd

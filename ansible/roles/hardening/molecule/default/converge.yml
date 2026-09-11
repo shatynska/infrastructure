@@ -14,11 +14,156 @@
 # requirement; see test-manifest.md): `hardening_ssh_allowed_cidrs` and
 # `hardening_web_allowed_cidrs` (list of CIDR strings, the latter defaulting
 # to `[]`/closed when unset).
+#
+# --------------------------------------------------------------------------
+# The apt-index staleness bound (change `cache-the-apt-index-within-a-converge`)
+# --------------------------------------------------------------------------
+# The pre_tasks and post_tasks below were derived from that change's delta
+# specifications before any implementation of it existed. They establish two of
+# its scenarios -- "A second install task in the same converge does not
+# re-fetch" and "An install on a host with no record of a fetch still fetches".
+# The third behavioural scenario, "An index older than the bound is refreshed",
+# is established in verify.yml, beside the role invocation already there.
+#
+# WHY HERE AND NOT IN verify.yml. Molecule runs converge and verify as two
+# separate ansible-playbook invocations, so no register set by the role's own
+# tasks survives out of this play -- the repository records that in its own
+# words in `image_prune`'s absent-heartbeat-key converge. An assertion about
+# THIS play's role run therefore has to sit in THIS play. A marker file would
+# bridge the gap and is refused: its content would differ between the converge
+# and the idempotence re-run, so the task writing it would report `changed` and
+# break the idempotence check.
+#
+# WHY THE ASSERTION IS A BICONDITIONAL. Molecule runs this play TWICE. On the
+# idempotence pass the index is minutes old and the first apt task correctly
+# does NOT fetch, so "the first task fetched" would fail against a correct
+# implementation. What holds on both passes is the requirement's own sentence:
+# the task fetches exactly when the recorded last-fetch time is outside the
+# bound. That is what is asserted.
+#
+# ASSUMPTIONS (interfaces this change will add, named by this test author
+# rather than by the delta -- see this change's test-plan.md):
+#   * `hardening_apt_cache_valid_time` -- the role's staleness bound, in
+#     seconds, defaulted in the role's defaults/main.yml. In scope here only
+#     because this play invokes the role through `roles:`, which exposes its
+#     defaults to the play; under `include_role` it would need `public: true`.
+#   * `hardening_ufw_install` / `hardening_fail2ban_install` -- the registers
+#     the role's first and second apt tasks will carry. Nothing in the delta
+#     names either; they are the channel the assertions need.
 - name: Converge
   hosts: all
   become: true
   vars:
     hardening_ssh_allowed_cidrs:
       - "203.0.113.0/24"
+  pre_tasks:
+    # Recording the last-fetch time BEFORE the role runs is what makes the
+    # assertions below hold on the idempotence pass as well as on the first
+    # converge. Reasoning about it afterwards cannot work: by then the role has
+    # moved it.
+    - name: Stat the apt update-success stamp, which the apt module prefers when it exists
+      ansible.builtin.stat:
+        path: /var/lib/apt/periodic/update-success-stamp
+      register: hardening_apt_success_stamp_before
+
+    - name: Stat the apt lists directory, which the apt module falls back to
+      ansible.builtin.stat:
+        path: /var/lib/apt/lists
+      register: hardening_apt_lists_before
+
+    # The comparison instant, recorded alongside the mtime rather than read at
+    # assertion time. The assertion runs minutes after the module made the same
+    # comparison and an index only ever gets older, so a recorded time inside
+    # the bound at role-run time can read as outside it by assertion time. Not
+    # reachable in a `molecule test` sequence, where the ages are months or
+    # minutes; reachable in a hand-driven re-converge, which is when someone
+    # would be debugging this.
+    - name: Read the instant the recorded fetch time is being compared against
+      ansible.builtin.command: date +%s
+      register: hardening_apt_instant_before
+      changed_when: false
+
+    # The apt module's own three branches, in its own order: the success stamp
+    # if it exists, else the lists directory, else the epoch. `stat` reports a
+    # missing path as `exists: false` rather than failing, so all three are
+    # expressible here. The epoch branch is the delta's never-fetched case.
+    - name: Record the index's last-fetch time as the apt module computes it
+      ansible.builtin.set_fact:
+        hardening_apt_last_fetch_before: >-
+          {{
+            (hardening_apt_success_stamp_before.stat.mtime
+             if hardening_apt_success_stamp_before.stat.exists
+             else (hardening_apt_lists_before.stat.mtime
+                   if hardening_apt_lists_before.stat.exists
+                   else 0)) | float
+          }}
+        hardening_apt_comparison_instant: "{{ hardening_apt_instant_before.stdout | float }}"
   roles:
     - role: hardening
+  post_tasks:
+    # SPECIFIED -- scenario "An install on a host with no record of a fetch
+    # still fetches". The antecedent is the recorded time, not the absence of
+    # an index: the pinned platform image ships an empty /var/lib/apt/lists
+    # whose mtime is its build date, and it is that age that forces the first
+    # fetch. Self-referential against the role's own bound on purpose -- the
+    # delta makes no normative claim about the bound's VALUE, so nothing here
+    # guards the default, and saying so plainly beats implying a check that
+    # does not exist.
+    - name: Assert the first bounded apt task fetched exactly when the recorded index age was outside the role's bound
+      ansible.builtin.assert:
+        that:
+          - hardening_ufw_install is defined
+          - "'cache_updated' in hardening_ufw_install"
+          - >-
+            (hardening_ufw_install.cache_updated | bool)
+            ==
+            (((hardening_apt_comparison_instant | float)
+              - (hardening_apt_last_fetch_before | float))
+             > (hardening_apt_cache_valid_time | float))
+        fail_msg: >-
+          The role's FIRST bounded apt task did not fetch exactly when the
+          requirement says it must. Recorded last-fetch time
+          {{ hardening_apt_last_fetch_before }}, compared at
+          {{ hardening_apt_comparison_instant }}, against the role's bound
+          {{ hardening_apt_cache_valid_time | default('UNDEFINED') }}s -- so the
+          index age at the instant recorded was
+          {{ (hardening_apt_comparison_instant | float) - (hardening_apt_last_fetch_before | float) }}
+          seconds, and the task reported cache_updated
+          {{ hardening_ufw_install.cache_updated | default('ABSENT') }}. If
+          `hardening_ufw_install` is undefined or carries no `cache_updated`,
+          the role's first apt task is not registered under that name and the
+          channel this assertion reads does not exist -- see this change's
+          test-plan.md, which records the register name as an assumption.
+        success_msg: >-
+          The first bounded apt task fetched exactly when the recorded index age
+          was outside the role's bound.
+
+    # SPECIFIED -- scenario "A second install task in the same converge does not
+    # re-fetch". This is the change's central claim, and it holds on both passes
+    # of this play: on the first converge the task before it fetched seconds
+    # earlier, and on the idempotence pass the index is minutes old.
+    #
+    # The presence half of the scenario -- that the package is actually there --
+    # is left to this scenario's existing UFW and fail2ban assertions in
+    # verify.yml rather than re-established here. `ansible.builtin.apt`'s return
+    # carries no presence field, and `package_facts` would be a second mechanism
+    # for something already asserted.
+    - name: Assert the second bounded apt task in the same converge did not re-fetch the index
+      ansible.builtin.assert:
+        that:
+          - hardening_fail2ban_install is defined
+          - "'cache_updated' in hardening_fail2ban_install"
+          - not (hardening_fail2ban_install.cache_updated | bool)
+        fail_msg: >-
+          The role's SECOND bounded apt task reported cache_updated
+          {{ hardening_fail2ban_install.cache_updated | default('ABSENT') }}. It
+          runs seconds after the first one in the same converge, so the index it
+          would re-fetch is the one the first task just fetched -- re-fetching it
+          is the repeated work this requirement exists to stop. A bound of 0, or
+          no bound at all, produces exactly this. If
+          `hardening_fail2ban_install` is undefined or carries no
+          `cache_updated`, the role's second apt task is not registered under
+          that name -- see this change's test-plan.md.
+        success_msg: >-
+          The second bounded apt task installed from the index the first one
+          fetched, rather than fetching it again.

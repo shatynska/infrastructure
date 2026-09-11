@@ -85,6 +85,100 @@
           - "'sshd' in hardening_fail2ban_status.stdout"
         fail_msg: "fail2ban has no sshd jail enabled (tasks.md 2.2's 'sane default jail for SSH')"
 
+    # ----------------------------------------------------------------------
+    # The apt-index staleness bound: "An index older than the bound is
+    # refreshed" (change `cache-the-apt-index-within-a-converge`)
+    # ----------------------------------------------------------------------
+    # Derived from that change's delta specification before any implementation
+    # of it existed. Its two sibling scenarios are established in converge.yml,
+    # beside the role run they characterise; this one characterises an
+    # invocation the test itself makes, so it sits here.
+    #
+    # WHY IT REUSES THE ROLE INVOCATION BELOW rather than adding one to the
+    # converge play. Molecule runs converge TWICE and the bound is a single
+    # variable per role, so a bound-overridden invocation there would make both
+    # apt tasks fetch on both passes -- four fetches, in the very scenario every
+    # figure in the change's design.md is computed from. This play runs once,
+    # after the idempotence pass, and already carries a third role invocation
+    # for the web-CIDR path. Reusing it costs one fetch and touches neither the
+    # idempotence check nor converge.yml's header claim.
+    #
+    # WHY THE INDEX IS BACK-DATED RATHER THAN THE BOUND OVERRIDDEN. The include
+    # below is not `public:`, so the role's bound variable is not in scope for a
+    # task placed ahead of it and the back-date distance has to be a literal.
+    # The consequence is stated rather than discovered: this catches an ABSURD
+    # default -- one longer than the distance below -- and not a merely wrong
+    # one. Nothing here guards the bound's value.
+    #
+    # WHY EMPTY-THEN-BACK-DATE, IN THAT ORDER. `cache_updated` is true only
+    # where the mtime the apt module reads MOVED across the update, so:
+    #   * The success stamp is the wrong path to touch. The module PREFERS it
+    #     when it exists and python-apt's cache.update() never writes it, so
+    #     back-dating it would pin the read value in the past and every later
+    #     task would report cache_updated false however much it fetched.
+    #   * Back-dating the lists directory WITHOUT emptying it is not enough: a
+    #     re-fetch may resolve entirely to "not modified", write nothing, and
+    #     leave the mtime where this fixture put it.
+    #   * Emptying sets the directory's mtime to NOW, so the back-dating must
+    #     come after it, never before.
+    # The directory itself and its partial/ subdirectory must survive: apt fails
+    # with "E: List directory /var/lib/apt/lists/partial is missing", which
+    # names apt rather than this fixture.
+    #
+    # This task reports `changed`, which is harmless: Molecule's idempotence
+    # check re-runs converge.yml alone and never reads this file.
+    - name: Confirm the apt lists directory exists before the fixture back-dates it
+      ansible.builtin.stat:
+        path: /var/lib/apt/lists
+      register: hardening_apt_lists_fixture
+
+    - name: Assert the fixture has the directory it is about to back-date
+      ansible.builtin.assert:
+        that:
+          - hardening_apt_lists_fixture.stat.exists
+          - hardening_apt_lists_fixture.stat.isdir
+        fail_msg: >-
+          /var/lib/apt/lists is absent, so the back-dating below would establish
+          nothing and the assertion after it would pass or fail for a reason
+          that has nothing to do with the bound.
+
+    - name: Find everything inside the apt lists directory
+      ansible.builtin.find:
+        paths: /var/lib/apt/lists
+        patterns:
+          - "*"
+          - ".*"
+        file_type: any
+        hidden: true
+        recurse: false
+      register: hardening_apt_list_entries
+
+    - name: Empty the apt lists directory, leaving the directory itself in place
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ hardening_apt_list_entries.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Restore the partial/ subdirectory apt refuses to run without
+      ansible.builtin.file:
+        path: /var/lib/apt/lists/partial
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Back-date the apt lists directory to well outside any plausible bound
+      ansible.builtin.file:
+        path: /var/lib/apt/lists
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+        modification_time: "197001020000.00"
+        access_time: preserve
+
     # --- Re-converge with hardening_web_allowed_cidrs set, to exercise the
     #     web-enabled path. This is a second role invocation inside verify,
     #     not converge, so it is never seen by Molecule's idempotence check.
@@ -97,6 +191,37 @@
         hardening_web_allowed_cidrs:
           - "198.51.100.0/24"
 
+
+    # SPECIFIED -- scenario "An index older than the bound is refreshed". This
+    # is what makes the bound a bound rather than a disabling: an
+    # implementation that simply stopped fetching would satisfy every other
+    # assertion this change adds.
+    #
+    # A register set by a task inside an included role is a play variable and
+    # reaches the tasks after the include, which is why this reads
+    # `hardening_ufw_install` without the include being `public:` -- `public`
+    # governs the role's vars and defaults, not its registers.
+    - name: Assert the first bounded apt task refreshed an index older than the bound
+      ansible.builtin.assert:
+        that:
+          - hardening_ufw_install is defined
+          - "'cache_updated' in hardening_ufw_install"
+          - hardening_ufw_install.cache_updated | bool
+        fail_msg: >-
+          The role's first bounded apt task reported cache_updated
+          {{ hardening_ufw_install.cache_updated | default('ABSENT') }} against
+          an index back-dated to 1970. A bound is a bound on staleness, not a
+          switch: a task reaching an index older than it SHALL still fetch. Read
+          this together with converge.yml's assertions -- if those pass and this
+          one fails, the change removed the refresh instead of bounding it. If
+          it fails because `hardening_ufw_install` is undefined, the role's
+          first apt task is not registered under that name; if it fails with the
+          index apparently fresh, check that the fixture above emptied
+          /var/lib/apt/lists BEFORE back-dating it, since deleting its contents
+          sets its mtime to now.
+        success_msg: >-
+          A bounded apt task reaching an index older than its bound fetched the
+          index before installing.
     - name: Get UFW status after enabling web CIDRs
       ansible.builtin.command: ufw status verbose
       register: hardening_ufw_status_web_enabled

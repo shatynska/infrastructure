@@ -608,3 +608,17 @@ Three things that change has already built and this one extends rather than repe
 - **The gate's three-way distinction.** `ansible-verify.yml`'s aggregating job distinguishes a discovery failure, a skip that was owed, and a skip that was not. A per-role matrix needs a fourth state — the suite ran, on the subset that was owed — without reopening the hole the third exists to close, and the shared inputs (`requirements.yml`, `requirements-test.txt`, `scripts/run-molecule`, the base-image digests) must still fan out to everything.
 
 **The prize is smaller than the last one.** Of the two recent pull requests that did touch a role, one touched eight files in a single role; per-role selection would have run one job instead of seven. Worth having, not worth rushing: the cost of getting it wrong is a green that verified nothing, on the check that gates every merge.
+
+## 68. prune-the-repository-walkers-of-provisioned-content
+
+Recorded 2026-09-11 by the test author deriving `cache-the-apt-index-within-a-converge`, who met it as a red suite on a provisioned working tree.
+
+`.github/tests/test_ci_configuration.py`'s `TestEveryComposeFileDeclaringAServiceImageIsCovered` walks the repository for Compose files and fails on six that live under `.molecule-home/collections/` — integration fixtures shipped by `community.docker` and `community.general`, which arrive the moment `ansible-galaxy collection install` runs into this project's per-working-tree Molecule namespace.
+
+**It is green in continuous integration and red on a provisioned developer machine**, which is the defect rather than an inconvenience. The `validate` job that runs this suite never provisions Molecule, so `.molecule-home/` does not exist there; a developer who follows this repository's own Molecule instructions creates it and inherits a failure they did not cause. A check that disagrees with itself between the two is worse than no check: it trains its readers to discount it.
+
+`cache-the-apt-index-within-a-converge` names this class in its own `tasks.md` 1.5 and handles it for the checks that change wrote, by enumerating roles from committed content rather than globbing a directory. This entry is the same rule applied to the walkers that were already there.
+
+**The fix is not simply to prune one directory.** What makes a path this suite's subject is that it is *committed*, which is the boundary `AGENTS.md` draws for the suite and which `cache-the-apt-index-within-a-converge` established a helper for: `tracked_files()` in that same module already enumerates the repository's tracked files and refuses rather than skips when it cannot. Re-pointing the repository-scope walkers at that helper closes the class rather than the instance, and would also reach `.terraform/`, virtual environments and sibling working trees under `.claude/worktrees/` — none of which any walker prunes today either.
+
+Worth doing before the next person meets it: this failure reads as "your tree is broken", and the natural response is to delete `.molecule-home/`, which throws away the provisioning the suite's Molecule row depends on.

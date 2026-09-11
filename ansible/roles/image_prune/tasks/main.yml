@@ -408,6 +408,7 @@
     name: curl
     state: present
     update_cache: true
+    cache_valid_time: "{{ image_prune_apt_cache_valid_time }}"
 
 # 0700 root, and a script rather than a `curl` written straight into
 # ExecStopPost=: a command line is readable from /proc/<pid>/cmdline by any

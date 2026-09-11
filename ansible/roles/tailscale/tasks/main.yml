@@ -29,6 +29,22 @@
 # that this exact version is published for this host's Ubuntu codename
 # (resolute) before pinning it here -- not assumed the way it briefly was
 # for Docker.
+# DECLARES NO CACHE STALENESS BOUND, deliberately, where hardening's and
+# image_prune's apt tasks do. Three reasons; the first survives the other two.
+#
+# 1. THIS ROLE ADDS THE SOURCE IT INSTALLS FROM, a few tasks above. An index
+#    fetched earlier in the same converge is inside any bound AND predates that
+#    source, so a bound here would skip the refresh and apt would report no
+#    installation candidate -- while every other package on the host installed
+#    normally. The failure names the package, not the cause, and appears only
+#    on the run that adds the source, which is the run least likely to be
+#    repeated.
+# 2. The install is PINNED to an exact version. A stale index does not hand a
+#    pinned install an older candidate; it hands it nothing.
+# 3. This role carries no Molecule scenario, so nothing here would observe a
+#    bound behaving either way. See docs/change-queue.md entry 3b.
+#
+# See the change cache-the-apt-index-within-a-converge.
 - name: Ensure Tailscale is installed (pinned exact version)
   ansible.builtin.apt:
     name: "tailscale=1.102.3"
