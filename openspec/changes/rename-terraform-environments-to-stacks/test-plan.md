@@ -4,6 +4,8 @@ Derived from this change's six delta specifications at commit `541dec8`, the com
 
 **This file is not an artifact the OpenSpec schema knows about.** It will not appear among `openspec instructions apply`'s context files, and it is not reachable by `openspec show`. It has to be read on purpose, before implementing.
 
+**This file was written in two passes, and the second is at the bottom.** Everything down to *Obsolete-test candidates* covers the twenty-one MODIFIED requirements the change carried when its plan was committed. A twenty-second was added to the delta afterwards; *Second pass* at the end of this file accounts for its eleven scenarios and carries the running totals for both. Do not stop at the first totals table.
+
 ## Where the tests are
 
 One new module, added whole:
@@ -461,3 +463,130 @@ In the order the failures will resolve:
 5. **The documentation and `direnv` sweep** (`tasks.md` 5.2–5.5 and 7.1–7.4) is what clears `TestNoCommittedFileStillNamesTheOldTerraformRoot` (1) — and it will not go green until `.github/tests`' own literals move too (`tasks.md` 4.1 and 4.2), because that sweep reads this suite's modules like any other committed file.
 
 **Expected end state: 752 tests, green.** A count below 752 is a module that failed to import, not a suite that got smaller.
+
+## Second pass — *Host Configuration Is Applied by a Gated Workflow*
+
+Everything above is the first pass, over the twenty-one MODIFIED requirements the change carried at commit `541dec8`. **This section is a second pass, over one further MODIFIED requirement added to the delta afterwards**, and it is additive to what is above rather than a revision of it: the first pass's basis still holds in full. A `git diff --stat` of this change's own delta-spec directory between `e88d0b2` — the commit carrying the first pass's tests — and `HEAD` reports one file changed, 69 insertions and no deletions — the requirement below, and nothing else.
+
+That requirement is *Host Configuration Is Applied by a Gated Workflow* (iac-cicd-pipeline), which reached the delta because the change that originally ADDED it archived while this branch sat unrebased; `design.md` decision 4 records the history. It is now live in `openspec/specs/iac-cicd-pipeline/spec.md` in the old `environment` vocabulary.
+
+**Its delta is vocabulary-only, and that was established by diffing rather than assumed.** Diffing the requirement as it stands under `openspec/specs/` against the delta's copy yields sixteen changed lines, every one of them the same substitution: `environment` → `stack` where the word names the unit the pipeline converges. No SHALL is added, none is removed, no scenario is added or removed, and the four keepers (`github_environment`, the `environment:` job key, `target_environment`/`TARGET_ENVIRONMENT`, the Hetzner `environment` label) are untouched. The behaviour this requirement states is therefore already asserted, in full, by `test_host_converge_workflow.py` — 34 tests written when it was ADDED, whose locators are written by **shape** (the job invoking `ansible-playbook`, the step redirecting into `$GITHUB_STEP_SUMMARY`, the `run:` step enumerating the inventory root) and which survive a rename untouched.
+
+### Baseline for this pass
+
+**Full**, taken immediately before the first new test was written, on this branch with the first pass's module present:
+
+    python3 -m unittest discover --start-directory .github/tests
+    Ran 752 tests in 20.138s — FAILED (failures=72)
+
+Filtering the `FAIL:`/`ERROR:` lines for anything outside `test_terraform_stacks_are_the_iterated_unit` yields zero, so the 72 are the first pass's expected reds and nothing else was broken going in. That figure is the one recorded above, re-measured rather than carried over.
+
+**After this pass:**
+
+    Ran 762 tests in 20.219s — FAILED (failures=76)
+
+762 − 752 = 10, which is this pass's test count. 76 − 72 = 4, which is this pass's four assertions about the workflow; the six discriminators pass. Every failure is still inside the derived module — the same filter again yields zero.
+
+### Where this pass's tests are
+
+Appended to the existing module, `.github/tests/test_terraform_stacks_are_the_iterated_unit.py`, in three new classes. **Nothing already in that module was edited, and no test anywhere in the suite was edited, deleted, renamed or disabled.** A new module was considered and rejected: these tests read the same file the module's `HOST_CONVERGE` constant already names, reuse its `REPLACEMENT_IDENTIFIERS` table, and are the host-converge half of a boundary whose apply-side half is asserted three classes above.
+
+One deliberate duplication is recorded so it is not read as an oversight. `host_converge_discovery_bodies()` is a second copy of the locator inside `TestDiscoveryIteratesTheStackRoot.test_the_host_converge_discovery_reads_each_stacks_own_declaration`, rather than that test being refactored to call it. That test is currently red; lifting its locator out of it would change what a red test asserts at the one moment when nothing could show the change was faithful.
+
+### The tests, and the assertion provenance of each
+
+#### `TestTheConvergeRowIsReachedThroughTheStack`
+
+The sweep in `TestTheMatrixAndItsOutputsNameTheStack` forbids `matrix.environment` **anywhere** in `host-converge.yml` and requires `matrix.stack` **somewhere** in it. Neither says which surfaces carry it, so a rename that moved the gate, the credential or the concurrency group onto a different field of the row — `matrix.stack.name` in place of `matrix.stack.github_environment` — satisfies both sweeps while gating, crediting or serialising the wrong thing. That gap is what these three close, and it is a gap the rename creates.
+
+| Test | Provenance |
+|---|---|
+| `.test_the_converge_job_is_gated_on_the_github_environment_its_stack_declares` | SPECIFIED — scenario *The converge job is gated on the environment's own GitHub Environment*, and "A converge job **per stack** SHALL declare that stack's own GitHub Environment, taken from that stack's committed pipeline declaration". DERIVED for the matrix key — `design.md` decision 2. The apply-side sibling, `TestTheEnvironmentAxisIsNotRenamedWithTheUnit.test_every_gated_job_still_attaches_to_the_github_environment_its_stack_declares`, scopes itself to `apply.yml` in its own docstring; this is the other file. |
+| `.test_the_converge_job_exports_the_read_only_secret_its_stack_declares` | SPECIFIED — "which repository secret holds each one's read-only credential SHALL come from discovery over committed files", and the converge job "SHALL be the only job holding the credentials a converge needs". DERIVED for the matrix key. `test_host_converge_workflow.TestTheConvergeJobIsGatedOnItsOwnGitHubEnvironment.test_no_step_maps_an_environment_to_its_secret` holds the other half and survives the rename — but it forbids a *literal* secret name, and `secrets[matrix.stack.name]` names no literal. |
+| `.test_the_converge_jobs_serialisation_group_is_per_stack` | SPECIFIED — "A converge SHALL NOT be cancelled in favour of a later one. Runs against one stack SHALL be serialised". DERIVED for the matrix key. `test_host_converge_workflow.TestOneEnvironmentsConvergeDoesNotSilenceAnother.test_an_in_flight_converge_is_not_cancelled_by_a_later_one` asserts `cancel-in-progress: false` and that the group carries *some* expression; it cannot see a group expressing something other than the row. |
+
+#### `TestTheDispatchInputStillReachesTheBodyThatValidatesIt`
+
+| Test | Provenance |
+|---|---|
+| `.test_the_dispatch_input_is_mapped_into_the_body_under_a_name_that_body_reads` | SPECIFIED for the refusal the mapping feeds — scenario *A run is requested for an environment that does not exist*: "the run SHALL fail naming the stacks that were found, rather than converging none and reporting success". DERIVED for the mechanism — `tasks.md` 3.4. |
+
+This is the other end of the wire `TestTheMatrixAndItsOutputsNameTheStack.test_the_host_converge_dispatch_input_names_the_stack` renames. That test moves the input an operator types; this one holds that the value still *arrives* inside the discovery body, which is where the refusal is written. A rename that moved the input and not the `env:` entry carrying it leaves the body reading an unset variable — which it is specified to treat as "converge every stack", because that is what every `push` supplies. A by-hand converge of one host would silently converge all of them, with nothing red anywhere.
+
+#### `TestTheseHostConvergeReadsDiscriminate` — six tests, all DERIVED
+
+These assert nothing about this change. The four above are a static read of one committed file, so a green result would report only that the file could be read; these run each read over material the test itself supplies. They establish that the converge locator picks out the job that runs the play and is **not** fooled by a job whose only mention of the play is a comment; that the gate read and the credential read tell the row from its fields, rejecting `matrix.environment.github_environment`, `matrix.stack.name` and a `needs.*.outputs.*` read; and that the dispatch-carrier read reports a mapping when given one, reports none when given none, and still sees the retired spelling in its `github.event.inputs` form — the last being what stops the absence assertion and the presence assertion being satisfiable by one mapping.
+
+**Discriminator record, per the testing standard.** All six were written and executed in this pass, and all six pass. The four assertions above were **red at authoring against real content, not against an absent target**: `host-converge.yml` exists and parses, and each read reached a live value and rejected it — `environment: ${{matrix.environment.github_environment}}`, the group `host-converge-${{matrix.environment.name}}`, a `CREDENTIAL_VALUE` lookup that reads no `matrix.stack.read_only_secret`, and an `env:` entry `REQUESTED_ENVIRONMENT: ${{ inputs.environment }}`. That is the first failure state, not the second, and it is stronger evidence than the first pass's thirty-eight could produce.
+
+### Running them
+
+    python3 -m unittest discover --start-directory .github/tests \
+      -k TestTheConvergeRowIsReachedThroughTheStack
+
+    PYTHONPATH=.github/tests python3 -m unittest \
+      test_terraform_stacks_are_the_iterated_unit.TestTheDispatchInputStillReachesTheBodyThatValidatesIt\
+.test_the_dispatch_input_is_mapped_into_the_body_under_a_name_that_body_reads
+
+### Scenario accounting — the eleven scenarios of this requirement
+
+**11 `#### Scenario:` blocks, all 11 accounted for below exactly once.** The three outcomes are the ones defined above.
+
+| # | Scenario | Outcome |
+|---|---|---|
+| 99 | A merge to the host configuration converges without a workstation | VOCAB — covered by `test_host_converge_workflow.TestAMergeConvergesWithoutAWorkstation` (3 tests, shape-located). Its `.test_a_run_can_also_be_requested_by_hand_for_one_environment` is superseded by the dispatch-input rename — see the obsolete list below — and needs re-pointing, not replacing. |
+| 100 | A host's first converge is the operator's | GAP — the delta does not touch this scenario's text at all. It states a bounded exemption about what an operator may do from a workstation before a host exists on the tailnet; no committed file carries it, and neither of the other two test rows can reach it. |
+| 101 | The pre-approval job holds no converge credential | VOCAB — unchanged by the delta; covered by `test_host_converge_workflow.TestThePreApprovalJobHoldsNoConvergeCredential` (3 tests). |
+| 102 | The converge job is gated on the environment's own GitHub Environment | **NEW** — `TestTheConvergeRowIsReachedThroughTheStack.test_the_converge_job_is_gated_on_the_github_environment_its_stack_declares`. The behaviour half stays with `test_host_converge_workflow...test_the_converge_job_takes_its_environment_from_discovery`, which is written generically and survives. |
+| 103 | An environment that cannot be converged fails the workflow | VOCAB — the two-sided refusal is covered by `test_host_converge_workflow.TestHostConvergeDiscoveryFailsClosed`, which **executes** the discovery body against a fixture tree. That tree is built at `terraform/environments` (line 1685), already in the first pass's obsolete list; re-pointing it is what keeps this scenario covered. |
+| 104 | Discovery finding no environment fails rather than reporting success | VOCAB — the executed refusal is `test_host_converge_workflow...test_discovery_fails_when_it_finds_no_environment`. That the body iterates the new root is covered by `TestDiscoveryIteratesTheStackRoot.test_the_host_converge_discovery_reads_each_stacks_own_declaration` and `.test_no_discovery_body_still_names_an_environments_root`. |
+| 105 | A run is requested for an environment that does not exist | **NEW, partial** — `TestTheDispatchInputStillReachesTheBodyThatValidatesIt.test_the_dispatch_input_is_mapped_into_the_body_under_a_name_that_body_reads` covers that the request still reaches the body. The **executed** refusal is `test_host_converge_workflow...test_a_dispatched_environment_discovery_did_not_find_is_refused`, whose locator this rename moves — see the obsolete list. |
+| 106 | A wrong secret stops the run before the host is touched | **NEW, partial** — `.test_the_converge_job_exports_the_read_only_secret_its_stack_declares` covers the committed half: the converge runs under the secret the stack's own declaration names. GAP for the runtime half. Whether a rejected credential stops the run before the first role acts needs a real host, a real credential and a real play; `.github/tests` may not make a network call or hold a credential, and no Molecule scenario runs a workflow job. The **ordering** half is covered statically and survives: `test_host_converge_workflow.TestAWrongSecretStopsTheRunBeforeTheHostIsTouched.test_the_credentials_are_exercised_before_the_play_runs`. |
+| 107 | The converge job supplies what the run needs | VOCAB — unchanged by the delta; covered by `test_host_converge_workflow.TestTheConvergeJobIsProvisionedBeforeItRuns` (2 tests). |
+| 108 | The converge runs the Ansible the roles were verified under | VOCAB — the delta changes not one word of this paragraph or of this scenario; covered by `test_host_converge_workflow.TestTheConvergeRunsTheAnsibleTheRolesWereVerifiedUnder` (3 tests). |
+| 109 | One environment's failure does not silence another's | **NEW, partial** — `.test_the_converge_jobs_serialisation_group_is_per_stack` covers the per-stack group the rename rewrites. The `fail-fast: false` half is VOCAB, covered by `test_host_converge_workflow...test_a_failing_converge_does_not_abandon_its_siblings`. GAP for the queueing itself, which is GitHub Actions runtime behaviour. |
+
+### Totals, both passes
+
+| Outcome | First pass | This pass | Total |
+|---|---|---|---|
+| NEW | 28 | 4 | 32 |
+| VOCAB | 36 | 6 | 42 |
+| GAP | 34 | 1 | 35 |
+| **Scenarios** | **98** | **11** | **109** |
+
+Across 22 MODIFIED requirements in 6 capabilities. Still no `REMOVED` and no `RENAMED` delta, and still no requirement or scenario renamed (`design.md` decision 3).
+
+### Obsolete-test candidates found by this pass
+
+Bounded, as before, to the dispatched test-path glob `.github/tests/*.py`. This pass's search was narrower than the first's and is stated as such: a grep of `test_host_converge_workflow.py` and `test_host_configuration_names_its_environment.py` for the old root literal and for each of the seven retired identifiers, plus a read of the former's module-constant block. **Every entry is a candidate for human confirmation, not a conclusion, and each needs a re-pointing rather than a deletion.** Nothing was edited, deleted or disabled by this pass.
+
+The literal search returned exactly four occurrences — lines 480, 497, 539 and 1685 — all of which the first pass already lists. The two entries below are what the *constant block* turned up, and neither carries a path:
+
+| Test | Superseding delta | Evidence |
+|---|---|---|
+| `test_host_converge_workflow` module constant `DISPATCH_INPUT_NAME = "environment"` (line 202), and its one consumer `TestAMergeConvergesWithoutAWorkstation.test_a_run_can_also_be_requested_by_hand_for_one_environment` | *Host Configuration Is Applied by a Gated Workflow* ("The workflow SHALL name no stack"), via `tasks.md` 3.4 | The test asserts `assertIn(DISPATCH_INPUT_NAME, inputs)` over the workflow's `workflow_dispatch` inputs. **This is a direct contradiction**, not a drift: `TestTheMatrixAndItsOutputsNameTheStack.test_the_host_converge_dispatch_input_names_the_stack` asserts `environment` is **not** among those inputs. The two cannot both be green, and the repair is one word in the constant. **Not in the first pass's list** — it is a bare string constant carrying the word without the path, which an AST walk keyed on retired path and identifier literals does not attribute. |
+| `test_host_converge_workflow` module constant `DISPATCH_INPUT = re.compile(r"(?:inputs\|event\.inputs)\.environment\b")` (line 195), consumed by `TestHostConvergeDiscoveryFailsClosed._input_variable` and therefore by `.test_a_dispatched_environment_discovery_did_not_find_is_refused`, `.test_a_dispatched_environment_discovery_found_is_the_only_one_selected` and `.test_an_empty_dispatch_input_selects_every_environment` | Same | `_input_variable` resolves the variable the dispatch input arrives under by matching this pattern against the step's `env:` values. After the rename it matches nothing and returns `None`. **The third consumer is the quiet one:** the first two go red with a readable message, but `test_an_empty_dispatch_input_selects_every_environment` takes the `elif variable:` branch, supplies nothing, and passes — while asserting nothing about the input it is named for. The repair is `\.stack\b`. |
+
+Two further tests are recorded here not as obsolete but so that re-pointing is known to be sufficient: `test_host_converge_workflow.TestTheConvergeJobIsGatedOnItsOwnGitHubEnvironment.test_the_workflow_names_no_environment` and `.test_no_step_maps_an_environment_to_its_secret` reach the old root only through `environment_directories()` and `environment_declarations()`, imported from `test_environment_agnostic_pipeline` and already listed in the first pass. Moving those helpers carries both; neither needs an edit of its own.
+
+**Everything else in `test_host_converge_workflow.py` survives the rename untouched**, and that is a finding rather than an absence of one: its `WorkflowLocatorMixin` locates every job and step by shape, for the reason its own docstring gives, and shape is what a vocabulary change does not alter.
+
+### Unresolved project questions from this pass
+
+Numbered on from the five above. Recorded rather than asked, because a dispatched subagent has no channel to ask on.
+
+6. **What handle the dispatch input arrives under inside the discovery body.** `RETIRED_IDENTIFIERS` retires `REQUESTED_ENVIRONMENT`, and `REPLACEMENT_IDENTIFIERS` names no successor; `tasks.md` 3.4 fixes the *input's* name and says nothing about the variable's. `TestHostConvergeDiscoveryFailsClosed`'s own docstring records the same question from the change that added the workflow. **Assumption taken:** the name stays the implementer's to choose, so the test asserts only that the key the workflow maps it under is a key the discovery body actually reads — an agreement, not a spelling. **Depends on it:** `test_the_dispatch_input_is_mapped_into_the_body_under_a_name_that_body_reads`.
+
+7. **Whether the converge job reaches its GitHub Environment and its read-only secret through the matrix row at all.** Nothing in the delta obliges a matrix; a converge job could read a per-row `needs.*.outputs.*` instead. **Assumption taken:** through `matrix.stack`, which is what the committed workflow does today under the old name and what `design.md` decision 2's rule renames rather than restructures. **Depends on it:** all three tests in `TestTheConvergeRowIsReachedThroughTheStack`. If this is wrong the three are the wrong shape rather than wrong in their expectation, and that is a reviewable correction to make in one class.
+
+8. **No skill in the toolkit covers this stack.** As recorded above for the first pass: `testing` was loaded as the floor, and the suite's own idiom — `unittest`, the shape locators, the discriminator classes — is the authority it defers to. Repeated here because the standard obliges the absence be stated in each pass rather than inherited.
+
+### What the implementation step must make pass, from this pass
+
+Four further failures, all in `host-converge.yml` and all cleared by the same sweep `tasks.md` 3.2–3.4 already describes:
+
+6. **The converge job's own row** — `environment:`, the `secrets[...]` lookup and the `concurrency: group:` each read `matrix.stack.<field>` rather than `matrix.environment.<field>`, keeping the *field* names (`github_environment`, `read_only_secret`) as they are. Clears `TestTheConvergeRowIsReachedThroughTheStack` (3).
+7. **The dispatch input's `env:` entry** — the `REQUESTED_ENVIRONMENT: ${{ inputs.environment }}` mapping on the discovery step becomes a mapping of `inputs.stack`, under a key the body reads. Clears `TestTheDispatchInputStillReachesTheBodyThatValidatesIt` (1). Re-point `test_host_converge_workflow`'s `DISPATCH_INPUT` and `DISPATCH_INPUT_NAME` in the same commit, or three of that module's tests go red and a fourth goes quietly vacuous.
+
+**Expected end state: 762 tests, green.** A count below 762 is a module that failed to import, not a suite that got smaller.

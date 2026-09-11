@@ -1647,6 +1647,450 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             "disagreeing headings as agreeing",
         )
 
+# --------------------------------------------------------------------------
+# iac-cicd-pipeline / Host Configuration Is Applied by a Gated Workflow
+# (MODIFIED) -- the converge row, and the dispatch input that narrows it
+#
+# This requirement reached the delta LATE, after the rest of this module was
+# written: the change that originally ADDED it archived while this branch sat
+# unrebased, so it is now live in `openspec/specs/iac-cicd-pipeline/spec.md` in
+# the old `environment` vocabulary. That change's design.md decision 4 records
+# the history.
+#
+# Its delta is vocabulary-only. Every SHALL and every one of its eleven
+# scenarios says what it said before with `stack` where it said `environment`,
+# so the BEHAVIOUR it states is already asserted, in full, by
+# `test_host_converge_workflow.py` -- whose locators are written by SHAPE (the
+# job that invokes `ansible-playbook`, the step that writes to
+# `$GITHUB_STEP_SUMMARY`) and therefore survive a rename untouched.
+#
+# What is asserted below is only what the rename can break and those shape
+# locators cannot see: WHICH MATRIX KEY the gate, the credential and the
+# serialisation are reached THROUGH, and whether the dispatch input still
+# reaches the body that validates it. The sweep in
+# `TestTheMatrixAndItsOutputsNameTheStack` forbids `matrix.environment`
+# anywhere in this file and requires `matrix.stack` SOMEWHERE in it; neither
+# says the converge job's own gate, credential and concurrency group are the
+# surfaces that carry it, and a rename that moved one of the three onto a
+# different field of the row satisfies both while gating, crediting or
+# serialising the wrong thing.
+# --------------------------------------------------------------------------
+
+ANSIBLE_PLAYBOOK = re.compile(r"\bansible-playbook\b")
+SECRETS_LOOKUP = re.compile(r"\bsecrets\[")
+GITHUB_ENVIRONMENT_THROUGH_THE_STACK = re.compile(
+    r"\bmatrix\.stack\.github_environment\b"
+)
+READ_ONLY_SECRET_THROUGH_THE_STACK = re.compile(r"\bmatrix\.stack\.read_only_secret\b")
+
+# The dispatch input as a step's `env:` block reads it, in both spellings
+# Actions accepts. `inputs.environment` is already forbidden file-wide by
+# `RETIRED_IDENTIFIERS`; the retired form is re-stated here in its
+# `github.event.inputs` spelling too, and scoped to `env:` values, because it
+# is the CONVERSE the carrier read below needs -- a read that found nothing
+# would satisfy the presence assertion by reporting an empty mapping.
+DISPATCH_INPUT_READ = re.compile(r"(?:inputs|event\.inputs)\.stack\b")
+RETIRED_DISPATCH_INPUT_READ = re.compile(r"(?:inputs|event\.inputs)\.environment\b")
+
+
+def converge_jobs(workflow: dict) -> list:
+    """Every job that runs the converge play, located BY SHAPE.
+
+    The same locator `test_host_converge_workflow.WorkflowLocatorMixin` uses:
+    the job invoking `ansible-playbook`. Keyed on what the job does rather than
+    on its key, because this change renames neither the job key nor the step
+    names and a locator keyed on one would be repaired by editing a test.
+
+    Comments are stripped first, so a job whose only mention of the play is a
+    comment is not mistaken for the one that runs it.
+    """
+    return [
+        (name, job)
+        for name, job in jobs(workflow).items()
+        if any(
+            ANSIBLE_PLAYBOOK.search(uncommented(str(step.get("run") or "")))
+            for step in (job.get("steps") or [])
+        )
+    ]
+
+
+def env_assignments(workflow: dict):
+    """Yield (job_name, label, key, value) for every `env:` entry a workflow
+    declares, at job level and at step level, with the value compacted."""
+    for job_name, job in jobs(workflow).items():
+        block = job.get("env")
+        if isinstance(block, dict):
+            for key, value in block.items():
+                yield job_name, f"{job_name}.env", str(key), compact(value)
+    for job_name, index, step in steps(workflow):
+        block = step.get("env")
+        if isinstance(block, dict):
+            for key, value in block.items():
+                yield job_name, step_label(job_name, index, step), str(key), compact(value)
+
+
+def dispatch_input_carriers(workflow: dict, pattern=DISPATCH_INPUT_READ) -> dict:
+    """The `env:` keys under which the dispatch input reaches a step body, as
+    key -> the places that map it."""
+    found: dict = {}
+    for _, label, key, value in env_assignments(workflow):
+        if pattern.search(value):
+            found.setdefault(key, []).append(label)
+    return found
+
+
+def host_converge_discovery_bodies(path: Path | None = None) -> list[str]:
+    """host-converge.yml's discovery body, located by the inventory root it
+    enumerates -- the locator
+    `TestDiscoveryIteratesTheStackRoot
+    .test_the_host_converge_discovery_reads_each_stacks_own_declaration`
+    already uses.
+
+    Written as a second copy rather than by refactoring that test to call this:
+    this pass is additive only. That test is currently red, and lifting its
+    locator out of it would change what a red test asserts at a moment when
+    nothing could show that the change was faithful.
+    """
+    return [
+        body
+        for _, body in run_bodies(path or HOST_CONVERGE)
+        if "ansible/inventory" in body
+        and "GITHUB_OUTPUT" in body
+        and not ACTIONS_EXPRESSION.search(body)
+    ]
+
+
+class TestTheConvergeRowIsReachedThroughTheStack(unittest.TestCase):
+    """MODIFIED requirement: Host Configuration Is Applied by a Gated Workflow
+    (iac-cicd-pipeline).
+
+    Three surfaces of one matrix row: the GitHub Environment that gates the
+    converge, the repository secret it runs under, and the group that
+    serialises it. Each is SPECIFIED by the requirement as a property of the
+    stack; DERIVED, per that change's design.md decision 2, is only that the
+    row is reached through `matrix.stack`.
+    """
+
+    def _converge_job(self, workflow: dict):
+        found = converge_jobs(workflow)
+        self.assertEqual(
+            1,
+            len(found),
+            "expected exactly one job in host-converge.yml invoking "
+            f"`ansible-playbook` -- the converge -- and found {len(found)}: "
+            f"{sorted(name for name, _ in found)}. A second such job would hold the "
+            "credentials the gate exists to withhold in more than one place",
+        )
+        return found[0]
+
+    def test_the_converge_job_is_gated_on_the_github_environment_its_stack_declares(
+        self,
+    ) -> None:
+        """SPECIFIED -- scenario "The converge job is gated on the environment's
+        own GitHub Environment": "it SHALL declare the GitHub Environment named
+        by that stack's own pipeline declaration, so that its protection rules
+        and its secrets are the ones that apply", and the requirement's "A
+        converge job **per stack** SHALL declare that stack's own GitHub
+        Environment, taken from that stack's committed pipeline declaration".
+
+        DERIVED for the matrix key -- design.md decision 2.
+
+        `TestTheEnvironmentAxisIsNotRenamedWithTheUnit
+        .test_every_gated_job_still_attaches_to_the_github_environment_its_stack_declares`
+        holds the same shape for `apply.yml`, and says in its own docstring that
+        apply.yml is its subject. This is the host-converge half: the converge
+        job is gated by a GitHub Environment exactly as an apply job is, and the
+        two live in different files.
+        """
+        workflow = load_yaml(HOST_CONVERGE)
+        name, job = self._converge_job(workflow)
+        declared = compact(job.get("environment", ""))
+        self.assertTrue(
+            declared,
+            f"host-converge.yml's `{name}` runs the converge play and declares no "
+            "`environment:`, so the credentials a converge needs are "
+            "repository-scoped and no protection rule applies to a production "
+            "converge",
+        )
+        self.assertIsNotNone(
+            GITHUB_ENVIRONMENT_THROUGH_THE_STACK.search(declared),
+            f"host-converge.yml's `{name}` declares `environment: {declared}`, which "
+            "does not read `matrix.stack.github_environment`. The Environment SHALL "
+            "be the one that stack's own declaration names, reached through the "
+            "matrix row this change renames -- a row read through any other field "
+            "gates the converge on something the declaration did not say",
+        )
+
+    def test_the_converge_job_exports_the_read_only_secret_its_stack_declares(
+        self,
+    ) -> None:
+        """SPECIFIED -- "which repository secret holds each one's read-only
+        credential SHALL come from discovery over committed files", and the
+        converge job "SHALL be the only job holding the credentials a converge
+        needs". DERIVED for the matrix key -- design.md decision 2.
+
+        `test_host_converge_workflow.TestTheConvergeJobIsGatedOnItsOwnGitHubEnvironment
+        .test_no_step_maps_an_environment_to_its_secret` holds the other half
+        and survives this rename untouched: it forbids a LITERAL secret name.
+        A lookup reading the wrong field of the right row -- `secrets[matrix
+        .stack.name]` -- names no literal and passes it.
+        """
+        workflow = load_yaml(HOST_CONVERGE)
+        name, _ = self._converge_job(workflow)
+        lookups = [
+            (label, key, value)
+            for job_name, label, key, value in env_assignments(workflow)
+            if job_name == name and SECRETS_LOOKUP.search(value)
+        ]
+        self.assertTrue(
+            lookups,
+            f"host-converge.yml's `{name}` resolves no `secrets[...]` lookup in any "
+            "`env:` block, so either the converge holds no read-only credential or "
+            "it reads one by a name written in workflow text",
+        )
+        through = [
+            entry for entry in lookups if READ_ONLY_SECRET_THROUGH_THE_STACK.search(entry[2])
+        ]
+        self.assertTrue(
+            through,
+            f"none of `{name}`'s secret lookups reads "
+            "`matrix.stack.read_only_secret`: "
+            f"{[(label, key) for label, key, _ in lookups]}. A lookup keyed on any "
+            "other field of the row resolves to the empty string rather than "
+            "failing, so the converge authenticates as nobody and reports that as an "
+            "inventory it could not parse",
+        )
+
+    def test_the_converge_jobs_serialisation_group_is_per_stack(self) -> None:
+        """SPECIFIED -- "A converge SHALL NOT be cancelled in favour of a later
+        one. Runs against one stack SHALL be serialised", and scenario "One
+        environment's failure does not silence another's". DERIVED for the
+        matrix key -- design.md decision 2.
+
+        `test_host_converge_workflow.TestOneEnvironmentsConvergeDoesNotSilenceAnother
+        .test_an_in_flight_converge_is_not_cancelled_by_a_later_one` asserts
+        `cancel-in-progress: false` and that the group carries SOME expression,
+        and survives this rename. What it cannot see is a group that carries an
+        expression of something other than the row -- one group for every stack,
+        under which one stack's converge queues behind another's for no reason.
+        The rename rewrites this line, which is what makes that reachable here.
+        """
+        workflow = load_yaml(HOST_CONVERGE)
+        name, job = self._converge_job(workflow)
+        concurrency = job.get("concurrency") or workflow.get("concurrency")
+        self.assertTrue(
+            concurrency,
+            f"neither host-converge.yml's `{name}` nor the workflow declares a "
+            "`concurrency:` group, so two merges in quick succession run two plays "
+            "against one host at once",
+        )
+        group = compact(
+            concurrency.get("group") if isinstance(concurrency, dict) else concurrency
+        )
+        self.assertIsNotNone(
+            REPLACEMENT_IDENTIFIERS["matrix.stack"].search(group),
+            f"host-converge.yml's `{name}` serialises on the group {group!r}, which "
+            "does not read `matrix.stack`. Serialisation is per stack: a group that "
+            "does not name the row is one queue for every host, and one that still "
+            "names `matrix.environment` is a rename that stopped halfway",
+        )
+
+
+class TestTheDispatchInputStillReachesTheBodyThatValidatesIt(unittest.TestCase):
+    """MODIFIED requirement: Host Configuration Is Applied by a Gated Workflow
+    (iac-cicd-pipeline) -- scenario "A run is requested for an environment that
+    does not exist".
+
+    `TestTheMatrixAndItsOutputsNameTheStack
+    .test_the_host_converge_dispatch_input_names_the_stack` renames the input
+    an operator types. This is the other end of the same wire: the value has to
+    arrive inside the discovery body, which is where the refusal that names the
+    stacks that WERE found is written. A rename that moved the input and not
+    the `env:` entry carrying it leaves the body reading an unset variable --
+    which it is specified to treat as "converge everything", because that is
+    what every `push` supplies. So a by-hand converge of one host would
+    silently converge all of them, and nothing would be red.
+    """
+
+    def test_the_dispatch_input_is_mapped_into_the_body_under_a_name_that_body_reads(
+        self,
+    ) -> None:
+        """SPECIFIED for the refusal the mapping feeds -- "the run SHALL fail
+        naming the stacks that were found, rather than converging none and
+        reporting success". DERIVED for the mechanism -- that change's
+        tasks.md 3.4, and this suite's own way of executing the body: the
+        variable is resolved from the step's `env:` block, which is what
+        `test_host_converge_workflow.TestHostConvergeDiscoveryFailsClosed
+        ._input_variable` does to run it at all.
+        """
+        workflow = load_yaml(HOST_CONVERGE)
+        retired = dispatch_input_carriers(workflow, RETIRED_DISPATCH_INPUT_READ)
+        self.assertEqual(
+            {},
+            retired,
+            "these `env:` entries in host-converge.yml still read the retired "
+            f"dispatch input: {retired}. The input an operator types is now `stack`, "
+            "and an unrecognised input resolves to the empty string rather than "
+            "failing",
+        )
+        carriers = dispatch_input_carriers(workflow)
+        self.assertTrue(
+            carriers,
+            "no `env:` entry in host-converge.yml reads the `stack` dispatch input, "
+            "so a run requested by hand naming one stack reaches the body that would "
+            "have to validate it through nothing -- and an absent value means "
+            "'converge every stack discovered', which is what a merge supplies",
+        )
+        bodies = host_converge_discovery_bodies()
+        self.assertEqual(
+            1,
+            len(bodies),
+            "expected exactly one `run:` step in host-converge.yml that enumerates "
+            f"the inventory root and writes to `$GITHUB_OUTPUT`, found {len(bodies)}",
+        )
+        unread = sorted(key for key in carriers if key not in bodies[0])
+        self.assertEqual(
+            [],
+            unread,
+            f"host-converge.yml maps the dispatch input into {unread}, which the "
+            "discovery body never reads. The value is carried to the step and "
+            "dropped there, so a dispatch naming one stack converges every stack and "
+            "the run is green",
+        )
+
+
+class TestTheseHostConvergeReadsDiscriminate(unittest.TestCase):
+    """DERIVED. Nothing here asserts anything about this change.
+
+    The four tests above are a static read of one committed file, so a green
+    result reports only that the file could be read. These establish that the
+    reads report what they claim to, by running them over material this test
+    supplies. Same idiom as `TestTheseReadsDiscriminate` above.
+    """
+
+    @staticmethod
+    def _workflow(jobs_block: dict) -> dict:
+        return {"name": "fixture", "jobs": jobs_block}
+
+    def test_the_converge_locator_finds_the_job_that_runs_the_play(self) -> None:
+        workflow = self._workflow(
+            {
+                "publish": {"steps": [{"name": "Diff", "run": "git diff"}]},
+                "converge": {
+                    "steps": [
+                        {"name": "Checkout", "uses": "actions/checkout@v4"},
+                        {"name": "Converge", "run": "ansible-playbook playbooks/x.yml"},
+                    ]
+                },
+            }
+        )
+        self.assertEqual(
+            ["converge"],
+            [name for name, _ in converge_jobs(workflow)],
+            "the converge locator did not pick out the job that runs the play",
+        )
+
+    def test_the_converge_locator_is_not_fooled_by_a_comment(self) -> None:
+        workflow = self._workflow(
+            {
+                "publish": {
+                    "steps": [{"name": "Diff", "run": "# not ansible-playbook\ngit diff"}]
+                }
+            }
+        )
+        self.assertEqual(
+            [],
+            converge_jobs(workflow),
+            "a job whose only mention of the play is a comment was read as the job "
+            "that runs it, so the gate, the credential and the group would be "
+            "asserted of the wrong job",
+        )
+
+    def test_the_gate_read_tells_the_row_from_its_fields(self) -> None:
+        self.assertIsNotNone(
+            GITHUB_ENVIRONMENT_THROUGH_THE_STACK.search(
+                compact("${{ matrix.stack.github_environment }}")
+            ),
+            "the gate read does not match the expression it exists to require",
+        )
+        for wrong in (
+            "${{ matrix.environment.github_environment }}",
+            "${{ matrix.stack.name }}",
+            "${{ needs.discover.outputs.github_environment }}",
+        ):
+            with self.subTest(expression=wrong):
+                self.assertIsNone(
+                    GITHUB_ENVIRONMENT_THROUGH_THE_STACK.search(compact(wrong)),
+                    f"the gate read accepted {wrong!r}, which reaches a GitHub "
+                    "Environment through something other than the stack's own row",
+                )
+
+    def test_the_secret_read_tells_the_row_from_its_fields(self) -> None:
+        self.assertIsNotNone(
+            READ_ONLY_SECRET_THROUGH_THE_STACK.search(
+                compact("${{ secrets[matrix.stack.read_only_secret] }}")
+            ),
+            "the credential read does not match the expression it exists to require",
+        )
+        self.assertIsNone(
+            READ_ONLY_SECRET_THROUGH_THE_STACK.search(
+                compact("${{ secrets[matrix.stack.name] }}")
+            ),
+            "the credential read accepted a lookup keyed on the stack's NAME, which "
+            "resolves to the empty string rather than failing",
+        )
+
+    def test_the_dispatch_carrier_read_reports_what_it_is_given(self) -> None:
+        mapped = self._workflow(
+            {
+                "discover": {
+                    "steps": [
+                        {
+                            "name": "Discover",
+                            "run": "echo x",
+                            "env": {"REQUESTED_STACK": "${{ inputs.stack }}"},
+                        }
+                    ]
+                }
+            }
+        )
+        self.assertEqual(
+            ["REQUESTED_STACK"],
+            sorted(dispatch_input_carriers(mapped)),
+            "the carrier read did not report an `env:` entry that maps the dispatch "
+            "input",
+        )
+        unmapped = self._workflow(
+            {"discover": {"steps": [{"name": "Discover", "run": "echo x"}]}}
+        )
+        self.assertEqual(
+            {},
+            dispatch_input_carriers(unmapped),
+            "the carrier read reported a mapping in a workflow that declares none, "
+            "so the presence assertion above could never be red",
+        )
+
+    def test_the_dispatch_carrier_read_still_sees_the_retired_spelling(self) -> None:
+        workflow = self._workflow(
+            {
+                "discover": {
+                    "env": {"REQUESTED_ENVIRONMENT": "${{ github.event.inputs.environment }}"},
+                    "steps": [{"name": "Discover", "run": "echo x"}],
+                }
+            }
+        )
+        self.assertEqual(
+            ["REQUESTED_ENVIRONMENT"],
+            sorted(dispatch_input_carriers(workflow, RETIRED_DISPATCH_INPUT_READ)),
+            "the retired-spelling read missed the `github.event.inputs` form, under "
+            "which a mapping left at the old input name would go unreported",
+        )
+        self.assertEqual(
+            {},
+            dispatch_input_carriers(workflow),
+            "the new-spelling read matched the retired input, so the absence "
+            "assertion and the presence assertion could be satisfied by one mapping",
+        )
 
 if __name__ == "__main__":
     unittest.main()
