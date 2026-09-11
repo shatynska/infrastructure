@@ -547,6 +547,16 @@ jobs:
       # would. It is chosen for matching `platform-deploy.yml` and for failing at
       # a step named for what it was doing.
       - name: Prove the credentials, derive the address, and trust the host key
+        # THE NAME AND ITS SOURCE DIFFER ON PURPOSE, and the difference is
+        # about to become real. `TARGET_ENVIRONMENT` names the ANSIBLE GROUP
+        # this play converges -- the environment axis -- and is governed by
+        # *Host Configuration Names the Environment It Targets*. It is fed from
+        # the STACK name because the two coincide at one tenant and nowhere
+        # else: after `docs/change-queue.md` entry 62 the group is `production`
+        # while the stack is `main-production`, and re-deriving this is that
+        # entry's work. Renaming the variable itself would break
+        # `ansible/playbooks/host-baseline.yml`, `.ansible-lint` and
+        # `.pre-commit-config.yaml`, which read it under this name.
         env:
           TARGET_ENVIRONMENT: ${{ matrix.stack.name }}
         run: |
@@ -588,7 +598,7 @@ jobs:
               '.[$env].hosts[] as $host
                | ._meta.hostvars[$host].ansible_host
                | if type == "object" then (.__ansible_unsafe // empty) else . end' 2>/dev/null); then
-            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this stack's group names no host to converge. The stack is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different stack label."
+            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this stack's environment group names no host to converge. The stack is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different 'environment' label."
             exit 1
           fi
 
@@ -613,7 +623,7 @@ jobs:
           if ! ansible -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" "$TARGET_ENVIRONMENT" \
               -c local -m debug -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"; then
-            echo "::error::$TARGET_ENVIRONMENT: templating this stack's variables failed, and Ansible names the variable above. Read that first: the cause this step exists for is a Vault password that is not the one these group_vars were encrypted under — reported as 'Attempt to use undecryptable variable' — but an undefined variable or a bad template in the same file fails here too. Left to the play, either would have surfaced four roles in, on an already-changed host."
+            echo "::error::$TARGET_ENVIRONMENT: templating this environment's group variables failed, and Ansible names the variable above. Read that first: the cause this step exists for is a Vault password that is not the one these group_vars were encrypted under — reported as 'Attempt to use undecryptable variable' — but an undefined variable or a bad template in the same file fails here too. Left to the play, either would have surfaced four roles in, on an already-changed host."
             exit 1
           fi
 
@@ -669,6 +679,9 @@ jobs:
       # `docs/bootstrap-a-new-host.md` §6.3a describes. That is a loud failure on
       # an already-diagnosable host, and §6.3a is the procedure for it.
       - name: Converge this stack's host
+        # Fed from the stack name for the reason the credential-proving step
+        # above states: this names the Ansible group, not the stack, and the
+        # two coincide only at one tenant.
         env:
           TARGET_ENVIRONMENT: ${{ matrix.stack.name }}
         run: |
