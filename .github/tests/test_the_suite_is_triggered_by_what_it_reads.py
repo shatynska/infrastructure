@@ -199,8 +199,18 @@ def declared_filter_patterns(path: Path, name: str = "ansible") -> list[list[str
 
 
 def selects(patterns, path: str) -> bool:
-    """Whether a filter's declared patterns select a path, reading `!` as a
-    negation and letting the LAST matching pattern win.
+    """Whether a filter's declared patterns select a path: matched by some
+    positive AND by no negation, which is `predicate-quantifier:
+    some-with-excludes`.
+
+    THE QUANTIFIER IS WHY THIS IS THE RULE. Under the action's default, `some`,
+    patterns are compiled independently and OR-ed, and picomatch inverts a
+    matcher built from a `!`-prefixed pattern -- so a negation matches every
+    path it does not exclude and the filter matches nearly everything. A
+    matcher modelling "last pattern wins" would agree with this one on an
+    ordered list and certify a selection the action produces only when
+    `some-with-excludes` is declared. Order is irrelevant here and exclusion is
+    final.
 
     An approximation of picomatch written for this suite's own use, not
     authority on what `dorny/paths-filter` does; the module docstring says why
@@ -214,7 +224,7 @@ def selects(patterns, path: str) -> bool:
         text = str(pattern).strip()
         if text.startswith("!"):
             if gh_glob_matches(text[1:].strip(), path):
-                selected = False
+                return False
         elif gh_glob_matches(text, path):
             selected = True
     return selected

@@ -139,15 +139,40 @@ jobs:
           # believe governs them is not one to exclude on the strength of a
           # sweep, and it changes rarely.
           #
-          # The positive stays at the head: dorny/paths-filter requires a file
-          # to be matched by a positive pattern before a negation can exclude
-          # it. `.github/tests` asserts this declaration, and asserts
+          # `predicate-quantifier` IS LOAD-BEARING AND IS NOT A STYLE CHOICE.
+          # The action's DEFAULT is `some`, under which every pattern is
+          # compiled independently and OR-ed: `patterns.some(rule =>
+          # rule.isMatch(filename))`. picomatch INVERTS a matcher built from a
+          # `!`-prefixed pattern, so `'!ansible/inventory/**'` returns true for
+          # every path that is NOT under that directory -- and the OR is then
+          # true for essentially every file in the repository. Left at the
+          # default, these four negations would not narrow anything: they would
+          # make this filter match README.md and terraform/*.tf, and the suite
+          # would start seven containers on EVERY pull request. That is not a
+          # smaller version of the bug this change fixes; it is a strictly
+          # larger one, on a required check whose degraded runs took 75
+          # minutes.
+          #
+          # `some-with-excludes` is the quantifier that means what the list
+          # above reads as: selected where some positive matches AND no
+          # negation matches. It is order-independent -- the positive is
+          # written first for legibility, not for semantics -- and exclusion is
+          # final, no later pattern re-including a file.
+          #
+          # `.github/tests` asserts that this input is DECLARED, because
+          # without it the negations are silently inert and every check over
+          # the declared patterns still passes. That is the "economical and
+          # silent" failure this repository refuses everywhere else, and it is
+          # invisible to any assertion that reads only the pattern list.
+          #
+          # `.github/tests` asserts this declaration, and asserts
           # separately that `pr-validation.yml`'s lint filter carries NO
           # negation -- that tier is the compensating coverage for everything
           # excluded here, so the two must disagree, and both halves are
           # checked rather than reviewed.
           #
           # See the change `narrow-the-molecule-trigger-to-what-it-reads`.
+          predicate-quantifier: 'some-with-excludes'
           filters: |
             ansible:
               - 'ansible/**'

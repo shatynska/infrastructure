@@ -168,21 +168,32 @@ def gh_glob_matches(pattern: str, path: str) -> bool:
 def _selects(patterns, path: str) -> bool:
     """Whether a dorny/paths-filter pattern list selects a path, negations included.
 
-    Last matching pattern wins, and a file must be matched by a positive before
-    a negation can exclude it. A deliberately approximate reimplementation of
-    picomatch, written here because this suite may not take the dependency and
-    may not reach the network: where the two disagree the action is the
-    authority, and the behaviour is established by observation on a real pull
-    request. It is worth having anyway, being the only thing that can go red
-    when someone deletes a negation.
+    MODELS `predicate-quantifier: some-with-excludes`, which is what
+    `ansible-verify.yml` declares and is the ONLY quantifier under which a
+    negation narrows anything. Under the action's default, `some`, each pattern
+    is compiled independently and OR-ed, and picomatch inverts a matcher built
+    from a `!`-prefixed pattern -- so a negation there matches every path it
+    does not exclude and the OR is true for nearly everything. A matcher that
+    modelled "last pattern wins" would certify a selection the action does not
+    produce, which is worse than no matcher: it is a green over the wrong
+    semantics.
+
+    Selected where some positive matches AND no negation matches. Order is
+    irrelevant and exclusion is final. Deliberately approximate all the same --
+    this suite may not take the picomatch dependency and may not reach the
+    network -- so where the two disagree the action is the authority and the
+    behaviour is established by observation on a real pull request. It is worth
+    having as the only thing that can go red when someone deletes a negation.
     """
-    selected = False
+    included = False
     for pattern in patterns:
         text = str(pattern)
-        negated = text.startswith("!")
-        if gh_glob_matches(text[1:] if negated else text, path):
-            selected = not negated
-    return selected
+        if text.startswith("!"):
+            if gh_glob_matches(text[1:], path):
+                return False
+        elif gh_glob_matches(text, path):
+            included = True
+    return included
 
 
 def terraform_lockfile_directories(root: Path | None = None) -> set[str]:
@@ -4802,6 +4813,55 @@ class TestChangeDetectionResolvesTheGatesInput(
             "on converging seven roles in containers for pull requests it has nothing "
             "to say about",
         )
+
+    def test_the_change_filter_declares_the_quantifier_its_negations_need(self) -> None:
+        """SPECIFIED -- "a pull request touching nothing the suite reads SHALL
+        start no container", and its converse, "An unconsidered new path under
+        the configuration directory runs the suite".
+
+        WITHOUT THIS INPUT THE NEGATIONS ARE INERT AND NOTHING ELSE NOTICES.
+        `dorny/paths-filter` defaults to `predicate-quantifier: some`, under
+        which each pattern is compiled independently and OR-ed --
+        `patterns.some(rule => rule.isMatch(filename))` -- and picomatch
+        INVERTS a matcher built from a `!`-prefixed pattern. So under the
+        default, `!ansible/inventory/**` returns true for every path that is
+        not under that directory, the OR is true for nearly every file in the
+        repository, and this filter selects `README.md` and `terraform/*.tf`.
+        The suite would then start seven containers on every pull request:
+        strictly more expensive than the unnarrowed `ansible/**` it replaced,
+        on a required check whose degraded runs took 75 minutes.
+
+        Every other assertion in this repository would stay green through that,
+        because they all read the DECLARED patterns and the declaration would be
+        correct. That is exactly the "economical and silent" failure the
+        requirement's exclusion polarity exists to refuse, so the input is
+        asserted here rather than left to review.
+        """
+        workflow = self._workflow()
+        discovery_key, discovery_job = self._discovery_job(workflow)
+        for step in discovery_job.get("steps") or []:
+            if "paths-filter" not in str(step.get("uses", "")):
+                continue
+            declared = (step.get("with") or {}).get("filters")
+            parsed = yaml.safe_load(declared) if isinstance(declared, str) else declared
+            patterns = []
+            if isinstance(parsed, dict):
+                for entry in parsed.values():
+                    patterns.extend(entry if isinstance(entry, list) else [entry])
+            if not any(str(pattern).startswith("!") for pattern in patterns):
+                continue
+            quantifier = (step.get("with") or {}).get("predicate-quantifier")
+            self.assertEqual(
+                "some-with-excludes",
+                quantifier,
+                f"the change-filter step in `{discovery_key}` declares negations "
+                f"{[p for p in patterns if str(p).startswith('!')]} but sets "
+                f"`predicate-quantifier` to {quantifier!r}. Under the action's "
+                "default the negations do not exclude anything -- they match every "
+                "path they do not name, the patterns are OR-ed, and the filter "
+                "selects the whole repository. The suite would run on every pull "
+                "request, which is the opposite of what these negations are for",
+            )
 
     def test_the_change_filter_itself_runs_only_where_there_is_a_diff(self) -> None:
         """DERIVED (design.md Decision 1, tasks.md 2.3) -- no scenario states
@@ -12315,6 +12375,11 @@ def _reads_in_play(text: str, scenario_dir: str) -> list[tuple[str, str, str]]:
             continue
         key, _, value = bare.partition(":")
         key = key.lstrip("- ").strip()
+        # `ansible.builtin.import_playbook:` is the same route as
+        # `import_playbook:`, and is the spelling ansible-lint's fqcn rule
+        # pushes authors toward. Reading only the bare form passes over the
+        # likeliest future read of the playbook directory, which is excluded.
+        key = key.rsplit(".", 1)[-1]
         if key not in INCLUSION_KEYS:
             continue
         if value.strip():
@@ -12327,14 +12392,32 @@ def _reads_in_play(text: str, scenario_dir: str) -> list[tuple[str, str, str]]:
             if (len(item) - len(item.lstrip())) <= indent and not item.lstrip().startswith("-"):
                 break
             entry = item.strip()
+            # The mapping form -- `include_vars:` then `file:` / `dir:` beneath
+            # it -- is as common as the list form and reaches the same files.
             if not entry.startswith("-"):
+                sub_key, _, sub_value = entry.partition(":")
+                if sub_key.strip() in {"file", "dir", "name", "path"} and sub_value.strip():
+                    found.append(
+                        (key, _resolve_target(sub_value, scenario_dir), sub_value.strip())
+                    )
+                    continue
                 break
             entry = entry.lstrip("- ").strip()
             if entry:
                 found.append((key, _resolve_target(entry, scenario_dir), entry))
 
     for block in _task_blocks(text):
-        delegated = re.search(r"^\s*delegate_to:\s*localhost\s*$", block, re.MULTILINE)
+        # `delegate_to: localhost` is the spelling this repository uses, and
+        # it is not the only one that puts a task on the controller. A literal
+        # match on it alone lets any of the others carry a read of an excluded
+        # path past this check.
+        delegated = re.search(
+            r"^\s*(?:delegate_to:\s*(?:localhost|127\.0\.0\.1|::1)"
+            r"|connection:\s*local"
+            r"|local_action:)\s*$",
+            block,
+            re.MULTILINE,
+        ) or re.search(r"^\s*local_action:", block, re.MULTILINE)
         remote_src = re.search(r"^\s*remote_src:\s*(true|yes)\s*$", block, re.MULTILINE | re.I)
         modules = [
             match.group(1)
@@ -12374,26 +12457,70 @@ def _reads_in_play(text: str, scenario_dir: str) -> list[tuple[str, str, str]]:
 def _reads_in_scenario_definition(text: str, scenario_dir: str) -> list[tuple[str, str, str]]:
     """Paths a scenario declares in its own configuration file.
 
-    Two spellings are live here and neither is a task or a play: the provisioner
-    environment, and the options passed to dependency resolution. The second was
-    found by the author deriving this change's tests rather than by either
-    sweep -- every authored scenario carries `requirements-file`, and two sweeps
-    had read these files for `ANSIBLE_ROLES_PATH` without seeing it.
+    Neither a task nor a play, and more than one key carries one. Two are live
+    in this repository -- the provisioner environment, and the options passed to
+    dependency resolution -- and the second was found by the author deriving
+    this change's tests rather than by either sweep: every authored scenario
+    carries `requirements-file`, and two sweeps had read these files for
+    `ANSIBLE_ROLES_PATH` without seeing it.
+
+    SO THIS DOES NOT ENUMERATE KEYS. `provisioner.playbooks.*` and
+    `provisioner.inventory.links.*` are documented Molecule options naming
+    controller paths, and the second is literally how a scenario would come to
+    read `ansible/inventory/` -- the flagship excluded path. Any scalar under
+    this file that looks like a path is reported unless it is permitted, which
+    is the refusing polarity the requirement asks for rather than a key list
+    that goes stale.
     """
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+
     found: list[tuple[str, str, str]] = []
-    for line in text.splitlines():
-        bare = line.strip()
-        if bare.startswith("#") or ":" not in bare:
-            continue
-        key, _, value = bare.partition(":")
-        key = key.strip()
-        value = value.strip()
-        if not value or not PATH_BEARING.search(value):
-            continue
-        if key == "requirements-file":
-            found.append((key, _resolve_target(value, scenario_dir), value))
-        elif key.isupper() or key.startswith("ANSIBLE_") or key.startswith("MOLECULE_"):
-            found.append(("provisioner-env", _resolve_target(value, scenario_dir), key))
+
+    def walk(node: object, trail: tuple[str, ...]) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, trail + (str(key),))
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item, trail)
+            return
+        if not isinstance(node, str) or not node.strip():
+            return
+        value = node.strip()
+        if value.startswith(("http://", "https://")):
+            return
+        # Strip Molecule's own variables FIRST, then ask what is left. A value
+        # is a path into this repository only if it NAVIGATES -- `../`, or a
+        # leading `./` or `/` left where a variable stood. Anything else with a
+        # slash in it is not: `platforms.image` is a registry reference
+        # (`geerlingguy/...@sha256:...`) and `platforms.name` carries a slash
+        # only inside a `${VAR:-default}` fallback. Reporting those would make
+        # this check red on every scenario with nothing meaningful to permit,
+        # which is the over-wide failure the criterion exists to avoid.
+        substituted = "${" in value
+        bare = re.sub(r"\$\{[^}]+\}", "", value).strip()
+        if not bare:
+            return
+        navigates = ".." in bare or bare.startswith(("./", "/"))
+        if not navigates:
+            return
+        if bare.startswith("/") and not substituted:
+            # A genuinely absolute path names the managed node or the runner,
+            # not a file here, and no filter over this repository reaches it.
+            return
+        leaf = trail[-1] if trail else ""
+        construction = "requirements-file" if leaf == "requirements-file" else (
+            "provisioner-env" if "env" in trail else f"scenario:{'.'.join(trail[-2:])}"
+        )
+        found.append((construction, _resolve_target(value, scenario_dir), ".".join(trail)))
+
+    walk(parsed, ())
     return found
 
 
