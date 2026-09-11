@@ -76,6 +76,13 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      # `roles` is every role discovered; `selection` is the subset this run
+      # owes, and it is what the matrix consumes. The unfiltered set is
+      # published anyway, for two reasons: it is what a reader comparing a
+      # narrowed run against the whole suite needs, and `.github/tests` pins
+      # the discovery assertion to the step that writes it rather than to that
+      # step's position -- which is what stops a step inserted ahead of
+      # discovery from silently re-targeting that assertion.
       roles: ${{ steps.discover.outputs.roles }}
       run-suite: ${{ steps.gate.outputs.run-suite }}
       selection: ${{ steps.select.outputs.selection }}

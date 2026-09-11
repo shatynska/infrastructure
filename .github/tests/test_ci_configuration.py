@@ -816,21 +816,45 @@ class TestMoleculeDiscoveryAndScenarioCoverage(unittest.TestCase):
         requires. Reconsider this assertion, do not weaken it, if the
         implementation satisfies the scenario by another means.
         """
+        # PINNED TO THE OUTPUT IT WRITES, not to `candidates[0]`. This step was
+        # selected as the FIRST whose `run:` mentions both `molecule` and
+        # `ansible/roles`, so a step inserted ahead of discovery re-targets it
+        # silently -- the assertion still passes, about a different script. A
+        # test that keeps passing while changing subject establishes nothing
+        # about either subject. The discovery step is the one writing the job's
+        # roles output; that is what identifies it, whatever its position.
+        discovering = None
+        for job_key, job_body in (self.workflow.get("jobs") or {}).items():
+            produced = compact((job_body.get("outputs") or {}).get("roles", ""))
+            found = re.search(r"steps\.([A-Za-z0-9_-]+)\.outputs\.", produced)
+            if found:
+                discovering = (job_key, found.group(1))
+                break
         candidates = [
             (job, index, step)
             for job, index, step in steps(self.workflow)
-            if step.get("run") and "molecule" in str(step.get("run"))
-            and re.search(r"ansible/roles", str(step.get("run")))
+            if step.get("run")
+            and discovering is not None
+            and job == discovering[0]
+            and step.get("id") == discovering[1]
         ]
         if not candidates:
             candidates = [
                 (job, index, step)
                 for job, index, step in steps(self.workflow)
-                if step.get("run") and re.search(r"ansible/roles", str(step.get("run")))
+                if step.get("run") and "molecule" in str(step.get("run"))
+                and re.search(r"ansible/roles", str(step.get("run")))
             ]
         self.assertTrue(
             candidates,
             "no step in ansible-verify.yml discovers roles under ansible/roles/",
+        )
+        self.assertEqual(
+            1,
+            len(candidates),
+            "more than one step in ansible-verify.yml looks like the discovery "
+            f"step: {[(job, step.get('name')) for job, _, step in candidates]}. "
+            "This assertion must know which script it is exercising",
         )
 
         job, index, step = candidates[0]
@@ -4523,7 +4547,11 @@ class TestChangeDetectionResolvesTheGatesInput(
         """
         for job in (workflow.get("jobs") or {}).values():
             condition = compact(job.get("if", ""))
-            matrix = compact(str(((job.get("strategy") or {}).get("matrix") or {})))
+            # `compact(str({}))` is `"{}"`, which is TRUTHY -- so a
+            # `not matrix` guard is a no-op and every job carrying an `if:`
+            # would be considered. Test the mapping itself, before it is
+            # stringified.
+            matrix = (job.get("strategy") or {}).get("matrix") or {}
             if not condition or not matrix:
                 continue
             found = re.search(

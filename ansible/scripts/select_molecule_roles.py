@@ -143,22 +143,57 @@ def _relative(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def _documents(path: Path):
-    """Every YAML document in a file, or none where it does not parse.
+class _AnsibleTolerantLoader(yaml.SafeLoader):
+    """`SafeLoader`, plus the tags Ansible's own YAML carries.
 
-    A file that does not parse is not a route this derivation can read, but it
-    is also not evidence of one: `ansible-lint` and `--syntax-check` own
-    malformed YAML, and refusing here would make this module the second thing
-    reporting it, in worse words.
+    `!vault` and `!unsafe` are VALID Ansible YAML, not malformed, and
+    `yaml.safe_load` rejects both. `!vault` is already live in
+    `ansible/inventory/group_vars/`; nothing stops it appearing in a scenario.
+    Without this, such a file would fail to parse -- and a parse failure that
+    resolves to "no edges" loses coverage silently, which is the one direction
+    this module is written never to resolve in.
+    """
+
+
+_AnsibleTolerantLoader.add_multi_constructor(
+    "!", lambda loader, suffix, node: None
+)
+_AnsibleTolerantLoader.add_multi_constructor(
+    "tag:", lambda loader, suffix, node: None
+)
+
+
+def _documents(path: Path):
+    """Every YAML document in a file.
+
+    A FILE THAT CANNOT BE READ IS REFUSED, not passed over. Returning no
+    documents would make an unreadable scenario contribute no edges, which is
+    indistinguishable from a scenario that reaches nothing -- the silent
+    under-read this module exists to prevent. `ansible-lint` and
+    `--syntax-check` also report malformed YAML, and being the second thing to
+    say so costs a duplicate message; being the thing that quietly stopped
+    selecting a role costs the coverage.
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
+    except (OSError, UnicodeDecodeError) as error:
+        raise DerivationRefused(
+            f"{path}: cannot be read ({error}), so whether it reaches a role is "
+            "unknown. Refused rather than treated as reaching nothing"
+        ) from error
     try:
-        return [document for document in yaml.safe_load_all(text) if document is not None]
-    except yaml.YAMLError:
-        return []
+        return [
+            document
+            for document in yaml.load_all(text, Loader=_AnsibleTolerantLoader)
+            if document is not None
+        ]
+    except yaml.YAMLError as error:
+        raise DerivationRefused(
+            f"{path}: is not YAML this derivation can parse ({error}), so whether "
+            "it reaches a role is unknown. Refused rather than treated as "
+            "reaching nothing -- a file that silently contributes no edges is "
+            "how a role stops being tested with nothing reporting"
+        ) from error
 
 
 def _is_literal(value) -> bool:
@@ -212,6 +247,45 @@ def _scenario_play_files(root: Path, role: str) -> list[Path]:
     )
 
 
+def _refuse_redirected_scenario_plays(root: Path, role: str) -> None:
+    """Refuse a scenario that points its plays somewhere this walker will not look.
+
+    `provisioner.playbooks` in a `molecule.yml` overrides which file Molecule
+    runs for `converge`, `prepare` or `verify`. A scenario using it can reach
+    roles from a playbook outside its own directory, and `_scenario_play_files`
+    globs `molecule/*/*.yml` -- so every edge in that playbook would be missed
+    with nothing reporting.
+
+    This is the ONE key read out of a `molecule.yml`, and reading it does not
+    reopen what the prohibition elsewhere in this module closes: that
+    prohibition is about `name:`, which carries the Docker driver and the
+    instance rather than a role. No scenario this repository authors declares
+    `provisioner.playbooks`; the Galaxy-installed role does, which is one more
+    reason its dotted directory is excluded before any of this runs.
+    """
+    molecule_root = Path(root) / ROLES_DIRECTORY / role / "molecule"
+    if not molecule_root.is_dir():
+        return
+    for definition in sorted(molecule_root.glob("*/molecule.yml")):
+        for document in _documents(definition):
+            if not isinstance(document, dict):
+                continue
+            playbooks = (document.get("provisioner") or {})
+            if not isinstance(playbooks, dict):
+                continue
+            declared = playbooks.get("playbooks")
+            if declared:
+                raise DerivationRefused(
+                    f"{_relative(definition, root)}: declares "
+                    f"`provisioner.playbooks` ({declared!r}), which redirects "
+                    "this scenario's plays away from its own directory. The "
+                    "derivation reads the plays it finds beside a scenario, so "
+                    "any role reached from a redirected playbook would "
+                    "contribute no edge and nothing would report that. Refused "
+                    "rather than passed over"
+                )
+
+
 def _role_own_files(root: Path, role: str) -> list[Path]:
     """A role's own task and handler files.
 
@@ -241,10 +315,14 @@ def _escapes(value: str, origin: Path, role_root: Path) -> bool:
         return False
     candidate = value.strip()
     if "{{" in candidate:
-        return ".." in candidate
+        # A TEMPLATED TARGET IS TREATED AS ESCAPING, whatever it spells. The
+        # value is not one this derivation can close over, and the rule is
+        # keyed on what is reached -- so an unresolvable target is refused for
+        # the same reason an unresolvable role name is, twelve lines up.
+        # Treating it as role-local would be a guess in the silent direction.
+        return True
     try:
         resolved = (origin.parent / candidate).resolve()
-        role_root.resolve().relative_to  # noqa: B018 -- attribute probe, cheap
         resolved.relative_to(role_root.resolve())
     except (ValueError, OSError):
         return True
@@ -272,18 +350,25 @@ def _walk_tasks(tasks, *, origin: Path, root: Path, role: str, edges: set[str]) 
                 edges.add(str(name))
             elif key in TASK_INCLUSION_KEYS:
                 target = value.get("file") if isinstance(value, dict) else value
-                if isinstance(target, str) and ".." in target:
-                    raise DerivationRefused(
-                        f"{_relative(origin, root)}: `{key}` reaches "
-                        f"{target!r}, which navigates outside this file's own "
-                        "directory. The derivation has no rule for this "
-                        "construction and refuses rather than passing over it: "
-                        "it names no role and couples two of them exactly as an "
-                        "invocation would"
-                    )
+                # REFUSED WHATEVER IT NAMES, not only when it navigates. A
+                # task file included beside the converge can itself reach a
+                # role, and this walker does not read it -- `_scenario_play_files`
+                # globs plays, and a bare task list parsed as a play yields
+                # nothing. So a literal, role-local target is exactly as
+                # invisible as a `../` one, and refusing only the navigating
+                # form leaves the quieter half passing over.
+                raise DerivationRefused(
+                    f"{_relative(origin, root)}: `{key}` reaches {target!r}. "
+                    "The derivation has no rule for this construction and "
+                    "refuses rather than passing over it: the file it names is "
+                    "not read, so any role reached through it would contribute "
+                    "no edge and nothing would report that. No scenario in this "
+                    "repository uses this construction, which is what makes "
+                    "refusing free"
+                )
             elif key in COMMAND_KEYS:
-                _refuse_unpermitted_nested_playbook(
-                    value, origin=origin, root=root, key=key
+                _handle_nested_playbook(
+                    value, origin=origin, root=root, key=key, edges=edges
                 )
         for block in BLOCK_KEYS:
             if block in task:
@@ -292,8 +377,21 @@ def _walk_tasks(tasks, *, origin: Path, root: Path, role: str, edges: set[str]) 
                 )
 
 
-def _refuse_unpermitted_nested_playbook(value, *, origin: Path, root: Path, key: str) -> None:
-    """Refuse `ansible-playbook` over an expression unless an entry covers it."""
+def _handle_nested_playbook(
+    value, *, origin: Path, root: Path, key: str, edges: set[str] | None = None
+) -> None:
+    """Follow a nested `ansible-playbook`, or refuse where it cannot be followed.
+
+    Both dispositions are conformant; passing over is not. A literal path is
+    followable, so it is FOLLOWED and its edges attributed to the role holding
+    the invocation -- a scenario reaching another role this way couples them
+    exactly as `import_playbook` does. Only an expression is refused, and only
+    where no entry covers that instance.
+
+    `edges` is None where the caller is scanning a role's own task or handler
+    files, which may not reach outside the role at all: there, every nested
+    playbook is refused rather than followed.
+    """
     if isinstance(value, dict):
         argv = value.get("argv")
         words = argv if isinstance(argv, list) else str(value.get("cmd", "")).split()
@@ -307,6 +405,19 @@ def _refuse_unpermitted_nested_playbook(value, *, origin: Path, root: Path, key:
     targets = [word for word in words if word.endswith((".yml", ".yaml"))]
     for target in targets:
         if _is_literal(target):
+            if edges is None:
+                raise DerivationRefused(
+                    f"{_relative(origin, root)}: a role's own task or handler "
+                    f"file runs `ansible-playbook` over {target!r}. That reaches "
+                    "outside the role whatever the path resolves to, and is "
+                    "refused for the same reason an include of another role's "
+                    "file is"
+                )
+            resolved = (origin.parent / target).resolve()
+            if resolved.is_file():
+                _collect_from_play_file(
+                    resolved, root=root, role="", edges=edges, seen=set()
+                )
             continue
         entry = (_relative(origin, root), f"{key.rsplit('.', 1)[-1]}(ansible-playbook)", f"expr:{target}")
         if entry in PERMITTED_NESTED_PLAYBOOKS:
@@ -397,6 +508,10 @@ def _refuse_tasks_reaching_out(tasks, *, origin: Path, root: Path, role_root: Pa
                     "makes refusing free. See design.md Decision 2 of the change "
                     "`select-the-molecule-matrix-per-role`"
                 )
+            if key in COMMAND_KEYS:
+                _handle_nested_playbook(
+                    value, origin=origin, root=root, key=key, edges=None
+                )
             if key in TASK_INCLUSION_KEYS:
                 target = value.get("file") if isinstance(value, dict) else value
                 if _escapes(target, origin, role_root):
@@ -427,6 +542,7 @@ def derive_graph(root) -> dict[str, set[str]]:
     for role in sorted(role_directories(root)):
         edges: set[str] = set()
         _refuse_routes_out_of_a_roles_own_files(root, role)
+        _refuse_redirected_scenario_plays(root, role)
         meta = root / ROLES_DIRECTORY / role / "meta" / "main.yml"
         if meta.is_file():
             for document in _documents(meta):
@@ -439,20 +555,52 @@ def derive_graph(root) -> dict[str, set[str]]:
                         name = entry.get("role") or entry.get("name")
                     else:
                         name = None
-                    if _is_literal(name):
-                        edges.add(str(name))
+                    if name is None:
+                        continue
+                    if not _is_literal(name):
+                        raise DerivationRefused(
+                            f"{_relative(meta, root)}: a `dependencies` entry "
+                            f"names a role by something other than a literal "
+                            f"({name!r}). Refused rather than skipped, exactly "
+                            "as the same shape is in a `roles:` list -- a "
+                            "dependency this derivation cannot close over is an "
+                            "edge it would otherwise drop with nothing reporting"
+                        )
+                    edges.add(str(name))
         seen: set[Path] = set()
         for path in _scenario_play_files(root, role):
             _collect_from_play_file(
                 path, root=root, role=role, edges=edges, seen=seen
             )
-        # Two edges are dropped rather than recorded. An external, dotted
+        # A role named by PATH is refused rather than filtered. `- role:
+        # ../../other_role` satisfies every literal check above, and the dotted
+        # filter below would then discard it for containing a `.` -- dropping a
+        # real edge for a reason that has nothing to do with why the filter
+        # exists. Refusing says so instead.
+        for edge in sorted(edges):
+            if "/" in edge:
+                raise DerivationRefused(
+                    f"{ROLES_DIRECTORY}/{role}: reaches a role by path "
+                    f"({edge!r}) rather than by name. The derivation resolves a "
+                    "role name to a role directory and cannot do that for a "
+                    "path, so this is refused rather than silently discarded by "
+                    "the external-content filter below"
+                )
+        # Two edges are then dropped rather than recorded. An external, dotted
         # Galaxy role is content this repository neither authors nor tests, so
         # it contributes nothing and is not a refusal -- `docker`'s
-        # `meta/main.yml` names one today. And a role's edge to ITSELF, which
-        # nearly every converge declares, carries no information a reverse
+        # `meta/main.yml` names one today, and it is installed under a dotted
+        # directory this module never enumerates. And a role's edge to ITSELF,
+        # which nearly every converge declares, carries no information a reverse
         # closure can use: a role is always in its own closure as the seed, so
         # a self-edge would only make every role look like its own converger.
+        #
+        # What is NOT closed here: a plain literal naming no role directory at
+        # all -- a typo -- contributes nothing and is not refused. Refusing it
+        # would be the consistent polarity, and it is not done because the name
+        # may legitimately be external content installed under a name this
+        # module cannot see. Such a name fails at converge time, loudly, in
+        # Molecule's own words rather than these.
         graph[role] = {
             edge for edge in edges if "." not in edge and edge != role
         }
@@ -465,12 +613,13 @@ def reverse_closure(graph, seeds) -> set[str]:
     Terminates on a cycle rather than refusing one -- two roles' scenarios
     converging each other is legal, and nothing in this repository stops it.
     """
+    edges = {role: set(targets) for role, targets in dict(graph).items()}
     owed = set(seeds)
     frontier = list(owed)
     while frontier:
         current = frontier.pop()
-        for role, targets in dict(graph).items():
-            if current in set(targets) and role not in owed:
+        for role, targets in edges.items():
+            if current in targets and role not in owed:
                 owed.add(role)
                 frontier.append(role)
     return owed
@@ -486,7 +635,12 @@ def attribute(changed_paths, root) -> set[str] | None:
     known = role_directories(root)
     seeds: set[str] = set()
     for raw in changed_paths:
-        path = str(raw).strip().lstrip("./")
+        path = str(raw).strip()
+        # `removeprefix`, not `lstrip`: the latter strips a CHARACTER SET, so
+        # `.github/workflows/x.yml` would become `github/...`. Both spellings
+        # widen, so nothing is riding on it today -- but a reader should not
+        # have to work that out to know the line is correct.
+        path = path.removeprefix("./")
         if not path:
             continue
         parts = path.split("/")
