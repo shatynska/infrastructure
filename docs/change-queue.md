@@ -295,21 +295,18 @@ tree, so where an entry cites a host fact, that is what `main-server` showed on
 
 ## 23. apply-host-configuration-through-a-gated-workflow
 
-**Unblocked once staging is actually converged, which is not the same day this
-was written.** It waited on a non-prod host to *converge* against.
-`configure-the-staging-host` supplied everything a converge needs from this
-repository on 2026-09-10 -- an inventory source, a `group_vars` of its own, a
-play that can name it -- but the converge itself is operator work against
-credentials that exist nowhere here, and `ansible/inventory/group_vars/staging.yml`
-is committed incomplete until it is done. **Check that staging is converged
-before starting this**, rather than inferring it from this entry.
+**Unblocked, in fact and not merely in principle.** It waited on a non-prod
+host to *converge* against. `configure-the-staging-host` supplied everything a
+converge needs from this repository on 2026-09-10 -- an inventory source, a
+`group_vars` of its own, a play that can name it -- and the converge itself,
+which was operator work, happened the same day: staging is configured, and the
+values `staging.yml` was committed without were supplied in PR #130.
 
-The block's history, since it has moved three times: recorded on 2026-09-09
-when staging was identified; re-pointed on 2026-09-10 when
+The block's history, since it moved three times before lifting: recorded on
+2026-09-09 when staging was identified; re-pointed on 2026-09-10 when
 `add-a-staging-environment` delivered staging's Terraform half; re-pointed
-again when `configure-the-staging-host` delivered the host half, at which point
-what remains between this entry and its prerequisite is a converge rather than
-any work in this repository.
+again when `configure-the-staging-host` delivered the host half; and lifted
+when that change's converge succeeded.
 
 This remains the one path to production this repository still leaves to a
 workstation.
@@ -1236,3 +1233,57 @@ currently deferred partly because nothing could test a fix for it.
 Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and
 whatever runner it needs, which is why it was not invented inside a change whose
 diff most needed reading closely.
+
+## 55. refresh-staging-group-vars-banner
+
+Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, which sends a
+reader to that file for evidence and meets a banner saying the opposite of what
+the file now is.
+
+`ansible/inventory/group_vars/staging.yml` opens its lower half with
+
+    # THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET CONVERGED.
+
+and closes it with "this file's state is PENDING the operator, not finished.
+Until it is completed there is no converged staging host, no prune timer and no
+`staging-server-prune-host-images` check." All three values it lists as missing
+were supplied in PR #130, and the host converged the same evening --
+`configure-the-staging-host`'s archived task list records the run and the checks
+that followed it.
+
+The banner was correct when written and is the kind of text that goes stale
+silently: nothing fails, and a reader who trusts it draws a wrong conclusion
+about the environment. What replaces it is not just deletion — the paragraphs
+under it explain *which* absence refuses a converge and which is tolerated, and
+that reasoning is worth keeping in some form for whoever writes the next
+environment's `group_vars` from scratch.
+
+Not blocked, and small. It touches one file and no mechanism.
+
+## 56. assert-the-bootstrap-document's-static-conventions
+
+Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, whose code review
+identified two conventions that hold across `docs/bootstrap-a-new-host.md` and
+are checkable by a static read of it — which `AGENTS.md` says is asserted in
+`.github/tests` "or nowhere".
+
+- **Every `ssh-keygen -f` in the document writes under `~/.ssh/`.** A relative
+  path puts a passphrase-less private key in the repository root, where stage
+  4.2's `git add -A` can commit it; `.gitignore` carries no private-key
+  pattern. Three of the five key rows had one, and two were found only by
+  sweeping after a reviewer reported the third.
+- **Every `§N.N` cross-reference resolves to a heading that exists.** The
+  document carries dozens and they move when sections are inserted.
+
+Both have the property the citation-form check already exists for: correct when
+written, correct when reviewed, and wrong only later. Neither can be caught by
+an author or a reviewer reading the diff.
+
+**What this deliberately does not attempt.** The reference check is mechanical
+only — that the target exists, not that it says what the citing sentence
+claims. The semantic half has produced two defects and is not statically
+decidable; it stays with the editor's note at the head of the document, along
+with the second-run and re-derivation habits.
+
+Not blocked. One new module in `.github/tests`, whose constraints it fits: a
+static read of one committed file, no network, no credential, no container.

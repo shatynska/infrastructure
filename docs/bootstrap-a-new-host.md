@@ -10,11 +10,36 @@ What you will have at the end:
 - A path for any application repository to deploy itself **to the production host** from its own GitHub Actions workflow.
 - **A staging server, configured but running nothing** — stage 6 converges it alongside production: Docker, the host firewall, the tailnet, the operator and deploy accounts, the mounted data volume, the weekly image prune. What it does not have is an application stack, a hostname or an open web port, because `platform-deploy.yml` still deploys to one environment. "From here on, two hosts" says which and what closes it. That is the honest end state today; it is not an oversight in this procedure.
 
-**Two servers is a standing cost**, not a one-off configuration: two instances and two volumes billed monthly, two hosts to patch and rebuild, two token pairs to rotate. Staging is roughly half production's bill. Decide you want that before stage 1, because the decisions that follow are shaped by it and are awkward to unpick afterwards. If you want one environment, this document still works: delete the second directory under `terraform/environments/`, skip its secrets, and read every "two" below as "one".
+**Two servers is a standing cost**, not a one-off configuration: two instances and two volumes billed monthly, two hosts to patch and rebuild, two token pairs to rotate. Staging is roughly half production's bill. Decide you want that before stage 1, because the decisions that follow are shaped by it and are awkward to unpick afterwards. If you want one environment, this document still works: delete the second directory under `terraform/environments/`, skip its secrets, and read every "two" below as "one" — including §0.4's table, which says so in its own terms.
 
 **How to read this.** Stages are in dependency order; do not skip ahead. Each stage ends with a **Secrets created in this stage** table and a **Check** list. `<angle brackets>` are placeholders you replace. "Operator" means the person doing this. Commands are run from the repository root unless a `cd` is shown. The reasoning behind most decisions is in `openspec/specs/` and in the archived changes under `openspec/changes/archive/`; this document only says what to do.
 
-**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. The second environment adds perhaps an hour of console work in stages 1 to 3 and nothing after that, since stages 5 to 9 configure one host. Stage 8 is repeated per application.
+**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. The second environment adds perhaps an hour of console work in stages 1 to 3, **and a second converge in stage 6** — stage 6 runs once per environment. Stages 7 to 9 are production's alone. Stage 8 is repeated per application.
+
+## Before you edit this document
+
+Two habits, learned by getting them wrong. Both are about the *kind* of mistake
+this document invites, which is not carelessness — every defect they exist to
+catch read fluently and survived a review.
+
+**A fact stated in several places must be corrected in all of them, and the
+list is rebuilt by grep, never remembered.** Where a deploy key's private half
+lives is stated in three places; the Tailscale auth key's reuse in five; what
+the heartbeat ping key addresses in three. A change that fixes one and asserts
+it fixed them all is how a defect reaches a commit message as fixed.
+
+**A fix aimed at the row a reviewer named will recreate the defect one row
+over.** Ask instead what predicate produced it and sweep every candidate: *for
+each creation step in a per-environment stage, what does the second run do?*
+*For each `ssh-keygen`, where does the private half sit and what removes it?*
+Both of those, swept, found instances nobody had reported.
+
+The generator behind both: **a property that holds when this document is read
+once, straight through, and fails when it is read the way it is actually used**
+— twice, once per environment; across elapsed time, with a `git add -A` in the
+middle; by following its own cross-references; on a rebuild, re-entering from
+the middle; by someone who wants one environment and is translating every "two"
+as they go. Each of those is a sweep, and each has caught something.
 
 ## Stage 0. Accounts, tools and keys
 
@@ -27,10 +52,10 @@ Nothing here touches a server. It is the shopping list.
 | GitHub | The repository, CI, the approval gate, the container registry (GHCR) | The company organisation, not a personal account |
 | Hetzner Cloud | Both servers, their firewalls, volumes and backups — **one project per environment**, created in stage 1 | The company, with billing set up |
 | HCP Terraform (app.terraform.io) | Storing Terraform state and locking it — one workspace per environment | The company; the free tier is enough |
-| Tailscale | A private network between the server, CI runners and operators | The company; the free plan is enough for now |
+| Tailscale | A private network between both servers, CI runners and operators | The company; the free plan is enough for now |
 | Slack | Alert delivery | The company workspace |
 | A heartbeat service (Healthchecks.io or similar) | Noticing when the whole host or its alerting dies | The company |
-| A DNS provider | Pointing hostnames at the server | Wherever the company's domain already lives |
+| A DNS provider | Pointing hostnames at the **production** server (§4.4 says why not staging) | Wherever the company's domain already lives |
 
 Use a shared company password manager for every credential in this document. Several values below exist in exactly one place after they are created, and the password manager is that place.
 
@@ -46,7 +71,7 @@ Install these once. Versions are pinned by the repository where it matters.
 | Python 3.12 and `uv` | Ansible and its test toolchain |
 | Docker (Docker Desktop on Windows/macOS, or the engine on Linux) | Molecule tests only |
 | `direnv` (optional but recommended) | Loads each environment's read-only Hetzner token only inside that environment's directory — one token reaches one project, so the scoping matters |
-| Tailscale client | Reaching the server over the private network |
+| Tailscale client | Reaching either server over the private network |
 
 Follow `README.md`, "Local setup", steps 1 to 5. Step 5 installs Ansible into a virtual environment and the Galaxy content into `ansible/roles/`; the `-p ansible/roles` flag there is required, not optional.
 
@@ -54,16 +79,51 @@ Follow `README.md`, "Local setup", steps 1 to 5. Step 5 installs Ansible into a 
 
 Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two **purposes**; each has a different holder and a different blast radius.
 
-**One purpose may span both environments, and the operator key does.** Both environment directories in this repository carry the same `ssh_public_key`, and that is deliberate rather than an oversight: the key authorises `root` on hosts this repository can recreate in their entirety, both are reached by the same operator, and a second private half would be one more thing to hold, rotate and lose for no gain. What must never be shared is a key across *purposes* — the operator key, the inspection key, the platform deploy key and each application's deploy key stay four distinct keys, because those have four different holders. If you decide otherwise for your company, generate a second operator key and put its public half in the second environment's `terraform.tfvars`; nothing else changes.
+**A purpose may span both environments, and several do** — the operator key most obviously; §0.4 lists the rest. Both environment directories in this repository carry the same `ssh_public_key`, and that is deliberate rather than an oversight: the key authorises `root` on hosts this repository can recreate in their entirety, both are reached by the same operator, and a second private half would be one more thing to hold, rotate and lose for no gain. What must never be shared is a key across *purposes* — the operator key, the inspection key, the platform deploy keys and each application's deploy key stay distinct, because those have different holders. The platform deploy key is the one whose *purpose* differs per environment, so it is two keys rather than one; the table below has a row for each. If you decide otherwise for your company, generate a second operator key and put its public half in the second environment's `terraform.tfvars`; nothing else changes.
 
 | Key | Command | Passphrase | Private half lives in |
 |---|---|---|---|
 | Operator key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-root -C "<you>@<company> root"` | Yes | Your workstation only. This is `root` on **both** servers. |
-| Operator inspection key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ops -C "ops-<you>"` | Yes | Your workstation. Unprivileged login, used daily instead of root. Configured on the production host only, in stage 6. |
-| Platform deploy key | `ssh-keygen -t ed25519 -f platform_deploy_key -N "" -C "deploy@platform"` | **No** (CI cannot type one) | GitHub secret only; delete the local file after storing it |
-| One deploy key per application | `ssh-keygen -t ed25519 -f <app>_deploy_key -N "" -C "<app>-deploy"` | **No** | That application's GitHub secret only |
+| Operator inspection key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ops -C "ops-<you>"` | Yes | Your workstation. Unprivileged login, used daily instead of root. Configured on **both** hosts, in stage 6. |
+| Platform deploy key — **production** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform -N "" -C "deploy@platform"` | **No** (CI cannot type one) | The `production` Environment secret `PLATFORM_DEPLOY_SSH_KEY` (stage 6.4); delete `~/.ssh/<company>-platform` once it is stored |
+| Platform deploy key — **staging** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform-staging -N "" -C "deploy@platform-staging"` | **No** | **Your password manager, and no GitHub secret yet** — so `~/.ssh/<company>-platform-staging` stays where it is. Do not delete it; see below |
+| One deploy key per application | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-deploy -N "" -C "<app>-deploy"` | **No** | That application's GitHub secret only; delete the local file once it is stored |
 
 Keep the `.pub` halves; they are committed to the repository in later stages and are not secret.
+
+**Why the two platform deploy keys are stored differently**, since the difference reads like an inconsistency and is not. Production's private half goes straight into a GitHub secret because a workflow reads it: `platform-deploy.yml` deploys to production. Staging has no deploy workflow yet — that workflow declares `environment: production`, and giving staging one is a change of its own — so there is nothing to put staging's private half into, and "delete the local file after storing it" would mean deleting it outright. Keep it in the password manager until staging gets a deploy path.
+
+**Every private half above is generated into `~/.ssh/`, and none into the repository.** These are passphrase-less keys, `.gitignore` carries no private-key pattern, and stage 4.2 runs `git add -A` — so a key generated where you stand is one routine commit away from being published, and gitleaks is a hook you may not have installed yet. The window is worst for staging's, which is never deleted at all, but production's and each application's are also generated in stage 0 and not stored until stage 6 or 8: most of a working day apart, with that `git add -A` in between.
+
+They are two keys rather than one because one leaked private half must not be able to deploy to both environments.
+
+### 0.4 What exists once, and what exists twice
+
+Two servers do not mean two of everything. This table is the whole answer, so that you assemble the right set once rather than discovering a missing keypair at stage 6.
+
+**Why each count is what it is**, §0.3's paragraph above already says: a different holder and a different blast radius. One thing it does not say, and which explains the pairs that are not about holders — **a Hetzner API token reaches exactly one project**, so anything scoped to a token comes in twos whatever it is allowed to do.
+
+**If you decided on one environment** (see the note above stage 1), read this table's "How many" column as its smaller number throughout: one Hetzner project, two tokens rather than four, one workspace, one Vault password, one GitHub Environment, one platform deploy keypair. The rows already marked "1, shared" do not change — they were never per environment.
+
+Covers stages 0 to 6. Three things sit outside it deliberately: stage 7's platform-stack secrets, production's alone until staging gets a deploy path, listed at §7.3 and Appendix A; `PLATFORM_DEPLOY_HOST`, which is created at stage 6.4 but belongs to that same production-only deploy path; and §0.3's last row, one deploy key per application, which belongs to stage 8.
+
+| Thing | How many | What proves it |
+|---|---|---|
+| Operator root key | **1**, shared | Both environments' `terraform.tfvars` carry the same `ssh_public_key` |
+| Operator inspection key | **1**, shared | Both `group_vars` files carry the same `ops_user_accounts` entry |
+| Platform deploy keypair | **2** | Each environment's `deploy_apps` carries a `platform` entry, and the two public keys differ |
+| Hetzner project | **2** | §1.1, and *Each Environment Has a Dedicated Hetzner Cloud Project* (`openspec/specs/iac-state-management/spec.md`) |
+| Hetzner API token | **4** — read-only and read-write per project | §1.2. **Not six:** each read-only token is *also* exported under a second variable name for Ansible, and a second name is not a second token |
+| HCP workspace | **2** | The two `versions.tf` name `infrastructure-prod` and `infrastructure-staging` |
+| `TF_API_TOKEN` | **1**, shared | *HCP Terraform Access via a Static Token, Unsplit by Privilege* (same spec file), cited for "one value, unsplit by privilege" and not for where it is stored — that requirement predates staging and names only `production`, while §3.3 now sets the token on both Environments |
+| Ansible Vault password | **2** | §6.1 requires it; the two `image_prune_heartbeat_ping_key` blocks carry vault ids `prod` and `staging` |
+| Tailscale auth key | **1 reusable key serves both joins**; two if single-use, or to revoke one host's join without the other — this repository used two | §5.3, and `ansible/roles/tailscale/tasks/main.yml`, which consumes it once per run and skips an already-joined host |
+| Tailscale OAuth client | **1** | §5.3 — one client serves every repository |
+| GHCR pull token | **1 value** unless you choose two, stored twice — encrypted separately into each environment's `group_vars` under that environment's own Vault password | `ansible/inventory/group_vars/staging.yml` records the shared *account* and the reasoning: read-only against the same packages, so a second "would be a second thing to rotate for no isolation gained". §6.1 permits reuse rather than requiring it, and the ciphertexts cannot be compared to tell which you chose |
+| GitHub Environment | **2** — `production` and `staging` | §3.2, and each environment's `pipeline.yml` names the one its apply job attaches to |
+| Heartbeat project ping key | **1**, shared — it addresses the **four** periodic-job checks Appendix A lists | §7.1: "It addresses one check per periodic job, listed with its period and grace in Appendix A". §7.1's Alertmanager check is **not** one of them: it has a ping URL of its own, held as `PLATFORM_DEADMANSWITCH_URL`, which a ping-key rotation does not touch |
+
+Appendix A is this same set seen from the other end — where each secret lives and what breaks when it is wrong, for rotating rather than for assembling. The two move together; if you change one, change the other.
 
 ## Stage 1. Hetzner Cloud
 
@@ -363,7 +423,7 @@ Two things about staging in stage 6 that differ from production, both deliberate
 
 ## Stage 5. Tailscale
 
-The private network. CI runners join it for the length of one job to reach the server; operators join it permanently. SSH for deploys never crosses the public internet.
+The private network. CI runners join it for the length of one job to reach a host; operators join it permanently. Both servers join it in stage 6. SSH for deploys never crosses the public internet.
 
 ### 5.1 Create the tailnet
 
@@ -380,13 +440,13 @@ Access controls → edit the policy file. Add the CI tag so an OAuth client can 
 }
 ```
 
-The original host runs with no further restriction, so any tailnet member can reach the server's SSH port. For a company tailnet with more members, add an ACL rule that lets `tag:ci` and operators reach the server on port 22 and port 3000 (Grafana), and nothing else. Do that once the server has joined and you know its tailnet name.
+Both hosts run with no further restriction, so any tailnet member can reach either one's SSH port. For a company tailnet with more members, add an ACL rule that lets `tag:ci` and operators reach each host on port 22 and port 3000 (Grafana), and nothing else. Do that once both have joined and you know their tailnet names.
 
 ### 5.3 Two credentials
 
 | Credential | Where | Settings |
 |---|---|---|
-| Auth key for the server | Settings → Keys → Generate auth key | **Reusable**, **not** ephemeral, no tags, expiry as long as allowed (90 days). It is used when Ansible joins the host (stage 6), and again only if the host is rebuilt. After the host has joined, in Machines → the server → **Disable key expiry**, or the host silently drops off the tailnet in 180 days. |
+| Auth key for the servers | Settings → Keys → Generate auth key | **Reusable**, **not** ephemeral, no tags, expiry as long as allowed (90 days). **One reusable key serves both hosts** — Ansible consumes it once per run and skips the join on a host already on the tailnet — so generate a second only if you make it single-use, or if you want to revoke one host's join without touching the other. A single-use key is also burnt by the *first* join, so a host that has to be rebuilt needs a fresh one. **Then, per machine:** Machines → that server → **Disable key expiry**, or that host silently drops off the tailnet in 180 days. It is a per-node setting; doing it for one host does nothing for the other. |
 | OAuth client for CI | Settings → OAuth clients → Generate OAuth client | Scope **Auth Keys: Write**, with tag `tag:ci`. Produces a client ID and a client secret. |
 
 **Secrets created in this stage**
@@ -395,7 +455,7 @@ The original host runs with no further restriction, so any tailnet member can re
 |---|---|---|---|
 | `TAILSCALE_OAUTH_CLIENT_ID` | `production` Environment, infrastructure repository | The OAuth client | `platform-deploy.yml`'s deploy job |
 | `TAILSCALE_OAUTH_SECRET` | `production` Environment, infrastructure repository | The OAuth client | Same |
-| The server auth key | Password manager only, no GitHub secret | The auth key | You, at the Ansible prompt in stage 6 |
+| The server auth key | Password manager only, no GitHub secret | The auth key | You, passing it with `-e tailscale_auth_key=…` in stage 6.3 — there is no prompt for it, and the role has no default, so omitting it fails inside `tailscale` after two roles have already changed the host. That form puts the key in your workstation's shell history, so clear it or accept it; §6.3a covers the separate exposure of running `tailscale up` by hand on the host |
 
 Each application repository will need the same two OAuth values in stage 8; one OAuth client can serve all of them.
 
@@ -405,7 +465,7 @@ Each application repository will need the same two OAuth values in stage 8; one 
 
 This stage is run from your workstation. It installs Docker, the host firewall and fail2ban, joins the tailnet, creates the `deploy` account with a forced-command key per application, creates your unprivileged operator account, mounts the data volume, and arms the weekly image prune.
 
-**Run it once per environment**, production first. Everything below takes the environment as an argument; `<environment>` means `prod` or `staging` throughout, and the two runs share no file, no token and no Vault password. Do production first because it is the one you will check most carefully, and staging second because by then you are repeating a procedure you have just seen work.
+**Run it once per environment**, production first. Everything below takes the environment as an argument; `<environment>` means `prod` or `staging` throughout, and the two runs share no `group_vars` file, no Hetzner token and no Vault password. What they may share is a value inside those files — the GHCR token and the heartbeat ping key are the same in both, encrypted separately; §0.4 says which is which. Do production first because it is the one you will check most carefully, and staging second because by then you are repeating a procedure you have just seen work.
 
 ### 6.0 The two tokens Ansible reads
 
@@ -438,7 +498,11 @@ Edit `ansible/inventory/group_vars/<environment>.yml` — production's and stagi
 | `ghcr_pull_token` | Vault-encrypted, see below |
 | `image_prune_heartbeat_ping_key` | Vault-encrypted, see below. **The play refuses to run without it** |
 
-**The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`).
+**The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`). **Rotating it means re-encrypting one block per environment, each under that environment's own Vault password** — two edits, not one, and you need both passwords to hand.
+
+**On the second environment's run you may reuse this token, and this repository does.** It is read-only against the same packages under the same account, so a second buys no isolation and adds a second thing to rotate — but two work, and nothing here depends on your choosing one. What *is* per environment either way is the encrypted block: you encrypt whichever value you chose again, under that environment's own Vault password.
+
+Contrast the heartbeat ping key below, where reuse is not a preference: creating a second there **rotates** the first.
 
 **Check the token before you encrypt it**, because a bad one is only discovered much later, at `docker compose pull`:
 
@@ -478,7 +542,9 @@ ansible localhost -m debug -a 'msg={{ <variable> | length }}' \
 
 **The heartbeat ping key.** The `image_prune` role installs a weekly unit that reports each activation to an external observer, and it **asserts this input before any role in the play changes the host** — so an absent key aborts `host-baseline.yml` rather than installing a scheduled unit nothing watches.
 
-Create it now, at the heartbeat service from stage 0.1: **Settings → Ping key → create**. One key addresses every periodic job's check, and the same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3. Put it in the password manager, then encrypt it the same way:
+Create it now, at the heartbeat service from stage 0.1: **Settings → Ping key → create**. One key addresses every periodic job's check, and the same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3.
+
+**On the second environment's run, reuse the key you already have — do not create another.** A project holds one ping key, so "create" there means *rotate*: every existing check would start rejecting pings from the value already Vault-encrypted in the first environment's `group_vars` and stored as `HEARTBEAT_PING_KEY`. **When you do deliberately rotate it, that is three places to update** — one encrypted block per environment, each under its own Vault password, plus the repository secret. The key is shared deliberately, and it still addresses a different check per host because the check name comes from the host's own name. Put it in the password manager, then encrypt it the same way:
 
 ```sh
 cd ansible
@@ -555,7 +621,7 @@ The usual causes, in rough order: the key was already consumed, because it was g
 
 ### 6.4 After the run
 
-1. Tailscale admin → Machines: the server is listed. Note its tailnet IPv4 (`100.x.y.z`). Disable key expiry for it (stage 5.3).
+1. Tailscale admin → Machines: **the host you have just converged** is listed. Note its tailnet IPv4 (`100.x.y.z`). Disable key expiry for it (stage 5.3) — per node, so this is done again after the other environment's converge.
 2. Log in the way you will from now on, over the tailnet, unprivileged:
 
    ```sh
@@ -587,9 +653,9 @@ The usual causes, in rough order: the key was already consumed, because it was g
 | Name | Scope | Value from | Read by |
 |---|---|---|---|
 | Vault password, one per environment | Password manager only | You chose it | Anyone running that environment's playbook |
-| `ghcr_pull_token` | Encrypted inside `group_vars/<environment>.yml`, per environment | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
-| `image_prune_heartbeat_ping_key` | Encrypted inside `group_vars/<environment>.yml`, per environment | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3 |
-| `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository | The **private** half of the platform deploy key from stage 0. Store it now, then delete the local file. | `platform-deploy.yml`'s deploy job |
+| `ghcr_pull_token` | One encrypted block per environment, of the same token value unless you chose two | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
+| `image_prune_heartbeat_ping_key` | One encrypted block per environment, of the same project ping key | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3, and addresses a different check per host because the check name comes from the host's name |
+| `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository. **Production's key only** | The **private** half of the *production* platform deploy key from stage 0. Store it now, then delete the local file. **Staging's key is not stored here and must not be deleted** — it stays at `~/.ssh/<company>-platform-staging` and in your password manager until staging gets a deploy path (§0.3) | `platform-deploy.yml`'s deploy job |
 | `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
 **Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
@@ -801,12 +867,12 @@ The Hetzner rows come in pairs, one per environment, because a Hetzner token rea
 | `TF_API_TOKEN` | Repo secret and **both** Env secrets; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |
 | Operator inspection key | Workstation | 0 | `ssh-keygen` | Daily unprivileged login |
-| Tailscale server auth key | Password manager | 5 | Tailscale → Keys | Joining the host to the tailnet (first run, rebuilds) |
+| Tailscale server auth key | Password manager | 5 | Tailscale → Keys | Joining a host to the tailnet (first run, rebuilds). One reusable key serves both hosts; see §5.3 |
 | `TAILSCALE_OAUTH_CLIENT_ID` / `_SECRET` | Env secret, infrastructure and each app repo | 5 | Tailscale → OAuth clients | Every deploy job |
 | Vault password, one per environment | Password manager | 6 | Chosen | Running that environment's playbook |
-| `ghcr_pull_token` | Vault-encrypted in `group_vars/<environment>.yml`, one per environment | 6 | GitHub classic PAT, `read:packages` | Pulling private images at deploy |
-| `PLATFORM_DEPLOY_SSH_KEY` | Env secret | 6 | `ssh-keygen`, platform key | Platform deploys |
-| `PLATFORM_DEPLOY_HOST` | Env secret | 6 | Tailscale → Machines | Platform deploys, Grafana bind |
+| `ghcr_pull_token` | One encrypted block per environment, in each `group_vars/<environment>.yml` — of the same token value, unless you chose two | 6 | GitHub classic PAT, `read:packages` | Pulling private images at deploy |
+| `PLATFORM_DEPLOY_SSH_KEY` | `production` Env secret. Staging's keypair exists but has no secret yet (§0.3) | 6 | `ssh-keygen`, production's platform key | Platform deploys |
+| `PLATFORM_DEPLOY_HOST` | `production` Env secret | 6 | Tailscale → Machines | Platform deploys, Grafana bind |
 | `PLATFORM_ACME_EMAIL` | Env secret | 7 | A mailbox | Certificate registration |
 | `PLATFORM_POSTGRES_USER` / `_PASSWORD` | Env secret | 7 | Chosen / generated | Postgres startup; every manual `psql` |
 | `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | Env secret and typed into Postgres | 7 | Generated | Postgres metrics |
@@ -843,6 +909,6 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 
 Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/change-queue.md`. The first two findings there — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The ones still to do before real data arrives: log rotation (21), swap and container limits (22, 7). The ones a company needs that this repository does not: a private repository in the company organisation, an approver who is not the author, and DNS as code (26).
 
-**Two environments are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. What a company still gets that this repository does not is the second host *configured*, and that waits on the entries stage 5 names.
+**Two environments are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per environment. What a company still gets that this repository does not is an application stack on the second host, which waits on `docs/change-queue.md` entry 52.
 
 **Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-server` — the name prod's tfvars uses — would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. This stopped being hypothetical when `add-a-staging-environment` added a second environment: staging's `terraform.tfvars` names its server `staging-server` for exactly this reason, and says so where the value is set. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.
