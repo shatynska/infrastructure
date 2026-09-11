@@ -603,3 +603,21 @@ That change bounded how stale an index a converge will install from, which remov
 **What it would actually save is smaller than it looks**, and worth measuring before it is proposed. After the bound, `hardening`'s container fetches twice, and one of those two is the test fixture's deliberate back-date. Collapsing the tasks removes neither: the first fetch of a fresh container is owed either way. The gain is on a host where the bound is inert — one carrying a maintained `update-success-stamp`, where `cache.update()` never advances what `get_cache_mtime()` reads, so every bounded task fetches again. That is the case the bound does not reach and this would.
 
 So the honest framing is that this is the fix for the production half that `cache-the-apt-index-within-a-converge` explicitly did not deliver, rather than a further trim of the continuous-integration half it did.
+
+## 70. correct-the-read-only-secret-name-in-the-provider-comments
+
+**Not blocked. Recorded 2026-09-11 by `rename-terraform-environments-to-stacks`'s code review, which found it while reading the files that change swept.**
+
+Both `versions.tf` provider comments state prod's read-only secret name wrongly, and have since prod's secret was renamed:
+
+- `terraform/stacks/prod/versions.tf` says the name "for this stack is `HCLOUD_TOKEN`".
+- `terraform/stacks/staging/versions.tf` says "for this stack HCLOUD_TOKEN_STAGING, and for prod HCLOUD_TOKEN".
+
+Prod declares `read_only_secret: HCLOUD_TOKEN_PRODUCTION` in its own `pipeline.yml`, and that same file argues at length that the name must **not** be `HCLOUD_TOKEN` — a repository secret of that name is shadowed by the Read & Write token every GitHub Environment defines, so a gated job reading it resolves a write credential silently. `README.md` agrees: "neither is named `HCLOUD_TOKEN`". The comment contradicts the declaration sitting beside it.
+
+**Why it is its own entry rather than folded into the rename.** It predates that branch — `origin/main`'s copy carries the same claim, and the rename's diff touches those lines only to spell the unit `stack`. Correcting a factual error about credential names inside a vocabulary sweep is unrelated scope, and the sweep's own review is what found it.
+
+**Why it is worth doing rather than tolerating.** The next reader of that comment is someone debugging a credential — the one moment a wrong secret name costs the most. It is also the exact confusion the shadowing paragraph exists to prevent, restated incorrectly three lines away from itself.
+
+**Whether a check can hold it.** Probably: the declared `read_only_secret` and the names these comments assert are both static reads of committed files, which is `.github/tests`' own subject, and the suite already reads every `pipeline.yml`. Worth deciding when the change is proposed rather than now — a comment asserting a secret name is harder to locate reliably than a declaration stating one, and a check that locates it badly is worse than the prose.
+
