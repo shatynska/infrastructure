@@ -263,11 +263,13 @@ jobs:
           # are NOT refused and mean every environment discovered: every `push`
           # supplies an empty value, so conflating empty with unresolvable would
           # fail discovery on every merge. Only a non-empty value is matched.
-          # Trimmed before it is read, so a value that is only whitespace is
-          # EMPTY rather than an environment discovery did not find. The
-          # distinction below is absent-or-empty against named, and this is the
-          # one input a human types by hand.
-          requested="$(printf '%s' "${REQUESTED_ENVIRONMENT:-}" | tr -d '[:space:]')"
+          # Trimmed -- leading and trailing only -- so a value that is only
+          # whitespace is EMPTY rather than an environment discovery did not
+          # find. The distinction below is absent-or-empty against named, and
+          # this is the one input a human types by hand. NOT `tr -d`, which
+          # deletes interior whitespace too and would silently accept a
+          # mistyped "pr od" as an environment rather than refusing it by name.
+          requested="$(printf '%s' "${REQUESTED_ENVIRONMENT:-}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
           if [ -n "$requested" ]; then
             if ! awk -F'\t' -v want="$requested" '$1 == want { found = 1 } END { exit !found }' "$records"; then
               echo "::error::This run was requested for '${requested}', which discovery did not find. What it did find: ${discovered_names}"
@@ -561,8 +563,26 @@ jobs:
             exit 1
           fi
 
-          # TWO: the Vault password. This is the line that actually proves it --
-          # see the block above for why `--list` does not. Templating
+          # TWO: an empty result is the environment's GROUP resolving to no
+          # host. The play's own guard has a careful diagnostic for that, which
+          # this step pre-empts by failing first -- so it says it here instead.
+          # Selected from the group rather than from `_meta.hostvars`, so the
+          # set keyscanned is the set the play converges.
+          #
+          # BEFORE the Vault proof, and the order is load-bearing rather than
+          # tidy: `ansible <group> -m debug` against a group that matches no host
+          # exits 0, warning "No hosts matched, nothing to do". So on an empty
+          # group the proof below would pass having templated nothing, and a
+          # preflight that cannot fail is worse than no preflight -- this
+          # change's own words, and they apply to its own check.
+          if ! addresses=$(printf '%s' "$inventory" | jq -er --arg env "$TARGET_ENVIRONMENT" \
+              '.[$env].hosts[] as $host | ._meta.hostvars[$host].ansible_host' 2>/dev/null); then
+            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this environment's group names no host to converge. The environment is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different environment label."
+            exit 1
+          fi
+
+          # THREE: the Vault password. This is the line that actually proves it
+          # -- see the block above for why `--list` does not. Templating
           # `hostvars[...]` forces every vaulted value this host carries, and
           # `to_json | length` means what is printed is a NUMBER: the values are
           # decrypted in the process and never rendered.
@@ -574,17 +594,6 @@ jobs:
               -c local -m debug -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"; then
             echo "::error::$TARGET_ENVIRONMENT: this environment's variables did not decrypt, so the Vault password in ANSIBLE_VAULT_PASSWORD is not the one its group_vars were encrypted under. Ansible names the undecryptable variable above. Left to the play, this would have surfaced four roles in, on an already-changed host."
-            exit 1
-          fi
-
-          # THREE: an empty result is the environment's GROUP resolving to no
-          # host. The play's own guard has a careful diagnostic for that, which
-          # this step pre-empts by failing first -- so it says it here instead.
-          # Selected from the group rather than from `_meta.hostvars`, so the
-          # set keyscanned is the set the play converges.
-          if ! addresses=$(printf '%s' "$inventory" | jq -er --arg env "$TARGET_ENVIRONMENT" \
-              '.[$env].hosts[] as $host | ._meta.hostvars[$host].ansible_host' 2>/dev/null); then
-            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this environment's group names no host to converge. The environment is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different environment label."
             exit 1
           fi
 

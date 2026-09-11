@@ -83,6 +83,7 @@ from test_ci_configuration import (
     load_yaml,
     read_text,
     require_external_tools,
+    walked_files,
     step_label,
     steps,
     triggers,
@@ -1703,6 +1704,156 @@ class TestHostConvergeDiscoveryFailsClosed(
                 f"merge converges fewer hosts than the repository carries: {emitted!r}",
             )
 
+
+# --------------------------------------------------------------------------
+# ADDED BY THE IMPLEMENTING AUTHOR, NOT BY THE AUTHOR OF THIS FILE.
+#
+# Everything above was derived from the delta specifications before any
+# implementation existed. The two classes below were not: they are regression
+# guards on a defect the code-review gate found, recorded here rather than in a
+# commit message because the defect is one no scenario describes and one that
+# would recur silently.
+#
+# WHAT WAS WRONG. The converge job's preflight was written to prove that an
+# environment's Vault password decrypts its variables "before any task acts on
+# the host", which the ADDED requirement obliges in those words. It ran
+# `ansible-inventory --list --vault-id ...` and read an exit status of 0 as
+# proof. Under the pinned `ansible-core` 2.21.3 that proves nothing: `--list`
+# serialises with the `inventory_legacy` profile, which PRESERVES a vaulted
+# value as `{"__ansible_vault": "<ciphertext>"}`. Verified against 2.21.3 -- a
+# wrong `--vault-id` exits 0, with output byte-identical to the right one's.
+#
+# WHY THE SUITE DID NOT CATCH IT. The derived test locates the preflight by
+# `ansible-inventory` plus a vault argument and asserts its POSITION relative to
+# the play. That is the right assertion for the scenario it traces to, and it
+# stayed green throughout -- deleting the line that does the proving would leave
+# it green still. These two close that, and the second is what keeps the first
+# honest as the tree changes.
+# --------------------------------------------------------------------------
+
+
+# `ansible` the ad-hoc command, which is not `ansible-playbook`, not
+# `ansible-inventory` and not `ansible-galaxy`. The negative lookahead on the
+# hyphen is what separates it from its siblings.
+ANSIBLE_ADHOC = re.compile(r"\bansible\b(?!-)")
+HOSTVARS = re.compile(r"\bhostvars\b")
+
+VAULT_MARKER = "$ANSIBLE_VAULT"
+# Where a vaulted value may live for the preflight to reach it. `hostvars` for a
+# host carries INVENTORY variables, so these are the two directories Ansible
+# resolves inventory variables from.
+VAULT_PERMITTED_PREFIXES = (
+    "ansible/inventory/group_vars/",
+    "ansible/inventory/host_vars/",
+)
+
+
+class TestTheVaultProofIsTheCommandThatProvesIt(
+    WorkflowLocatorMixin, unittest.TestCase
+):
+    """Regression guard, not a derived test -- see the block above.
+
+    The requirement says the converge job SHALL establish that the environment's
+    secrets decrypt before any task acts on the host. `ansible-inventory --list`
+    does not establish it under the pinned `ansible-core`; templating a host's
+    variables does. This asserts the command that does the proving is present
+    and runs before the play, so that removing it is a red run rather than a
+    silent return to the state the review found.
+    """
+
+    def test_a_templating_step_proves_the_vault_secret_before_the_play(self) -> None:
+        name, job = self.converge_job()
+        proving = []
+        for index, step in enumerate(job.get("steps") or []):
+            body = str(step.get("run") or "")
+            if not invocation_lines(body, ANSIBLE_ADHOC):
+                continue
+            # Both halves matter: the vault argument makes it a statement about
+            # the secret, and `hostvars` makes it a statement about THIS host's
+            # variables rather than about some constant a template could render
+            # without decrypting anything.
+            if not invocation_lines(body, VAULT_ARGUMENT):
+                continue
+            if not HOSTVARS.search(uncommented(body)):
+                continue
+            proving.append(index)
+        self.assertTrue(
+            proving,
+            f"the converge job `{name}` runs no ad-hoc `ansible` command that both "
+            "carries a vault argument and templates `hostvars`, so nothing in it "
+            "forces this environment's vaulted values to decrypt. `ansible-inventory "
+            "--list` does NOT: under the pinned ansible-core it serialises a vaulted "
+            "value as ciphertext and exits 0 on a wrong password. Without this, a "
+            "stale vault password is discovered four roles into the play, on a host "
+            "that is already changed",
+        )
+        play = [index for index, _, _ in invoking_steps(job, ANSIBLE_PLAYBOOK)]
+        self.assertTrue(play, f"the converge job `{name}` runs no play")
+        self.assertLess(
+            min(proving),
+            min(play),
+            f"the converge job `{name}` proves its vault secret only after the play "
+            "has started, which is the partially-converged host this check exists to "
+            "prevent",
+        )
+
+
+class TestEveryVaultedValueIsWhereThePreflightReachesIt(unittest.TestCase):
+    """Regression guard, not a derived test -- see the block above.
+
+    The proof above templates `hostvars[inventory_hostname]`, which carries
+    INVENTORY variables. It does not carry a role's `defaults/main.yml` or
+    `vars/main.yml`, a `vars_files:`, an `include_vars` result, or a
+    playbook-adjacent `group_vars/`. So the first vaulted value that lands in any
+    of those reopens exactly the hole the review closed -- silently, with the
+    preflight still green and still read as proof.
+
+    This turns the preflight's coverage from a property of today's tree into an
+    invariant. It is a static read of committed files at repository scope, which
+    is what this suite is for.
+    """
+
+    def _candidates(self):
+        for path in walked_files(ANSIBLE_DIR):
+            relative = path.relative_to(ROOT).as_posix()
+            # A Molecule scenario is a fixture for a role's own tests. It is
+            # never resolved by the host-baseline play and never reaches a
+            # converge, so a vaulted value in one says nothing about this.
+            if "/molecule/" in relative:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            if VAULT_MARKER in text:
+                yield relative
+
+    def test_every_vaulted_value_lives_where_inventory_variables_live(self) -> None:
+        offenders = sorted(
+            relative
+            for relative in self._candidates()
+            if not relative.startswith(VAULT_PERMITTED_PREFIXES)
+        )
+        self.assertEqual(
+            [],
+            offenders,
+            "these files carry a Vault-encrypted value somewhere the converge job's "
+            "preflight cannot reach: it templates `hostvars[inventory_hostname]`, "
+            "which carries inventory variables and not a role's defaults, a "
+            "`vars_files:`, an `include_vars` result or a playbook-adjacent "
+            "`group_vars/`. A value here would decrypt for the first time partway "
+            f"through the play, on a host already changed: {offenders}",
+        )
+
+    def test_the_tree_carries_a_vaulted_value_for_this_to_have_read(self) -> None:
+        """The converse. With no vaulted value anywhere, the sweep above passes
+        having read nothing -- and so does the preflight it protects, since there
+        would be no secret for a wrong password to fail on."""
+        self.assertTrue(
+            sorted(self._candidates()),
+            "no committed file under ansible/ carries a Vault-encrypted value outside "
+            "a Molecule scenario, so the sweep above compared nothing",
+        )
 
 if __name__ == "__main__":  # pragma: no cover - parity with the modules beside it
     unittest.main()
