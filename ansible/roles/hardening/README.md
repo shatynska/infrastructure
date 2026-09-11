@@ -26,4 +26,4 @@ UFW's default-deny-incoming policy applies to the `tailscale0` interface the sam
 |---|---|---|
 | `hardening_ssh_allowed_cidrs` | *(required, no default)* | List of CIDR strings allowed to reach SSH (22). |
 | `hardening_web_allowed_cidrs` | `[]` | List of CIDR strings allowed to reach HTTP/HTTPS (80/443). Empty means closed. |
-| `hardening_apt_cache_valid_time` | `3600` | Seconds an already-fetched package index may be reused for. Bounds how often a converge re-fetches it; the first install of a run still fetches, later ones reuse. |
+| `hardening_apt_cache_valid_time` | `3600` | Seconds an already-fetched package index may be reused for. The first install of a run still fetches, later ones reuse — **except on a host carrying a maintained `apt` update-success stamp, where the module reads a timestamp it never advances and every task fetches as before**. See `defaults/main.yml`. |

@@ -127,7 +127,10 @@ BLOCK_KEYWORDS = ("block", "rescue", "always")
 #: plays, each holding its tasks under one of these -- while a role's task file
 #: is a bare list of tasks. One walker reads both, so the fixture-play exemption
 #: and the task-file obligation cannot drift apart in how they find a task.
-PLAY_KEYWORDS = ("tasks", "pre_tasks", "post_tasks", "handlers")
+# Document order, which is what the same-run-source predicate turns on: a
+# source written in `pre_tasks` precedes an install in `tasks`. Handlers run
+# last of all, whatever their position in the file.
+PLAY_KEYWORDS = ("pre_tasks", "tasks", "post_tasks", "handlers")
 
 #: A bound expressed as a reference to exactly one variable, optionally with a
 #: filter chain -- `{{ hardening_apt_cache_valid_time }}` or
@@ -238,11 +241,29 @@ def flattened_tasks(document) -> list[dict]:
     return tasks
 
 
+class FreeFormModuleInvocation(Exception):
+    """A task invokes a module in free-form (`apt: name=ufw state=present`).
+
+    Raised rather than returned, because the alternative is silence: an empty
+    argument mapping makes the task name no package, which makes it not
+    qualifying, which makes it invisible to the positive obligation AND to both
+    refusals at once. A shape this check cannot read must say so rather than
+    pass. The form occurs in this tree today -- installed Galaxy content uses
+    it -- so this is a real boundary and not a hypothetical one.
+    """
+
+
 def module_arguments(task: dict, module_names) -> dict | None:
     """The argument mapping a task passes to one of `module_names`, or None."""
     for key, value in task.items():
         if key in module_names:
-            return value if isinstance(value, dict) else {}
+            if isinstance(value, dict):
+                return value
+            raise FreeFormModuleInvocation(
+                f"task {task.get('name', '<unnamed>')!r} invokes {key} in free-form "
+                f"({value!r}); this check reads mapping arguments and cannot parse it. "
+                f"Rewrite the task with a mapping, or teach this helper the form"
+            )
     return None
 
 

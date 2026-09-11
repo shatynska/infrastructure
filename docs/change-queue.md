@@ -619,6 +619,20 @@ Recorded 2026-09-11 by the test author deriving `cache-the-apt-index-within-a-co
 
 `cache-the-apt-index-within-a-converge` names this class in its own `tasks.md` 1.5 and handles it for the checks that change wrote, by enumerating roles from committed content rather than globbing a directory. This entry is the same rule applied to the walkers that were already there.
 
-**The fix is not simply to prune one directory.** What makes a path this suite's subject is that it is *committed*, which is the boundary `AGENTS.md` draws for the suite and which `cache-the-apt-index-within-a-converge` established a helper for: `tracked_files()` in that same module already enumerates the repository's tracked files and refuses rather than skips when it cannot. Re-pointing the repository-scope walkers at that helper closes the class rather than the instance, and would also reach `.terraform/`, virtual environments and sibling working trees under `.claude/worktrees/` — none of which any walker prunes today either.
+**The fix is not simply to prune one directory.** What makes a path this suite's subject is that it is *committed*, which is the boundary `AGENTS.md` draws for the suite and which already has a helper: `tracked_files()` in that same module, added by `narrow-the-molecule-trigger-to-what-it-reads`, enumerates the repository's tracked files and refuses rather than skips when it cannot. Re-pointing the repository-scope walkers at that helper closes the class rather than the instance, and would also reach `.terraform/`, virtual environments and sibling working trees under `.claude/worktrees/` — none of which any walker prunes today either.
 
 Worth doing before the next person meets it: this failure reads as "your tree is broken", and the natural response is to delete `.molecule-home/`, which throws away the provisioning the suite's Molecule row depends on.
+
+**It is also a race, not only a false positive.** That directory is *live* while Molecule runs — the ephemeral `tmp/` is created and removed under it — so running this suite during a Molecule run produces an intermittent error on top of the steady failure, as a file the walker has listed disappears before it is read. Observed 2026-09-11 while both ran at once, and not reproducible afterwards, which is the worst shape for anyone trying to diagnose it. Reading tracked files removes the race with the false positive, since nothing under that directory is tracked.
+
+## 69. collect-each-role-s-apt-installs-into-one-task
+
+Recorded 2026-09-11 by `cache-the-apt-index-within-a-converge`, whose Non-Goals name it and whose own saving it would extend.
+
+That change bounded how stale an index a converge will install from, which removes the *second and later* fetch of a run. What it leaves is the tasks themselves: `hardening` installs `ufw` and then `fail2ban` as two `apt` tasks seconds apart, where `ansible.builtin.apt` accepts a list and would install both in one. One task cannot re-fetch what it just fetched, so the bound becomes belt-and-braces rather than the mechanism.
+
+**Why it was not folded in.** It is a larger change to two roles than the bound was, and it moves things a reader depends on: which task a failure surfaces under, what a scenario's assertions name, and — for `hardening` — whether `ufw` being installed and `fail2ban` being installed remain separately observable, since the scenarios assert on each. It also interacts with the ordering the roles currently guarantee between install and configure.
+
+**What it would actually save is smaller than it looks**, and worth measuring before it is proposed. After the bound, `hardening`'s container fetches twice, and one of those two is the test fixture's deliberate back-date. Collapsing the tasks removes neither: the first fetch of a fresh container is owed either way. The gain is on a host where the bound is inert — one carrying a maintained `update-success-stamp`, where `cache.update()` never advances what `get_cache_mtime()` reads, so every bounded task fetches again. That is the case the bound does not reach and this would.
+
+So the honest framing is that this is the fix for the production half that `cache-the-apt-index-within-a-converge` explicitly did not deliver, rather than a further trim of the continuous-integration half it did.

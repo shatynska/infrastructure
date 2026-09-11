@@ -29,6 +29,15 @@ hardening_web_allowed_cidrs: []
 # candidate -- and a converge is not what keeps a running host current; that is
 # unattended upgrades.
 #
+# ON A LONG-LIVED HOST THIS MAY SAVE NOTHING, and an operator should hear that
+# here rather than from a converge log. The module measures staleness from
+# /var/lib/apt/periodic/update-success-stamp where it exists, preferring it
+# over the lists directory -- and it never writes that stamp itself; apt's own
+# 15update-stamp hook does, which `apt-daily` runs. So on a stock Ubuntu host
+# every bounded task may re-read the same timestamp and fetch again, exactly as
+# it does today. The direction is benign -- never a staler index -- and the
+# saving this bound is measured against is the one in continuous integration,
+# whose containers carry no such stamp.
 # NOT for a task installing a pinned version, nor for one installing from a
 # source the same run added: see ansible/roles/tailscale/tasks/main.yml, which
 # is both and therefore declares no bound.

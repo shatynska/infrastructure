@@ -70,7 +70,7 @@ Two consequences worth knowing before editing this:
 | `image_prune_on_calendar` | `Sun *-*-* 04:00:00 UTC` | Timer schedule |
 | `image_prune_randomized_delay_sec` | `3600` | Jitter, so runs do not land on a fixed minute |
 | `image_prune_timeout_start_sec` | `600` | Duration bound for the whole run, enumeration included |
-| `image_prune_apt_cache_valid_time` | `3600` | Seconds an already-fetched package index may be reused for, when installing this role's HTTP client |
+| `image_prune_apt_cache_valid_time` | `3600` | Seconds an already-fetched package index may be reused for, when installing this role's HTTP client. **May save nothing on a host carrying a maintained `apt` update-success stamp** — see `defaults/main.yml`. |
 
 The bound is the unit's, not a `timeout` inside the script: systemd records the expiry and marks the unit failed from outside the process, which is where a report about a killed region has to come from.
 

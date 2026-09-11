@@ -23,7 +23,7 @@ Three consequences, and the first is what makes this change safe rather than mer
 
 - **The measurement is a timestamp, not a presence check**, and it matters which. `cache_time` is `0` only where *neither* the success stamp *nor* `/var/lib/apt/lists` exists. These platform images ship the directory — emptied at build — so what forces the first fetch is its **build mtime**, not its emptiness. The safety therefore rests on the images being old, which is a property of the digest pin rather than of the module. The pins are months old and a pin is a reviewable commit, so this holds; stating it as an absence guarantee, as an earlier draft did, would have claimed something the mechanism does not provide.
 - **A never-fetched host fetches for the same reason**, its recorded time being the epoch or the build date, either of which is outside any window this change would consider.
-- **Within one converge, the second and later apt tasks skip**, because the first one's fetch set the stamp minutes ago. That is the entire saving, and it is the only case the window changes.
+- **Within one converge, the second and later apt tasks skip**, because the first one's fetch moved `/var/lib/apt/lists`'s mtime minutes ago. *The lists directory, not the stamp* — `cache.update()` never writes the stamp, which is the whole point of the third bullet below and of the back-dating rule in the tasks. That is the entire saving, and it is the only case the window changes.
 
 `update_cache: true` stays on every task. The option is not being removed and replaced; a bound is being added to it. A task that reaches a stale index still refreshes.
 

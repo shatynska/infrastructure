@@ -71,9 +71,10 @@ Verification commands referenced below, from this project's conventions:
       **Observed 2026-09-11 in `hardening`'s `default` scenario**, which is where the effect is visible at all: a fetched and an unfetched index leave identical host state. The second bounded apt task reported no cache update in the same converge as the first, on both passes.
 - [x] 6.2 Confirm the host state is unchanged, which is the other half of the claim: the same packages installed, the idempotence pass still reporting no change, and no scenario's assertions relaxed to reach green.
 
+      **Observed 2026-09-11.** Host state unchanged: both scenarios pass unmodified, the idempotence pass reports no change, and no existing assertion was relaxed — the two that were red before this implementation were the derived ones, and they went green by the implementation meeting them rather than by being rewritten.
+
 ## 7. Archive
 
-      **Observed 2026-09-11.** Host state unchanged: both scenarios pass unmodified, the idempotence pass reports no change, and no existing assertion was relaxed — the two that were red before this implementation were the derived ones, and they went green by the implementation meeting them rather than by being rewritten.
 - [ ] 7.1 Once the effect is confirmed, bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request that carries it.
 
 ## Not performed

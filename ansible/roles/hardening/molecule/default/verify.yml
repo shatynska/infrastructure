@@ -161,13 +161,20 @@
       loop_control:
         label: "{{ item.path }}"
 
+    # `_apt:root 0700` is what the distribution ships, and it is not cosmetic:
+    # apt drops privileges to `_apt` to download, and on any other ownership it
+    # warns "Can't drop privileges for downloading as file
+    # '/var/lib/apt/lists/partial/' couldn't be accessed by user '_apt'" and
+    # falls back to root. The fetch still happens and the assertion below still
+    # holds -- but the warning lands in the one run someone debugging this
+    # fixture would be reading, pointing at apt rather than at the fixture.
     - name: Restore the partial/ subdirectory apt refuses to run without
       ansible.builtin.file:
         path: /var/lib/apt/lists/partial
         state: directory
-        owner: root
+        owner: _apt
         group: root
-        mode: "0755"
+        mode: "0700"
 
     - name: Back-date the apt lists directory to well outside any plausible bound
       ansible.builtin.file:
