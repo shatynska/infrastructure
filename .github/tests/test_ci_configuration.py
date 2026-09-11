@@ -42,6 +42,7 @@ from __future__ import annotations
 import ast
 import functools
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -162,6 +163,26 @@ def gh_glob_matches(pattern: str, path: str) -> bool:
             regex += re.escape(char)
             i += 1
     return re.fullmatch(regex, path) is not None
+
+
+def _selects(patterns, path: str) -> bool:
+    """Whether a dorny/paths-filter pattern list selects a path, negations included.
+
+    Last matching pattern wins, and a file must be matched by a positive before
+    a negation can exclude it. A deliberately approximate reimplementation of
+    picomatch, written here because this suite may not take the dependency and
+    may not reach the network: where the two disagree the action is the
+    authority, and the behaviour is established by observation on a real pull
+    request. It is worth having anyway, being the only thing that can go red
+    when someone deletes a negation.
+    """
+    selected = False
+    for pattern in patterns:
+        text = str(pattern)
+        negated = text.startswith("!")
+        if gh_glob_matches(text[1:] if negated else text, path):
+            selected = not negated
+    return selected
 
 
 def terraform_lockfile_directories(root: Path | None = None) -> set[str]:
@@ -2207,7 +2228,14 @@ class TestTheSuiteNeedsNoPrivilegedResource(unittest.TestCase):
             f"pinned dependency: {outside}",
         )
 
-    SPAWNABLE = {"bash", "sh"}
+    # The version-control binary is admitted for one reason and bounded by it:
+    # this suite reads the repository's TRACKED files, and the binary that
+    # enumerates them exists wherever the repository was obtained at all. That
+    # is not a general relaxation -- a tool that must be INSTALLED for the suite
+    # to work is a dependency this suite would have to pin and provision, and
+    # remains excluded. See `narrow-the-molecule-trigger-to-what-it-reads`,
+    # design.md Decision 5.
+    SPAWNABLE = {"bash", "sh", "git"}
     NETWORK_MODULES = {"urllib", "http", "socket", "ssl", "ftplib", "smtplib", "requests", "httpx"}
 
     def test_the_suite_spawns_no_terraform_binary_or_container_runtime(self) -> None:
@@ -4655,17 +4683,32 @@ class TestChangeDetectionResolvesTheGatesInput(
                     f"filter as the cause; it emitted {combined[-400:]!r}",
                 )
 
-    # Representative of the configuration directory's breadth, not of its
-    # current contents: a filter narrowed to any one of these subtrees reports
-    # a legitimate `false` for a pull request that changed another.
+    # Representative of what the SUITE READS, not of the configuration
+    # directory's breadth: a filter narrowed to any one of these subtrees
+    # reports a legitimate `false` for a pull request that changed another.
+    #
+    # Two paths left this tuple when the suite's trigger was narrowed to what
+    # its scenarios read, and they are asserted NOT selected below. The whole
+    # -directory claim they used to carry now belongs to the lint tier in
+    # `pr-validation.yml`, which is triggered without exclusion and is asserted
+    # to be, in the module that covers that narrowing. This is not a test
+    # weakened to reach green: the proposition changed in the specification and
+    # the assertion is re-pointed at what now holds. See the change
+    # `narrow-the-molecule-trigger-to-what-it-reads`.
     CONFIGURATION_PATHS = (
-        "ansible/playbooks/host-baseline.yml",
         "ansible/roles/some_role/tasks/main.yml",
         "ansible/roles/some_role/molecule/default/molecule.yml",
         "ansible/requirements.yml",
         "ansible/requirements-test.txt",
         "ansible/ansible.cfg",
+    )
+    # Under `ansible/`, and deliberately NOT selected: no scenario reads them.
+    EXCLUDED_CONFIGURATION_PATHS = (
+        "ansible/playbooks/host-baseline.yml",
         "ansible/inventory/prod.hcloud.yml",
+        "ansible/inventory/group_vars/prod.yml",
+        "ansible/requirements.txt",
+        "ansible/.envrc.example",
     )
     NON_CONFIGURATION_PATHS = (
         "README.md",
@@ -4742,6 +4785,22 @@ class TestChangeDetectionResolvesTheGatesInput(
             f"the change filter's patterns {patterns} also select these files outside "
             f"ansible/: {overmatched}, so the suite would run on pull requests that "
             "cannot affect it -- the cost this gating exists to avoid",
+        )
+        # NEGATION-AWARE, and it has to be: `any(...)` over every declared
+        # pattern cannot see a negation at all, so the positive `ansible/**`
+        # would keep this check green while the filter excluded these paths --
+        # an assertion stating the opposite of the requirement, structurally
+        # incapable of failing on it.
+        still_selected = [
+            path for path in self.EXCLUDED_CONFIGURATION_PATHS if _selects(patterns, path)
+        ]
+        self.assertEqual(
+            [],
+            still_selected,
+            f"the change filter's patterns {patterns} still select these paths under "
+            f"ansible/, which no scenario reads: {still_selected}. The suite would go "
+            "on converging seven roles in containers for pull requests it has nothing "
+            "to say about",
         )
 
     def test_the_change_filter_itself_runs_only_where_there_is_a_diff(self) -> None:
@@ -11891,6 +11950,608 @@ class TestTheLivenessChecksAreARealReadOfTheFile(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertTrue(scenario_expects_a_refusal(scratch))
+
+
+# ============================================================================
+# The repository's tracked files, and the credential scans built on them.
+#
+# These three scans arrived here from Molecule verify plays, where they were
+# static reads of committed files wearing the shape of host verification. Two
+# scanned the whole repository and one scanned `ansible/inventory/`, and all
+# three ran only on pull requests that happened to change `ansible/` -- which
+# is not the scope a repository-wide claim needs. They run here on every pull
+# request instead, which is what makes the claim true, and their relocation is
+# what made narrowing the Molecule trigger safe: excluding `ansible/inventory/`
+# would otherwise have withdrawn the only check reading it.
+#
+# See the change `narrow-the-molecule-trigger-to-what-it-reads`, design.md
+# Decisions 4 and 5.
+# ============================================================================
+
+
+class TrackedFilesUnavailable(AssertionError):
+    """The repository's tracked files could not be enumerated.
+
+    An AssertionError rather than a skip, and that is the whole point. This
+    suite's other external-tool guards skip when their tool is missing, which
+    is the right shape for an assertion whose absence leaves another check
+    standing. It is the wrong shape here: a scan for committed credential
+    material that skips reports success for a property nothing examined, and
+    nothing else in this repository reads the tracked tree.
+    """
+
+
+def tracked_files(root: Path | None = None) -> dict[str, bytes]:
+    """Every tracked file, as repository-relative path -> bytes.
+
+    THE FILE SET IS TRACKED FILES, NOT A FILESYSTEM WALK. This suite runs on
+    developer machines as well as on runners, and a working tree holds what a
+    checkout does not: dependency caches, virtual environments, `.molecule-home/`,
+    sibling working trees under `.claude/worktrees/`, and the gitignored
+    `ansible/.envrc` where a real GHCR pull token legitimately lives. Walking
+    those reports a developer's own uncommitted credential as a committed
+    secret, and the remedy anyone reaches for is a path-exclusion list -- which
+    blinds the scan permanently in whichever directory acquired it. An
+    uncommitted credential is the commit hook's to catch; this suite's subject
+    is the committed file.
+
+    BYTES, NOT DECODED TEXT. The markers are ASCII, and decoding every tracked
+    file would make an undecodable one -- none is tracked today, nothing
+    prevents one -- a hard failure that examined nothing.
+
+    Spawning the version-control binary is this suite's one admitted exception
+    to its standard-library limit, and it is bounded by how the binary comes to
+    be present: it exists wherever the repository was obtained at all. That is
+    not a general admission of binaries, and it does not touch the prohibition
+    on running a separately installed one.
+    """
+    base = ROOT if root is None else Path(root)
+    try:
+        listed = subprocess.run(
+            ["git", "-C", str(base), "ls-files", "-z"],
+            capture_output=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        raise TrackedFilesUnavailable(
+            "the version-control binary is not available, so the repository's tracked "
+            "files could not be enumerated. Refusing to skip: a credential scan that "
+            "does not run reports success for a property nothing examined"
+        ) from None
+    except subprocess.SubprocessError as error:
+        raise TrackedFilesUnavailable(
+            f"the tracked files could not be enumerated: {error}"
+        ) from None
+    if listed.returncode != 0:
+        detail = listed.stderr.decode("utf-8", errors="replace").strip()
+        raise TrackedFilesUnavailable(
+            f"`git ls-files` exited {listed.returncode} in {base}, so the tracked "
+            f"files could not be enumerated: {detail!r}. Refusing to skip"
+        )
+    names = [name for name in listed.stdout.decode("utf-8", errors="replace").split("\0") if name]
+    files: dict[str, bytes] = {}
+    missing: list[str] = []
+    for name in names:
+        path = base / name
+        try:
+            files[name] = path.read_bytes()
+        except (FileNotFoundError, NotADirectoryError):
+            missing.append(name)
+        except OSError as error:
+            raise TrackedFilesUnavailable(
+                f"the tracked file {name} could not be read: {error}"
+            ) from None
+    if missing:
+        raise TrackedFilesUnavailable(
+            "these paths are tracked but absent from the working tree, so the scans "
+            "would establish a property over files they never read: "
+            f"{', '.join(sorted(missing))}. A sparse or interrupted checkout is a "
+            "state to hear about rather than to scan around"
+        )
+    return files
+
+
+# Assembled rather than spelled out, for the same reason the private-key
+# pattern below is: this module is itself a tracked file, so a pattern written
+# whole would make every scan report its own source as a committed secret.
+_TOKEN_PREFIX = "gh"
+_PAT_PREFIX = "g"
+_PAT_INFIX = "ithub_pat_"
+TOKEN_MARKER = re.compile(
+    _TOKEN_PREFIX + r"[pousr]_[A-Za-z0-9]{20,}|"
+    + _PAT_PREFIX + _PAT_INFIX + r"[A-Za-z0-9_]{20,}"
+)
+
+_KEY_OPENING = "-----BEGIN"
+_KEY_CLOSING = "PRIVATE KEY-----"
+PRIVATE_KEY_MARKER = re.compile(
+    re.escape(_KEY_OPENING) + r" (OPENSSH |RSA )?" + re.escape(_KEY_CLOSING)
+)
+
+GHCR_TOKEN_ASSIGNMENT = re.compile(r"^([ \t]*)ghcr_pull_token[ \t]*:(.*)$")
+
+
+def files_carrying_a_token_marker(files: dict) -> list[str]:
+    """Tracked files carrying a literal GitHub or GHCR token marker."""
+    pattern = TOKEN_MARKER.pattern.encode("ascii")
+    compiled = re.compile(pattern)
+    return sorted(name for name, body in files.items() if compiled.search(body))
+
+
+def files_carrying_a_private_key_marker(files: dict) -> list[str]:
+    """Tracked files carrying an operator private-key delimiter.
+
+    Widened from `ansible/inventory/` to the whole tracked tree when this scan
+    moved here. Its old root was DERIVED -- the scan's own comment said no
+    scenario named that path, but that it was where the key material lived --
+    and a scan rooted at one directory while its siblings scan the repository
+    claims a scope its root does not give it.
+    """
+    pattern = PRIVATE_KEY_MARKER.pattern.encode("ascii")
+    compiled = re.compile(pattern)
+    return sorted(name for name, body in files.items() if compiled.search(body))
+
+
+def ghcr_token_literal_assignments(files: dict) -> list[str]:
+    """`ghcr_pull_token` assignments whose value is a committed literal.
+
+    A LINE-ORIENTED READING CANNOT DO THIS, and that is why the loop below
+    absorbs continuations. Both of `deploy_user`'s credentialled scenario
+    converge files assign the token as a YAML FOLDED scalar, so the assignment
+    line is bare -- `ghcr_pull_token: >-` -- and the `lookup('env', ...)` that
+    makes it acceptable sits on the following, more-indented lines. Reading the
+    assignment together with its continuation is the whole point; a grep, or a
+    rewrite against a YAML parser that discards line structure, passes over
+    both files and reports a clean tree.
+
+    Excluding those two files by path would have been simpler and is
+    deliberately not done: it would blind the scan permanently in exactly the
+    files most likely to acquire a pasted real token, since running the
+    credentialled verification means having a live token at the keyboard while
+    editing them. An assignment is acceptable where its value is an inline
+    `!vault` value or a `lookup('env', ...)` expression; anything else is a
+    literal and fails.
+    """
+    offenders: list[str] = []
+    for name in sorted(files):
+        if not name.endswith((".yml", ".yaml")):
+            continue
+        lines = files[name].decode("utf-8", errors="replace").splitlines()
+        for index, line in enumerate(lines):
+            match = GHCR_TOKEN_ASSIGNMENT.match(line)
+            if not match:
+                continue
+            indent, value = len(match.group(1)), match.group(2)
+            for continuation in lines[index + 1:]:
+                if continuation.strip() and (
+                    len(continuation) - len(continuation.lstrip())
+                ) <= indent:
+                    break
+                value += " " + continuation.strip()
+            if not value.strip():
+                continue
+            if "!vault" in value or "lookup('env'" in value or 'lookup("env"' in value:
+                continue
+            offenders.append(f"{name}:{index + 1}")
+    return offenders
+
+
+# ============================================================================
+# The premise the Molecule trigger's exclusions rest on.
+#
+# `ansible-verify.yml` excludes four paths under `ansible/` from the Molecule
+# suite's change detection, on the strength of a sweep establishing that no
+# scenario reads them. THAT PREMISE IS WHAT ROTS. A filter assertion cannot
+# catch it: the filter stays perfectly correct about a premise that has stopped
+# being true, the suite skips on the pull requests that change the path, and
+# the gate reports green. So the premise is asserted here, over scenario text.
+#
+# THE CRITERION IS A CONTROLLER-SIDE READ OF A REPOSITORY FILE, and both halves
+# carry weight. A read of the MANAGED NODE cannot be affected by a filter over
+# this repository -- around twenty `slurp` tasks read absolute paths inside the
+# container -- and a delegated task deriving a value from an already-registered
+# fact opens nothing. Drawn wider than this the check fires on the bulk of
+# ordinary scenario text, and the only escapes are to permit those sites
+# wholesale, which makes it meaningless, or to narrow it by a rule nobody wrote
+# down, which is how the first version of this design went wrong.
+#
+# `slurp` has no `remote_src` option at all, so DELEGATION rather than any
+# option on the module is what puts its read on the controller.
+#
+# See `narrow-the-molecule-trigger-to-what-it-reads`, design.md Decisions 1
+# and 1a.
+# ============================================================================
+
+FILE_READING_LOOKUPS = frozenset(
+    {"file", "template", "fileglob", "ini", "csvfile", "first_found", "unvault"}
+)
+
+# Lookups that reach no file. `env` is the one this repository uses; the rest
+# are named so that a scenario adopting one is not reported as an unrecognised
+# construction when it reads nothing.
+NON_FILE_LOOKUPS = frozenset({"env", "pipe", "vars", "varnames", "password", "random_choice"})
+
+# Modules that send a file TO the managed node, whose `src:` is therefore a
+# controller path unless the module is told otherwise.
+SENDING_MODULES = frozenset({"copy", "template", "script", "unarchive", "assemble"})
+
+INCLUSION_KEYS = frozenset(
+    {
+        "vars_files",
+        "include_vars",
+        "import_playbook",
+        "include_tasks",
+        "import_tasks",
+        "tasks_from",
+        "vars_from",
+    }
+)
+
+LOOKUP_CALL = re.compile(r"lookup\(\s*['\"]([A-Za-z0-9_.]+)['\"]\s*,(.*?)\)", re.DOTALL)
+TASK_START = re.compile(r"^(\s*)-\s+name:\s")
+MODULE_KEY = re.compile(r"^\s*(?:ansible\.builtin\.|ansible\.posix\.|community\.general\.)?([a-z_]+):")
+# What makes an expression worth resolving. `MOLECULE_SCENARIO_DIRECTORY` and
+# `MOLECULE_PROJECT_DIRECTORY` are Molecule's own, supplied at run time and
+# pointing into this repository just as `playbook_dir` does.
+PATH_BEARING = re.compile(
+    r"(?:playbook_dir|MOLECULE_PROJECT_DIRECTORY|MOLECULE_SCENARIO_DIRECTORY|\.\./)"
+)
+
+# A quoted path built on a variable this check cannot evaluate: `{{ x }}/y.yml`.
+# Such a read is not passed over -- it resolves to an `expr:` target and must be
+# permitted explicitly, which is the conservative direction.
+VARIABLE_PATH = re.compile(r"\{\{[^}]+\}\}/[\w./-]+")
+
+
+def _normalise_expression(text: str) -> str:
+    return " ".join(text.split()).strip().strip("\"'")
+
+
+def _resolve_target(expression: str, scenario_dir: str) -> str:
+    """Resolve a path expression to a repository-relative path where it can be.
+
+    THE BASE DEPENDS ON THE VARIABLE. `playbook_dir` and Molecule's
+    `MOLECULE_SCENARIO_DIRECTORY` both name the scenario directory;
+    `MOLECULE_PROJECT_DIRECTORY` names the ROLE directory, two levels above it.
+    Resolving everything against one base silently mislocates the second, which
+    is how `ANSIBLE_ROLES_PATH` came to read as an absolute path on the managed
+    node rather than as `ansible/roles/`.
+
+    Where the expression carries a variable this check cannot evaluate, the
+    normalised expression is returned under an `expr:` prefix. Such a read is
+    not passed over: it must be permitted explicitly like any other.
+    """
+    raw = _normalise_expression(expression)
+    role_dir = posixpath.normpath(posixpath.join(scenario_dir, "..", ".."))
+
+    base = scenario_dir
+    substituted = False
+    if "MOLECULE_PROJECT_DIRECTORY" in raw:
+        base = role_dir
+        substituted = True
+    elif "playbook_dir" in raw or "MOLECULE_SCENARIO_DIRECTORY" in raw:
+        substituted = True
+
+    stripped = re.sub(r"\{\{\s*playbook_dir\s*\}\}", "", raw)
+    stripped = re.sub(r"\bplaybook_dir\b", "", stripped)
+    stripped = re.sub(r"\$\{MOLECULE_PROJECT_DIRECTORY\}", "", stripped)
+    stripped = re.sub(
+        r"\{\{\s*lookup\(\s*['\"]env['\"]\s*,\s*['\"]MOLECULE_(?:SCENARIO_DIRECTORY|PROJECT_DIRECTORY)['\"]\s*\)\s*\}\}",
+        "",
+        stripped,
+    )
+    stripped = stripped.replace("+", " ").replace("'", " ").replace('"', " ")
+    stripped = " ".join(stripped.split())
+
+    if "{{" in stripped or "${" in stripped:
+        return f"expr:{raw}"
+    candidate = stripped.replace(" ", "")
+    if not candidate:
+        return f"expr:{raw}"
+    if candidate.startswith("/"):
+        # A leading slash AFTER a variable was removed is the join between the
+        # variable and the rest of the path, not an absolute path on the host.
+        if not substituted:
+            return f"node:{candidate}"
+        candidate = candidate.lstrip("/")
+        if not candidate:
+            return base
+    joined = posixpath.normpath(posixpath.join(base, candidate))
+    if joined.startswith(".."):
+        return f"expr:{raw}"
+    return joined
+
+
+def _task_blocks(text: str) -> list[str]:
+    lines = text.splitlines()
+    blocks: list[str] = []
+    current: list[str] = []
+    indent = None
+    for line in lines:
+        start = TASK_START.match(line)
+        if start:
+            if current:
+                blocks.append("\n".join(current))
+            current = [line]
+            indent = len(start.group(1))
+            continue
+        if current:
+            bare = line.strip()
+            if bare and not line.startswith(" " * (indent + 1)) and not line.startswith("#"):
+                blocks.append("\n".join(current))
+                current = []
+                indent = None
+                continue
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def _reads_in_play(text: str, scenario_dir: str) -> list[tuple[str, str, str]]:
+    """(construction, target, detail) for every controller read in a play file."""
+    found: list[tuple[str, str, str]] = []
+
+    for name, argument in LOOKUP_CALL.findall(text):
+        short = name.rsplit(".", 1)[-1]
+        if short in NON_FILE_LOOKUPS:
+            continue
+        if short in FILE_READING_LOOKUPS:
+            found.append((f"lookup({short})", _resolve_target(argument, scenario_dir), name))
+            continue
+        if PATH_BEARING.search(argument):
+            found.append(
+                ("unrecognised-lookup", _resolve_target(argument, scenario_dir), name)
+            )
+
+    # An inclusion key carries its path either on its own line or, for the
+    # list-valued ones, on the items beneath it. `vars_files:` is almost always
+    # the second shape, so reading only the key's own line passes over exactly
+    # the route most likely to reach an excluded path.
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        bare = line.strip()
+        if bare.startswith("#") or ":" not in bare:
+            continue
+        key, _, value = bare.partition(":")
+        key = key.lstrip("- ").strip()
+        if key not in INCLUSION_KEYS:
+            continue
+        if value.strip():
+            found.append((key, _resolve_target(value, scenario_dir), value.strip()))
+            continue
+        indent = len(line) - len(line.lstrip())
+        for item in lines[index + 1:]:
+            if not item.strip():
+                continue
+            if (len(item) - len(item.lstrip())) <= indent and not item.lstrip().startswith("-"):
+                break
+            entry = item.strip()
+            if not entry.startswith("-"):
+                break
+            entry = entry.lstrip("- ").strip()
+            if entry:
+                found.append((key, _resolve_target(entry, scenario_dir), entry))
+
+    for block in _task_blocks(text):
+        delegated = re.search(r"^\s*delegate_to:\s*localhost\s*$", block, re.MULTILINE)
+        remote_src = re.search(r"^\s*remote_src:\s*(true|yes)\s*$", block, re.MULTILINE | re.I)
+        modules = [
+            match.group(1)
+            for line in block.splitlines()[1:]
+            for match in [MODULE_KEY.match(line)]
+            if match
+        ]
+        sending = [module for module in modules if module in SENDING_MODULES]
+        source = re.search(r"^\s*src:\s*(.+?)\s*$", block, re.MULTILINE)
+        if sending and source and not remote_src:
+            found.append(("src", _resolve_target(source.group(1), scenario_dir), sending[0]))
+            continue
+        if not delegated:
+            continue
+        source_target = None
+        if source:
+            source_target = _resolve_target(source.group(1), scenario_dir)
+            found.append(("delegated-src", source_target, "delegated"))
+        for candidate in re.findall(r"((?:\{\{\s*[\w.]+\s*\}\}|[\w./-])+/\.\.[\w./-]*)", block):
+            if not PATH_BEARING.search(candidate):
+                continue
+            resolved = _resolve_target(candidate, scenario_dir)
+            # One read, not two: where the block already declared a `src:`, the
+            # bare path found in its text is the same read seen again.
+            if resolved == source_target:
+                continue
+            found.append(("delegated-path", resolved, "delegated"))
+        for candidate in VARIABLE_PATH.findall(block):
+            if "playbook_dir" in candidate or ".." in candidate:
+                continue
+            found.append(
+                ("delegated-path", _resolve_target(candidate, scenario_dir), "delegated")
+            )
+    return found
+
+
+def _reads_in_scenario_definition(text: str, scenario_dir: str) -> list[tuple[str, str, str]]:
+    """Paths a scenario declares in its own configuration file.
+
+    Two spellings are live here and neither is a task or a play: the provisioner
+    environment, and the options passed to dependency resolution. The second was
+    found by the author deriving this change's tests rather than by either
+    sweep -- every authored scenario carries `requirements-file`, and two sweeps
+    had read these files for `ANSIBLE_ROLES_PATH` without seeing it.
+    """
+    found: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        bare = line.strip()
+        if bare.startswith("#") or ":" not in bare:
+            continue
+        key, _, value = bare.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if not value or not PATH_BEARING.search(value):
+            continue
+        if key == "requirements-file":
+            found.append((key, _resolve_target(value, scenario_dir), value))
+        elif key.isupper() or key.startswith("ANSIBLE_") or key.startswith("MOLECULE_"):
+            found.append(("provisioner-env", _resolve_target(value, scenario_dir), key))
+    return found
+
+
+# The permitted reads, keyed by the file that holds each, the construction that
+# performs it and the target it resolves to -- NEVER by a line offset. The
+# commit that relocated three scans out of two of these files shifted every
+# offset below it, so an offset-keyed set would have been wrong on the commit
+# that introduced it.
+#
+# The value is the number of occurrences permitted WITHIN THAT FILE. Identity
+# alone does not separate one read from two, and the natural place to add a
+# second read of `ansible/requirements.yml` is the file already holding the
+# first. Per file rather than in total, because the two declaration entries are
+# one declaration each across seventeen scenarios.
+PERMITTED_CONTROLLER_READS: dict[tuple[str, str, str], int] = {
+    # Role-local private-key scans. Their own role directory changing selects
+    # the suite anyway, so they stay where they are.
+    ("ansible/roles/deploy_user/molecule/default/verify.yml", "delegated-path", "ansible/roles/deploy_user"): 1,
+    ("ansible/roles/ops_user/molecule/default/verify.yml", "delegated-path", "ansible/roles/ops_user"): 1,
+    # The role's own README, asserted to record what the role grants.
+    ("ansible/roles/ops_user/molecule/default/verify.yml", "delegated-src", "ansible/roles/ops_user/README.md"): 1,
+    # A nested `ansible-playbook` over this scenario's own directory.
+    ("ansible/roles/ops_user/molecule/revocation-steady-state/verify.yml", "delegated-path", "expr:{{ ops_user_nested_scenario_dir }}/converge.yml"): 1,
+    # The role's own shipped defaults, read to assert them.
+    ("ansible/roles/swap/molecule/default/verify.yml", "lookup(file)", "ansible/roles/swap/defaults/main.yml"): 1,
+    # The Galaxy manifest, read to assert the external role's pin. Escapes the
+    # role directory; its target is a trigger.
+    ("ansible/roles/docker/molecule/default/verify.yml", "lookup(file)", "ansible/requirements.yml"): 1,
+    # One scenario built on its sibling's plays, three files deep.
+    ("ansible/roles/platform_data_volume/molecule/multiple-devices-reverse-order/converge.yml", "import_playbook", "ansible/roles/platform_data_volume/molecule/multiple-devices-discoverable/converge.yml"): 1,
+    ("ansible/roles/platform_data_volume/molecule/multiple-devices-reverse-order/prepare.yml", "import_playbook", "ansible/roles/platform_data_volume/molecule/multiple-devices-discoverable/prepare.yml"): 1,
+    ("ansible/roles/platform_data_volume/molecule/multiple-devices-reverse-order/verify.yml", "import_playbook", "ansible/roles/platform_data_volume/molecule/multiple-devices-discoverable/verify.yml"): 1,
+}
+
+# The two declarations every authored scenario carries. Keyed by construction
+# and target only, with a count of one PER `molecule.yml`, because a total
+# would be seventeen and would go red whenever a scenario is added or removed.
+PERMITTED_SCENARIO_DECLARATIONS: dict[tuple[str, str], int] = {
+    ("provisioner-env", "ansible/roles"): 1,
+    ("requirements-file", "ansible/requirements.yml"): 1,
+}
+
+
+def unpermitted_controller_reads(root: Path | None = None) -> list[str]:
+    """Controller-side reads of repository files that no permitted entry covers.
+
+    Refuses rather than passes over: a construction this check has no rule for,
+    carrying a path that resolves into the repository, is reported. A route list
+    goes stale exactly as a path list does, and the polarity that answers one
+    answers the other -- an unrecognised construction ignored is a silent gap,
+    where one refused costs a visible edit to permit.
+    """
+    base = ROOT if root is None else Path(root)
+    offenders: list[str] = []
+    for definition in authored_scenario_files(base):
+        scenario_root = definition.parent
+        scenario_dir = scenario_root.relative_to(base).as_posix()
+        for path in sorted(scenario_root.rglob("*.yml")):
+            relative = path.relative_to(base).as_posix()
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if path.name == "molecule.yml":
+                reads = _reads_in_scenario_definition(text, scenario_dir)
+            else:
+                reads = _reads_in_play(text, scenario_dir)
+            seen: dict[tuple[str, str, str], int] = {}
+            for construction, target, detail in reads:
+                if target.startswith("node:"):
+                    continue
+                key = (relative, construction, target)
+                seen[key] = seen.get(key, 0) + 1
+                allowed = PERMITTED_CONTROLLER_READS.get(key)
+                if allowed is None:
+                    allowed = PERMITTED_SCENARIO_DECLARATIONS.get((construction, target))
+                if allowed is None:
+                    offenders.append(
+                        f"{relative}: {construction} -> {target} ({detail}) is a "
+                        f"controller-side read of a repository file that no permitted "
+                        f"entry covers"
+                    )
+                elif seen[key] > allowed:
+                    offenders.append(
+                        f"{relative}: {construction} -> {target} occurs {seen[key]} "
+                        f"times where {allowed} is permitted; a second read of an "
+                        f"already-permitted target is enumerated separately or not at all"
+                    )
+    return sorted(set(offenders))
+
+
+class TestNoCredentialIsCommittedAnywhereInTheRepository(unittest.TestCase):
+    """SPECIFIED -- The Continuous-Integration Configuration Is Itself Verified:
+    "A scan at repository scope ... SHALL live here rather than inside a check
+    that runs only when some particular directory changes, because unconditional
+    execution is exactly what makes such a claim true."
+
+    These three arrived from Molecule verify plays, where they ran only on pull
+    requests that happened to change `ansible/`. `gitleaks` already covers the
+    diff of every pull request; what these add is a structural rule it has no
+    equivalent of, and a read of the tracked tree rather than of the diff.
+    """
+
+    def test_no_tracked_file_carries_a_token_marker(self) -> None:
+        offenders = files_carrying_a_token_marker(tracked_files())
+        self.assertEqual(
+            [],
+            offenders,
+            "a GitHub/GHCR token-shaped marker is committed in: "
+            f"{offenders}. The GHCR pull token SHALL be stored outside version "
+            "control and SHALL NOT appear in plaintext anywhere in the repository",
+        )
+
+    def test_no_tracked_file_carries_a_private_key_marker(self) -> None:
+        offenders = files_carrying_a_private_key_marker(tracked_files())
+        self.assertEqual(
+            [],
+            offenders,
+            "a private-key marker is committed in: "
+            f"{offenders}. Only an operator keypair's public half SHALL be "
+            "committed; the private half SHALL remain on the operator's own machine",
+        )
+
+    def test_no_ghcr_pull_token_assignment_carries_a_committed_literal(self) -> None:
+        offenders = ghcr_token_literal_assignments(tracked_files())
+        self.assertEqual(
+            [],
+            offenders,
+            "ghcr_pull_token is assigned a committed literal in: "
+            f"{offenders}. It SHALL be stored outside version control (Ansible "
+            "Vault), not merely referenced without a committed default",
+        )
+
+
+class TestNoScenarioReadsAPathTheSuiteIsNoLongerTriggeredBy(unittest.TestCase):
+    """SPECIFIED -- "The premise the exclusions rest on SHALL itself be checked."
+
+    The exclusions in `ansible-verify.yml` rest on a sweep of scenario text. A
+    scenario acquiring a read of an excluded path makes that sweep false, the
+    filter goes on excluding a path that is now read, and the suite skips on the
+    pull requests that change it -- with the gate reporting green. Nothing else
+    in this repository can observe that.
+    """
+
+    def test_every_controller_side_read_is_one_the_exclusions_were_established_against(
+        self,
+    ) -> None:
+        offenders = unpermitted_controller_reads()
+        self.assertEqual(
+            [],
+            offenders,
+            "these controller-side reads of repository files are not in the "
+            "permitted set the Molecule trigger's exclusions were established "
+            f"against:\n  " + "\n  ".join(offenders) + "\n"
+            "Either the read reaches a path the filter excludes -- in which case "
+            "the exclusion is now wrong and `ansible-verify.yml` must change -- or "
+            "it is a new read of a path that remains a trigger, in which case add "
+            "it to PERMITTED_CONTROLLER_READS with the reason. Do not widen the "
+            "check's rules to make this pass: an unstated narrowing is the defect "
+            "this check exists to prevent",
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -594,3 +594,17 @@ No workflow in `.github/workflows/` declares `timeout-minutes` anywhere, so ever
 **The trade-off is the whole content of the change, and it is sharper than it looks.** A timeout tight enough to catch a hang promptly would have failed the runs of 2026-09-11 described in entry 65, which were slow and green rather than hung: `image_prune` took 74.5 minutes and passed. So the value has to sit above the degraded-but-working ceiling and below six hours, which means it is chosen against observed durations rather than against the baseline — and the baseline, around 10 minutes, is a bad guide. Record the durations the proposal is based on, since they are what a later reader will want when the number looks arbitrary.
 
 Entry 65 would lower both the baseline and the ceiling, so doing that first changes what this one should choose. They are independent in mechanism and not in the number.
+
+## 67. select-the-molecule-matrix-per-role
+
+Recorded 2026-09-11 by `narrow-the-molecule-trigger-to-what-it-reads`, which narrowed the suite's trigger to the paths its scenarios read and deliberately stopped there. That change removed the whole of the safe win — the pull requests touching no role at all, four of the last six to touch `ansible/` — and left this, which is the contested remainder: running only the roles a diff actually touches.
+
+**What makes it a change of its own rather than a refinement of that filter.** Scenarios converge sibling roles. `image_prune`'s converge every one of theirs on `docker`; `ops_user`'s default converges `docker` and `deploy_user`. A matrix selecting only the role whose files changed would therefore skip `image_prune` and `ops_user` on a pull request editing `docker`, and skip them silently — the gate sees a green matrix over the rows it was given. A correct per-role matrix needs the **reverse closure** of a dependency graph derived from scenario text, and deriving that graph wrongly loses coverage with nothing reporting, which is the failure this pipeline is built to refuse.
+
+Three things that change has already built and this one extends rather than repeats:
+
+- **The sweep.** `design.md` Decision 1's table enumerates every controller-side read of a repository file in all seventeen authored scenarios, with the route that finds each. A dependency graph is the same exercise over `roles:` and `include_role:`, and the same lesson applies: that table took three attempts and its last entry was found by the test author, not by either sweep.
+- **The permitted-set mechanism.** `unpermitted_controller_reads` in `.github/tests/test_ci_configuration.py` already reads scenario text statically, keyed on file, construction and resolved target with per-file occurrence counts. A role-dependency check belongs beside it.
+- **The gate's three-way distinction.** `ansible-verify.yml`'s aggregating job distinguishes a discovery failure, a skip that was owed, and a skip that was not. A per-role matrix needs a fourth state — the suite ran, on the subset that was owed — without reopening the hole the third exists to close, and the shared inputs (`requirements.yml`, `requirements-test.txt`, `scripts/run-molecule`, the base-image digests) must still fan out to everything.
+
+**The prize is smaller than the last one.** Of the two recent pull requests that did touch a role, one touched eight files in a single role; per-role selection would have run one job instead of seven. Worth having, not worth rushing: the cost of getting it wrong is a green that verified nothing, on the check that gates every merge.
