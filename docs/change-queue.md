@@ -498,3 +498,52 @@ The rule makes the assertion crisp rather than heuristic: under "one line per pa
 **What this deliberately does not attempt.** Not a formatter. Prettier's `proseWrap: "never"` would auto-fix, but it rewrites list markers, emphasis characters, table alignment and heading style across the tree, and it would rewrite archived records — which `AGENTS.md` says may be touched only to make them say what actually happened. There is also no Node toolchain in this repository to hang it on. markdownlint is the wrong tool for a different reason: `MD013` enforces a maximum line length, and there is no rule for the opposite.
 
 Not blocked. One new module in `.github/tests`, whose constraints it fits: a static read of committed files, no network, no credential, no container.
+
+## 58. rename-terraform-environments-to-stacks
+
+Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **First of four**, and the other three are blocked behind it in the order they appear.
+
+`terraform/environments/` names an axis that has stopped being the organising one. The unit the pipeline iterates over is a **stack** — one root module, one state, one Hetzner project, one blast radius — and a stack is a *(tenant, environment)* pair. Environment stays as a field inside the stack's name; it is no longer what the folder is divided by. The concrete case that breaks the present word is a tenant with no staging, which under `environments/` reads as a missing directory and under `stacks/` is simply a tenant with one stack.
+
+What moves with the folder is the **vocabulary**, and this is the part that makes the entry bigger than a `git mv`: `environments_root` in the discovery body, `matrix.environment.*`, and `ENVIRONMENT_NAME` all name the old axis. `pipeline.yml`'s `github_environment` field does **not** move — it names a GitHub Environment, which is a GitHub concept and still called that.
+
+**Renaming the folder without the vocabulary is worse than doing nothing.** A directory called `stacks/` iterated by a variable called `environment` is a scheme that contradicts itself in the same file, and a reader has no way to tell which word is load-bearing.
+
+The cost is spread rather than deep. `terraform/environments/` appears as **requirement text** in `openspec/specs/iac-repo-foundations/spec.md`, `openspec/specs/iac-state-management/spec.md`, `openspec/specs/iac-safety-hardening/spec.md` and `openspec/specs/iac-cicd-pipeline/spec.md` — the last carries roughly ten requirements naming it. The discovery body is duplicated verbatim in three gated workflows, with `.github/tests` asserting the three copies stay identical, so they move together or the assertion fails.
+
+**No live effect.** Terraform state is keyed by the HCP workspace named in each `cloud` block, not by the directory's path, so the move is invisible to Hetzner and to HCP. It goes first so that entry 59 does not rewrite the same specification text a second time.
+
+## 59. rename-the-stacks-and-their-resources
+
+Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **Blocked on entry 58** — it edits the same specification text, and doing it first means editing it twice.
+
+The scheme is in `docs/naming-conventions.md` and is not restated here. What this entry carries: the stack directories become `main-production` and `main-staging`; the `environment` label is spelled in full and a `tenant` label joins it; the Hetzner server takes its stack's name, the firewall and volume become `main` and the SSH key becomes `operator`; the inventory sources and `group_vars` follow the new group names; `.github/tests` literals and the documents that quote them follow. It deliberately leaves the HCP workspace names and the repository secret names alone — those are entry 60 — so that everything here is files plus Hetzner, and its correctness is established by a plan rather than by a repository setting nobody can verify.
+
+It also **adds an Ansible hostname task, which does not exist today**. Cloud-init sets a host's name once, at creation, from the Hetzner server name: the live production host answers to `main-server` and will keep answering to it after Terraform renames the server, because nothing re-sets it. Without the task this change produces a host with three names instead of one. The task templates `{{ company }}-{{ inventory_hostname }}`, and `company` is the single group variable the company's clone changes.
+
+Four hazards, each of which has a quiet failure mode:
+
+- **The pull-request plan is the proof, and nothing else is.** Hetzner supports renaming a server, firewall, volume and SSH key in place, but a plan that reports `must be replaced` for any of them stops this change rather than being worked around. Do not assert in advance which it will be.
+- **Renaming the server renames its heartbeat check.** The slug is `{{ inventory_hostname }}-prune-host-images`; after the rename the host pings a check that does not exist yet while the old one goes quiet, which is the alarm condition. Create the new check before the converge and delete the old one after.
+- **Renaming the `environment` label renames the Ansible group, and the mismatch is silent.** A play whose `hosts:` matches nothing prints `skipping: no hosts matched` and exits 0 — a converge that did nothing is indistinguishable from one that had nothing to do. The label, the `group_vars` filenames and the playbook's `hosts:` move in one commit.
+- **The live host's hostname is `main-server` until the new task runs**, so a converge that renames the server but skips or fails the hostname task leaves the divergence in place with nothing failing.
+
+## 60. rename-the-external-services
+
+Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **Blocked on entry 59.**
+
+Four renames that live outside the repository, none of which Terraform performs: the HCP workspaces to `main-production` and `main-staging`, the GitHub Environments to the same, the repository read-only secrets to `HCLOUD_TOKEN_MAIN_PRODUCTION` and `HCLOUD_TOKEN_MAIN_STAGING`, and the two Hetzner projects. The only code it touches is each `versions.tf`'s `cloud` block and each `pipeline.yml`'s two declared names.
+
+**Order is load-bearing and the window between steps is broken CI.** The HCP workspace is renamed in the HCP interface *first*, which preserves its state; pushing `versions.tf` ahead of that points at a workspace that does not exist, and the next plan proposes creating every resource from scratch. GitHub cannot rename a secret at all — the new name is created, `pipeline.yml` is flipped, and the old one is deleted afterwards. The Hetzner project rename is cosmetic and its tokens survive it.
+
+It is separated from entry 59 precisely because none of it is provable by a plan: every step is a click whose effect no file in this repository can verify. Mixing it with a Terraform change would produce one pull request whose green result means less than it appears to.
+
+## 61. move-the-platform-data-mount
+
+Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **Blocked on entry 59**, which renames the volume; independent of entry 60 and may go before or after it.
+
+`/mnt/main-data` becomes `/mnt/main`, so that the mount path matches the volume's new name. It touches `platform_data_volume_mount_path`, the two bind mounts in `platform/docker-compose.yml`, the `.github/tests` literals that assert them, and the documents that quote the path.
+
+**There is no data migration.** The filesystem lives on the volume and the subdirectories travel with it; only the mountpoint moves, which is an `/etc/fstab` entry and a remount. What it does cost is a stack restart, so Prometheus and Grafana are down for the window and their scrape gap is visible afterwards.
+
+**One trap does the damage if missed.** `ansible.posix.mount` with `state: mounted` adds the new entry and does **not** remove the old one, so the converge leaves `/mnt/main-data` in `/etc/fstab` and the device remounts at two paths on the next reboot. A one-shot task with `state: absent` for the old path is required, and it is the kind of cleanup that is easy to write, easy to verify on the day, and invisible until a reboot months later.
