@@ -70,6 +70,8 @@ import json
 import os
 import posixpath
 import re
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -1974,5 +1976,105 @@ class TestEveryVaultedValueIsWhereThePreflightReachesIt(unittest.TestCase):
             "a Molecule scenario, so the sweep above compared nothing",
         )
 
+class TestTheDerivedAddressIsABareString(WorkflowLocatorMixin, unittest.TestCase):
+    """Regression guard, not a derived test -- see the block above it.
+
+    `compose` marks its result UNSAFE, so `ansible_host` serialises as
+    `{"__ansible_unsafe": "<address>"}` rather than as a string. The first real
+    run of this workflow took that raw, handed the shell a pretty-printed JSON
+    object, and failed naming `'{'` as the host it could not find -- on staging,
+    at the preflight, before the play, which is where it was meant to land.
+
+    The filter is EXECUTED against both shapes rather than read. A check that
+    grepped for `__ansible_unsafe` would pass against a filter that mentions it
+    and still emits an object.
+    """
+
+    def setUp(self) -> None:
+        require_external_tools(
+            self, ("bash", "jq"), "run the address-derivation filter"
+        )
+
+    def _filter(self) -> str:
+        """The jq program the converge job derives its addresses with."""
+        name, job = self.converge_job()
+        bodies = [
+            str(step.get("run") or "")
+            for step in (job.get("steps") or [])
+            if "jq" in str(step.get("run") or "")
+            and "ansible_host" in str(step.get("run") or "")
+        ]
+        self.assertEqual(
+            1,
+            len(bodies),
+            f"expected exactly one step in `{name}` deriving addresses with `jq`, "
+            f"found {len(bodies)}",
+        )
+        opening = bodies[0].index("'", bodies[0].index("jq -er"))
+        closing = bodies[0].index("'", opening + 1)
+        return bodies[0][opening + 1 : closing]
+
+    def _scratch(self) -> Path:
+        directory = Path(tempfile.mkdtemp(prefix="derived-address-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        return directory
+
+    def _run(self, document: str):
+        """Through `bash`, as a runner would -- not by calling `jq` directly.
+
+        This directory may spawn a shell and nothing else, which
+        `TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource` asserts
+        about every module in it, including this one.
+        """
+        scratch = self._scratch()
+        fixture = scratch / "inventory.json"
+        fixture.write_text(document, encoding="utf-8")
+        snippet = (
+            'set -euo pipefail\n'
+            "jq -er --arg env alpha '" + self._filter() + "' <\"$FIXTURE\"\n"
+        )
+        return run_snippet(snippet, dict(os.environ, FIXTURE=str(fixture)), scratch)
+
+    def test_an_unsafe_wrapped_address_yields_the_bare_address(self) -> None:
+        document = json.dumps({
+            "alpha": {"hosts": ["alpha-server"]},
+            "_meta": {"hostvars": {"alpha-server": {
+                "ansible_host": {"__ansible_unsafe": "alpha-server"}}}},
+        })
+        result = self._run(document)
+        self.assertEqual(
+            0, result.returncode,
+            f"the filter refused an unsafe-wrapped address: {result.stderr!r}",
+        )
+        self.assertEqual(
+            ["alpha-server"],
+            result.stdout.split(),
+            "the filter emitted something other than the bare address, so the shell "
+            f"reading it would word-split JSON: {result.stdout!r}",
+        )
+
+    def test_a_plain_string_address_still_works(self) -> None:
+        """The converse: the unwrap must not break the shape Ansible emits when
+        nothing marked the value unsafe."""
+        document = json.dumps({
+            "alpha": {"hosts": ["alpha-server"]},
+            "_meta": {"hostvars": {"alpha-server": {"ansible_host": "10.0.0.1"}}},
+        })
+        result = self._run(document)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(["10.0.0.1"], result.stdout.split())
+
+    def test_a_host_outside_the_group_is_not_derived(self) -> None:
+        """The group is what the play converges; `_meta.hostvars` is every server
+        in the project."""
+        document = json.dumps({
+            "alpha": {"hosts": ["alpha-server"]},
+            "_meta": {"hostvars": {
+                "alpha-server": {"ansible_host": "10.0.0.1"},
+                "stray-server": {"ansible_host": "10.0.0.2"},
+            }},
+        })
+        result = self._run(document)
+        self.assertEqual(["10.0.0.1"], result.stdout.split())
 if __name__ == "__main__":  # pragma: no cover - parity with the modules beside it
     unittest.main()
