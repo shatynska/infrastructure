@@ -1,38 +1,12 @@
 # Test manifest — `integrate-ansible-host-config`
 
-Written by the `openspec-test-writer` dispatch, before implementation. This
-file is **not** an OpenSpec-schema artifact — it will not appear among
-`openspec instructions apply`'s context files, and must be read on purpose
-before implementing this change. See also this repository's
-`rules/` fragment (in the `ai-toolkit` library checkout this project uses),
-which directs that it be read before implementing; this manifest's location
-is the second, redundant pointer for a machine where that fragment's
-machine-local import path doesn't resolve.
+Written by the `openspec-test-writer` dispatch, before implementation. This file is **not** an OpenSpec-schema artifact — it will not appear among `openspec instructions apply`'s context files, and must be read on purpose before implementing this change. See also this repository's `rules/` fragment (in the `ai-toolkit` library checkout this project uses), which directs that it be read before implementing; this manifest's location is the second, redundant pointer for a machine where that fragment's machine-local import path doesn't resolve.
 
-**This pass added zero test files.** No existing test was edited, deleted,
-or disabled, and nothing was written outside this manifest's own path. Every
-scenario below is accounted for — covered, or uncovered with a stated
-reason — never silently dropped. The reasoning is that this change is,
-by its own `proposal.md` and `design.md`, structural/scaffolding only: it
-explicitly does not write Ansible role/playbook content or the `platform/`
-Compose service definitions (see `proposal.md`'s closing paragraph and
-`design.md`'s Non-Goals), and this project's only currently-defined
-mechanized test convention — `terraform test` against
-`terraform/modules/<name>/tests/*.tftest.hcl` — has no bearing on Ansible or
-Compose behavior at all, and (per the reasoning under
-`iac-repo-foundations` below) does not reach environment-level module
-composition either. Forcing a test into that gap would mean either writing
-implementation to give it something to assert against (prohibited) or
-asserting only that scaffolding exists, which would not exercise the
-behavior the scenario actually states — the `testing` skill's standard on
-not fabricating tests for behavior that can't yet be exercised.
+**This pass added zero test files.** No existing test was edited, deleted, or disabled, and nothing was written outside this manifest's own path. Every scenario below is accounted for — covered, or uncovered with a stated reason — never silently dropped. The reasoning is that this change is, by its own `proposal.md` and `design.md`, structural/scaffolding only: it explicitly does not write Ansible role/playbook content or the `platform/` Compose service definitions (see `proposal.md`'s closing paragraph and `design.md`'s Non-Goals), and this project's only currently-defined mechanized test convention — `terraform test` against `terraform/modules/<name>/tests/*.tftest.hcl` — has no bearing on Ansible or Compose behavior at all, and (per the reasoning under `iac-repo-foundations` below) does not reach environment-level module composition either. Forcing a test into that gap would mean either writing implementation to give it something to assert against (prohibited) or asserting only that scaffolding exists, which would not exercise the behavior the scenario actually states — the `testing` skill's standard on not fabricating tests for behavior that can't yet be exercised.
 
 ## Baseline taken
 
-**Scoped baseline**, covering the entire currently-existing test-path glob
-contents (`modules/<name>/tests/*.tftest.hcl` — the pre-restructure location;
-this change's task 1.2 relocates it to `terraform/modules/<name>/tests/*.tftest.hcl`,
-which does not yet exist):
+**Scoped baseline**, covering the entire currently-existing test-path glob contents (`modules/<name>/tests/*.tftest.hcl` — the pre-restructure location; this change's task 1.2 relocates it to `terraform/modules/<name>/tests/*.tftest.hcl`, which does not yet exist):
 
 ```
 $ cd modules/volume && terraform test
@@ -43,28 +17,17 @@ tests/labels.tftest.hcl...            pass (2 runs)
 Success! 8 passed, 0 failed.
 ```
 
-`modules/server` carries no `tests/` directory at all — there is nothing to
-run there. Terraform v1.9.8 was used (locally installed; newer than the
-repo's provider lock but not pinned itself).
+`modules/server` carries no `tests/` directory at all — there is nothing to run there. Terraform v1.9.8 was used (locally installed; newer than the repo's provider lock but not pinned itself).
 
-Since this pass adds no new test files, there is no "new tests fail because
-the target doesn't exist yet" claim to make — the baseline above establishes
-only that the pass did not encounter or touch an already-broken suite.
+Since this pass adds no new test files, there is no "new tests fail because the target doesn't exist yet" claim to make — the baseline above establishes only that the pass did not encounter or touch an already-broken suite.
 
 ## Scenario accounting
 
-14 `#### Scenario:` blocks total across the three delta specs. All 14 are
-accounted for below; 0 are covered by a new test; 14 are uncovered with a
-stated reason.
+14 `#### Scenario:` blocks total across the three delta specs. All 14 are accounted for below; 0 are covered by a new test; 14 are uncovered with a stated reason.
 
 ### `iac-host-configuration` (ADDED capability — 8 scenarios)
 
-None of these are covered. This capability's requirements describe Ansible
-inventory, role-pinning, secrets, and firewall-ownership *behavior* — none
-of which exists yet (no `ansible/` content is written by this change; see
-`proposal.md`/`design.md` Non-Goals) — and none of it is Terraform, so it
-falls outside this project's only mechanized test convention
-(`terraform test` against a module) regardless of implementation state.
+None of these are covered. This capability's requirements describe Ansible inventory, role-pinning, secrets, and firewall-ownership *behavior* — none of which exists yet (no `ansible/` content is written by this change; see `proposal.md`/`design.md` Non-Goals) — and none of it is Terraform, so it falls outside this project's only mechanized test convention (`terraform test` against a module) regardless of implementation state.
 
 | Requirement | Scenario | Status | Reason |
 |---|---|---|---|
@@ -79,12 +42,7 @@ falls outside this project's only mechanized test convention
 
 ### `iac-platform-services` (ADDED capability — 4 scenarios)
 
-None of these are covered, for the same reason as a block: this capability
-describes the shared `platform/` Compose stack's behavior, and this change
-adds only `platform/README.md` (task 3.2) — explicitly no
-`docker-compose.yml` service content (`proposal.md`, `design.md`
-Non-Goals). None of it is Terraform, so none of it is reachable through this
-project's only mechanized test convention regardless.
+None of these are covered, for the same reason as a block: this capability describes the shared `platform/` Compose stack's behavior, and this change adds only `platform/README.md` (task 3.2) — explicitly no `docker-compose.yml` service content (`proposal.md`, `design.md` Non-Goals). None of it is Terraform, so none of it is reachable through this project's only mechanized test convention regardless.
 
 | Requirement | Scenario | Status | Reason |
 |---|---|---|---|
@@ -95,31 +53,7 @@ project's only mechanized test convention regardless.
 
 ### `iac-repo-foundations` (MODIFIED requirement — 2 scenarios)
 
-Both scenarios state a fact about `terraform/environments/prod/`'s own
-configuration (which module path it calls, and that a future environment
-folder wouldn't require restructuring) — not about a module's own internal
-behavior. This project's only mechanized test convention is explicitly
-scoped to *module*-level tests
-(`modules/<name>/tests/*.tftest.hcl`/`terraform/modules/<name>/tests/*.tftest.hcl`,
-per `AGENTS.md`'s Testing section and this dispatch's stated test-path
-glob), and the existing test suite already establishes, in its own words,
-that environment-level composition is out of that scope: see
-`modules/volume/tests/creation.tftest.hcl`'s header comment — "These run
-blocks exercise `modules/volume` in isolation (not `environments/prod`)...
-They do NOT exercise the `environments/prod`-level ... coupling itself —
-that composition lives outside this module and outside this test-path
-glob." The same reasoning applies here without modification, and is the
-basis both scenarios below are recorded uncovered rather than attempted via
-a `run` block that overrides `module.source` to point at
-`terraform/environments/prod` — that pattern would extend a
-module-under-test's own test suite to assert on an unrelated root
-module's file layout, which is exactly what that precedent declined to do,
-and would also require standing up variables/mocking for
-`terraform/environments/prod`'s full configuration (including
-`hcloud_ssh_key.this`) to produce a test whose real subject is a path
-string, not module behavior — fragile scaffolding built to observe a fact
-`terraform plan`'s own empty-diff check (`tasks.md` task 1.9) already
-verifies directly, with real state, at implementation time.
+Both scenarios state a fact about `terraform/environments/prod/`'s own configuration (which module path it calls, and that a future environment folder wouldn't require restructuring) — not about a module's own internal behavior. This project's only mechanized test convention is explicitly scoped to *module*-level tests (`modules/<name>/tests/*.tftest.hcl`/`terraform/modules/<name>/tests/*.tftest.hcl`, per `AGENTS.md`'s Testing section and this dispatch's stated test-path glob), and the existing test suite already establishes, in its own words, that environment-level composition is out of that scope: see `modules/volume/tests/creation.tftest.hcl`'s header comment — "These run blocks exercise `modules/volume` in isolation (not `environments/prod`)... They do NOT exercise the `environments/prod`-level ... coupling itself — that composition lives outside this module and outside this test-path glob." The same reasoning applies here without modification, and is the basis both scenarios below are recorded uncovered rather than attempted via a `run` block that overrides `module.source` to point at `terraform/environments/prod` — that pattern would extend a module-under-test's own test suite to assert on an unrelated root module's file layout, which is exactly what that precedent declined to do, and would also require standing up variables/mocking for `terraform/environments/prod`'s full configuration (including `hcloud_ssh_key.this`) to produce a test whose real subject is a path string, not module behavior — fragile scaffolding built to observe a fact `terraform plan`'s own empty-diff check (`tasks.md` task 1.9) already verifies directly, with real state, at implementation time.
 
 | Requirement | Scenario | Status | Reason |
 |---|---|---|---|
@@ -128,81 +62,26 @@ verifies directly, with real state, at implementation time.
 
 ## Assertion classification
 
-Not applicable — this pass wrote no assertions. (See scenario accounting
-above for the per-scenario coverage/uncovered classification, which is the
-applicable granularity here.)
+Not applicable — this pass wrote no assertions. (See scenario accounting above for the per-scenario coverage/uncovered classification, which is the applicable granularity here.)
 
 ## Obsolete-tests list
 
-**Search conducted, no bearing test found** (this change does carry a
-`MODIFIED` delta — `iac-repo-foundations`'s "Environment and Module Folder
-Structure" — so "not applicable" does not apply here; a search was owed and
-was performed).
+**Search conducted, no bearing test found** (this change does carry a `MODIFIED` delta — `iac-repo-foundations`'s "Environment and Module Folder Structure" — so "not applicable" does not apply here; a search was owed and was performed).
 
-Searched the dispatched test-path glob and nowhere else:
-`modules/*/tests/*.tftest.hcl` (the pre-restructure location; the only one
-that currently exists — `terraform/modules/` doesn't exist yet). Found:
-`modules/volume/tests/creation.tftest.hcl`,
-`modules/volume/tests/delete_protection.tftest.hcl`,
-`modules/volume/tests/labels.tftest.hcl`. `modules/server/tests/` doesn't
-exist, so nothing to search there.
+Searched the dispatched test-path glob and nowhere else: `modules/*/tests/*.tftest.hcl` (the pre-restructure location; the only one that currently exists — `terraform/modules/` doesn't exist yet). Found: `modules/volume/tests/creation.tftest.hcl`, `modules/volume/tests/delete_protection.tftest.hcl`, `modules/volume/tests/labels.tftest.hcl`. `modules/server/tests/` doesn't exist, so nothing to search there.
 
-Evidence: read all three files in full. Their assertions target
-`hcloud_volume.this`'s resource-level attributes only — `name`, `size`,
-`server_id`, `delete_protection`, `labels["environment"]`,
-`labels["managed_by"]`, and a caller-supplied label merge (see
-`modules/volume/tests/creation.tftest.hcl` lines 43–82,
-`delete_protection.tftest.hcl` lines 34–67, `labels.tftest.hcl` lines
-22–59). None reference a literal `environments/` or `modules/` path
-string, and none assert anything about how a caller sources this module —
-the only thing the modified requirement actually changes (the path
-segments environments consume modules from). Relocating these files (as
-part of `git mv modules terraform/modules`, task 1.2, which is not
-performed by this pass) changes no line inside them and would not need to,
-per the baseline run above. **Candidate for human confirmation**, as with
-every entry in this list — but the evidence above is that none of the three
-existing test files bear on what this delta changes.
+Evidence: read all three files in full. Their assertions target `hcloud_volume.this`'s resource-level attributes only — `name`, `size`, `server_id`, `delete_protection`, `labels["environment"]`, `labels["managed_by"]`, and a caller-supplied label merge (see `modules/volume/tests/creation.tftest.hcl` lines 43–82, `delete_protection.tftest.hcl` lines 34–67, `labels.tftest.hcl` lines 22–59). None reference a literal `environments/` or `modules/` path string, and none assert anything about how a caller sources this module — the only thing the modified requirement actually changes (the path segments environments consume modules from). Relocating these files (as part of `git mv modules terraform/modules`, task 1.2, which is not performed by this pass) changes no line inside them and would not need to, per the baseline run above. **Candidate for human confirmation**, as with every entry in this list — but the evidence above is that none of the three existing test files bear on what this delta changes.
 
 ## Unresolved project questions
 
-- **What mechanized testing convention, if any, applies to Ansible content
-  once written, and to `platform/`'s Compose stack once it has service
-  definitions?** `AGENTS.md`'s "Testing" section states only the
-  Terraform-module `*.tftest.hcl` convention; it says nothing about
-  Ansible or Compose. `tasks.md` task 2.6 adds `ansible-lint` and
-  `ansible-playbook --syntax-check` to pre-commit (static checking, not a
-  test command), and the `ansible` skill separately names Molecule as the
-  proportionate mechanism for role-level testing "once role content
-  exists" — but neither `AGENTS.md` nor this change's own artifacts commit
-  the project to Molecule, or to anything else, as its test command for
-  `ansible/`. No assumption was taken here because no test in this pass
-  depended on an answer — but whoever implements `ansible/` role/playbook
-  content in a future change, and whoever next writes tests against it,
-  will need this settled (recorded in `AGENTS.md`, mirroring how the
-  Terraform convention is recorded there today) rather than decided ad hoc
-  per change. Flagging it now since this change is where the `ansible/`
-  and `platform/` directories are first scaffolded.
+- **What mechanized testing convention, if any, applies to Ansible content once written, and to `platform/`'s Compose stack once it has service definitions?** `AGENTS.md`'s "Testing" section states only the Terraform-module `*.tftest.hcl` convention; it says nothing about Ansible or Compose. `tasks.md` task 2.6 adds `ansible-lint` and `ansible-playbook --syntax-check` to pre-commit (static checking, not a test command), and the `ansible` skill separately names Molecule as the proportionate mechanism for role-level testing "once role content exists" — but neither `AGENTS.md` nor this change's own artifacts commit the project to Molecule, or to anything else, as its test command for `ansible/`. No assumption was taken here because no test in this pass depended on an answer — but whoever implements `ansible/` role/playbook content in a future change, and whoever next writes tests against it, will need this settled (recorded in `AGENTS.md`, mirroring how the Terraform convention is recorded there today) rather than decided ad hoc per change. Flagging it now since this change is where the `ansible/` and `platform/` directories are first scaffolded.
 
 ## What the implementation step must make pass
 
-Nothing in this manifest — no new test was written, so there is nothing
-for `openspec-apply-change` to turn from red to green as a direct
-consequence of this pass. What implementation should still do, per
-`tasks.md`'s own verification section (5.1–5.4) and the uncovered-scenario
-reasons above:
+Nothing in this manifest — no new test was written, so there is nothing for `openspec-apply-change` to turn from red to green as a direct consequence of this pass. What implementation should still do, per `tasks.md`'s own verification section (5.1–5.4) and the uncovered-scenario reasons above:
 
-- `terraform fmt -check`, `terraform validate`, `tflint` against the moved
-  `terraform/` tree (task 5.1).
-- `terraform init && terraform plan` inside `terraform/environments/prod`
-  producing an empty diff (task 1.9) — the actual verification for both
-  `iac-repo-foundations` scenarios recorded uncovered above.
-- `ansible-lint` and `ansible-playbook --syntax-check` against the new
-  `ansible/` scaffolding (task 5.3).
-- `ansible-inventory -i ansible/inventory/hcloud.yml --graph` resolving the
-  real prod host (task 2.5), and returning no host when disabled (task
-  2.5b, or documenting why deferred) — the actual verification for the two
-  `iac-host-configuration` inventory scenarios recorded uncovered above.
-- The existing `modules/volume/tests/*.tftest.hcl` suite (8 runs) continuing
-  to pass unchanged after `git mv modules terraform/modules` (task 1.2) —
-  this is the baseline this pass recorded, and nothing in this change's
-  delta specs should cause it to regress.
+- `terraform fmt -check`, `terraform validate`, `tflint` against the moved `terraform/` tree (task 5.1).
+- `terraform init && terraform plan` inside `terraform/environments/prod` producing an empty diff (task 1.9) — the actual verification for both `iac-repo-foundations` scenarios recorded uncovered above.
+- `ansible-lint` and `ansible-playbook --syntax-check` against the new `ansible/` scaffolding (task 5.3).
+- `ansible-inventory -i ansible/inventory/hcloud.yml --graph` resolving the real prod host (task 2.5), and returning no host when disabled (task 2.5b, or documenting why deferred) — the actual verification for the two `iac-host-configuration` inventory scenarios recorded uncovered above.
+- The existing `modules/volume/tests/*.tftest.hcl` suite (8 runs) continuing to pass unchanged after `git mv modules terraform/modules` (task 1.2) — this is the baseline this pass recorded, and nothing in this change's delta specs should cause it to regress.

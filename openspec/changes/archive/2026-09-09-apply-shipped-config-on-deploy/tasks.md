@@ -1,8 +1,4 @@
-Two steps this change owes are not in this list, because they happen after the
-commit that writes this file and so could never be ticked in it: removing the
-branch and removing the working tree, both after the record's own pull request
-has merged and every other pull request this change opened is merged. The
-archive step itself is task 5.5 below and is unaffected.
+Two steps this change owes are not in this list, because they happen after the commit that writes this file and so could never be ticked in it: removing the branch and removing the working tree, both after the record's own pull request has merged and every other pull request this change opened is merged. The archive step itself is task 5.5 below and is unaffected.
 
 ## 1. Make the configuration visible to Compose
 
@@ -11,28 +7,11 @@ archive step itself is task 5.5 below and is unaffected.
 
 ## 2. Derived tests
 
-Written by an author other than whoever implements section 1, from the added
-requirement in this change's delta spec rather than from the labels as written.
-Two things are fixed here rather than left open, and the author should know
-which: the digest algorithm, because it is not discoverable from the requirement
-and two authors must reach the same value (`design.md` Decision 3), and the
-properties themselves, named per task below. What remains the author's is how
-each assertion is expressed, where in the suite it belongs, what each failure
-message says — Decision 2 rests the whole friction budget on that message naming
-the correct value — and actually performing the falsification check each task
-names, which is where a tautological assertion gets caught.
+Written by an author other than whoever implements section 1, from the added requirement in this change's delta spec rather than from the labels as written. Two things are fixed here rather than left open, and the author should know which: the digest algorithm, because it is not discoverable from the requirement and two authors must reach the same value (`design.md` Decision 3), and the properties themselves, named per task below. What remains the author's is how each assertion is expressed, where in the suite it belongs, what each failure message says — Decision 2 rests the whole friction budget on that message naming the correct value — and actually performing the falsification check each task names, which is where a tautological assertion gets caught.
 
-What the derive-from-the-spec rule protects is preserved regardless: nothing
-below sends the author to the committed label values, so the tests cannot be
-derived from the implementation. Note too that these assertions are not a
-one-time check of this implementation's arithmetic — they are the standing
-guarantee Decision 2 depends on, run against every future edit to an embedded
-config.
+What the derive-from-the-spec rule protects is preserved regardless: nothing below sends the author to the committed label values, so the tests cannot be derived from the implementation. Note too that these assertions are not a one-time check of this implementation's arithmetic — they are the standing guarantee Decision 2 depends on, run against every future edit to an embedded config.
 
-Test command: `python3 -m unittest discover --start-directory .github/tests`,
-run from the repository root; test-path glob `.github/tests/*.py`. The Terraform
-and Molecule rows of `AGENTS.md`'s testing table do not apply — this change
-touches neither a Terraform module nor an Ansible role.
+Test command: `python3 -m unittest discover --start-directory .github/tests`, run from the repository root; test-path glob `.github/tests/*.py`. The Terraform and Molecule rows of `AGENTS.md`'s testing table do not apply — this change touches neither a Terraform module nor an Ansible role.
 
 - [x] 2.1 Assert that every service declaring `configs:` carries the checksum label, discovering those services from the file rather than from a list of names, per this change's `design.md` Risks — the check must not hold only until someone adds a service. Verify the assertion fails against a copy in which a fourth service gains a `configs:` entry and no label.
 - [x] 2.2 Assert each label's value equals a recomputation of the digest from the content of the configs that service mounts, and that the failure message names the value the label should hold. Derives from the requirement's third scenario. Verify the assertion fails against a copy with one alert rule edited and the label left alone.

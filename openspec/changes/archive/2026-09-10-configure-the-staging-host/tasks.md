@@ -4,9 +4,7 @@ Verification commands referenced below, from this project's conventions:
 - `ansible/scripts/run-molecule test --all`, from a role directory — read the SCENARIO RECAP, not the exit code
 - `pre-commit run --all-files`, which carries `ansible-lint` and `ansible-playbook --syntax-check`
 
-Tasks 9 and 10 are the operator's, on their own workstation, against credentials
-that exist nowhere in this repository. Everything before them is repository work
-that lands and passes before staging is touched.
+Tasks 9 and 10 are the operator's, on their own workstation, against credentials that exist nowhere in this repository. Everything before them is repository work that lands and passes before staging is touched.
 
 ## 1. Inventory: one source per environment
 
@@ -68,50 +66,24 @@ that lands and passes before staging is touched.
 
 ## Verification record
 
-Evidence for the tasks above that asked for it, recorded here rather than in
-prose so a reviewer can check it rather than take it.
+Evidence for the tasks above that asked for it, recorded here rather than in prose so a reviewer can check it rather than take it.
 
-**2.3 — the guard, on the two paths it can be run without a credential.**
-From `ansible/`, no `-i`:
+**2.3 — the guard, on the two paths it can be run without a credential.** From `ansible/`, no `-i`:
 
-- `ansible-playbook playbooks/host-baseline.yml -e target_environment=staging`
-  → **exit 2**, `fatal: [localhost]` on the second assert, message beginning
-  `target_environment is "staging", and that group holds no host`. The converge
-  play is never reached.
-- the same with no `-e` → **exit 2** on the first assert, `No
-  target_environment was supplied`.
+- `ansible-playbook playbooks/host-baseline.yml -e target_environment=staging` → **exit 2**, `fatal: [localhost]` on the second assert, message beginning `target_environment is "staging", and that group holds no host`. The converge play is never reached.
+- the same with no `-e` → **exit 2** on the first assert, `No target_environment was supplied`.
 
 **2.3, second round — two bypasses found by code review, one closed.**
 
-- `--tags docker` / `--skip-tags docker` originally exited **0**: a tag
-  selection deselected the untagged asserts and the converge play then matched
-  nothing. `tags: always` on the guard play closes it; both now exit **2** with
-  the empty-group message, and the bare invocation still exits 2.
-- `--skip-tags always` also exits **0**, and no tag can be immune to being
-  skipped by name. It is a deliberate act rather than a slip, so it is stated
-  in the play header and in §6.3 rather than treated as closable.
-- `--limit staging-server` exits **0** and cannot be fixed from inside the
-  playbook: a limit filters `localhost` out of the guard play and Ansible has
-  no per-play exemption. Stated in the play header and in
-  `docs/bootstrap-a-new-host.md` §6.3, and recorded in `docs/change-queue.md`
-  entry 54. **This is a known open hole in the requirement.**
+- `--tags docker` / `--skip-tags docker` originally exited **0**: a tag selection deselected the untagged asserts and the converge play then matched nothing. `tags: always` on the guard play closes it; both now exit **2** with the empty-group message, and the bare invocation still exits 2.
+- `--skip-tags always` also exits **0**, and no tag can be immune to being skipped by name. It is a deliberate act rather than a slip, so it is stated in the play header and in §6.3 rather than treated as closable.
+- `--limit staging-server` exits **0** and cannot be fixed from inside the playbook: a limit filters `localhost` out of the guard play and Ansible has no per-play exemption. Stated in the play header and in `docs/bootstrap-a-new-host.md` §6.3, and recorded in `docs/change-queue.md` entry 54. **This is a known open hole in the requirement.**
 
-**1.2 / 1.3a — the inventory discriminators.** `HCLOUD_TOKEN_STAGING=invalid
-ansible-inventory -i inventory/staging.hcloud.yml --graph` exits **1** with
-`Invalid Hetzner Cloud API Token`; before 1.3a the same command exits **0**
-printing an empty inventory. A path the `verify_file` suffix rule rejects
-instead reports `could not be verified by inventory plugin
-'hetzner.hcloud.hcloud'`. 1.3's syntax check still exits 0.
+**1.2 / 1.3a — the inventory discriminators.** `HCLOUD_TOKEN_STAGING=invalid ansible-inventory -i inventory/staging.hcloud.yml --graph` exits **1** with `Invalid Hetzner Cloud API Token`; before 1.3a the same command exits **0** printing an empty inventory. A path the `verify_file` suffix rule rejects instead reports `could not be verified by inventory plugin 'hetzner.hcloud.hcloud'`. 1.3's syntax check still exits 0.
 
-**5.1 — Molecule baselines before the role change.**
-`absent-ssh-cidrs` and `absent-heartbeat-key` both passed against the old
-message with the old assertion, which is what establishes they ran against the
-wording being replaced: that assertion demands the literal `group_vars/prod.yml`
-that 5.2 removes.
+**5.1 — Molecule baselines before the role change.** `absent-ssh-cidrs` and `absent-heartbeat-key` both passed against the old message with the old assertion, which is what establishes they ran against the wording being replaced: that assertion demands the literal `group_vars/prod.yml` that 5.2 removes.
 
-**6.2 — SCENARIO RECAP per role, read rather than the exit code.** Every recap
-names every scenario that role has on disk, so nothing sorted after a failure
-was silently skipped:
+**6.2 — SCENARIO RECAP per role, read rather than the exit code.** Every recap names every scenario that role has on disk, so nothing sorted after a failure was silently skipped:
 
 | Role | Scenarios in recap | Dirs on disk | Result |
 |---|---|---|---|
@@ -121,46 +93,21 @@ was silently skipped:
 | `platform_data_volume` | 4 | 4 | `failed=0` |
 | `image_prune` | 4 | 4 | `failed=0` |
 
-**6.1 — the static suite.** 529 before the change, 557 after, `OK`. The 28
-derived tests were committed as authored in `cc78b4d`, before any
-implementation, with 16 of them failing by design at that commit.
+**6.1 — the static suite.** 529 before the change, 557 after, `OK`. The 28 derived tests were committed as authored in `cc78b4d`, before any implementation, with 16 of them failing by design at that commit.
 
 **`pre-commit run --all-files`** passes, all hooks.
 
-**10.1 — production's new invocation, in check mode.** Resolved `main-server`,
-`ok=76 changed=2 failed=0`, and `localhost : ok=2` — the guard passed and the
-run *proceeded*, which is the positive counterpart to 9.1a and the second
-scenario of *A Run Whose Target Group Resolves to No Host Refuses*.
+**10.1 — production's new invocation, in check mode.** Resolved `main-server`, `ok=76 changed=2 failed=0`, and `localhost : ok=2` — the guard passed and the run *proceeded*, which is the positive counterpart to 9.1a and the second scenario of *A Run Whose Target Group Resolves to No Host Refuses*.
 
-The two `changed` were investigated rather than waved through, since nothing in
-this change alters host state. Both are in `tailscale`: *Add the Tailscale apt
-signing key* and *Add the Tailscale apt repository*, each an `ansible.builtin.get_url`
-with no `checksum:`. Reproduced against a local fixture: `get_url` to an
-existing destination without a checksum reports **changed** in check mode,
-because confirming the file matches would require downloading it and check mode
-will not. Not drift. Recorded against `docs/change-queue.md` entry 23, which
-proposes `--check --diff` as the host layer's drift detector and would inherit
-two permanent false positives.
+The two `changed` were investigated rather than waved through, since nothing in this change alters host state. Both are in `tailscale`: *Add the Tailscale apt signing key* and *Add the Tailscale apt repository*, each an `ansible.builtin.get_url` with no `checksum:`. Reproduced against a local fixture: `get_url` to an existing destination without a checksum reports **changed** in check mode, because confirming the file matches would require downloading it and check mode will not. Not drift. Recorded against `docs/change-queue.md` entry 23, which proposes `--check --diff` as the host layer's drift detector and would inherit two permanent false positives.
 
-**10.2 — staging's first converge**, local, as `docs/bootstrap-a-new-host.md`
-§6.3 prescribes. It failed once at *Bring the host onto the tailnet* with the
-output masked by `no_log`, was diagnosed by running `tailscale up` by hand on
-the host, and completed on re-run: `ok=76 changed=28 failed=0`, the same task
-count production reports.
+**10.2 — staging's first converge**, local, as `docs/bootstrap-a-new-host.md` §6.3 prescribes. It failed once at *Bring the host onto the tailnet* with the output masked by `no_log`, was diagnosed by running `tailscale up` by hand on the host, and completed on re-run: `ok=76 changed=28 failed=0`, the same task count production reports.
 
-That failure left a **partially-converged host** — `docker` and `hardening` had
-applied, `tailscale` had not — which is the exposure `docs/deferred-work.md`'s
-"Two gaps in required-input validation that only the play could close"
-describes. It is the first time that state has occurred on a real host rather
-than in argument, and the recovery was exactly what that entry predicts:
-correct the input, re-run, every role idempotent. Its "revisit when a
-partially-converged host actually costs something" trigger has now been met
-once, at no cost.
+That failure left a **partially-converged host** — `docker` and `hardening` had applied, `tailscale` had not — which is the exposure `docs/deferred-work.md`'s "Two gaps in required-input validation that only the play could close" describes. It is the first time that state has occurred on a real host rather than in argument, and the recovery was exactly what that entry predicts: correct the input, re-run, every role idempotent. Its "revisit when a partially-converged host actually costs something" trigger has now been met once, at no cost.
 
 **10.3 — idempotence.** An immediate second run: `ok=75 changed=0 failed=0`.
 
-**10.4 — host state**, checked as `ops-claude` over the tailnet at
-`100.85.219.36`:
+**10.4 — host state**, checked as `ops-claude` over the tailnet at `100.85.219.36`:
 
 | Checked | Result |
 |---|---|
@@ -170,13 +117,9 @@ once, at no cost.
 | `/mnt/main-data` | mounted, `grafana` 472:472, `prometheus` 65534:65534, and `lost+found` — a real filesystem on the volume, not a directory on the root disk |
 | `ufw status verbose` (via Ansible as root) | default deny incoming; 22 from `176.104.184.0/24`; 22 and 3000 from `100.64.0.0/10`; **no 80, no 443** |
 
-That last row is the one that mattered most: it is the `web_allowed_cidrs = []`
-mirror holding at both layers at once, which is the pair most able to drift
-because it is hand-kept in two files.
+That last row is the one that mattered most: it is the `web_allowed_cidrs = []` mirror holding at both layers at once, which is the pair most able to drift because it is hand-kept in two files.
 
-**10.6 — one prune activation, deliberately triggered.** It abandoned and
-reported failure, which is the accepted outcome of Decision 8. The journal
-establishes both halves:
+**10.6 — one prune activation, deliberately triggered.** It abandoned and reported failure, which is the accepted outcome of Decision 8. The journal establishes both halves:
 
 ```
 prune-host-images: abandoned -- the keep set is empty; no enumerated
@@ -184,39 +127,17 @@ application references an image and no container holds one
 prune-host-images-report[11213]: Created
 ```
 
-The message names the **empty keep set** and not "the enumeration names no
-application", which proves `deploy_apps` reached the host. And `Created` is the
-observer's own reply to a ping for a check that did not exist — so the staging
-ping key works, the reporting path is sound end to end, and
-`staging-server-prune-host-images` now exists. A green `systemctl status` could
-have established neither.
+The message names the **empty keep set** and not "the enumeration names no application", which proves `deploy_apps` reached the host. And `Created` is the observer's own reply to a ping for a check that did not exist — so the staging ping key works, the reporting path is sound end to end, and `staging-server-prune-host-images` now exists. A green `systemctl status` could have established neither.
 
-**10.5 and 10.7 — the two observer-side settings**, neither of which any
-converge performs. Key expiry disabled for `staging-server` in the tailnet, so
-the host does not silently drop off it in 180 days. And the new check set to
-**period 7 days, grace 2 days** per Appendix A — without which it would carry
-healthchecks' default and call a healthy weekly job overdue within a day, which
-is how a check becomes one nobody reads.
+**10.5 and 10.7 — the two observer-side settings**, neither of which any converge performs. Key expiry disabled for `staging-server` in the tailnet, so the host does not silently drop off it in 180 days. And the new check set to **period 7 days, grace 2 days** per Appendix A — without which it would carry healthchecks' default and call a healthy weekly job overdue within a day, which is how a check becomes one nobody reads.
 
 ## Performed later, in a pull request of its own
 
-**4.2 and 4.3 were disclosed as not performed when the implementation pull
-request merged**, because all three values needed credentials that existed
-nowhere in this repository. They were completed afterwards, in PR #130
-(`complete-staging-group-vars`), and are ticked above on that evidence:
-`ansible/inventory/group_vars/staging.yml` on the trunk now carries
-`deploy_apps` with staging's own `platform` key, and two `!vault` blocks
-carrying the `staging` vault id.
+**4.2 and 4.3 were disclosed as not performed when the implementation pull request merged**, because all three values needed credentials that existed nowhere in this repository. They were completed afterwards, in PR #130 (`complete-staging-group-vars`), and are ticked above on that evidence: `ansible/inventory/group_vars/staging.yml` on the trunk now carries `deploy_apps` with staging's own `platform` key, and two `!vault` blocks carrying the `staging` vault id.
 
-That ordering is recorded rather than tidied away, because it is the shape
-this class of change has: repository work can be reviewed before any
-credential exists, and the credential-bearing half is a second, smaller
-review. Nothing was ticked before it was true.
+That ordering is recorded rather than tidied away, because it is the shape this class of change has: repository work can be reviewed before any credential exists, and the credential-bearing half is a second, smaller review. Nothing was ticked before it was true.
 
-No task in this change went unperformed, so there is no `## Not performed`
-section: the two that were deferred are accounted for immediately above, and
-the heading exists to disclose work that never happened rather than work that
-happened late.
+No task in this change went unperformed, so there is no `## Not performed` section: the two that were deferred are accounted for immediately above, and the heading exists to disclose work that never happened rather than work that happened late.
 
 ## 9. Operator prerequisites, out of band
 
@@ -247,11 +168,4 @@ happened late.
 - [x] 11.2 The confirmation gate for this change is task 10 — a converged staging host, reachable over the tailnet, with the state 10.4 lists. It is not waivable: an observation can be made, and it has been proposed. Wait for the operator's confirmation rather than inferring it from a green pull request.
 - [x] 11.3 Bring the branch back to the freshly fetched trunk, confirm 8.3 and 8.4 have re-homed everything that pointed at entry 50, delete entry 50 from `docs/change-queue.md`, and archive the change's record with `openspec archive`. Verify `openspec validate --archived` passes and that `python3 -m unittest discover --start-directory .github/tests` still passes, the citation-form check included.
 
-Opening the record's own pull request, and removing the branch and the working
-tree once it merges, all happen after the commit that writes this file — so they
-are recorded here in prose rather than as tasks that could never be ticked in
-the file that contains them. Open that pull request; once it merges, remove the
-branch locally and on the remote, and the working tree from the repository's
-main working tree rather than from inside the tree being removed; then check
-`docker ps` for anything this tree's Molecule runs left behind, since nothing
-reclaims a removed tree's namespace.
+Opening the record's own pull request, and removing the branch and the working tree once it merges, all happen after the commit that writes this file — so they are recorded here in prose rather than as tasks that could never be ticked in the file that contains them. Open that pull request; once it merges, remove the branch locally and on the remote, and the working tree from the repository's main working tree rather than from inside the tree being removed; then check `docker ps` for anything this tree's Molecule runs left behind, since nothing reclaims a removed tree's namespace.

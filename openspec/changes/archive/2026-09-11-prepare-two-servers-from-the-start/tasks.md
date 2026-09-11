@@ -1,7 +1,4 @@
-Verification for a docs-only change is the static suite from the repository root
-and `pre-commit run --all-files`. Neither reads prose for truth, so **every count
-this change writes down names what proves it**, and each task below gives that.
-A count nobody can check in a few minutes does not belong in §0.4.
+Verification for a docs-only change is the static suite from the repository root and `pre-commit run --all-files`. Neither reads prose for truth, so **every count this change writes down names what proves it**, and each task below gives that. A count nobody can check in a few minutes does not belong in §0.4.
 
 ## 1. §0.3 — the keys, and how many of each
 
@@ -88,16 +85,11 @@ A count nobody can check in a few minutes does not belong in §0.4.
 
 ## Verification record
 
-**7.1** 557 static tests, OK. **7.2** `pre-commit run --all-files`, all hooks —
-after provisioning the worktree, which a first run without the pinned Galaxy
-role fails on. Neither reads prose for truth.
+**7.1** 557 static tests, OK. **7.2** `pre-commit run --all-files`, all hooks — after provisioning the worktree, which a first run without the pinned Galaxy role fails on. Neither reads prose for truth.
 
-**7.3 — stages 0 to 6 read as an operator holding nothing.** The credentials
-§0.3 and §0.4 name are the set stages 1 to 6 ask for, and no storage
-instruction is now wrong for one environment.
+**7.3 — stages 0 to 6 read as an operator holding nothing.** The credentials §0.3 and §0.4 name are the set stages 1 to 6 ask for, and no storage instruction is now wrong for one environment.
 
-**7.4 — every location of every twice-stated fact, walked.** Rebuilt by grep
-rather than from the task's list, which is the point of the task:
+**7.4 — every location of every twice-stated fact, walked.** Rebuilt by grep rather than from the task's list, which is the point of the task:
 
 | Fact | Locations | Agree? |
 |---|---|---|
@@ -108,36 +100,15 @@ rather than from the task's list, which is the point of the task:
 | What stage 6 configures | end-state summary, time estimate, "From here on, two hosts", §6's opening, **Appendix C** | **one fixed** |
 | Whether the GHCR token is one value or two | §0.4, §6's opening, §6.4's secrets table, Appendix A | **all four reconciled** |
 
-Its first walk caught one: §6.4 step 1 read "Tailscale admin → Machines: **the
-server** is listed… Disable key expiry for it" — unambiguous when stage 6 ran
-once, ambiguous now that it runs per environment. It now names the host just
-converged and says the step repeats.
+Its first walk caught one: §6.4 step 1 read "Tailscale admin → Machines: **the server** is listed… Disable key expiry for it" — unambiguous when stage 6 ran once, ambiguous now that it runs per environment. It now names the host just converged and says the step repeats.
 
-**Code review then found two the walk had missed, and both were missing rows
-rather than missed locations.** The GHCR token was not on the list at all, and
-the document stated it four ways: §0.4 said "1, shared", Appendix A said "one
-per environment", §6's opening said the two runs "share no token", and §6.4 said
-"per environment". A value counted one way and its storage another, with no
-sentence distinguishing them — all four now say one value, stored twice. And
-"what stage 6 configures" had a fifth location in Appendix C, still telling a
-company reader that the second host *configured* is something they do not get.
+**Code review then found two the walk had missed, and both were missing rows rather than missed locations.** The GHCR token was not on the list at all, and the document stated it four ways: §0.4 said "1, shared", Appendix A said "one per environment", §6's opening said the two runs "share no token", and §6.4 said "per environment". A value counted one way and its storage another, with no sentence distinguishing them — all four now say one value, stored twice. And "what stage 6 configures" had a fifth location in Appendix C, still telling a company reader that the second host *configured* is something they do not get.
 
-Recorded rather than quietly fixed. A hand-built inventory of a document's
-duplicated facts is subject to the mechanism it exists to close; this task says
-so and then demonstrated it. Six facts now, and the instruction stands: rebuild
-the list by grep, do not trust it.
+Recorded rather than quietly fixed. A hand-built inventory of a document's duplicated facts is subject to the mechanism it exists to close; this task says so and then demonstrated it. Six facts now, and the instruction stands: rebuild the list by grep, do not trust it.
 
-**A second round of code review then found the deeper problem, which was not in
-the document but in how it was being edited: fixes were applied instance-wise
-where the findings were class-wise.** Two of that round's three majors were the
-first round's own defects recurring inside their own fixes — a per-environment
-imperative that is wrong on the second run was corrected for the ping key and
-left for the GHCR token three lines away; a private key generated into the tree
-was moved out for staging and left for production one row above, which the new
-paragraph then asserted was safe.
+**A second round of code review then found the deeper problem, which was not in the document but in how it was being edited: fixes were applied instance-wise where the findings were class-wise.** Two of that round's three majors were the first round's own defects recurring inside their own fixes — a per-environment imperative that is wrong on the second run was corrected for the ping key and left for the GHCR token three lines away; a private key generated into the tree was moved out for staging and left for production one row above, which the new paragraph then asserted was safe.
 
-So the remaining passes were run as **predicates swept across every candidate**,
-not as edits to the rows a reviewer named:
+So the remaining passes were run as **predicates swept across every candidate**, not as edits to the rows a reviewer named:
 
 | Predicate | Swept over | Found |
 |---|---|---|
@@ -146,23 +117,16 @@ not as edits to the rows a reviewer named:
 | Re-derive completeness claims by grep rather than asserting them | the GHCR and ping-key facts | the previous round's "all four reconciled" was false — §6.4 was never touched |
 | Open every `§` reference and check the target says what the sentence claims | every cross-reference this change adds | none **at the time it was run** — and that qualifier is the finding. Review then caught two references falsified by edits made *after* the sweep: §0.4 said "§6.1 permits reuse rather than requiring it" of a §6.1 the same commit had made imperative, and §5.3 pointed at §6.3a for an exposure §6.3a does not describe. A sweep is evidence about the text at the moment it ran, not about the commit |
 
-The third of those is the one worth keeping: a completeness claim asserted from
-memory is how a defect survives its own fix and reaches a commit message as
-fixed. The fourth carries the same lesson from the other side — a sweep run
-before the last edit is a claim about a text that no longer exists.
+The third of those is the one worth keeping: a completeness claim asserted from memory is how a defect survives its own fix and reaches a commit message as fixed. The fourth carries the same lesson from the other side — a sweep run before the last edit is a claim about a text that no longer exists.
 
-**A fifth and sixth axis were found by review and swept here.** Both come from
-the same generator: a property that holds of the document read once, straight
-through, and fails of it read the way it is actually used.
+**A fifth and sixth axis were found by review and swept here.** Both come from the same generator: a property that holds of the document read once, straight through, and fails of it read the way it is actually used.
 
 | Axis | Swept over | Found |
 |---|---|---|
 | Used for **rotation**, not assembly | the two "one value, stored twice" credentials | both: neither said what a rotation costs. Appendix A's Hetzner rows already carry that form — "editing two local files, not one" — and these lacked it. GHCR is two blocks under two Vault passwords; the ping key is three places |
 | Used by the **single-environment reader** | the escape hatch at the head of the document against §0.4 | one: it says "read every 'two' below as 'one'", and §0.4's counts are "4", "1 value… stored twice", "2 — `production` and `staging`". §0.4 now translates itself for that reader |
 
-A seventh — **read from the middle**, as Appendix B re-enters at §4.2, §4.3,
-§5.3, §6.3, §6.4, §7.4 and §7.5 — was swept and returned nothing, which is a
-result worth recording rather than an unrun check.
+A seventh — **read from the middle**, as Appendix B re-enters at §4.2, §4.3, §5.3, §6.3, §6.4, §7.4 and §7.5 — was swept and returned nothing, which is a result worth recording rather than an unrun check.
 
 ## 8. Ship
 
@@ -172,29 +136,12 @@ result worth recording rather than an unrun check.
 
 ## Ship record
 
-**8.1** Pull request #133, merged as `c9c016e` on 2026-09-11. `PR Validation`
-and `Ansible Verify` both passed on the branch head `705c832`, the commit that
-merged. A docs-only change triggers no deploy: the Terraform workflows are
-path-filtered to `terraform/`, so there is no deploy to call healthy or
-unhealthy, and none is claimed here.
+**8.1** Pull request #133, merged as `c9c016e` on 2026-09-11. `PR Validation` and `Ansible Verify` both passed on the branch head `705c832`, the commit that merged. A docs-only change triggers no deploy: the Terraform workflows are path-filtered to `terraform/`, so there is no deploy to call healthy or unhealthy, and none is claimed here.
 
-**8.2 — the gate is answered, not waived.** The operator performed the cold
-read on 2026-09-11 — §0.3 and §0.4 read while holding none of these
-credentials, the resulting set written down and compared against what §6.1,
-§6.3 and §6.4 ask for — and reported that the two agree. That is the match this
-task names, obtained from someone other than the author, so the waivable
-classes were not reached and are not invoked.
+**8.2 — the gate is answered, not waived.** The operator performed the cold read on 2026-09-11 — §0.3 and §0.4 read while holding none of these credentials, the resulting set written down and compared against what §6.1, §6.3 and §6.4 ask for — and reported that the two agree. That is the match this task names, obtained from someone other than the author, so the waivable classes were not reached and are not invoked.
 
-The company bootstrap remains the second and stronger observation of the whole
-procedure, worth reporting when it happens. It was never this gate, for the
-reason the task gives: a gap it finds in stages 1 to 6 would not be
-attributable to this change.
+The company bootstrap remains the second and stronger observation of the whole procedure, worth reporting when it happens. It was never this gate, for the reason the task gives: a gap it finds in stages 1 to 6 would not be attributable to this change.
 
-**8.3** Branch fast-forwarded to the freshly fetched trunk at `c9c016e` —
-discarding nothing, the work already being on it — then archived with
-`openspec archive`, with `openspec validate --archived` passing.
+**8.3** Branch fast-forwarded to the freshly fetched trunk at `c9c016e` — discarding nothing, the work already being on it — then archived with `openspec archive`, with `openspec validate --archived` passing.
 
-Opening the record's own pull request, and removing the branch and working tree
-once it merges, happen after the commit that writes this file, so they are
-recorded here in prose rather than as tasks that could never be ticked in the
-file containing them.
+Opening the record's own pull request, and removing the branch and working tree once it merges, happen after the commit that writes this file, so they are recorded here in prose rather than as tasks that could never be ticked in the file containing them.

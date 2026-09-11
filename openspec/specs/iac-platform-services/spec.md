@@ -225,20 +225,11 @@ This mirrors the pinning obligation `iac-cicd-pipeline` already places on the co
 - **AND** this scenario states why the requirement above matters rather than imposing a new obligation: it is already discharged by `iac-platform-deploy-pipeline`'s "Reviewer Sees the Exact Diff Before Approving" requirement, and needs no separate mechanism
 
 ### Requirement: An Expiring TLS Certificate Is Alerted On Before It Expires
-The platform stack SHALL alert when a TLS certificate the shared reverse proxy
-serves is approaching expiry, with enough lead time remaining to reissue it
-before any client is affected. The notification a recipient actually receives
-SHALL identify which certificate is affected, including when more than one is
-approaching expiry at the same time.
+The platform stack SHALL alert when a TLS certificate the shared reverse proxy serves is approaching expiry, with enough lead time remaining to reissue it before any client is affected. The notification a recipient actually receives SHALL identify which certificate is affected, including when more than one is approaching expiry at the same time.
 
-The threshold SHALL be strictly less than the lead time at which the reverse
-proxy begins renewing a certificate on its own, so that the alert reports a
-renewal that did not happen rather than one that has not happened yet.
+The threshold SHALL be strictly less than the lead time at which the reverse proxy begins renewing a certificate on its own, so that the alert reports a renewal that did not happen rather than one that has not happened yet.
 
-This requirement is satisfied by metrics the reverse proxy already publishes
-about the certificates it holds. It does not require probing a public hostname
-and is not a check made from outside the host, so it does not cover a failure
-that is invisible from the host itself.
+This requirement is satisfied by metrics the reverse proxy already publishes about the certificates it holds. It does not require probing a public hostname and is not a check made from outside the host, so it does not cover a failure that is invisible from the host itself.
 
 #### Scenario: A certificate approaching expiry raises an alert
 - **WHEN** a certificate the shared reverse proxy serves is within the configured number of days of its expiry timestamp, for a sustained period

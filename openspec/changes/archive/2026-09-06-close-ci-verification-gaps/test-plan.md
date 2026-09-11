@@ -1,18 +1,10 @@
 # Test plan — close-ci-verification-gaps
 
-Derived from this change's delta specs before any of its implementation existed.
-Not an artifact the OpenSpec schema knows about: it does **not** appear among
-`openspec instructions apply`'s context files and must be read on purpose.
+Derived from this change's delta specs before any of its implementation existed. Not an artifact the OpenSpec schema knows about: it does **not** appear among `openspec instructions apply`'s context files and must be read on purpose.
 
-Authored by `openspec-change-test-writer`, which did not read
-`.github/workflows/*`, `.github/dependabot.yml` or any other implementation of
-the behavior under test. Superseded behavior was established by comparing each
-`MODIFIED` delta against the requirement as it currently stands under
-`openspec/specs/`.
+Authored by `openspec-change-test-writer`, which did not read `.github/workflows/*`, `.github/dependabot.yml` or any other implementation of the behavior under test. Superseded behavior was established by comparing each `MODIFIED` delta against the requirement as it currently stands under `openspec/specs/`.
 
-**This pass is additive only. It added tests and subtracted nothing.** No
-existing test file was edited, deleted or disabled, and no implementation was
-written.
+**This pass is additive only. It added tests and subtracted nothing.** No existing test file was edited, deleted or disabled, and no implementation was written.
 
 ---
 
@@ -24,43 +16,25 @@ written.
 
 46 tests. Authorised test-path glob for this change: `.github/tests/*.py`.
 
-`terraform test` remains this project's test command for
-`terraform/modules/*/tests/*.tftest.hcl`. This suite is additional to it, not a
-replacement: every scenario this change carries is about GitHub Actions
-configuration, `.github/dependabot.yml` and `.pre-commit-config.yaml`, none of
-which the module-level Terraform mechanism can reach.
+`terraform test` remains this project's test command for `terraform/modules/*/tests/*.tftest.hcl`. This suite is additional to it, not a replacement: every scenario this change carries is about GitHub Actions configuration, `.github/dependabot.yml` and `.pre-commit-config.yaml`, none of which the module-level Terraform mechanism can reach.
 
 ## 2. Runner and the invocation CI must use
 
-Python standard-library `unittest` plus PyYAML, and — for one test only — the
-external tools listed under *External tools* below. No network, credential,
-container runtime or Terraform binary. Full run: ~0.2 s.
+Python standard-library `unittest` plus PyYAML, and — for one test only — the external tools listed under *External tools* below. No network, credential, container runtime or Terraform binary. Full run: ~0.2 s.
 
-**The exact command the `pr-validation.yml` step should use, with the
-repository root as its working directory — this is the invocation the suite was
-verified under:**
+**The exact command the `pr-validation.yml` step should use, with the repository root as its working directory — this is the invocation the suite was verified under:**
 
 ```yaml
 - name: CI configuration tests
   run: python3 -m unittest discover --start-directory .github/tests --verbose
 ```
 
-- **Working directory: the repository root** (the workflow default). Do not set
-  `working-directory:`; it is unnecessary and would obscure the paths in
-  failure messages. The suite locates the repository root itself by walking up
-  for `openspec/config.yaml`, so it also runs correctly from
-  `.github/tests/`, and honours `REPO_ROOT` when set — that override exists for
-  the fixture-based self-tests in §4.6, not for CI.
-- **Exit status 1 on any failure** — verified. Nothing further is needed to make
-  the check fail.
-- **No `if:` and no `continue-on-error:`** on the step; the requirement is that
-  it runs unconditionally and that its result is not swallowed. Three tests
-  assert exactly this and will stay red until the step exists (§4.6 F1, F2).
-- `--start-directory .github/tests` puts that directory on `sys.path`, so no
-  `PYTHONPATH` is needed.
+- **Working directory: the repository root** (the workflow default). Do not set `working-directory:`; it is unnecessary and would obscure the paths in failure messages. The suite locates the repository root itself by walking up for `openspec/config.yaml`, so it also runs correctly from `.github/tests/`, and honours `REPO_ROOT` when set — that override exists for the fixture-based self-tests in §4.6, not for CI.
+- **Exit status 1 on any failure** — verified. Nothing further is needed to make the check fail.
+- **No `if:` and no `continue-on-error:`** on the step; the requirement is that it runs unconditionally and that its result is not swallowed. Three tests assert exactly this and will stay red until the step exists (§4.6 F1, F2).
+- `--start-directory .github/tests` puts that directory on `sys.path`, so no `PYTHONPATH` is needed.
 
-Individually selectable, which is how the implementation step should use it
-while working through tasks:
+Individually selectable, which is how the implementation step should use it while working through tasks:
 
 ```sh
 python3 -m unittest discover --start-directory .github/tests \
@@ -69,57 +43,28 @@ python3 -m unittest discover --start-directory .github/tests \
 
 ### Dependency
 
-**PyYAML, pinned exactly in `.github/requirements-ci.txt`** alongside
-`pre-commit` (`tasks.md` 4.2). **Verified against PyYAML 6.0.1** — pin that
-version, so the pin and this verification agree. Everything else the suite
-imports is its runtime's standard library, and two tests assert that it
-stays that way
-(§4.6 F3).
+**PyYAML, pinned exactly in `.github/requirements-ci.txt`** alongside `pre-commit` (`tasks.md` 4.2). **Verified against PyYAML 6.0.1** — pin that version, so the pin and this verification agree. Everything else the suite imports is its runtime's standard library, and two tests assert that it stays that way (§4.6 F3).
 
 ### External tools
 
-Beyond Python and PyYAML the suite needs **`bash`, `find`, `xargs`, `basename`,
-`grep`, `sort` and `jq`** — but for **one test only**,
-`TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`
-(A4). That test is behavioral: it executes `ansible-verify.yml`'s own discovery
-snippet against a scratch tree, and the snippet calls those tools before it can
-reach the failure branch under test. Every other test in the suite needs Python
-and PyYAML alone.
+Beyond Python and PyYAML the suite needs **`bash`, `find`, `xargs`, `basename`, `grep`, `sort` and `jq`** — but for **one test only**, `TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing` (A4). That test is behavioral: it executes `ansible-verify.yml`'s own discovery snippet against a scratch tree, and the snippet calls those tools before it can reach the failure branch under test. Every other test in the suite needs Python and PyYAML alone.
 
-Where any of those tools is absent, the test **skips and names the missing
-tool** rather than asserting on an exit status that says nothing about
-discovery: `jq: command not found` is also a non-zero exit, so
-`assertNotEqual(0, returncode)` would pass on an accident and the message
-assertion would then fail for a cause the workflow is not responsible for.
-`unittest` reports the skip and its reason in the run output — it is not
-counted as a pass.
+Where any of those tools is absent, the test **skips and names the missing tool** rather than asserting on an exit status that says nothing about discovery: `jq: command not found` is also a non-zero exit, so `assertNotEqual(0, returncode)` would pass on an accident and the message assertion would then fail for a cause the workflow is not responsible for. `unittest` reports the skip and its reason in the run output — it is not counted as a pass.
 
-**Under CI (`CI` set in the environment) it fails instead of skipping.** A
-skipped check on a runner is exactly the "green having verified nothing"
-failure this change exists to close, so on a runner whose image stopped
-shipping `jq` the suite must go red, not quietly drop the test. GitHub-hosted
-`ubuntu-latest` images ship all seven today; the guard exists so that ceasing
-to is visible.
+**Under CI (`CI` set in the environment) it fails instead of skipping.** A skipped check on a runner is exactly the "green having verified nothing" failure this change exists to close, so on a runner whose image stopped shipping `jq` the suite must go red, not quietly drop the test. GitHub-hosted `ubuntu-latest` images ship all seven today; the guard exists so that ceasing to is visible.
 
-This dependency is a property of the *implemented* discovery snippet, recorded
-after the fact: the snippet's final form pipes `find` through `xargs basename`,
-`grep -v '\.'` and `sort` into `jq -R -s -c`. Nothing in the delta specs
-requires that shape — see Q4 — so a reimplementation that drops `jq` would
-narrow this list rather than violate anything.
+This dependency is a property of the *implemented* discovery snippet, recorded after the fact: the snippet's final form pipes `find` through `xargs basename`, `grep -v '\.'` and `sort` into `jq -R -s -c`. Nothing in the delta specs requires that shape — see Q4 — so a reimplementation that drops `jq` would narrow this list rather than violate anything.
 
 ## 3. Baseline
 
-**Full baseline, taken before any test was written**, and **re-confirmed after
-the suite was placed** at `.github/tests/`:
+**Full baseline, taken before any test was written**, and **re-confirmed after the suite was placed** at `.github/tests/`:
 
 | Module | Command | Before | After placement |
 | --- | --- | --- | --- |
 | `terraform/modules/volume` | `terraform test` | 8 passed, 0 failed | 8 passed, 0 failed |
 | `terraform/modules/server` | `terraform test` | 18 passed, 0 failed | 18 passed, 0 failed |
 
-All 26 pre-existing `terraform test` assertions still pass. The new suite adds
-no test to either module, touches no file under `terraform/`, and cannot change
-these results. No existing test was edited, deleted or disabled.
+All 26 pre-existing `terraform test` assertions still pass. The new suite adds no test to either module, touches no file under `terraform/`, and cannot change these results. No existing test was edited, deleted or disabled.
 
 The static-assertion suite itself had no prior baseline — it did not exist.
 
@@ -127,9 +72,7 @@ The static-assertion suite itself had no prior baseline — it did not exist.
 
 29 scenarios across six requirements; 29 accounted for below.
 
-Legend: **C** covered by at least one test · **P** partially covered (the
-repository-state half is asserted; the named half is not reachable) · **U**
-uncovered, with reason.
+Legend: **C** covered by at least one test · **P** partially covered (the repository-state half is asserted; the named half is not reachable) · **U** uncovered, with reason.
 
 ### 4.1 `iac-cicd-pipeline` — ADDED: Ansible Configuration Is Verified in Continuous Integration
 
@@ -185,9 +128,7 @@ uncovered, with reason.
 
 ### 4.6 `iac-cicd-pipeline` — ADDED: The Continuous-Integration Configuration Is Itself Verified
 
-Added to the delta after this pass began, when the operator chose to wire the
-suite into `pr-validation.yml` rather than queue it. Covered here rather than
-deferred, so the scenario count stays complete.
+Added to the delta after this pass began, when the operator chose to wire the suite into `pr-validation.yml` rather than queue it. Covered here rather than deferred, so the scenario count stays complete.
 
 | # | Scenario | | Tests / reason |
 | --- | --- | --- | --- |
@@ -195,19 +136,15 @@ deferred, so the scenario count stays complete.
 | F2 | The suite runs regardless of what a pull request touched | C | `TestTheSuiteIsWiredIntoTheRequiredCheck.test_the_step_invoking_the_suite_is_unconditional` — no `if:` on the step and none on its job — together with `TestRequiredCheckIsNotPathFiltered.test_the_required_check_declares_no_workflow_level_path_filter`, which is what stops the workflow itself from being filtered out. |
 | F3 | The suite needs no privileged or external resource | C | `TestTheSuiteNeedsNoPrivilegedResource.test_the_suite_imports_only_the_standard_library_and_pinned_dependencies` (every import is its runtime's standard library or the pinned `yaml`), `.test_the_suite_imports_no_network_capable_module` (stdlib-only does not establish this — `urllib` is stdlib), `.test_the_suite_spawns_no_terraform_binary_or_container_runtime` (reads the suite's own `subprocess` calls out of its AST; the only command it spawns is `bash`, to exercise a workflow snippet). Self-asserting by construction, which is the point: the requirement constrains the suite, so the suite is what must be inspected. |
 
-**Count:** 6 + 7 + 5 + 4 + 4 + 3 = 29 scenarios. Covered 14 · partial 10 ·
-uncovered 5. All 29 accounted for.
+**Count:** 6 + 7 + 5 + 4 + 4 + 3 = 29 scenarios. Covered 14 · partial 10 · uncovered 5. All 29 accounted for.
 
 ## 5. Verified run against the current tree
 
-46 tests. `python3 -m unittest discover --start-directory .github/tests` →
-**23 failures, 23 passes**, exit status 1. Every failure was classified before
-being recorded; none is left unattributed.
+46 tests. `python3 -m unittest discover --start-directory .github/tests` → **23 failures, 23 passes**, exit status 1. Every failure was classified before being recorded; none is left unattributed.
 
 ### 15 failures in state 1 — the assertion ran and discriminated
 
-These fail because the current configuration genuinely violates the delta. They
-are what the implementation must turn green.
+These fail because the current configuration genuinely violates the delta. They are what the implementation must turn green.
 
 | Test | What it caught |
 | --- | --- |
@@ -229,141 +166,53 @@ are what the implementation must turn green.
 
 ### 8 failures in state 2 — the target does not exist yet
 
-All eight fail on `.github/workflows/ansible-verify.yml does not exist`. **Their
-assertions have never executed**, so whether those assertions are any good is
-still unverified. **They must not be counted as coverage until that workflow
-exists**, and a green first run is the first evidence they discriminate at all.
+All eight fail on `.github/workflows/ansible-verify.yml does not exist`. **Their assertions have never executed**, so whether those assertions are any good is still unverified. **They must not be counted as coverage until that workflow exists**, and a green first run is the first evidence they discriminate at all.
 
-`TestMoleculeDiscoveryAndScenarioCoverage.{test_the_workflow_names_no_role_literally,
-test_molecule_is_invoked_across_all_scenarios, test_the_workflow_uses_no_continue_on_error,
-test_role_discovery_fails_when_it_finds_nothing}`,
-`TestToolchainIsInstalledFromPinnedManifests.{test_the_molecule_workflow_installs_only_from_requirement_manifests,
-test_the_molecule_workflow_names_both_pinned_manifests}`,
-`TestVerificationJobsCarryNoCredential.{test_the_molecule_workflow_declares_no_environment,
-test_the_molecule_workflow_consumes_no_secret}`.
+`TestMoleculeDiscoveryAndScenarioCoverage.{test_the_workflow_names_no_role_literally, test_molecule_is_invoked_across_all_scenarios, test_the_workflow_uses_no_continue_on_error, test_role_discovery_fails_when_it_finds_nothing}`, `TestToolchainIsInstalledFromPinnedManifests.{test_the_molecule_workflow_installs_only_from_requirement_manifests, test_the_molecule_workflow_names_both_pinned_manifests}`, `TestVerificationJobsCarryNoCredential.{test_the_molecule_workflow_declares_no_environment, test_the_molecule_workflow_consumes_no_secret}`.
 
-**No stub was created to make these execute.** Creating `ansible-verify.yml` —
-even empty — would be writing the implementation.
+**No stub was created to make these execute.** Creating `ansible-verify.yml` — even empty — would be writing the implementation.
 
 ### 23 passes
 
-Twenty-two assert behavior that already exists and that this change must not
-break — regression guards for scenarios the deltas carry through unchanged (B2,
-B5, B6, B7, C1, C3, C4, E1, E3, E4, the required-check cross-constraint, and the
-destroy gate's existence), plus the five §4.6 tests whose target is the suite
-itself.
+Twenty-two assert behavior that already exists and that this change must not break — regression guards for scenarios the deltas carry through unchanged (B2, B5, B6, B7, C1, C3, C4, E1, E3, E4, the required-check cross-constraint, and the destroy gate's existence), plus the five §4.6 tests whose target is the suite itself.
 
-**These passes are not state-4 alarms.** State 4 — a pass before any
-implementation exists — applies where the target is absent. For all 23 the
-target already exists (the current workflows, or the suite itself), so a pass is
-the expected result and establishes that the thing currently behaves as
-asserted.
+**These passes are not state-4 alarms.** State 4 — a pass before any implementation exists — applies where the target is absent. For all 23 the target already exists (the current workflows, or the suite itself), so a pass is the expected result and establishes that the thing currently behaves as asserted.
 
-**One vacuous pass, flagged:**
-`TestToolchainIsInstalledFromPinnedManifests.test_the_validation_workflow_installs_only_from_requirement_manifests`
-passes because `pr-validation.yml` currently contains no `pip install` at all.
-It asserts nothing today and becomes meaningful only once `tasks.md` 4.3 adds
-the blocking tier's installs. Do not read it as evidence before then.
+**One vacuous pass, flagged:** `TestToolchainIsInstalledFromPinnedManifests.test_the_validation_workflow_installs_only_from_requirement_manifests` passes because `pr-validation.yml` currently contains no `pip install` at all. It asserts nothing today and becomes meaningful only once `tasks.md` 4.3 adds the blocking tier's installs. Do not read it as evidence before then.
 
 ### Three harness repairs made during authoring — failure state 3
 
-Recorded because a repair that is not recorded is indistinguishable from
-weakening an assertion to reach green, and a later reader needs to see which it
-was. **None changed what is asserted**; each fixed a test that never reached a
-meaningful assertion.
+Recorded because a repair that is not recorded is indistinguishable from weakening an assertion to reach green, and a later reader needs to see which it was. **None changed what is asserted**; each fixed a test that never reached a meaningful assertion.
 
-1. `test_no_workflow_references_a_gitleaks_license_secret` matched
-   `GITLEAKS_LICENSE` inside a YAML *comment* in `pr-validation.yml`. Fixed by
-   ignoring whole-line comments. The assertion — no license secret is required —
-   is unchanged, and the test now passes for the right reason.
-2. `test_the_path_filter_excludes_changes_that_cannot_affect_infrastructure`
-   passed vacuously: with no `paths:` key the pattern list is empty and nothing
-   matches, so "excludes everything" and "filters nothing" were
-   indistinguishable. Fixed by requiring a non-empty filter first; it now fails
-   correctly, in state 1.
-3. The first form of §4.6 F3's command check grepped the suite's text for
-   `"terraform"` and matched the Dependabot **ecosystem name**, not a command.
-   Replaced with an AST walk over the suite's own `subprocess` calls, which can
-   tell a spawned binary from a string that happens to name one.
+1. `test_no_workflow_references_a_gitleaks_license_secret` matched `GITLEAKS_LICENSE` inside a YAML *comment* in `pr-validation.yml`. Fixed by ignoring whole-line comments. The assertion — no license secret is required — is unchanged, and the test now passes for the right reason.
+2. `test_the_path_filter_excludes_changes_that_cannot_affect_infrastructure` passed vacuously: with no `paths:` key the pattern list is empty and nothing matches, so "excludes everything" and "filters nothing" were indistinguishable. Fixed by requiring a non-empty filter first; it now fails correctly, in state 1.
+3. The first form of §4.6 F3's command check grepped the suite's text for `"terraform"` and matched the Dependabot **ecosystem name**, not a command. Replaced with an AST walk over the suite's own `subprocess` calls, which can tell a spawned binary from a string that happens to name one.
 
 ## 6. Obsolete tests
 
-**None.** The `terraform test` glob `terraform/modules/<name>/tests/*.tftest.hcl`
-was searched in full — all eight files across `modules/server` and
-`modules/volume` — for tests bearing on the four `MODIFIED` deltas, matching on
-assertion text, run-block names and referenced behavior against the terms those
-deltas turn on (`gitleaks`, `dependabot`, workflow, plan inspection,
-`resource_changes`, lockfile, Ansible, Molecule, `pre-commit`).
+**None.** The `terraform test` glob `terraform/modules/<name>/tests/*.tftest.hcl` was searched in full — all eight files across `modules/server` and `modules/volume` — for tests bearing on the four `MODIFIED` deltas, matching on assertion text, run-block names and referenced behavior against the terms those deltas turn on (`gitleaks`, `dependabot`, workflow, plan inspection, `resource_changes`, lockfile, Ansible, Molecule, `pre-commit`).
 
-Every test in that glob asserts Hetzner resource attributes under
-`mock_provider` — firewall rules, labels, `delete_protection`/`rebuild_protection`
-coupling, variable validation. None references CI configuration, the destroy
-gate, or Dependabot.
+Every test in that glob asserts Hetzner resource attributes under `mock_provider` — firewall rules, labels, `delete_protection`/`rebuild_protection` coupling, variable validation. None references CI configuration, the destroy gate, or Dependabot.
 
-**This is "no such test exists", not merely "none was found by this search."**
-`terraform test` cannot reach GitHub Actions YAML, so no test in that glob
-*could* bear on these requirements. The four `MODIFIED` requirements had no test
-coverage anywhere before this pass.
+**This is "no such test exists", not merely "none was found by this search."** `terraform test` cannot reach GitHub Actions YAML, so no test in that glob *could* bear on these requirements. The four `MODIFIED` requirements had no test coverage anywhere before this pass.
 
-No earlier `test-plan.md` path was dispatched, so none was consulted; none was
-searched for, since its referent would sit in an archived change directory whose
-path this pass may not construct.
+No earlier `test-plan.md` path was dispatched, so none was consulted; none was searched for, since its referent would sit in an archived change directory whose path this pass may not construct.
 
-`terraform/modules/server/tests/protection.tftest.hcl` and
-`terraform/modules/volume/tests/delete_protection.tftest.hcl` were considered and
-**rejected** as obsolete candidates: the Destroy Policy Gate requirement's
-rationale mentions `lifecycle { prevent_destroy = true }`, but that paragraph is
-carried through the delta unchanged, and those tests cover module resource
-attributes rather than the gate. Nothing supersedes them.
+`terraform/modules/server/tests/protection.tftest.hcl` and `terraform/modules/volume/tests/delete_protection.tftest.hcl` were considered and **rejected** as obsolete candidates: the Destroy Policy Gate requirement's rationale mentions `lifecycle { prevent_destroy = true }`, but that paragraph is carried through the delta unchanged, and those tests cover module resource attributes rather than the gate. Nothing supersedes them.
 
 ## 7. Project questions
 
-**Q1 — There was no runner for repository-configuration tests, and the project
-recorded no convention for one.** *Resolved by the operator:* the suite lives at
-`.github/tests/`, colocated with almost everything it asserts about, avoiding a
-top-level test root in a repository whose only other tests are module-local
-`*.tftest.hcl`. Mechanism: Python `unittest` + PyYAML, both already present.
+**Q1 — There was no runner for repository-configuration tests, and the project recorded no convention for one.** *Resolved by the operator:* the suite lives at `.github/tests/`, colocated with almost everything it asserts about, avoiding a top-level test root in a repository whose only other tests are module-local `*.tftest.hcl`. Mechanism: Python `unittest` + PyYAML, both already present.
 
-**Q2 — PyYAML was unpinned, against `AGENTS.md`'s exact-pinning convention.**
-*Resolved:* it will be pinned in `.github/requirements-ci.txt` (`tasks.md` 4.2)
-alongside `pre-commit`. **Pin 6.0.1** — the version these 46 tests were verified
-against. Two tests (§4.6 F3) fail if the suite ever grows an import that is
-neither standard library nor that pinned dependency.
+**Q2 — PyYAML was unpinned, against `AGENTS.md`'s exact-pinning convention.** *Resolved:* it will be pinned in `.github/requirements-ci.txt` (`tasks.md` 4.2) alongside `pre-commit`. **Pin 6.0.1** — the version these 46 tests were verified against. Two tests (§4.6 F3) fail if the suite ever grows an import that is neither standard library nor that pinned dependency.
 
-**Q3 — Nothing would have run the suite.** *Resolved:* the operator chose to
-wire it into `pr-validation.yml` as an unconditional step now rather than queue
-it, and the delta gained the requirement covered in §4.6. §2 gives the exact
-command and working directory. The implementing session should use that
-invocation verbatim; it is the one under which the suite's behavior here was
-established.
+**Q3 — Nothing would have run the suite.** *Resolved:* the operator chose to wire it into `pr-validation.yml` as an unconditional step now rather than queue it, and the delta gained the requirement covered in §4.6. §2 gives the exact command and working directory. The implementing session should use that invocation verbatim; it is the one under which the suite's behavior here was established.
 
-**Q4 — Whether the Molecule discovery snippet must be standalone-runnable.**
-*Open, assumption recorded.* The A4 test extracts the discovery step's `run:`
-text and executes it. `tasks.md` 5.2 already prescribes exactly that
-verification ("running it against a scratch tree with no matching directory and
-observing a non-zero exit"), so the constraint is the plan's, not this pass's
-invention — but the scenario itself requires only the outcome, not the shape.
-*Assumption taken:* `tasks.md` 5.2 is binding. *Depends on it:*
-`TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`,
-which fails with an explicit message if the snippet embeds a `${{ }}`
-expression. This assertion is labelled DERIVED and may be reconsidered — as a
-recorded change to a derived assertion, never as a repair — if the
-implementation satisfies the scenario another way.
+**Q4 — Whether the Molecule discovery snippet must be standalone-runnable.** *Open, assumption recorded.* The A4 test extracts the discovery step's `run:` text and executes it. `tasks.md` 5.2 already prescribes exactly that verification ("running it against a scratch tree with no matching directory and observing a non-zero exit"), so the constraint is the plan's, not this pass's invention — but the scenario itself requires only the outcome, not the shape. *Assumption taken:* `tasks.md` 5.2 is binding. *Depends on it:* `TestMoleculeDiscoveryAndScenarioCoverage.test_role_discovery_fails_when_it_finds_nothing`, which fails with an explicit message if the snippet embeds a `${{ }}` expression. This assertion is labelled DERIVED and may be reconsidered — as a recorded change to a derived assertion, never as a repair — if the implementation satisfies the scenario another way.
 
 ## 8. Recommendations for the implementation step, not obligations
 
-- **Do not weaken a failing test to reach green.** The 15 state-1 failures are
-  the change's specification made executable. Every SPECIFIED assertion that
-  does not match means the configuration is wrong, not the test.
-- **Re-run the 8 state-2 tests deliberately once `ansible-verify.yml` exists**,
-  and treat that run — not this one — as the first evidence they discriminate.
-- **Land the destroy-gate fixtures executably if the queued extraction happens.**
-  `tasks.md` 1.1 already requires four fixture files to be kept. D1–D3 stay
-  behaviorally uncovered only because the gate's logic is inline workflow shell.
-  If the queued script-extraction (design Decision 5's second rejected
-  alternative) is taken up, three uncovered scenarios become directly testable
-  with fixtures that will already exist. Note that in the queue entry `tasks.md`
-  7.3 creates.
-- **Keep the `TestTheSuiteDiscriminates` pair green.** It is the only thing
-  standing between this suite and the failure mode it exists to prevent
-  elsewhere: a check that reports success without having verified anything.
+- **Do not weaken a failing test to reach green.** The 15 state-1 failures are the change's specification made executable. Every SPECIFIED assertion that does not match means the configuration is wrong, not the test.
+- **Re-run the 8 state-2 tests deliberately once `ansible-verify.yml` exists**, and treat that run — not this one — as the first evidence they discriminate.
+- **Land the destroy-gate fixtures executably if the queued extraction happens.** `tasks.md` 1.1 already requires four fixture files to be kept. D1–D3 stay behaviorally uncovered only because the gate's logic is inline workflow shell. If the queued script-extraction (design Decision 5's second rejected alternative) is taken up, three uncovered scenarios become directly testable with fixtures that will already exist. Note that in the queue entry `tasks.md` 7.3 creates.
+- **Keep the `TestTheSuiteDiscriminates` pair green.** It is the only thing standing between this suite and the failure mode it exists to prevent elsewhere: a check that reports success without having verified anything.

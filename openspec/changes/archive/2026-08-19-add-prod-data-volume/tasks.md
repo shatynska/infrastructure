@@ -28,13 +28,7 @@
 
 ## Not performed
 
-Three tasks in section 3 were not performed. They were left unticked rather than
-recorded, so this change's archived record could not distinguish *this was
-verified* from *nobody said* — and, because nothing ran
-`openspec validate --archived`, nobody saw it for three weeks. They are moved
-here with their original dispositions preserved word for word, by the change
-`make-openspec-validation-a-usable-gate`. Nothing this change decided, built or
-specified is altered.
+Three tasks in section 3 were not performed. They were left unticked rather than recorded, so this change's archived record could not distinguish *this was verified* from *nobody said* — and, because nothing ran `openspec validate --archived`, nobody saw it for three weeks. They are moved here with their original dispositions preserved word for word, by the change `make-openspec-validation-a-usable-gate`. Nothing this change decided, built or specified is altered.
 
 - 3.4 Run a live `terraform plan` in `environments/prod` (read-only token) with `volume_enabled = true` (the committed default): confirm it shows exactly one addition (the `main-data` volume, attached to the existing server, 10 GB, `hel1`, correctly labeled), and no changes to the server or firewall.
   Reason: **Skipped by user decision**: never run locally (no `HCLOUD_TOKEN` in the authoring sandbox) — the user chose to skip straight to opening the PR (4.1) rather than supply a token or run this themselves first. Superseded by the PR's own CI-run plan (see 4.2), which additionally revealed the server itself needed recreating — an outcome this task's premise ("no changes to the server or firewall") didn't anticipate, since it assumed the server was untouched.
@@ -43,14 +37,4 @@ specified is altered.
 - 3.6 Run `tflint` and the `gitleaks`/pre-commit hooks (or `pre-commit run --all-files`) before committing.
   Reason: **Partially covered, not by this task**: CI's `validate` job ran `terraform fmt -check -recursive` (repo-wide, covers `modules/volume`), Trivy, and `gitleaks` (both scan the whole repo) — all passed. However `.github/workflows/pr-validation.yml` hardcodes `terraform validate`/`tflint` to only `modules/server` and `environments/prod` (lines 58–83) — **`modules/volume` was never `terraform validate`'d or `tflint`'d by CI**, and `terraform test` isn't wired into the pipeline at all (only run locally, by hand, in this session). This is a real gap this change exposed, not one it was scoped to fix — flagged to the user as a separate follow-up rather than folded in here.
 
-  **Closed since.** Re-checked 2026-09-08: `fix-ci-module-coverage` replaced the
-  hardcoded directory list with a discovery loop, so `pr-validation.yml` no longer
-  names module directories at all. `terraform validate` and `tflint` iterate both
-  `terraform/modules/*/` and `terraform/environments/*/` holding `.tf` files;
-  `terraform test` iterates `terraform/modules/*/` only, guarded on that module
-  having `tests/*.tftest.hcl`. All three are conditioned on the pull request
-  touching a Terraform path. So `modules/volume` is now covered by all three —
-  which is what this task's gap was about — while environments are covered by two
-  of the three, `terraform test` having nothing to run in them. The gap this task
-  recorded is gone; the record of it stays, because the task genuinely was not
-  performed at the time.
+  **Closed since.** Re-checked 2026-09-08: `fix-ci-module-coverage` replaced the hardcoded directory list with a discovery loop, so `pr-validation.yml` no longer names module directories at all. `terraform validate` and `tflint` iterate both `terraform/modules/*/` and `terraform/environments/*/` holding `.tf` files; `terraform test` iterates `terraform/modules/*/` only, guarded on that module having `tests/*.tftest.hcl`. All three are conditioned on the pull request touching a Terraform path. So `modules/volume` is now covered by all three — which is what this task's gap was about — while environments are covered by two of the three, `terraform test` having nothing to run in them. The gap this task recorded is gone; the record of it stays, because the task genuinely was not performed at the time.

@@ -1,28 +1,16 @@
 # Test plan — promote-molecule-to-a-required-check
 
-Derived from this change's delta specifications before any implementation of it
-existed, by an author who has not read an implementation of it. Written to
-satisfy task 1.1–1.7.
+Derived from this change's delta specifications before any implementation of it existed, by an author who has not read an implementation of it. Written to satisfy task 1.1–1.7.
 
-This file is **not** an artifact the OpenSpec schema knows about. It will not
-appear among the context files `openspec instructions apply` lists, and has to
-be opened on purpose by whoever implements next.
+This file is **not** an artifact the OpenSpec schema knows about. It will not appear among the context files `openspec instructions apply` lists, and has to be opened on purpose by whoever implements next.
 
-- **Test command:** `python3 -m unittest discover --start-directory .github/tests`,
-  run from the repository root.
-- **Test-path glob:** `.github/tests/*.py`. Every new test was written into the
-  existing `.github/tests/test_ci_configuration.py`, appended as one new
-  section before that file's `if __name__ == "__main__":` block. No existing
-  line was edited, deleted or disabled.
-- **Rows not in play:** no scenario in this delta belongs to the `terraform test`
-  row or to the `molecule test --all` row of `AGENTS.md`'s Testing table. Every
-  reachable scenario is a static read of a committed workflow file, or an
-  execution of a shell snippet taken out of one.
+- **Test command:** `python3 -m unittest discover --start-directory .github/tests`, run from the repository root.
+- **Test-path glob:** `.github/tests/*.py`. Every new test was written into the existing `.github/tests/test_ci_configuration.py`, appended as one new section before that file's `if __name__ == "__main__":` block. No existing line was edited, deleted or disabled.
+- **Rows not in play:** no scenario in this delta belongs to the `terraform test` row or to the `molecule test --all` row of `AGENTS.md`'s Testing table. Every reachable scenario is a static read of a committed workflow file, or an execution of a shell snippet taken out of one.
 
 ## Baseline
 
-Taken **before** the new tests were written, over the whole suite (the suite is
-one file, so a scoped baseline and a full one coincide):
+Taken **before** the new tests were written, over the whole suite (the suite is one file, so a scoped baseline and a full one coincide):
 
 ```
 $ python3 -m unittest discover --start-directory .github/tests
@@ -30,9 +18,7 @@ Ran 111 tests in 0.565s
 OK
 ```
 
-No test was failing beforehand, and none was skipping: the machine carries
-`bash`, `find`, `xargs`, `basename`, `grep`, `sort` and `jq`, so the existing
-extract-and-run test executed rather than skipping.
+No test was failing beforehand, and none was skipping: the machine carries `bash`, `find`, `xargs`, `basename`, `grep`, `sort` and `jq`, so the existing extract-and-run test executed rather than skipping.
 
 After the new tests were added, with the implementation not yet written:
 
@@ -42,9 +28,7 @@ Ran 128 tests in 0.625s
 FAILED (failures=12)
 ```
 
-Seventeen tests were added. Twelve fail, none errors, and each fails for the
-reason the specification names rather than by an import failure or a defect in
-the test:
+Seventeen tests were added. Twelve fail, none errors, and each fails for the reason the specification names rather than by an import failure or a defect in the test:
 
 | Failing test | Failure message, abridged |
 |---|---|
@@ -61,10 +45,7 @@ the test:
 | `TestChangeDetectionResolvesTheGatesInput.test_a_pull_request_resolves_to_what_the_change_filter_found` | found 0 such steps |
 | `TestChangeDetectionResolvesTheGatesInput.test_the_change_filter_itself_runs_only_where_there_is_a_diff` | the discovery job `discover` carries no change-filter step |
 
-Five of the seventeen **pass on their first run**, which the testing floor
-treats as an alarm rather than as coverage. Each was investigated, and each is a
-regression guard over a property the current workflow already has and this
-change could remove — not a test that asserts nothing:
+Five of the seventeen **pass on their first run**, which the testing floor treats as an alarm rather than as coverage. Each was investigated, and each is a regression guard over a property the current workflow already has and this change could remove — not a test that asserts nothing:
 
 | Passing on first run | The property it guards, and the task that could break it |
 |---|---|
@@ -76,14 +57,7 @@ change could remove — not a test that asserts nothing:
 
 ### The two extract-and-run tests were checked for discrimination
 
-A target-absent failure establishes only that the target is absent: the
-assertions never executed, so nothing yet said whether they are any good. Both
-extract-and-run tests were therefore exercised against a **throwaway fixture
-repository built outside this repository** (in a scratch directory, deleted
-afterwards; no file was written into the repository and no part of the
-implementation was authored). Against a conforming fixture all seventeen new
-tests pass. Against six deliberately defective variants, each is caught, and by
-the intended test alone:
+A target-absent failure establishes only that the target is absent: the assertions never executed, so nothing yet said whether they are any good. Both extract-and-run tests were therefore exercised against a **throwaway fixture repository built outside this repository** (in a scratch directory, deleted afterwards; no file was written into the repository and no part of the implementation was authored). Against a conforming fixture all seventeen new tests pass. Against six deliberately defective variants, each is caught, and by the intended test alone:
 
 | Defect injected into the fixture | Caught by |
 |---|---|
@@ -96,38 +70,18 @@ the intended test alone:
 
 ## The two extracted scripts, named distinctly
 
-Task 1.5 requires these not be conflated as "the extracted script". They are
-different steps, in different jobs, with different tests:
+Task 1.5 requires these not be conflated as "the extracted script". They are different steps, in different jobs, with different tests:
 
-- **The aggregating gate** — the single `run:` step of the job named
-  `ansible-verify`. Its three inputs (the discovery job's result, the matrix
-  job's result, the discovery job's change-detection output) arrive through the
-  step's `env:` block. Tested by `TestTheAggregatingGateDiscriminates`, over
-  design Decision 4's table.
-- **The change-detection resolution** — a `run:` step in the discovery job that
-  decides the "Ansible changed" input from `github.event_name`: on
-  `pull_request` it is the change filter's output, on any other event it is
-  `true`. Tested by `TestChangeDetectionResolvesTheGatesInput`, over the event
-  name. The gate's table takes "Ansible changed" as *given*, so the polarity is
-  invisible to the gate's test and is asserted only here.
+- **The aggregating gate** — the single `run:` step of the job named `ansible-verify`. Its three inputs (the discovery job's result, the matrix job's result, the discovery job's change-detection output) arrive through the step's `env:` block. Tested by `TestTheAggregatingGateDiscriminates`, over design Decision 4's table.
+- **The change-detection resolution** — a `run:` step in the discovery job that decides the "Ansible changed" input from `github.event_name`: on `pull_request` it is the change filter's output, on any other event it is `true`. Tested by `TestChangeDetectionResolvesTheGatesInput`, over the event name. The gate's table takes "Ansible changed" as *given*, so the polarity is invisible to the gate's test and is asserted only here.
 
-Both tests locate their step and its inputs by the **expressions** the `env:`
-block assigns rather than by the variable names the implementation chooses, so
-the implementer is free to name the variables.
+Both tests locate their step and its inputs by the **expressions** the `env:` block assigns rather than by the variable names the implementation chooses, so the implementer is free to name the variables.
 
-`TestTheAggregatingGateDiscriminates.test_the_gate_concludes_as_the_table_says_on_every_row`
-iterates a case list of **seven rows** — the whole of Decision 4's table, four
-refusals and three passes — not the subset the scenarios happen to name. Two of
-those rows name two matrix results (`failure` and `cancelled`), exactly as the
-table's own cells do, so the run is seven rows and nine executions; the delta
-states cancellation and failure as separate scenarios and a gate can
-discriminate one while conflating the other.
+`TestTheAggregatingGateDiscriminates.test_the_gate_concludes_as_the_table_says_on_every_row` iterates a case list of **seven rows** — the whole of Decision 4's table, four refusals and three passes — not the subset the scenarios happen to name. Two of those rows name two matrix results (`failure` and `cancelled`), exactly as the table's own cells do, so the run is seven rows and nine executions; the delta states cancellation and failure as separate scenarios and a gate can discriminate one while conflating the other.
 
 ## Scenario accounting
 
-The delta declares **28** scenarios across four requirement blocks. All 28 are
-accounted for below, plus the one scenario reached through the REMOVED
-requirement. Nothing is omitted.
+The delta declares **28** scenarios across four requirement blocks. All 28 are accounted for below, plus the one scenario reached through the REMOVED requirement. Nothing is omitted.
 
 ### MODIFIED — Required Status Checks Report on Every Pull Request (6)
 
@@ -140,10 +94,7 @@ requirement. Nothing is omitted.
 | A cancelled dependency does not report success | gate rows 4 and 7, `cancelled` result |
 | A failed dependency reports failure whatever the change detection said | gate row 7, `failure` result |
 
-Structural coverage the same requirement's prose obliges, with no scenario of
-its own: `TestTheAggregatingJobConcludesOnTheSuitesBehalf.test_the_aggregating_job_depends_on_discovery_and_on_the_matrix`
-and `.test_the_aggregating_job_runs_whatever_its_dependencies_concluded`;
-`TestEveryRequiredCheckIsShapedToBeRegistrable.test_the_generated_matrix_context_is_not_the_one_registered`.
+Structural coverage the same requirement's prose obliges, with no scenario of its own: `TestTheAggregatingJobConcludesOnTheSuitesBehalf.test_the_aggregating_job_depends_on_discovery_and_on_the_matrix` and `.test_the_aggregating_job_runs_whatever_its_dependencies_concluded`; `TestEveryRequiredCheckIsShapedToBeRegistrable.test_the_generated_matrix_context_is_not_the_one_registered`.
 
 ### MODIFIED — Branch Protection on the Default Branch (3)
 
@@ -155,9 +106,7 @@ and `.test_the_aggregating_job_runs_whatever_its_dependencies_concluded`;
 
 ### MODIFIED — Gated Production Apply Applies the Reviewed Plan (5)
 
-The only edit to this requirement is a cross-reference whose singular becomes a
-plural; all five scenarios are carried through verbatim and no behaviour they
-assert changes. Each is already covered, and no new test was written for it:
+The only edit to this requirement is a cross-reference whose singular becomes a plural; all five scenarios are carried through verbatim and no behaviour they assert changes. Each is already covered, and no new test was written for it:
 
 | Scenario | Covered by (existing) |
 |---|---|
@@ -167,10 +116,7 @@ assert changes. Each is already covered, and no new test was written for it:
 | Apply credentials are inaccessible before approval | `TestSavedPlanIsWhatGetsApplied.test_exactly_one_job_declares_the_production_environment` |
 | A merge that cannot change infrastructure raises no approval request | `TestApplyWorkflowTriggerIsPathFiltered.test_the_path_filter_excludes_changes_that_cannot_affect_infrastructure`, `.test_the_push_trigger_declares_a_path_filter` |
 
-The requirement's changed sentence — "There is more than one such workflow, and
-the constraint holds of each" — **is** newly covered, by
-`TestEveryRequiredCheckIsShapedToBeRegistrable.test_no_required_check_workflow_declares_a_workflow_level_path_filter`,
-which iterates every workflow behind a registered context rather than one.
+The requirement's changed sentence — "There is more than one such workflow, and the constraint holds of each" — **is** newly covered, by `TestEveryRequiredCheckIsShapedToBeRegistrable.test_no_required_check_workflow_declares_a_workflow_level_path_filter`, which iterates every workflow behind a registered context rather than one.
 
 ### ADDED — Ansible Configuration Is Verified in Continuous Integration and Gates the Merge (14)
 
@@ -193,10 +139,7 @@ which iterates every workflow behind a registered context rather than one.
 
 ### REMOVED — Ansible Configuration Is Verified in Continuous Integration
 
-The removed requirement carries eleven scenarios in
-`openspec/specs/iac-cicd-pipeline/spec.md`. Ten are re-added verbatim under the
-new requirement and are accounted for in the table above; the ADDED block's
-other four scenarios are new to it. One is dropped:
+The removed requirement carries eleven scenarios in `openspec/specs/iac-cicd-pipeline/spec.md`. Ten are re-added verbatim under the new requirement and are accounted for in the table above; the ADDED block's other four scenarios are new to it. One is dropped:
 
 | Scenario | Disposition |
 |---|---|
@@ -204,12 +147,7 @@ other four scenarios are new to it. One is dropped:
 
 ## Scenarios no test command in this project can reach
 
-Recorded as a disposition, not as a gap. Each is a property of repository
-settings or of a merge outcome; `.github/tests` may make no network call, and
-the requirement itself says so ("Registering a context is repository settings
-rather than repository content, so nothing in this repository can verify that it
-happened"). Each is covered by the ship-stage observation in tasks 8.5 and 8.6,
-not by a test.
+Recorded as a disposition, not as a gap. Each is a property of repository settings or of a merge outcome; `.github/tests` may make no network call, and the requirement itself says so ("Registering a context is repository settings rather than repository content, so nothing in this repository can verify that it happened"). Each is covered by the ship-stage observation in tasks 8.5 and 8.6, not by a test.
 
 | Scenario (or clause) | Why unreachable | Observed by |
 |---|---|---|
@@ -219,27 +157,15 @@ not by a test.
 | *Documentation-only pull request remains mergeable*, **merge-outcome clause** | merge outcome | task 8.2 (the change's own doc-only pull request) and task 8.5 |
 | *A failing Molecule scenario blocks the merge*, **merge-outcome clause** | merge outcome | task 8.5, second bullet |
 
-Their workflow-file halves — no workflow-level path filter, a literal job name,
-a gate that discriminates — **are** reachable and are asserted, as the tables
-above record.
+Their workflow-file halves — no workflow-level path filter, a literal job name, a gate that discriminates — **are** reachable and are asserted, as the tables above record.
 
-Every new test whose subject touches branch protection says in its own docstring
-what it did not establish, and the new section's header comment says it once
-more for the section as a whole. No green run of this suite is evidence that a
-context is registered.
+Every new test whose subject touches branch protection says in its own docstring what it did not establish, and the new section's header comment says it once more for the section as a whole. No green run of this suite is evidence that a context is registered.
 
-One further path is unreachable by any test and is not a scenario: what
-`dorny/paths-filter` does on an event carrying no diff. Nothing in this
-repository has observed it — `pr-validation.yml` runs on `pull_request` only.
-`test_the_change_filter_itself_runs_only_where_there_is_a_diff` asserts the step
-is conditioned so it never runs there; the condition's effect is observed by
-task 8.6's manual dispatch.
+One further path is unreachable by any test and is not a scenario: what `dorny/paths-filter` does on an event carrying no diff. Nothing in this repository has observed it — `pr-validation.yml` runs on `pull_request` only. `test_the_change_filter_itself_runs_only_where_there_is_a_diff` asserts the step is conditioned so it never runs there; the condition's effect is observed by task 8.6's manual dispatch.
 
 ## Assertion classification
 
-Every new assertion is annotated in its own docstring as SPECIFIED (it traces to
-SHALL text or to a scenario in the delta) or DERIVED (it traces to `design.md`
-or `tasks.md` rather than to the specification). The derived ones, gathered:
+Every new assertion is annotated in its own docstring as SPECIFIED (it traces to SHALL text or to a scenario in the delta) or DERIVED (it traces to `design.md` or `tasks.md` rather than to the specification). The derived ones, gathered:
 
 | Derived assertion | What it traces to | Note |
 |---|---|---|
@@ -248,32 +174,18 @@ or `tasks.md` rather than to the specification). The derived ones, gathered:
 | `TestTheAggregatingGateDiscriminates.test_the_gate_names_the_skip_when_it_refuses_the_vacuous_green` | tasks 3.2 ("a distinct message … naming it as a green that verified nothing") | the conclusion is specified; the message is not |
 | `TestChangeDetectionResolvesTheGatesInput.test_the_change_filter_itself_runs_only_where_there_is_a_diff` | design Decision 1; tasks 2.3 | the specification requires the suite to run in full on a diffless event, not that the filter step be skipped |
 
-Each carries "Reconsider this assertion, do not weaken it, if …" in its
-docstring, naming the alternative implementation that would justify revisiting
-it.
+Each carries "Reconsider this assertion, do not weaken it, if …" in its docstring, naming the alternative implementation that would justify revisiting it.
 
 **Deliberately untested**, and recorded rather than dropped:
 
-- The `branches: [main]` limb of the `pull_request` trigger (task 2.1). No
-  scenario states it, `pr-validation.yml` carries it for reasons of its own, and
-  a test would constrain the implementer without a requirement behind it.
-- The exact `dorny/paths-filter` version pin (task 2.2). Task 2.2's own
-  verification is a grep of both workflows; asserting pin parity here would be a
-  new invented constraint whose scope is wider than this change.
-- The workflow's `name:` and its top comment (tasks 3.4, 3.5). Prose, verified
-  by review; `TestMoleculeDiscoveryAndScenarioCoverage.test_the_workflow_names_no_role_literally`
-  already guards the one failure mode a comment can introduce.
-- Whether `molecule test --all`'s recap names every scenario (design Decision 8,
-  deferred to a queue entry). Not this change's subject, and unreachable from
-  this row of the Testing table in any case.
+- The `branches: [main]` limb of the `pull_request` trigger (task 2.1). No scenario states it, `pr-validation.yml` carries it for reasons of its own, and a test would constrain the implementer without a requirement behind it.
+- The exact `dorny/paths-filter` version pin (task 2.2). Task 2.2's own verification is a grep of both workflows; asserting pin parity here would be a new invented constraint whose scope is wider than this change.
+- The workflow's `name:` and its top comment (tasks 3.4, 3.5). Prose, verified by review; `TestMoleculeDiscoveryAndScenarioCoverage.test_the_workflow_names_no_role_literally` already guards the one failure mode a comment can introduce.
+- Whether `molecule test --all`'s recap names every scenario (design Decision 8, deferred to a queue entry). Not this change's subject, and unreachable from this row of the Testing table in any case.
 
 ## Obsolete tests — candidates for human confirmation, never conclusions
 
-Search bound: `.github/tests/*.py`, the dispatched test-path glob, and nothing
-else. No earlier `test-plan.md` path was supplied for this change, so no
-scenario-to-test mapping was available beyond the docstrings in that file. Every
-entry below is a **candidate for confirmation by the implementer**, not a
-conclusion, and nothing in this pass edited, deleted or disabled any of them.
+Search bound: `.github/tests/*.py`, the dispatched test-path glob, and nothing else. No earlier `test-plan.md` path was supplied for this change, so no scenario-to-test mapping was available beyond the docstrings in that file. Every entry below is a **candidate for confirmation by the implementer**, not a conclusion, and nothing in this pass edited, deleted or disabled any of them.
 
 | Test | Superseded by | Evidence |
 |---|---|---|
@@ -281,40 +193,16 @@ conclusion, and nothing in this pass edited, deleted or disabled any of them.
 | `TestVerificationJobsCarryNoCredential.test_the_molecule_workflow_declares_no_environment` | REMOVED requirement | its docstring reads "SPECIFIED -- same scenario, advisory tier"; there is no advisory tier after this change. The assertion is carried through the ADDED requirement verbatim and must stay (task 4.3) |
 | `TestRequiredCheckIsNotPathFiltered` (whole class; one method, `test_the_required_check_declares_no_workflow_level_path_filter`) | MODIFIED *Required Status Checks Report on Every Pull Request*; MODIFIED *Gated Production Apply Applies the Reviewed Plan* | its class docstring says "This asserts the second half" of a constraint stated in the singular, and its method reads `PR_VALIDATION` alone. The delta makes the constraint plural. Task 4.1 widens it; the new `TestEveryRequiredCheckIsShapedToBeRegistrable.test_no_required_check_workflow_declares_a_workflow_level_path_filter` **already asserts the plural form** over the module-level `REQUIRED_STATUS_CHECK_WORKFLOWS`, so 4.1 may reduce to reusing that constant, or to deciding the older method is now redundant. That decision is the implementer's — this pass neither made it nor edited the class |
 
-Two further sites carry the stale word rather than a stale subject, found by the
-same search and offered as candidates for the same reason:
-`TestAnsibleBlockingTier` and its `test_the_blocking_tier_runs_*` methods name a
-tier label the delta renames (*Blocking tier* → *Lint tier*), and the class
-docstrings across the Ansible section abbreviate the requirement to "Ansible
-Configuration Is Verified in CI", a name that no longer exists after archive.
-The assertions are unaffected; task 4.3 decides whether to rename.
+Two further sites carry the stale word rather than a stale subject, found by the same search and offered as candidates for the same reason: `TestAnsibleBlockingTier` and its `test_the_blocking_tier_runs_*` methods name a tier label the delta renames (*Blocking tier* → *Lint tier*), and the class docstrings across the Ansible section abbreviate the requirement to "Ansible Configuration Is Verified in CI", a name that no longer exists after archive. The assertions are unaffected; task 4.3 decides whether to rename.
 
-This list is **not empty and not exhaustive by construction**: it is what a
-search of the one file in the dispatched glob turned up, matching on docstring
-citations of the dropped scenario, on the word "advisory", and on the singular
-"the required check". A test bearing on the superseded behaviour whose docstring
-names neither would not have been found by it.
+This list is **not empty and not exhaustive by construction**: it is what a search of the one file in the dispatched glob turned up, matching on docstring citations of the dropped scenario, on the word "advisory", and on the singular "the required check". A test bearing on the superseded behaviour whose docstring names neither would not have been found by it.
 
 ## Unresolved project questions
 
-The project's conventions were read (`AGENTS.md`, and `CLAUDE.md`, which imports
-it). Two questions arose that they do not answer; each was resolved by
-assumption rather than by asking, because a dispatched author has no channel to
-ask on, and both are recorded here with the tests that depend on them:
+The project's conventions were read (`AGENTS.md`, and `CLAUDE.md`, which imports it). Two questions arose that they do not answer; each was resolved by assumption rather than by asking, because a dispatched author has no channel to ask on, and both are recorded here with the tests that depend on them:
 
-1. **Whether a new test section belongs in the existing
-   `.github/tests/test_ci_configuration.py` or in a second file under the same
-   glob.** `AGENTS.md` names the glob, not the file count. Assumed: the existing
-   file, because `TestTheSuiteNeedsNoPrivilegedResource` asserts the no-network,
-   no-container, no-Terraform, standard-library-only constraints by reading
-   `SUITE_PATH` — its own file alone — so a second file would sit outside those
-   self-assertions. **All seventeen new tests depend on this assumption**, and
-   moving them to a new file would silently drop them out of that guard.
-2. **What the project calls the levels of its tests.** `AGENTS.md` names three
-   test commands by subject rather than by level, and records no vocabulary for
-   unit/integration/acceptance. Assumed: none is needed, and each test is placed
-   by subject per the Testing table. Nothing depends on this beyond the
-   vocabulary used in this file.
+1. **Whether a new test section belongs in the existing `.github/tests/test_ci_configuration.py` or in a second file under the same glob.** `AGENTS.md` names the glob, not the file count. Assumed: the existing file, because `TestTheSuiteNeedsNoPrivilegedResource` asserts the no-network, no-container, no-Terraform, standard-library-only constraints by reading `SUITE_PATH` — its own file alone — so a second file would sit outside those self-assertions. **All seventeen new tests depend on this assumption**, and moving them to a new file would silently drop them out of that guard.
+2. **What the project calls the levels of its tests.** `AGENTS.md` names three test commands by subject rather than by level, and records no vocabulary for unit/integration/acceptance. Assumed: none is needed, and each test is placed by subject per the Testing table. Nothing depends on this beyond the vocabulary used in this file.
 
 ## What the implementation must make pass
 
@@ -330,9 +218,7 @@ python3 -m unittest test_ci_configuration.TestTheAggregatingGateDiscriminates   
 python3 -m unittest test_ci_configuration.TestChangeDetectionResolvesTheGatesInput         # tasks 2.2, 2.3, 2.5
 ```
 
-(`python3 -m unittest` resolves `test_ci_configuration` when run with
-`.github/tests` on `PYTHONPATH`, or from inside that directory; the whole-suite
-command in the header needs neither.)
+(`python3 -m unittest` resolves `test_ci_configuration` when run with `.github/tests` on `PYTHONPATH`, or from inside that directory; the whole-suite command in the header needs neither.)
 
 An individual method is selectable in the same form, e.g.
 
@@ -340,6 +226,4 @@ An individual method is selectable in the same form, e.g.
 python3 -m unittest test_ci_configuration.TestTheAggregatingGateDiscriminates.test_the_gate_concludes_as_the_table_says_on_every_row
 ```
 
-Both extract-and-run classes need `bash`. Where it is absent they skip and name
-it, except under `CI`, where they fail instead — the same skip-vs-fail
-precondition the existing role-discovery test uses, for the same reason.
+Both extract-and-run classes need `bash`. Where it is absent they skip and name it, except under `CI`, where they fail instead — the same skip-vs-fail precondition the existing role-discovery test uses, for the same reason.

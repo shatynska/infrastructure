@@ -48,12 +48,7 @@
 - [x] 7.3 Record a change-queue entry (46, renumbered from 43 when the trunk claimed that number mid-change) for adopting a ShellCheck pre-commit hook, this change having added the repository's first script with no linter to check it; verify the entry states why it was not folded in here
 - [x] 7.4 Verify the full suite and `openspec validate --all` pass, then archive the record through its own pull request
 
-**`ship:confirmed`.** The operator confirmed the effect on 2026-09-09, against
-the observation this change proposed: `ansible/scripts/run-molecule
---print-namespace` returns `infrastructure-e8a5b4` from the main working tree
-and `namespace-the-molecule-suite-per-working-58721e` from this change's own,
-and a run from a role directory creates a container carrying that namespace.
-Not a waiver: this change had an effect that could be observed, and it was.
+**`ship:confirmed`.** The operator confirmed the effect on 2026-09-09, against the observation this change proposed: `ansible/scripts/run-molecule --print-namespace` returns `infrastructure-e8a5b4` from the main working tree and `namespace-the-molecule-suite-per-working-58721e` from this change's own, and a run from a role directory creates a container carrying that namespace. Not a waiver: this change had an effect that could be observed, and it was.
 
 ## Not performed
 

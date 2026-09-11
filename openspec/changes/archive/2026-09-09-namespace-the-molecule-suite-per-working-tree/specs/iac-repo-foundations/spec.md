@@ -1,36 +1,17 @@
 ## ADDED Requirements
 
 ### Requirement: Verification Writing to Shared State Is Namespaced per Working Tree
-Where a verification mechanism in this repository writes to state that outlives
-a single run and is reachable from more than one working tree on the same
-machine, that state SHALL be namespaced per working tree, and the namespace
-SHALL be derived deterministically from the working tree it belongs to.
+Where a verification mechanism in this repository writes to state that outlives a single run and is reachable from more than one working tree on the same machine, that state SHALL be namespaced per working tree, and the namespace SHALL be derived deterministically from the working tree it belongs to.
 
-Determinism is normative rather than incidental: a later session in the same
-working tree SHALL resolve the same namespace, so that state an earlier run left
-behind can be found and removed rather than orphaned.
+Determinism is normative rather than incidental: a later session in the same working tree SHALL resolve the same namespace, so that state an earlier run left behind can be found and removed rather than orphaned.
 
-Where the namespace is absent, the mechanism SHALL refuse to run and SHALL
-report what is missing. It SHALL fail before producing any result, and SHALL NOT
-fall back to state whose sharing could make a run report success — a run that
-silently shares such state can report success having verified nothing about the
-change under test, since it may equally pass against another session's state as
-fail against it, and a verification result that can mean either is not a result.
+Where the namespace is absent, the mechanism SHALL refuse to run and SHALL report what is missing. It SHALL fail before producing any result, and SHALL NOT fall back to state whose sharing could make a run report success — a run that silently shares such state can report success having verified nothing about the change under test, since it may equally pass against another session's state as fail against it, and a verification result that can mean either is not a result.
 
-This prohibition is over state that can carry a result between working trees. It
-does not extend to state whose sharing can only cause a run to fail: a refusal
-reached noisily is not the defect this requirement exists to prevent, and
-demanding that nothing whatever be shared before the refusal would forbid
-mechanisms that are in fact safe.
+This prohibition is over state that can carry a result between working trees. It does not extend to state whose sharing can only cause a run to fail: a refusal reached noisily is not the defect this requirement exists to prevent, and demanding that nothing whatever be shared before the refusal would forbid mechanisms that are in fact safe.
 
-This requirement governs state shared *between working trees on one machine*. It
-places no obligation on continuous integration, where each job is an isolated
-checkout and the condition cannot arise.
+This requirement governs state shared *between working trees on one machine*. It places no obligation on continuous integration, where each job is an isolated checkout and the condition cannot arise.
 
-`AGENTS.md` SHALL carry a section binding this requirement to each service it
-governs, naming the state, the namespace, and how a session takes one. A stated
-rule with nothing bound to it is not enforceable by a reviewer, and this
-repository has already run for months in exactly that state.
+`AGENTS.md` SHALL carry a section binding this requirement to each service it governs, naming the state, the namespace, and how a session takes one. A stated rule with nothing bound to it is not enforceable by a reviewer, and this repository has already run for months in exactly that state.
 
 #### Scenario: Two working trees verify the same subject concurrently
 - **WHEN** two working trees on one machine run the same verification subject at the same time

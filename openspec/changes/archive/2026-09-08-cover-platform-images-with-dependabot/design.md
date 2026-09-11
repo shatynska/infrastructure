@@ -83,14 +83,7 @@ Eight images on a weekly schedule is up to eight pull requests, each of which �
 
 **The patterns are written in dependency names, not service names.** Dependabot matches a group's `patterns` against the *dependency* name, which for this ecosystem is the image reference with its tag stripped — not the key the Compose file happens to file the service under. The two differ for **all six** — `grafana` and `grafana/grafana` included — which is exactly why a group written in service names would match nothing at all rather than merely under-matching, leaving Decision 4 inert and every image ungrouped with nothing red to say so:
 
-**Corrected 2026-09-08, after the first Dependabot run contradicted it.** The
-two rows carrying a registry host below were originally written *with* that
-host, and were wrong: Dependabot builds the dependency as
-`Dependency.new(name: details.fetch("image"), ..., source: source_from(details))`
-— the image capture group alone, with the registry carried in the source. The
-shipped patterns therefore matched nothing, and the assertion covering them was
-green because it computed its expected names from this same table. The names
-below are now transcribed from pull requests Dependabot actually opened.
+**Corrected 2026-09-08, after the first Dependabot run contradicted it.** The two rows carrying a registry host below were originally written *with* that host, and were wrong: Dependabot builds the dependency as `Dependency.new(name: details.fetch("image"), ..., source: source_from(details))` — the image capture group alone, with the registry carried in the source. The shipped patterns therefore matched nothing, and the assertion covering them was green because it computed its expected names from this same table. The names below are now transcribed from pull requests Dependabot actually opened.
 
 | Compose service | Image as written | Dependency name Dependabot matches on |
 |---|---|---|
@@ -103,8 +96,7 @@ below are now transcribed from pull requests Dependabot actually opened.
 | *(ungrouped)* `postgres` | `postgres` | `postgres` |
 | *(ungrouped)* `traefik` | `traefik` | `traefik` |
 
-So the group is `prom/*`, `grafana/*`, `google/cadvisor`,
-`prometheuscommunity/postgres-exporter`. **No pattern may match `postgres` or `traefik`** — which is why postgres-exporter is named in full rather than as `postgres*`, a pattern that would silently pull the shared database into a group whose whole purpose is to keep it out. That is Decision 4's own rejected alternative arrived at by a typo, and it is the reason this decision gets an assertion rather than a `grep` in a task.
+So the group is `prom/*`, `grafana/*`, `google/cadvisor`, `prometheuscommunity/postgres-exporter`. **No pattern may match `postgres` or `traefik`** — which is why postgres-exporter is named in full rather than as `postgres*`, a pattern that would silently pull the shared database into a group whose whole purpose is to keep it out. That is Decision 4's own rejected alternative arrived at by a typo, and it is the reason this decision gets an assertion rather than a `grep` in a task.
 
 The split is by blast radius, not by tidiness. Traefik terminates TLS for every public hostname on the host, so a bad Traefik release takes everything offline at once; PostgreSQL is the one grouped-out service holding state. Each deserves its own diff and its own approval decision. The monitoring services fail in a direction that is visible to the operator and not to customers, and they move together in practice.
 
@@ -138,12 +130,9 @@ Rollback is deleting the stanza. Any pull request it had opened is closed, and n
 
 ## Confirmed in production, 2026-09-08
 
-The gate this change had to answer was whether image pins actually produce pull
-requests, grouped as Decision 4 specifies. Both halves were observed, and the
-first observation is what found the defect.
+The gate this change had to answer was whether image pins actually produce pull requests, grouped as Decision 4 specifies. Both halves were observed, and the first observation is what found the defect.
 
-**First run, after PR #87 merged.** Six pull requests, four of them this
-ecosystem's — and four is one more than Decision 4 allows:
+**First run, after PR #87 merged.** Six pull requests, four of them this ecosystem's — and four is one more than Decision 4 allows:
 
 | PR | What it was | Verdict |
 |---|---|---|
@@ -152,20 +141,8 @@ ecosystem's — and four is one more than Decision 4 allows:
 | #91 | `postgres` 16.15 → 18.6 | correctly ungrouped |
 | #92 | `prometheuscommunity/postgres-exporter` | **escaped the group** |
 
-#92's title and branch path both omitted the registry host, which is what
-identified the defect: the two registry-prefixed patterns matched nothing. The
-fix is PR #94, and its reasoning is Decision 4's correction above.
+#92's title and branch path both omitted the registry host, which is what identified the defect: the two registry-prefixed patterns matched nothing. The fix is PR #94, and its reasoning is Decision 4's correction above.
 
-**Second run, after PR #94 merged.** Dependabot re-evaluated on its own — no
-trigger, no re-run — closed #89 and #92 as superseded, and opened #95: *"Bump
-the platform-monitoring-images group across 1 directory with 5 updates"*,
-carrying `prom/node-exporter`, `prom/prometheus`, `prom/alertmanager`,
-`grafana/grafana` **and `prometheuscommunity/postgres-exporter`**. The
-ecosystem's open pull requests then stood at three — #95 grouped, #90 and #91
-each alone — which is what Decision 4 specifies.
+**Second run, after PR #94 merged.** Dependabot re-evaluated on its own — no trigger, no re-run — closed #89 and #92 as superseded, and opened #95: *"Bump the platform-monitoring-images group across 1 directory with 5 updates"*, carrying `prom/node-exporter`, `prom/prometheus`, `prom/alertmanager`, `grafana/grafana` **and `prometheuscommunity/postgres-exporter`**. The ecosystem's open pull requests then stood at three — #95 grouped, #90 and #91 each alone — which is what Decision 4 specifies.
 
-`google/cadvisor` is still **not** observed. It has opened no pull request
-because v0.60.5 remains its latest release, so its corrected pattern is
-inferred from the same rule the observed one confirms, and nothing here
-establishes it. The anchor test's docstring says so, and the pair should be
-added the first time Dependabot names it rather than assumed settled.
+`google/cadvisor` is still **not** observed. It has opened no pull request because v0.60.5 remains its latest release, so its corrected pattern is inferred from the same rule the observed one confirms, and nothing here establishes it. The anchor test's docstring says so, and the pair should be added the first time Dependabot names it rather than assumed settled.

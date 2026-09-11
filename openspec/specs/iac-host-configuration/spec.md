@@ -264,95 +264,31 @@ Nor SHALL the obligation be treated as satisfied by an operator's ability to inf
 - **THEN** the run SHALL fail before any task that acts on the host has changed it, so the failure is a refusal to proceed rather than a partial application
 
 ### Requirement: Superseded Application Images Are Reclaimed at Deploy Time
-`/usr/local/bin/app-deploy` SHALL, after an application's containers have been
-brought up and reported healthy, remove the local images in that application's
-own image namespace that the application's current Compose file does not
-reference.
+`/usr/local/bin/app-deploy` SHALL, after an application's containers have been brought up and reported healthy, remove the local images in that application's own image namespace that the application's current Compose file does not reference.
 
-An application's image namespace is the set of local image references of the
-form `ghcr.io/<owner>/<app_name>:<tag>`, for the application name `app-deploy`
-was invoked with and **any** owner segment. Reclamation SHALL NOT consider an
-image reference outside that namespace, so an image shared with another
-application on the host — a base image such as `postgres:16` or
-`traefik:v3.7.10` — is never a candidate for removal by any application's
-deploy. The namespace is exactly two path segments after the registry, the last
-of them equal to the application name, so an application whose images live at a
-deeper path (`ghcr.io/<owner>/<app_name>/<component>`) or under a differing
-name has an empty namespace and reclaims nothing at all — silently, and indistinguishably from an application that had nothing to
-reclaim. That coupling SHALL be recorded in the deploy role's own onboarding
-documentation, so it is discoverable where an application is onboarded rather
-than only in the body of the script.
+An application's image namespace is the set of local image references of the form `ghcr.io/<owner>/<app_name>:<tag>`, for the application name `app-deploy` was invoked with and **any** owner segment. Reclamation SHALL NOT consider an image reference outside that namespace, so an image shared with another application on the host — a base image such as `postgres:16` or `traefik:v3.7.10` — is never a candidate for removal by any application's deploy. The namespace is exactly two path segments after the registry, the last of them equal to the application name, so an application whose images live at a deeper path (`ghcr.io/<owner>/<app_name>/<component>`) or under a differing name has an empty namespace and reclaims nothing at all — silently, and indistinguishably from an application that had nothing to reclaim. That coupling SHALL be recorded in the deploy role's own onboarding documentation, so it is discoverable where an application is onboarded rather than only in the body of the script.
 
-A local image in that namespace carrying no tag SHALL NOT be reclaimed. Such an
-image is one referenced by digest rather than by tag, so it can never appear in
-a tag-shaped reference set, and treating its absence from that set as evidence
-that it is unreferenced would remove an image the application may currently be
-pinned to.
+A local image in that namespace carrying no tag SHALL NOT be reclaimed. Such an image is one referenced by digest rather than by tag, so it can never appear in a tag-shaped reference set, and treating its absence from that set as evidence that it is unreferenced would remove an image the application may currently be pinned to.
 
-Reclamation SHALL determine the set of referenced images before removing
-anything. Where that set cannot be determined, or is determined to be empty,
-reclamation SHALL remove nothing on that run. An unavailable reference set is
-indistinguishable from one naming no images, and both would otherwise make
-every image in the namespace a candidate — including those of services that are
-defined but not currently running, which is the case taking the reference set
-from the Compose file rather than from running containers exists to protect.
+Reclamation SHALL determine the set of referenced images before removing anything. Where that set cannot be determined, or is determined to be empty, reclamation SHALL remove nothing on that run. An unavailable reference set is indistinguishable from one naming no images, and both would otherwise make every image in the namespace a candidate — including those of services that are defined but not currently running, which is the case taking the reference set from the Compose file rather than from running containers exists to protect.
 
-Removal SHALL NOT be forced. Reclamation SHALL rely on the container runtime
-refusing to remove an image that a container — running or stopped — still
-holds, so that the runtime's own refusal stands between a defective reference
-set and an image still in use. A removal that is refused SHALL be treated as a
-normal outcome, not as an error to be overridden.
+Removal SHALL NOT be forced. Reclamation SHALL rely on the container runtime refusing to remove an image that a container — running or stopped — still holds, so that the runtime's own refusal stands between a defective reference set and an image still in use. A removal that is refused SHALL be treated as a normal outcome, not as an error to be overridden.
 
-That refusal guards the image, not the reference: a runtime refuses where
-removal would drop an image's **last** reference, and removes a redundant tag
-from an image carrying more than one. Reclamation SHALL therefore be understood
-to guarantee that an in-use image survives, and SHALL NOT be relied on to
-preserve any particular tag of it.
+That refusal guards the image, not the reference: a runtime refuses where removal would drop an image's **last** reference, and removes a redundant tag from an image carrying more than one. Reclamation SHALL therefore be understood to guarantee that an in-use image survives, and SHALL NOT be relied on to preserve any particular tag of it.
 
-Reclamation SHALL run only after the deploy has succeeded, so that the images
-the new containers hold are held by running containers while removal is
-attempted.
+Reclamation SHALL run only after the deploy has succeeded, so that the images the new containers hold are held by running containers while removal is attempted.
 
-Reclamation SHALL NOT change the outcome of a deploy that has already
-succeeded: a failure to enumerate or remove any image SHALL leave the deploy
-reported as successful, and SHALL NOT fail the invoking SSH session or the
-workflow that opened it.
+Reclamation SHALL NOT change the outcome of a deploy that has already succeeded: a failure to enumerate or remove any image SHALL leave the deploy reported as successful, and SHALL NOT fail the invoking SSH session or the workflow that opened it.
 
-Reclamation SHALL be bounded in duration as a whole — enumerating the local
-images and the reference set included, not only the removals — so that a
-container runtime which stops responding cannot hold the deploy session, or the
-workflow that opened it, open indefinitely. Enumeration is a call to the same
-runtime that the removals are, and a bound that covers only the removals leaves
-the wedged-runtime case reachable through the step that precedes them. Reaching that bound is a reclamation failure like any
-other and SHALL leave the deploy reported as successful. Exit status alone does
-not make a step non-interfering: a step that never returns fails the deploy
-without ever exiting non-zero.
+Reclamation SHALL be bounded in duration as a whole — enumerating the local images and the reference set included, not only the removals — so that a container runtime which stops responding cannot hold the deploy session, or the workflow that opened it, open indefinitely. Enumeration is a call to the same runtime that the removals are, and a bound that covers only the removals leaves the wedged-runtime case reachable through the step that precedes them. Reaching that bound is a reclamation failure like any other and SHALL leave the deploy reported as successful. Exit status alone does not make a step non-interfering: a step that never returns fails the deploy without ever exiting non-zero.
 
-Reclamation SHALL report on every run, and SHALL do so on every exit path.
-Since every failure is otherwise swallowed, a reclamation that matches nothing
-at all is indistinguishable from one working correctly, and the only remaining
-signal would be the disk filling — the outcome this requirement exists to
-prevent.
+Reclamation SHALL report on every run, and SHALL do so on every exit path. Since every failure is otherwise swallowed, a reclamation that matches nothing at all is indistinguishable from one working correctly, and the only remaining signal would be the disk filling — the outcome this requirement exists to prevent.
 
-What is reported differs by how the run ended, because not every path can know
-the same things. A run that **completed** SHALL report how many images it
-considered and how many it removed. A run **abandoned early** — because the
-reference set was empty or undeterminable, because the local images could not be
-enumerated, or because it reached its duration bound — SHALL instead report
-which of those ended it, and SHALL be distinguishable from a completed run that
-found nothing to reclaim.
+What is reported differs by how the run ended, because not every path can know the same things. A run that **completed** SHALL report how many images it considered and how many it removed. A run **abandoned early** — because the reference set was empty or undeterminable, because the local images could not be enumerated, or because it reached its duration bound — SHALL instead report which of those ended it, and SHALL be distinguishable from a completed run that found nothing to reclaim.
 
-A failure to enumerate SHALL NOT be reported as a completed run of zero. Zero
-considered and zero removed is the truthful report of an application whose
-namespace is legitimately empty, so a broken enumeration reported that way is
-indistinguishable from a healthy one — which is the state this requirement
-exists to prevent, arrived at by the report itself.
+A failure to enumerate SHALL NOT be reported as a completed run of zero. Zero considered and zero removed is the truthful report of an application whose namespace is legitimately empty, so a broken enumeration reported that way is indistinguishable from a healthy one — which is the state this requirement exists to prevent, arrived at by the report itself.
 
-The duration-bound report SHALL be emitted from outside the bounded region: a
-report printed inside that region cannot survive it being killed, which would
-leave the one run most worth hearing about as the only silent one. It follows
-that this path reports a reason and not a count, since no count survives the
-kill either.
+The duration-bound report SHALL be emitted from outside the bounded region: a report printed inside that region cannot survive it being killed, which would leave the one run most worth hearing about as the only silent one. It follows that this path reports a reason and not a count, since no count survives the kill either.
 
 #### Scenario: A deploy removes the image its predecessor left behind
 - **WHEN** an application is deployed at one image tag, and then deployed again at a different tag of the same image repository
@@ -399,159 +335,41 @@ kill either.
 - **THEN** `app-deploy` SHALL still exit successfully, and the deploy SHALL be reported as having succeeded
 
 ### Requirement: Unreferenced Host Images Are Pruned on a Schedule
-Ansible SHALL install, on the configured host, a scheduled unit that
-periodically removes every local container image that no enumerated
-application and no container on that host still references. The schedule SHALL
-be owned by the host's init system rather than by the removal script, SHALL
-survive a host being down at its scheduled time by running once afterwards
-rather than skipping that occurrence, and SHALL NOT be triggered by a deploy.
-Installing or updating the unit SHALL NOT itself remove an image, so that
-configuring the host is never also a mutation of what it stores.
+Ansible SHALL install, on the configured host, a scheduled unit that periodically removes every local container image that no enumerated application and no container on that host still references. The schedule SHALL be owned by the host's init system rather than by the removal script, SHALL survive a host being down at its scheduled time by running once afterwards rather than skipping that occurrence, and SHALL NOT be triggered by a deploy. Installing or updating the unit SHALL NOT itself remove an image, so that configuring the host is never also a mutation of what it stores.
 
-This is complementary to, and SHALL NOT replace, the reclamation
-`/usr/local/bin/app-deploy` performs at deploy time. The two differ in what
-they may claim authority over, not only in how often they run.
+This is complementary to, and SHALL NOT replace, the reclamation `/usr/local/bin/app-deploy` performs at deploy time. The two differ in what they may claim authority over, not only in how often they run.
 
-**The set of images to keep SHALL be the union, over every application
-enumerated in version control, of the images that application's Compose file
-on the host references, unioned with the image held by every container on the
-host, running or stopped.** A single application's reference set is not
-authority over an image other applications also use, which is why deploy-time
-reclamation does not consider one, per its own requirement; the union over
-every enumerated application is such an authority, and it is what allows a shared base image superseded by a
-newer pin to be removed here and nowhere else.
+**The set of images to keep SHALL be the union, over every application enumerated in version control, of the images that application's Compose file on the host references, unioned with the image held by every container on the host, running or stopped.** A single application's reference set is not authority over an image other applications also use, which is why deploy-time reclamation does not consider one, per its own requirement; the union over every enumerated application is such an authority, and it is what allows a shared base image superseded by a newer pin to be removed here and nowhere else.
 
-**An application's references SHALL span every profile its Compose file
-declares, not only the profiles active at the moment the set is computed.** A
-Compose file's rendered image list omits any service gated behind an inactive
-profile, so a set taken from a single rendering is short by exactly the
-services that are defined and not running — the class this union exists to
-protect, and the one a prune driven by current container state already loses.
+**An application's references SHALL span every profile its Compose file declares, not only the profiles active at the moment the set is computed.** A Compose file's rendered image list omits any service gated behind an inactive profile, so a set taken from a single rendering is short by exactly the services that are defined and not running — the class this union exists to protect, and the one a prune driven by current container state already loses.
 
-The enumeration of applications SHALL be the version-controlled list from which
-that host's deploy accounts, `sudoers` rules and forced commands are generated.
-It SHALL NOT be derived from directories or Compose files found on the host: an
-application's directory and its last Compose file outlive its removal from that
-list, so a filesystem-derived enumeration would let a retired application's
-stale file protect its images indefinitely — the outcome the schedule exists to
-reach. It follows that removing an application from that list SHALL make its
-images reclaimable, and that this consequence SHALL be recorded in the
-installing role's own documentation.
+The enumeration of applications SHALL be the version-controlled list from which that host's deploy accounts, `sudoers` rules and forced commands are generated. It SHALL NOT be derived from directories or Compose files found on the host: an application's directory and its last Compose file outlive its removal from that list, so a filesystem-derived enumeration would let a retired application's stale file protect its images indefinitely — the outcome the schedule exists to reach. It follows that removing an application from that list SHALL make its images reclaimable, and that this consequence SHALL be recorded in the installing role's own documentation.
 
-Where the enumeration names no application at all, the run SHALL remove nothing
-and SHALL report that condition. The keep set would otherwise reduce to the
-images containers currently hold, which is precisely the untargeted claim about
-a moment that this requirement's union exists to avoid making.
+Where the enumeration names no application at all, the run SHALL remove nothing and SHALL report that condition. The keep set would otherwise reduce to the images containers currently hold, which is precisely the untargeted claim about a moment that this requirement's union exists to avoid making.
 
-**Age SHALL NOT be a criterion.** An image is kept because something
-references it or it is removed. In particular, the container runtime's
-`until` image filter selects on an image's creation timestamp — which for a
-pulled image is set by whoever built it upstream, not by this host — so it
-does not distinguish an image this host has stopped using from one it uses
-constantly, and SHALL NOT be relied on as a retention window or presented as
-one.
+**Age SHALL NOT be a criterion.** An image is kept because something references it or it is removed. In particular, the container runtime's `until` image filter selects on an image's creation timestamp — which for a pulled image is set by whoever built it upstream, not by this host — so it does not distinguish an image this host has stopped using from one it uses constantly, and SHALL NOT be relied on as a retention window or presented as one.
 
-**References SHALL be compared as the images they resolve to, not as the
-strings that name them.** Each reference in the keep set SHALL be resolved to a
-local image identity before comparison, and local images SHALL be matched
-against the keep set by that identity.
+**References SHALL be compared as the images they resolve to, not as the strings that name them.** Each reference in the keep set SHALL be resolved to a local image identity before comparison, and local images SHALL be matched against the keep set by that identity.
 
-A reference that is well-formed but resolves to no local image SHALL contribute
-nothing and SHALL NOT be treated as an error, since it names an image this host
-has not pulled. A reference that is **not well-formed** SHALL instead be
-treated as an unresolvable reference set and abandon the run. Rendering a
-Compose file whose interpolation variables are unset yields a malformed
-reference and reports success, so an implementation that treats every
-unresolvable reference alike cannot distinguish an image the host lacks from a
-reference set silently missing its application's images. A reference naming an
-image by digest is well-formed: it is the form this requirement exists to
-honour, and rejecting it would abandon every run of a host whose applications
-pin their images.
+A reference that is well-formed but resolves to no local image SHALL contribute nothing and SHALL NOT be treated as an error, since it names an image this host has not pulled. A reference that is **not well-formed** SHALL instead be treated as an unresolvable reference set and abandon the run. Rendering a Compose file whose interpolation variables are unset yields a malformed reference and reports success, so an implementation that treats every unresolvable reference alike cannot distinguish an image the host lacks from a reference set silently missing its application's images. A reference naming an image by digest is well-formed: it is the form this requirement exists to honour, and rejecting it would abandon every run of a host whose applications pin their images.
 
-It follows that an image referenced by digest rather than by tag SHALL be kept
-where an enumerated application references it, even though it carries no tag,
-and SHALL be removed where the union does not reach it. Its absence of a tag
-SHALL NOT by itself be treated as evidence that nothing references it: that
-property is what deploy-time reclamation had no way to see past, and an
-identity-shaped keep set SHALL decide it on evidence instead.
+It follows that an image referenced by digest rather than by tag SHALL be kept where an enumerated application references it, even though it carries no tag, and SHALL be removed where the union does not reach it. Its absence of a tag SHALL NOT by itself be treated as evidence that nothing references it: that property is what deploy-time reclamation had no way to see past, and an identity-shaped keep set SHALL decide it on evidence instead.
 
-**Removal SHALL NOT be forced.** An image carrying tags SHALL be removed
-through each of its tags, so that the runtime deletes it when its last
-reference is dropped; an image carrying no tag SHALL be removed by its
-identity. A removal the runtime refuses SHALL be treated as a normal outcome
-and SHALL NOT be retried with force, so that the runtime's own refusal to
-remove an image a container holds stands between a defective keep set and an
-image still in use.
+**Removal SHALL NOT be forced.** An image carrying tags SHALL be removed through each of its tags, so that the runtime deletes it when its last reference is dropped; an image carrying no tag SHALL be removed by its identity. A removal the runtime refuses SHALL be treated as a normal outcome and SHALL NOT be retried with force, so that the runtime's own refusal to remove an image a container holds stands between a defective keep set and an image still in use.
 
-**A tag SHALL be confirmed to still name the image it was selected as, at the
-moment it is removed.** A tag is selected by the identity it resolved to during
-enumeration and removed by name afterwards, and a tag may be re-pointed at a
-different image in between — by a concurrent deploy, or by any pull of a moving
-tag. Removing it without re-checking drops a reference to whichever image the
-tag names by then, which for a freshly pulled image is a reference no container
-holds yet.
+**A tag SHALL be confirmed to still name the image it was selected as, at the moment it is removed.** A tag is selected by the identity it resolved to during enumeration and removed by name afterwards, and a tag may be re-pointed at a different image in between — by a concurrent deploy, or by any pull of a moving tag. Removing it without re-checking drops a reference to whichever image the tag names by then, which for a freshly pulled image is a reference no container holds yet.
 
-A prune SHALL NOT be performed through a runtime facility that selects images
-by absence of a tag, since that selects digest-referenced images on a property
-this requirement establishes is not evidence.
+A prune SHALL NOT be performed through a runtime facility that selects images by absence of a tag, since that selects digest-referenced images on a property this requirement establishes is not evidence.
 
-**The local images a run may consider SHALL be enumerated before the keep set
-is computed, and the keep set SHALL be determined before anything is
-removed.** An image that appears on the host after that enumeration is
-therefore never a candidate, while a reference that appears after it is still
-honoured — so the interval can only narrow what a run may remove, never widen
-it. The reverse order leaves an image pulled by a concurrent deploy inside the
-candidate set and outside the keep set, in the interval before any container
-holds it and so before the runtime's refusal can engage.
+**The local images a run may consider SHALL be enumerated before the keep set is computed, and the keep set SHALL be determined before anything is removed.** An image that appears on the host after that enumeration is therefore never a candidate, while a reference that appears after it is still honoured — so the interval can only narrow what a run may remove, never widen it. The reverse order leaves an image pulled by a concurrent deploy inside the candidate set and outside the keep set, in the interval before any container holds it and so before the runtime's refusal can engage.
 
-**A run that cannot determine the keep set completely SHALL remove nothing.** Where an enumerated
-application's Compose file is present on the host but its references cannot be
-resolved, the entire run SHALL be abandoned rather than that application's
-contribution merely omitted — an incomplete union offers live images for
-removal, so a partial keep set is a wrong keep set. Where an enumerated
-application has no Compose file on the host at all, that application SHALL
-contribute nothing and the run SHALL proceed, since an application that has
-never deployed has no image on the host to remove. Where the resulting union is
-empty, the run SHALL remove nothing.
+**A run that cannot determine the keep set completely SHALL remove nothing.** Where an enumerated application's Compose file is present on the host but its references cannot be resolved, the entire run SHALL be abandoned rather than that application's contribution merely omitted — an incomplete union offers live images for removal, so a partial keep set is a wrong keep set. Where an enumerated application has no Compose file on the host at all, that application SHALL contribute nothing and the run SHALL proceed, since an application that has never deployed has no image on the host to remove. Where the resulting union is empty, the run SHALL remove nothing.
 
-**The run SHALL be bounded in duration as a whole** — resolving the keep set
-and enumerating local images included, not only the removals — so that a
-container runtime which stops responding cannot leave the unit running
-indefinitely. Enumeration is a call to the same runtime the removals are.
+**The run SHALL be bounded in duration as a whole** — resolving the keep set and enumerating local images included, not only the removals — so that a container runtime which stops responding cannot leave the unit running indefinitely. Enumeration is a call to the same runtime the removals are.
 
-**The run SHALL report on every exit path, and a run that was abandoned SHALL
-fail.** A run that completed SHALL report how many images it considered and how
-many it removed. Both counts SHALL be deduplicated by image identity, so that
-an image carrying several tags counts once however many removals it took. The
-considered count SHALL be the number of distinct identities the run enumerated.
-The removed count SHALL be the number of **those** identities for which one of
-this run's own removal invocations reported the image deleted — anchored to the
-invocation, not to the host's state at the end of the run. An image a
-concurrent actor removed is therefore not counted as this run's work, and an
-image this run deleted is still counted where a concurrent deploy has since
-re-pulled it. A removal the runtime
-refused, a tag skipped because it no longer named the image it was selected as,
-and a tag dropped from an image that survives under another each leave it
-unchanged. A run abandoned early SHALL instead report which
-condition ended it — an unresolvable or malformed reference set, an
-enumeration the host does not yet carry, an enumeration naming no application,
-an empty keep set, or a failure to enumerate local images — and
-SHALL be distinguishable from a completed run that found nothing to remove.
-Where the enumeration is unavailable because the host has not yet been
-configured with one, the report SHALL say so distinguishably from an
-enumeration that is present and names no application: the two have different
-remedies, and a report that conflates them sends an operator to the inventory
-when the host merely needs a converge.
-Unlike deploy-time reclamation, which SHALL NOT change the outcome of a deploy
-that already succeeded, this unit has no caller to damage and SHALL therefore
-exit non-zero on an abandoned run, so that the host records a failed unit
-rather than a silent one.
+**The run SHALL report on every exit path, and a run that was abandoned SHALL fail.** A run that completed SHALL report how many images it considered and how many it removed. Both counts SHALL be deduplicated by image identity, so that an image carrying several tags counts once however many removals it took. The considered count SHALL be the number of distinct identities the run enumerated. The removed count SHALL be the number of **those** identities for which one of this run's own removal invocations reported the image deleted — anchored to the invocation, not to the host's state at the end of the run. An image a concurrent actor removed is therefore not counted as this run's work, and an image this run deleted is still counted where a concurrent deploy has since re-pulled it. A removal the runtime refused, a tag skipped because it no longer named the image it was selected as, and a tag dropped from an image that survives under another each leave it unchanged. A run abandoned early SHALL instead report which condition ended it — an unresolvable or malformed reference set, an enumeration the host does not yet carry, an enumeration naming no application, an empty keep set, or a failure to enumerate local images — and SHALL be distinguishable from a completed run that found nothing to remove. Where the enumeration is unavailable because the host has not yet been configured with one, the report SHALL say so distinguishably from an enumeration that is present and names no application: the two have different remedies, and a report that conflates them sends an operator to the inventory when the host merely needs a converge. Unlike deploy-time reclamation, which SHALL NOT change the outcome of a deploy that already succeeded, this unit has no caller to damage and SHALL therefore exit non-zero on an abandoned run, so that the host records a failed unit rather than a silent one.
 
-A run ended by its duration bound is the one path that reports nothing itself,
-and SHALL instead be recorded by the init system that bounded it, as a logged
-expiry and a failed unit. A report emitted from within the bounded region
-cannot survive that region being killed, so this path SHALL NOT be specified as
-a line the run prints.
+A run ended by its duration bound is the one path that reports nothing itself, and SHALL instead be recorded by the init system that bounded it, as a logged expiry and a failed unit. A report emitted from within the bounded region cannot survive that region being killed, so this path SHALL NOT be specified as a line the run prints.
 
 #### Scenario: An image superseded by a newer pin is removed
 - **WHEN** the host carries two tags of the same base image repository and only the newer is referenced by any enumerated application's Compose file, and no container holds the older
@@ -650,44 +468,15 @@ a line the run prints.
 - **THEN** the run SHALL take place once after that start, rather than the occurrence being skipped
 
 ### Requirement: Container Logs Are Bounded by the Host's Daemon Configuration
-Ansible SHALL configure the host's container runtime daemon so that a container
-the daemon subsequently creates writes a bounded on-disk log unless that
-container's own definition specifies its logging otherwise: a maximum size per
-log file and a maximum number of retained files, both recorded in the daemon's
-own configuration file on the host.
+Ansible SHALL configure the host's container runtime daemon so that a container the daemon subsequently creates writes a bounded on-disk log unless that container's own definition specifies its logging otherwise: a maximum size per log file and a maximum number of retained files, both recorded in the daemon's own configuration file on the host.
 
-The exception is what a daemon-level default is: a value a container's own
-definition may override. The obligation this requirement makes is that the
-default is bounded, so that a container which says nothing about its logging is
-bounded rather than unlimited — not that no container can ever choose
-otherwise.
+The exception is what a daemon-level default is: a value a container's own definition may override. The obligation this requirement makes is that the default is bounded, so that a container which says nothing about its logging is bounded rather than unlimited — not that no container can ever choose otherwise.
 
-**The bound SHALL be a property of the daemon, not of any application's
-service-definition file.** An application's Compose file can only bound the
-services its author remembered to annotate, and only for applications whose
-Compose files this repository is able to edit — which excludes every
-application deployed here from its own repository. A daemon-level default binds
-both, and binds a service added later without anyone editing it. Placing the
-bound at the daemon SHALL NOT be read as an exception to "Configuration Scope
-Stops at the Container Runtime": the daemon is the runtime, and configuring it
-is inside that boundary, whereas writing a `logging:` stanza into an
-application's Compose file would not be.
+**The bound SHALL be a property of the daemon, not of any application's service-definition file.** An application's Compose file can only bound the services its author remembered to annotate, and only for applications whose Compose files this repository is able to edit — which excludes every application deployed here from its own repository. A daemon-level default binds both, and binds a service added later without anyone editing it. Placing the bound at the daemon SHALL NOT be read as an exception to "Configuration Scope Stops at the Container Runtime": the daemon is the runtime, and configuring it is inside that boundary, whereas writing a `logging:` stanza into an application's Compose file would not be.
 
-**The bound SHALL be a ceiling rather than a retention target.** Its purpose is
-that no container can consume the host's root filesystem, not that logs be
-small. Where the host has no log aggregation, the runtime's own files are the
-only history an incident has to read, and a limit chosen to minimise disk
-rather than to bound it destroys that history for a resource the host has in
-surplus. The chosen values SHALL be justified against the host's actual free
-space, and revisited if log aggregation is introduced.
+**The bound SHALL be a ceiling rather than a retention target.** Its purpose is that no container can consume the host's root filesystem, not that logs be small. Where the host has no log aggregation, the runtime's own files are the only history an incident has to read, and a limit chosen to minimise disk rather than to bound it destroys that history for a resource the host has in surplus. The chosen values SHALL be justified against the host's actual free space, and revisited if log aggregation is introduced.
 
-**The guarantee SHALL be stated as reaching containers created after the
-configuration is applied.** The runtime resolves a container's log options when
-the container is created, so containers already running when the daemon is
-reconfigured retain the configuration they were created with, and a restart of
-the daemon does not change them. A converge SHALL NOT be reported, in this
-repository's documentation or its verification, as having bounded a container
-that predates it.
+**The guarantee SHALL be stated as reaching containers created after the configuration is applied.** The runtime resolves a container's log options when the container is created, so containers already running when the daemon is reconfigured retain the configuration they were created with, and a restart of the daemon does not change them. A converge SHALL NOT be reported, in this repository's documentation or its verification, as having bounded a container that predates it.
 
 #### Scenario: A container created after configuration has a bounded log
 - **WHEN** the container runtime daemon creates a container, whose definition specifies no logging options, on a host Ansible has configured
@@ -706,53 +495,19 @@ that predates it.
 - **THEN** it SHALL name the logging driver and both bounds, so that the guarantee is verifiable from the host's own configuration rather than inferred from each container
 
 ### Requirement: The Host Carries Swap That Survives a Reboot
-Ansible SHALL provide the configured host with swap space, and that swap SHALL
-be active after a converge and again after a reboot without a manual step.
+Ansible SHALL provide the configured host with swap space, and that swap SHALL be active after a converge and again after a reboot without a manual step.
 
-Swap SHALL be backed by a file on the host's root filesystem rather than by a
-partition or an attached volume: a partition cannot be added to an already
-provisioned host without repartitioning it, and an attached network volume makes
-the kernel's last-resort memory tier depend on a network device — the
-dependency least able to tolerate the pressure that makes swap necessary. The
-host's dedicated data volume in particular SHALL NOT be used.
+Swap SHALL be backed by a file on the host's root filesystem rather than by a partition or an attached volume: a partition cannot be added to an already provisioned host without repartitioning it, and an attached network volume makes the kernel's last-resort memory tier depend on a network device — the dependency least able to tolerate the pressure that makes swap necessary. The host's dedicated data volume in particular SHALL NOT be used.
 
-**The swap file SHALL be readable and writable only by `root`.** Its contents
-are whatever the kernel evicted from process memory, so it is a file that can
-hold any secret any process on the host held. This obligation is stated here
-rather than inherited: the existing "Secrets Never Committed in Plaintext and
-Never Left World-Readable on Host" requirement reaches a file that a task
-renders a protected value into, which a swap file is not. The reason is the
-same one, and this host has an unprivileged interactive account for which the
-difference is not academic.
+**The swap file SHALL be readable and writable only by `root`.** Its contents are whatever the kernel evicted from process memory, so it is a file that can hold any secret any process on the host held. This obligation is stated here rather than inherited: the existing "Secrets Never Committed in Plaintext and Never Left World-Readable on Host" requirement reaches a file that a task renders a protected value into, which a swap file is not. The reason is the same one, and this host has an unprivileged interactive account for which the difference is not academic.
 
-**The kernel's swap tendency SHALL be set so that swap is an overflow reserve
-rather than a routine memory tier, and that setting SHALL persist across a
-reboot.** Swap exists here to convert an out-of-memory kill — which selects its
-victim by resident size rather than by which process leaked, so on this host it
-would most likely stop a database or the monitoring stack rather than the
-culprit — into a slowdown that the host's memory-pressure alerting has time to
-report. A default tendency that pages out a working set the host has room for
-serves neither purpose.
+**The kernel's swap tendency SHALL be set so that swap is an overflow reserve rather than a routine memory tier, and that setting SHALL persist across a reboot.** Swap exists here to convert an out-of-memory kill — which selects its victim by resident size rather than by which process leaked, so on this host it would most likely stop a database or the monitoring stack rather than the culprit — into a slowdown that the host's memory-pressure alerting has time to report. A default tendency that pages out a working set the host has room for serves neither purpose.
 
-**Configuring swap SHALL be separable from activating it.** Activation writes to
-the kernel, and the swap-tendency setting is not namespaced, so on any host
-sharing a kernel with others — a container, and therefore this project's
-role-verification harness — activation reaches state the run does not own.
-Splitting the two means the configuration can be verified where activation
-cannot be performed safely, and obliges this repository to state which of the
-two any given verification established.
+**Configuring swap SHALL be separable from activating it.** Activation writes to the kernel, and the swap-tendency setting is not namespaced, so on any host sharing a kernel with others — a container, and therefore this project's role-verification harness — activation reaches state the run does not own. Splitting the two means the configuration can be verified where activation cannot be performed safely, and obliges this repository to state which of the two any given verification established.
 
-**Persistence SHALL be established by the records the host reads at boot** —
-the boot-time mount table and the kernel-parameter directory — and this
-repository SHALL state whether a given verification observed those records or
-observed an actual boot. The two are not the same claim, and the weaker one is
-what a configuration run can make.
+**Persistence SHALL be established by the records the host reads at boot** — the boot-time mount table and the kernel-parameter directory — and this repository SHALL state whether a given verification observed those records or observed an actual boot. The two are not the same claim, and the weaker one is what a configuration run can make.
 
-**A converge against a host whose swap is already active SHALL NOT reformat or
-recreate the backing file.** Writing a fresh swap signature over a file the
-kernel is currently swapping to corrupts the pages it holds, so the run SHALL
-establish the file's current state before acting on it rather than acting
-unconditionally and relying on the file's absence.
+**A converge against a host whose swap is already active SHALL NOT reformat or recreate the backing file.** Writing a fresh swap signature over a file the kernel is currently swapping to corrupts the pages it holds, so the run SHALL establish the file's current state before acting on it rather than acting unconditionally and relying on the file's absence.
 
 #### Scenario: Swap is active after a converge
 - **WHEN** the host-baseline playbook completes against a host with no swap
@@ -783,60 +538,21 @@ unconditionally and relying on the file's absence.
 - **THEN** the run SHALL make no change to the backing file's contents, and SHALL NOT write a new swap signature over a file the kernel is swapping to
 
 ### Requirement: Scheduled Host Units Report Their Own Liveness
-Every scheduled unit **whose definition a role in this repository writes** SHALL
-report the outcome of each activation to the same **external** observer the
-repository's schedule-triggered workflows report to, so that a unit that fails, a
-unit killed by its own bound, and a timer that has stopped being scheduled are
-equally visible. The scope is units this repository defines, not every timer
-present on the host: a package this repository installs may ship timers of its
-own — unattended security updates do — and those are the packager's to define,
-report and bound. As on the continuous-integration side, the observer SHALL alarm on
-silence rather than only on a reported failure: a timer that stops firing leaves
-no failed unit behind, and `systemctl list-units --failed` is a manual read that
-nothing performs on a schedule.
+Every scheduled unit **whose definition a role in this repository writes** SHALL report the outcome of each activation to the same **external** observer the repository's schedule-triggered workflows report to, so that a unit that fails, a unit killed by its own bound, and a timer that has stopped being scheduled are equally visible. The scope is units this repository defines, not every timer present on the host: a package this repository installs may ship timers of its own — unattended security updates do — and those are the packager's to define, report and bound. As on the continuous-integration side, the observer SHALL alarm on silence rather than only on a reported failure: a timer that stops firing leaves no failed unit behind, and `systemctl list-units --failed` is a manual read that nothing performs on a schedule.
 
-The report SHALL come from the init system rather than from inside the unit's
-own script, for the same reason the run's duration bound is the unit's rather
-than a `timeout` inside the script: a run killed from outside the process cannot
-report its own death, and that kill is precisely the case the bound exists for.
-It follows that a unit terminated on expiry of that bound SHALL report a
-failure.
+The report SHALL come from the init system rather than from inside the unit's own script, for the same reason the run's duration bound is the unit's rather than a `timeout` inside the script: a run killed from outside the process cannot report its own death, and that kill is precisely the case the bound exists for. It follows that a unit terminated on expiry of that bound SHALL report a failure.
 
-The report SHALL NOT mutate what the unit manages. Installing or updating the
-reporting SHALL NOT itself perform the unit's work, on the same reasoning
-*Unreferenced Host Images Are Pruned on a Schedule* in this capability already
-gives for its own installation.
+The report SHALL NOT mutate what the unit manages. Installing or updating the reporting SHALL NOT itself perform the unit's work, on the same reasoning *Unreferenced Host Images Are Pruned on a Schedule* in this capability already gives for its own installation.
 
-The address the report is sent to SHALL be delivered from an encrypted source
-and SHALL NOT be left world-readable on the host, per *Secrets Never Committed
-in Plaintext and Never Left World-Readable on Host* in this capability. It
-grants access to nothing, but a party who holds it can suppress the alarm by
-reporting success on the unit's behalf, which is the outcome this requirement
-exists to prevent.
+The address the report is sent to SHALL be delivered from an encrypted source and SHALL NOT be left world-readable on the host, per *Secrets Never Committed in Plaintext and Never Left World-Readable on Host* in this capability. It grants access to nothing, but a party who holds it can suppress the alarm by reporting success on the unit's behalf, which is the outcome this requirement exists to prevent.
 
-The identifier the unit reports under SHALL be distinct from every other
-reporter's — every other unit's and every schedule-triggered workflow's — so that
-one silent reporter is distinguishable from another, and SHALL be recorded in the
-host-bootstrap documentation alongside the secret inventory.
+The identifier the unit reports under SHALL be distinct from every other reporter's — every other unit's and every schedule-triggered workflow's — so that one silent reporter is distinguishable from another, and SHALL be recorded in the host-bootstrap documentation alongside the secret inventory.
 
-Where the address is not supplied, the role SHALL fail naming it, before it
-changes anything on the host, per *A Role's Absent Required Input Is Reported by
-Name* in this capability. It SHALL NOT install the unit with reporting silently
-omitted: a scheduled unit that runs unobserved is the state this requirement
-exists to end, so an absent address is a misconfiguration rather than a mode of
-operation.
+Where the address is not supplied, the role SHALL fail naming it, before it changes anything on the host, per *A Role's Absent Required Input Is Reported by Name* in this capability. It SHALL NOT install the unit with reporting silently omitted: a scheduled unit that runs unobserved is the state this requirement exists to end, so an absent address is a misconfiguration rather than a mode of operation.
 
-A report that could not be delivered SHALL be recorded in the host's own log.
-Where delivery failing is deliberately not allowed to fail the unit — so that a
-unit which did its work correctly is not recorded as having failed because a
-third party was briefly unreachable — the local record is the only trace the host
-keeps, and an operator answering the resulting silence days later otherwise finds
-a successful unit and no account of why nothing was reported.
+A report that could not be delivered SHALL be recorded in the host's own log. Where delivery failing is deliberately not allowed to fail the unit — so that a unit which did its work correctly is not recorded as having failed because a third party was briefly unreachable — the local record is the only trace the host keeps, and an operator answering the resulting silence days later otherwise finds a successful unit and no account of why nothing was reported.
 
-The mechanism by which a report is delivered SHALL be verifiable without reaching
-the external observer, so that the obligations above can be asserted by this
-project's role-behaviour tests, which run with no credential and no network
-egress to a third party.
+The mechanism by which a report is delivered SHALL be verifiable without reaching the external observer, so that the obligations above can be asserted by this project's role-behaviour tests, which run with no credential and no network egress to a third party.
 
 #### Scenario: A failed activation is reported as a failure
 - **WHEN** a scheduled unit exits non-zero

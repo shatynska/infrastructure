@@ -1,8 +1,6 @@
 ## 1. Baseline
 
-Provisioning first, and a recorded pre-implementation baseline for both suites.
-`AGENTS.md`: verification that cannot reach what it needs skips and reports
-success, so an unprovisioned run is indistinguishable from a passing one.
+Provisioning first, and a recorded pre-implementation baseline for both suites. `AGENTS.md`: verification that cannot reach what it needs skips and reports success, so an unprovisioned run is indistinguishable from a passing one.
 
 - [x] 1.1 Provision the working tree per `README.md` "Local setup": `pre-commit install --hook-type pre-commit --hook-type commit-msg`, the pinned Molecule toolchain from `ansible/requirements-test.txt`, and `ansible-galaxy collection install -r ansible/requirements.yml` plus `ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`. Verify `molecule --version` runs and `ansible/roles/geerlingguy.docker/` exists. Note the README's own step 5 says `ansible-galaxy install -r ansible/requirements.yml`, which installs to `~/.ansible/roles` where no scenario will find it — use `-p ansible/roles` as CI does. Until every step has been reached, report verification as not run.
 - [x] 1.2 Record the pre-implementation baseline for the Molecule suite: `cd ansible/roles/platform_data_volume && molecule test --all` and verify the `default` scenario **passes** on the tree as it stands, so any later failure there is attributable to this change and the working path is known good before the discovery guard touches it.
@@ -13,11 +11,7 @@ success, so an unprovisioned run is indistinguishable from a passing one.
 
 ## 2. Derived tests (before implementation)
 
-Written from the delta specs by an author other than whoever implements, and
-before the implementation exists — `AGENTS.md`, "derive tests". Each task below
-names the spec scenario it descends from. Every one of these tests is expected to
-**fail** on the current tree; that failure is the point, and it is what group 1's
-baseline makes attributable.
+Written from the delta specs by an author other than whoever implements, and before the implementation exists — `AGENTS.md`, "derive tests". Each task below names the spec scenario it descends from. Every one of these tests is expected to **fail** on the current tree; that failure is the point, and it is what group 1's baseline makes attributable.
 
 - [x] 2.1 Add `ansible/roles/platform_data_volume/molecule/no-device-discoverable/` (`molecule.yml`, `converge.yml`, `verify.yml`, and `prepare.yml` only if one proves necessary). Base `molecule.yml` on the `default` scenario's — the platform stanza is role-specific — keeping the **same digest-pinned image**, since `iac-cicd-pipeline` requires scenarios naming the same image repository to name the same digest and `.github/tests/test_ci_configuration.py` asserts it. Give the instance a **distinct name** (`platform-data-volume-no-device-instance`): every scenario in this repository names its instance uniquely, and two scenarios of one role sharing a name collide on `create` while a sibling's container is still up. State explicitly whether `test_sequence` is overridden as `ghcr-credential-rejected` does, rather than inheriting the default silently. Verify by running `python3 -m unittest discover --start-directory .github/tests`, which is what enforces the digest pin.
 - [x] 2.2 In that scenario's `converge.yml`, supply **no** `platform_data_volume_device`, letting it default to `""` so on-host discovery runs and finds nothing (a container has no `/dev/disk/by-id/scsi-0HC_Volume_*` entry). Wrap the role include in `block`/`rescue` and write the outcome — `succeeded` or `failed`, plus the failing task's name, action and message — to a JSON marker file on **both** branches, the shape `ansible/roles/deploy_user/molecule/ghcr-credential-rejected/converge.yml` uses and for the reason its comment gives. Verify the marker file exists on the instance after `molecule converge`.
@@ -56,9 +50,7 @@ baseline makes attributable.
 
 ## 6a. AGENTS.md gains the Molecule test row
 
-Operator-directed, and postdating the plan review: recorded here rather than
-queued because a change that adds three Molecule scenarios under a glob the
-project's own testing table does not name should be the change that names it.
+Operator-directed, and postdating the plan review: recorded here rather than queued because a change that adds three Molecule scenarios under a glob the project's own testing table does not name should be the change that names it.
 
 - [x] 6a.1 In `AGENTS.md`'s "Testing" section, change "**two** test commands" to three and add a Molecule row to the table — subject "the behaviour of an Ansible role on a host", command `molecule test --all` run from each role directory, glob `ansible/roles/<name>/molecule/<scenario>/`. Verify by reading the section as a dispatching agent would: it must now be possible to dispatch a test author for a role scenario without being told the pair by hand, which is what this change had to do.
 - [x] 6a.2 Re-point the paragraph that begins "The second exists because" — with three rows, "the second" no longer identifies the `.github/tests` suite. Name that suite explicitly. Verify no other sentence in the section counts or ordinally references the rows.

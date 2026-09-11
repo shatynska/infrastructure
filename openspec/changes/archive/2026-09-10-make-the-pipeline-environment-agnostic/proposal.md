@@ -1,91 +1,25 @@
 ## Why
 
-`terraform/modules/` are parameterised for a second environment — `modules/server`'s
-`delete_protection` variable names "a future staging environment" as its own reason
-for existing — and the README describes staging as "a second
-`terraform/environments/<name>/` folder reusing the same modules". The pipeline does
-not agree. `apply.yml`, `drift.yml` and `pr-validation.yml`'s plan step each pin
-`working-directory: terraform/environments/prod`, so a second folder would be
-formatted and validated by `pr-validation.yml`'s existing discovery loop and then
-**planned by nothing, applied by nothing and drift-checked by nothing**.
+`terraform/modules/` are parameterised for a second environment — `modules/server`'s `delete_protection` variable names "a future staging environment" as its own reason for existing — and the README describes staging as "a second `terraform/environments/<name>/` folder reusing the same modules". The pipeline does not agree. `apply.yml`, `drift.yml` and `pr-validation.yml`'s plan step each pin `working-directory: terraform/environments/prod`, so a second folder would be formatted and validated by `pr-validation.yml`'s existing discovery loop and then **planned by nothing, applied by nothing and drift-checked by nothing**.
 
-This is the enabler for a staging environment (`docs/change-queue.md` entry 49) and,
-through it, for the gated host-configuration workflow (entry 23), which is developed
-against a host that costs nothing rather than against prod.
+This is the enabler for a staging environment (`docs/change-queue.md` entry 49) and, through it, for the gated host-configuration workflow (entry 23), which is developed against a host that costs nothing rather than against prod.
 
-It goes first, and before staging exists, because it is verifiable at N=1: the
-discovery loop runs with a matrix of one element and its acceptance test is that prod
-plans, applies and drifts exactly as it does today. No infrastructure is created, no
-credential is added, and nothing is deployed. Building it first is what lets staging's
-very first `terraform apply` go through the pipeline instead of a workstation.
+It goes first, and before staging exists, because it is verifiable at N=1: the discovery loop runs with a matrix of one element and its acceptance test is that prod plans, applies and drifts exactly as it does today. No infrastructure is created, no credential is added, and nothing is deployed. Building it first is what lets staging's very first `terraform apply` go through the pipeline instead of a workstation.
 
 ## What Changes
 
-- `apply.yml`, `drift.yml` and `pr-validation.yml`'s plan step discover
-  `terraform/environments/*/` and run per environment, replacing three hardcoded
-  `working-directory: terraform/environments/prod` pins. Discovery fails loudly on an
-  empty result rather than letting a dependent job be skipped and reported green.
-- **The environment set is derived from changed paths, not from a directory listing
-  alone.** A change under `terraform/modules/**` selects every environment; a change
-  under `terraform/environments/<name>/` selects only that environment. Without this,
-  editing only staging raises a **`production`** Environment approval request — the
-  exact failure the *Gated Production Apply* requirement forbids, on the ground that an
-  approval prompt with nothing to approve trains the approver not to read. That
-  derivation fails closed: `apply.yml` runs on `push`, where the comparison base can be
-  absent or unresolvable, and reading that as "no environment affected" would apply
-  nothing for a merge that did change infrastructure and report a green run.
-- **`pr-validation.yml`'s plan becomes a matrix job that carries its own secret scan.**
-  `terraform plan` is currently a step in the registered `validate` job, after gitleaks,
-  and *Pull Request Validation Checks* obliges the workflow to fail on a leaked
-  credential "before any `terraform plan` is executed" — an ordering whose assertion is
-  scoped to a single job and goes vacuous, not red, if scan and plan are separated.
-  Running gitleaks inside each matrix job keeps that ordering where a plan actually
-  runs. The other validation checks — formatting, `terraform validate`, `tflint`, Trivy
-  and the two suites — no longer precede a plan, since the job carrying them now
-  concludes on the matrix's behalf and so runs after it. That narrowing is deliberate and
-  is stated in the requirement rather than left to be inferred. A shell loop inside `validate` was considered and rejected: `${{ }}` is
-  evaluated before a step runs, so a loop cannot select a per-environment token, and at
-  N≥2 every environment's plan would run under prod's credential and report a
-  meaningless diff.
-- Per-environment GitHub Environment names, `concurrency` groups and drift-issue
-  titles. The `concurrency` group is more than a rename, though it began as one:
-  *Serialized Terraform Runs* already said "per environment" and only the workflow was
-  singular, but moving the declaration to job level — which a matrix value forces —
-  costs the run its atomicity over the group, so plan jobs and apply jobs are separated
-  into groups of their own rather than sharing one. See design.md decision 9.
-- **The apply stage runs over the environments whose plan passed**, not over the
-  environments the merge affects. `needs:` is scoped to a job rather than to a matrix
-  row, so an apply matrix depending on the plan matrix is skipped in full whenever any
-  single environment's plan fails — one broken environment would stop every other
-  environment's correct change reaching production. *Passed*, not merely *produced*:
-  the destroy-policy gate runs inside the plan job and after the plan exists, so a plan
-  the gate refused is a plan that was produced, and reading existence as success would
-  leave that gate defeated for exactly the plans it stops. The saved plan is therefore
-  published only once every check in its plan job has passed, and the apply stage reads
-  that. See design.md decision 8.
-- **The destroy-policy gate becomes a per-environment policy rather than a constant.**
-  Requiring a `destroy-override` label to tear down staging is friction that will be
-  routed around, and staging's disposability is most of its value. The gate stays
-  mandatory for prod.
-- **Per-environment Hetzner credentials.** A repository secret is single-valued, so
-  once a second environment has its own Hetzner project, one repository-scoped
-  read-only `HCLOUD_TOKEN` cannot serve both. Environment-scoped secrets are not
-  available to the plan jobs, which must declare no `environment:` — that constraint is
-  load-bearing and is not being relaxed. Resolved by matrix-selected secret names.
-- `.github/tests/` gains assertions for the properties above, per *The
-  Continuous-Integration Configuration Is Itself Verified* — **and re-expresses the six
-  existing assertions this change invalidates**, three of which locate the apply job by
-  `environment == "production"`, a literal this change removes, and strengthens a seventh
-  so it fails rather than skips.
+- `apply.yml`, `drift.yml` and `pr-validation.yml`'s plan step discover `terraform/environments/*/` and run per environment, replacing three hardcoded `working-directory: terraform/environments/prod` pins. Discovery fails loudly on an empty result rather than letting a dependent job be skipped and reported green.
+- **The environment set is derived from changed paths, not from a directory listing alone.** A change under `terraform/modules/**` selects every environment; a change under `terraform/environments/<name>/` selects only that environment. Without this, editing only staging raises a **`production`** Environment approval request — the exact failure the *Gated Production Apply* requirement forbids, on the ground that an approval prompt with nothing to approve trains the approver not to read. That derivation fails closed: `apply.yml` runs on `push`, where the comparison base can be absent or unresolvable, and reading that as "no environment affected" would apply nothing for a merge that did change infrastructure and report a green run.
+- **`pr-validation.yml`'s plan becomes a matrix job that carries its own secret scan.** `terraform plan` is currently a step in the registered `validate` job, after gitleaks, and *Pull Request Validation Checks* obliges the workflow to fail on a leaked credential "before any `terraform plan` is executed" — an ordering whose assertion is scoped to a single job and goes vacuous, not red, if scan and plan are separated. Running gitleaks inside each matrix job keeps that ordering where a plan actually runs. The other validation checks — formatting, `terraform validate`, `tflint`, Trivy and the two suites — no longer precede a plan, since the job carrying them now concludes on the matrix's behalf and so runs after it. That narrowing is deliberate and is stated in the requirement rather than left to be inferred. A shell loop inside `validate` was considered and rejected: `${{ }}` is evaluated before a step runs, so a loop cannot select a per-environment token, and at N≥2 every environment's plan would run under prod's credential and report a meaningless diff.
+- Per-environment GitHub Environment names, `concurrency` groups and drift-issue titles. The `concurrency` group is more than a rename, though it began as one: *Serialized Terraform Runs* already said "per environment" and only the workflow was singular, but moving the declaration to job level — which a matrix value forces — costs the run its atomicity over the group, so plan jobs and apply jobs are separated into groups of their own rather than sharing one. See design.md decision 9.
+- **The apply stage runs over the environments whose plan passed**, not over the environments the merge affects. `needs:` is scoped to a job rather than to a matrix row, so an apply matrix depending on the plan matrix is skipped in full whenever any single environment's plan fails — one broken environment would stop every other environment's correct change reaching production. *Passed*, not merely *produced*: the destroy-policy gate runs inside the plan job and after the plan exists, so a plan the gate refused is a plan that was produced, and reading existence as success would leave that gate defeated for exactly the plans it stops. The saved plan is therefore published only once every check in its plan job has passed, and the apply stage reads that. See design.md decision 8.
+- **The destroy-policy gate becomes a per-environment policy rather than a constant.** Requiring a `destroy-override` label to tear down staging is friction that will be routed around, and staging's disposability is most of its value. The gate stays mandatory for prod.
+- **Per-environment Hetzner credentials.** A repository secret is single-valued, so once a second environment has its own Hetzner project, one repository-scoped read-only `HCLOUD_TOKEN` cannot serve both. Environment-scoped secrets are not available to the plan jobs, which must declare no `environment:` — that constraint is load-bearing and is not being relaxed. Resolved by matrix-selected secret names.
+- `.github/tests/` gains assertions for the properties above, per *The Continuous-Integration Configuration Is Itself Verified* — **and re-expresses the six existing assertions this change invalidates**, three of which locate the apply job by `environment == "production"`, a literal this change removes, and strengthens a seventh so it fails rather than skips.
 
-Out of scope, and deliberately: **the Ansible half.** `docs/change-queue.md` entry 24
-placed `host-baseline.yml`'s `hosts: prod` here. It does not belong here — no workflow
-converges Ansible at all, which is entry 23's whole subject, so that line is not
-pipeline work; and it has no second value to take until entry 49 creates a second host
-and its `group_vars`. It moves to 49. Nothing in this change edits `ansible/`.
+Out of scope, and deliberately: **the Ansible half.** `docs/change-queue.md` entry 24 placed `host-baseline.yml`'s `hosts: prod` here. It does not belong here — no workflow converges Ansible at all, which is entry 23's whole subject, so that line is not pipeline work; and it has no second value to take until entry 49 creates a second host and its `group_vars`. It moves to 49. Nothing in this change edits `ansible/`.
 
-Also out of scope: creating any environment. This change is the mechanism; entry 49 is
-its second consumer.
+Also out of scope: creating any environment. This change is the mechanism; entry 49 is its second consumer.
 
 ## Capabilities
 
@@ -95,62 +29,14 @@ None.
 
 ### Modified Capabilities
 
-- `iac-safety-hardening`: *Write Credentials Confined to the Gated Pipeline* says the
-  Read & Write token "SHALL exist in exactly one location: the `production` GitHub
-  Environment secret", and that local work uses "the Read Only token" — both singular.
-  This change makes the credential scheme per-environment, so that requirement is
-  generalised here rather than left to be discovered as false by the change that adds
-  the second environment. Its prohibition is unchanged and extended explicitly to an
-  environment whose Environment requires no reviewer.
-- `iac-cicd-pipeline`: **eight requirements.** Six stop naming prod as the only
-  environment. Two more — *The Specification Record Is Verified in Continuous
-  Integration* and *The Continuous-Integration Configuration Is Itself Verified* — are
-  amended to admit the single literal `if: always()` on the job enclosing their checks,
-  and nothing else. That job is `validate`, which this change makes an aggregator over
-  the plan matrix, and a job with `needs:` is otherwise skipped whenever a dependency
-  fails — producing no status check context at all, which under branch protection is a
-  required check that never reports. `always()` cannot evaluate false, so admitting it
-  preserves those requirements' stated intent (the job must not be skippable) rather
-  than relaxing it; admitting the exact literal rather than a class keeps their closed
-  form. See design.md decision 3a.
-  *Pull Request Plan Visibility*, *Gated Production Apply Applies the Reviewed Plan*
-  and *Scheduled Drift Detection* become per-environment, the latter two gaining
-  scenarios for an environment-scoped path filter and per-environment issue dedup
-  respectively, the first also gaining a fail-closed obligation on resolving which
-  environments a merge affects. *Gated Production Apply* further gains an obligation
-  that an environment be applied only where its own plan **passed every check its plan
-  job performs**, and that a failed plan for one environment not block another's apply —
-  the two halves of one mechanism, since a dependency scoped to the stage rather than to
-  the environment can only choose between them. It also gains the fail-closed shape that
-  resolution takes, which distinguishes a set that cannot be read from an **explicitly
-  empty** one: a merge matching the workflow's path filter while affecting no
-  environment reaches the apply stage with nothing to apply, and that is the correct
-  outcome rather than an error. *Credential Scoping by Privilege* replaces its two-row token table with
-  a per-environment scheme while keeping intact the rule that no plan job declares an
-  `environment:`, and adds an obligation that each GitHub Environment define
-  `HCLOUD_TOKEN` — GitHub silently resolves an absent Environment secret to the
-  repository secret of the same name — with an apply job required to establish it did
-  not resolve that repository value. *Destroy Policy Gate* becomes a per-environment policy with prod's
-  behaviour unchanged. *Serialized Terraform Runs* gains a scenario asserting that two
-  environments do not queue behind each other, and another that a queued plan does not
-  cancel an apply awaiting approval.
+- `iac-safety-hardening`: *Write Credentials Confined to the Gated Pipeline* says the Read & Write token "SHALL exist in exactly one location: the `production` GitHub Environment secret", and that local work uses "the Read Only token" — both singular. This change makes the credential scheme per-environment, so that requirement is generalised here rather than left to be discovered as false by the change that adds the second environment. Its prohibition is unchanged and extended explicitly to an environment whose Environment requires no reviewer.
+- `iac-cicd-pipeline`: **eight requirements.** Six stop naming prod as the only environment. Two more — *The Specification Record Is Verified in Continuous Integration* and *The Continuous-Integration Configuration Is Itself Verified* — are amended to admit the single literal `if: always()` on the job enclosing their checks, and nothing else. That job is `validate`, which this change makes an aggregator over the plan matrix, and a job with `needs:` is otherwise skipped whenever a dependency fails — producing no status check context at all, which under branch protection is a required check that never reports. `always()` cannot evaluate false, so admitting it preserves those requirements' stated intent (the job must not be skippable) rather than relaxing it; admitting the exact literal rather than a class keeps their closed form. See design.md decision 3a. *Pull Request Plan Visibility*, *Gated Production Apply Applies the Reviewed Plan* and *Scheduled Drift Detection* become per-environment, the latter two gaining scenarios for an environment-scoped path filter and per-environment issue dedup respectively, the first also gaining a fail-closed obligation on resolving which environments a merge affects. *Gated Production Apply* further gains an obligation that an environment be applied only where its own plan **passed every check its plan job performs**, and that a failed plan for one environment not block another's apply — the two halves of one mechanism, since a dependency scoped to the stage rather than to the environment can only choose between them. It also gains the fail-closed shape that resolution takes, which distinguishes a set that cannot be read from an **explicitly empty** one: a merge matching the workflow's path filter while affecting no environment reaches the apply stage with nothing to apply, and that is the correct outcome rather than an error. *Credential Scoping by Privilege* replaces its two-row token table with a per-environment scheme while keeping intact the rule that no plan job declares an `environment:`, and adds an obligation that each GitHub Environment define `HCLOUD_TOKEN` — GitHub silently resolves an absent Environment secret to the repository secret of the same name — with an apply job required to establish it did not resolve that repository value. *Destroy Policy Gate* becomes a per-environment policy with prod's behaviour unchanged. *Serialized Terraform Runs* gains a scenario asserting that two environments do not queue behind each other, and another that a queued plan does not cancel an apply awaiting approval.
 
 ## Impact
 
-- `.github/workflows/apply.yml`, `.github/workflows/drift.yml`,
-  `.github/workflows/pr-validation.yml`.
-- `.github/tests/` — new assertions, plus a strengthening of the existing
-  scan-before-plan assertion so it fails rather than skips when the two are in different
-  jobs. This suite is the only mechanism that can check any of it, since the properties
-  are static reads of committed files.
-- `README.md`, `docs/bootstrap-a-new-host.md` and `docs/deferred-work.md` — the staging
-  paragraph corrected, the environment-addition procedure recorded, and the declined
-  requirement rename plus the drift-heartbeat question written where they outlive this
-  change.
-- **Repository settings, which no file here can verify**: per-environment secret names
-  must exist before a second environment is added, and the required status check
-  context registered in branch protection must remain a literal job name. A second
-  environment added without them fails at run time, not at review time.
-- No infrastructure change. No new credential is created by this change; prod's
-  existing `HCLOUD_TOKEN` and `TF_API_TOKEN` placement is preserved as the N=1 case.
+- `.github/workflows/apply.yml`, `.github/workflows/drift.yml`, `.github/workflows/pr-validation.yml`.
+- `.github/tests/` — new assertions, plus a strengthening of the existing scan-before-plan assertion so it fails rather than skips when the two are in different jobs. This suite is the only mechanism that can check any of it, since the properties are static reads of committed files.
+- `README.md`, `docs/bootstrap-a-new-host.md` and `docs/deferred-work.md` — the staging paragraph corrected, the environment-addition procedure recorded, and the declined requirement rename plus the drift-heartbeat question written where they outlive this change.
+- **Repository settings, which no file here can verify**: per-environment secret names must exist before a second environment is added, and the required status check context registered in branch protection must remain a literal job name. A second environment added without them fails at run time, not at review time.
+- No infrastructure change. No new credential is created by this change; prod's existing `HCLOUD_TOKEN` and `TF_API_TOKEN` placement is preserved as the N=1 case.
 - Unblocks `docs/change-queue.md` entry 49, and through it entry 23.

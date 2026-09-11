@@ -19,22 +19,9 @@
 
 ## Not performed
 
-One task in section 2 was not performed. It was left unticked rather than
-recorded, so this change's archived record could not distinguish *this was
-verified* from *nobody said*. It is moved here with its original disposition
-preserved word for word, by the change
-`make-openspec-validation-a-usable-gate`. Nothing this change decided, built or
-specified is altered.
+One task in section 2 was not performed. It was left unticked rather than recorded, so this change's archived record could not distinguish *this was verified* from *nobody said*. It is moved here with its original disposition preserved word for word, by the change `make-openspec-validation-a-usable-gate`. Nothing this change decided, built or specified is altered.
 
 - 2.3 Run this project's full pre-commit verification before considering the change complete
   Reason: `pre-commit`/`gitleaks` aren't installed in this dev environment; ran the equivalent checks manually where available (see task 2.1)
 
-  **Not re-run retroactively.** A `pre-commit run --all-files` today reads
-  today's tree, not the tree this change shipped, so it would be evidence for a
-  different claim than the one this task makes. What has changed since is
-  coverage, not this record: `pr-validation.yml` runs `gitleaks` on every pull
-  request with no condition on it, and runs `docker compose config` on any pull
-  request changing `platform/` — which is where the file this change edited
-  lives. So both checks 2.1 stood in for are now enforced by the pipeline rather
-  than by an author remembering to run them. This task stays not performed; the
-  class of gap it belonged to is closed.
+  **Not re-run retroactively.** A `pre-commit run --all-files` today reads today's tree, not the tree this change shipped, so it would be evidence for a different claim than the one this task makes. What has changed since is coverage, not this record: `pr-validation.yml` runs `gitleaks` on every pull request with no condition on it, and runs `docker compose config` on any pull request changing `platform/` — which is where the file this change edited lives. So both checks 2.1 stood in for are now enforced by the pipeline rather than by an author remembering to run them. This task stays not performed; the class of gap it belonged to is closed.

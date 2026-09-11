@@ -1,9 +1,4 @@
-> **Read `test-plan.md` in this directory before starting.** It is not an
-> OpenSpec-schema artifact, so it does not appear in `openspec instructions
-> apply`'s context and must be opened deliberately. It holds the per-scenario
-> accounting (29 scenarios: 14 covered, 10 partial, 5 uncovered with reasons),
-> the classified pre-implementation baseline, the exact CI invocation, and four
-> questions it deliberately left open.
+> **Read `test-plan.md` in this directory before starting.** It is not an OpenSpec-schema artifact, so it does not appear in `openspec instructions apply`'s context and must be opened deliberately. It holds the per-scenario accounting (29 scenarios: 14 covered, 10 partial, 5 uncovered with reasons), the classified pre-implementation baseline, the exact CI invocation, and four questions it deliberately left open.
 
 ## 0. Derived tests and their baseline — before any implementation
 
@@ -70,20 +65,8 @@
 
 ## Outcomes recorded at archive
 
-- **8.6** — merge commit `c7e516d` triggered only Dependabot Updates. No
-  `Terraform Apply (prod)` run and no `production` Environment approval
-  request, where the preceding merge `4242127` did produce one. The path
-  filter works.
-- **8.7** — dispatched on `main` as run `34046099603`, confirming
-  `workflow_dispatch` resolves once the file is on the default branch. Four
-  roles pass, `platform_data_volume` fails identically to its pull-request
-  run; both results are in `docs/change-queue.md` entry 4, and the failure
-  itself is entry 8.
-- **7.5** — `openspec/specs/iac-cicd-pipeline/spec.md`'s Purpose extended to
-  name both added subjects, in this archive pull request.
-- **Confirm gate** — the operator confirmed the change working on the evidence
-  above and instructed archiving. The destroy-policy gate remains unexercised
-  in the pipeline: it fires only on a merge touching `terraform/**`, and this
-  change touched none. Its four routes were verified against fixtures locally;
-  the next Terraform change exercises it for real.
+- **8.6** — merge commit `c7e516d` triggered only Dependabot Updates. No `Terraform Apply (prod)` run and no `production` Environment approval request, where the preceding merge `4242127` did produce one. The path filter works.
+- **8.7** — dispatched on `main` as run `34046099603`, confirming `workflow_dispatch` resolves once the file is on the default branch. Four roles pass, `platform_data_volume` fails identically to its pull-request run; both results are in `docs/change-queue.md` entry 4, and the failure itself is entry 8.
+- **7.5** — `openspec/specs/iac-cicd-pipeline/spec.md`'s Purpose extended to name both added subjects, in this archive pull request.
+- **Confirm gate** — the operator confirmed the change working on the evidence above and instructed archiving. The destroy-policy gate remains unexercised in the pipeline: it fires only on a merge touching `terraform/**`, and this change touched none. Its four routes were verified against fixtures locally; the next Terraform change exercises it for real.
 

@@ -21,8 +21,7 @@
 
 ## 5. Operator steps outside the repository
 
-These cannot be performed from the repository and are the precondition for
-`ship`'s confirm gate. They are the operator's, not the implementer's.
+These cannot be performed from the repository and are the precondition for `ship`'s confirm gate. They are the operator's, not the implementer's.
 
 - [x] 5.1 Create a GitHub App named exactly `infrastructure-autoupdate`, owned by `shatynska`, with repository permissions Contents: Read and write and Pull requests: Read and write, and no account permissions; verify the App's settings page shows exactly those two and that its URL is `https://github.com/settings/apps/infrastructure-autoupdate`, which is the address the README gives a reader looking for it
 - [x] 5.2 Install the App on `shatynska/infrastructure` only, and verify the installation page lists that single repository

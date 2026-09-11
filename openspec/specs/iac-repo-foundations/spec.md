@@ -105,116 +105,55 @@ The `.terraform.lock.hcl` provider dependency lockfile SHALL be committed to ver
 
 ### Requirement: Source Files Cite Specifications by Path and Changes by Name
 
-A change's planning artifacts move when the change is archived — from
-`openspec/changes/<name>/` to `openspec/changes/archive/<date>-<name>/` — and
-the archive date does not exist until archiving happens. A citation of the
-pre-archive path therefore cannot be written correctly in advance and breaks at
-the moment its change succeeds, in the same commit that proves the change
-worked.
+A change's planning artifacts move when the change is archived — from `openspec/changes/<name>/` to `openspec/changes/archive/<date>-<name>/` — and the archive date does not exist until archiving happens. A citation of the pre-archive path therefore cannot be written correctly in advance and breaks at the moment its change succeeds, in the same commit that proves the change worked.
 
-Committed files outside `openspec/` SHALL cite the repository's own
-specifications and change records in one of two forms, chosen by what is being
-cited:
+Committed files outside `openspec/` SHALL cite the repository's own specifications and change records in one of two forms, chosen by what is being cited:
 
 | What is cited | Form |
 |---|---|
 | A requirement | The path of the specification that holds it — `openspec/specs/<capability>/spec.md` — together with the requirement's own name |
 | Rationale or history held only inside a change — its `proposal.md`, `design.md`, `test-plan.md` or `test-manifest.md` | The change's name and the artifact's name, in prose, with no path |
 
-Archiving merges a change's delta specifications into the main specification, so
-the first form's path is permanent and names the requirement as it currently
-stands rather than as one change once proposed it. The second form has no path
-to break. A citation MAY additionally give a change's archived location as
-`openspec/changes/archive/<date>-<name>/…` once that location exists.
+Archiving merges a change's delta specifications into the main specification, so the first form's path is permanent and names the requirement as it currently stands rather than as one change once proposed it. The second form has no path to break. A citation MAY additionally give a change's archived location as `openspec/changes/archive/<date>-<name>/…` once that location exists.
 
-The first form names the requirement's post-archive home. Where a change
-introduces a **new** capability, archiving is what creates
-`openspec/specs/<capability>/spec.md`, so a citation written during that change
-does not resolve until the change is archived. That interval is accepted: it is
-bounded by the change's own lifetime, after which the path is permanent, and it
-is the inverse of the defect this requirement exists to remove.
+The first form names the requirement's post-archive home. Where a change introduces a **new** capability, archiving is what creates `openspec/specs/<capability>/spec.md`, so a citation written during that change does not resolve until the change is archived. That interval is accepted: it is bounded by the change's own lifetime, after which the path is permanent, and it is the inverse of the defect this requirement exists to remove.
 
-No committed file outside `openspec/` SHALL contain a path naming a change's own
-directory under `openspec/changes/` — that is, `openspec/changes/<segment>` where
-`<segment>` is a change name rather than `archive`, **whether or not a further
-path component follows it**.
+No committed file outside `openspec/` SHALL contain a path naming a change's own directory under `openspec/changes/` — that is, `openspec/changes/<segment>` where `<segment>` is a change name rather than `archive`, **whether or not a further path component follows it**.
 
-The trailing qualification is load-bearing rather than pedantic. Better than a
-third of the citations this requirement removes name the change and stop there —
-`requirement (openspec/changes/connect-platform-deploy-via-tailscale)` — and a
-prohibition written as `openspec/changes/<segment>/` permits every one of them.
-Two earlier attempts to measure this problem each undercounted it by exactly that
-class.
+The trailing qualification is load-bearing rather than pedantic. Better than a third of the citations this requirement removes name the change and stop there — `requirement (openspec/changes/connect-platform-deploy-via-tailscale)` — and a prohibition written as `openspec/changes/<segment>/` permits every one of them. Two earlier attempts to measure this problem each undercounted it by exactly that class.
 
-This prohibition SHALL be asserted by the executable test suite that gates every
-pull request, because the author of such a citation cannot detect it: the
-citation is correct when written, correct when reviewed, and wrong only once the
-change it cites has succeeded.
+This prohibition SHALL be asserted by the executable test suite that gates every pull request, because the author of such a citation cannot detect it: the citation is correct when written, correct when reviewed, and wrong only once the change it cites has succeeded.
 
-That assertion is a static text match, and one rendering lies outside it: a
-citation split across a line break immediately after `openspec/changes/` whose
-change name is a single word with no hyphen. Distinguishing that from ordinary
-prose describing this rule is not possible by text, since a continuation line's
-first word is itself a valid single-word change name. Every change this
-repository has recorded is named in multiple hyphenated words, so the excluded
-rendering is the intersection of two shapes neither of which has occurred.
+That assertion is a static text match, and one rendering lies outside it: a citation split across a line break immediately after `openspec/changes/` whose change name is a single word with no hyphen. Distinguishing that from ordinary prose describing this rule is not possible by text, since a continuation line's first word is itself a valid single-word change name. Every change this repository has recorded is named in multiple hyphenated words, so the excluded rendering is the intersection of two shapes neither of which has occurred.
 
 #### Scenario: A pull request reintroducing the pre-archive citation form is rejected
-- **WHEN** a pull request adds, to a committed file outside `openspec/`, a path
-  naming a change's own directory under `openspec/changes/`
-- **THEN** the required status check SHALL fail on that pull request, naming the
-  file, the line and the citation
+- **WHEN** a pull request adds, to a committed file outside `openspec/`, a path naming a change's own directory under `openspec/changes/`
+- **THEN** the required status check SHALL fail on that pull request, naming the file, the line and the citation
 
 #### Scenario: Archiving a change breaks no citation
-- **WHEN** a change is archived and its directory moves to
-  `openspec/changes/archive/<date>-<name>/`
-- **THEN** no citation in any committed file outside `openspec/` SHALL be
-  invalidated by the move
+- **WHEN** a change is archived and its directory moves to `openspec/changes/archive/<date>-<name>/`
+- **THEN** no citation in any committed file outside `openspec/` SHALL be invalidated by the move
 
 #### Scenario: A requirement is cited at its permanent location
-- **WHEN** a committed file outside `openspec/` cites a requirement that a
-  change introduced or modified
-- **THEN** it SHALL name `openspec/specs/<capability>/spec.md` and the
-  requirement's own name, rather than the delta specification inside the change
-  that proposed it
+- **WHEN** a committed file outside `openspec/` cites a requirement that a change introduced or modified
+- **THEN** it SHALL name `openspec/specs/<capability>/spec.md` and the requirement's own name, rather than the delta specification inside the change that proposed it
 
 #### Scenario: A change's own artifacts are out of scope
-- **WHEN** a change's planning artifacts, live or archived, cite that change's
-  own paths
-- **THEN** the prohibition SHALL NOT apply to them, since they move together
-  with what they cite
+- **WHEN** a change's planning artifacts, live or archived, cite that change's own paths
+- **THEN** the prohibition SHALL NOT apply to them, since they move together with what they cite
 
 ### Requirement: Verification Writing to Shared State Is Namespaced per Working Tree
-Where a verification mechanism in this repository writes to state that outlives
-a single run and is reachable from more than one working tree on the same
-machine, that state SHALL be namespaced per working tree, and the namespace
-SHALL be derived deterministically from the working tree it belongs to.
+Where a verification mechanism in this repository writes to state that outlives a single run and is reachable from more than one working tree on the same machine, that state SHALL be namespaced per working tree, and the namespace SHALL be derived deterministically from the working tree it belongs to.
 
-Determinism is normative rather than incidental: a later session in the same
-working tree SHALL resolve the same namespace, so that state an earlier run left
-behind can be found and removed rather than orphaned.
+Determinism is normative rather than incidental: a later session in the same working tree SHALL resolve the same namespace, so that state an earlier run left behind can be found and removed rather than orphaned.
 
-Where the namespace is absent, the mechanism SHALL refuse to run and SHALL
-report what is missing. It SHALL fail before producing any result, and SHALL NOT
-fall back to state whose sharing could make a run report success — a run that
-silently shares such state can report success having verified nothing about the
-change under test, since it may equally pass against another session's state as
-fail against it, and a verification result that can mean either is not a result.
+Where the namespace is absent, the mechanism SHALL refuse to run and SHALL report what is missing. It SHALL fail before producing any result, and SHALL NOT fall back to state whose sharing could make a run report success — a run that silently shares such state can report success having verified nothing about the change under test, since it may equally pass against another session's state as fail against it, and a verification result that can mean either is not a result.
 
-This prohibition is over state that can carry a result between working trees. It
-does not extend to state whose sharing can only cause a run to fail: a refusal
-reached noisily is not the defect this requirement exists to prevent, and
-demanding that nothing whatever be shared before the refusal would forbid
-mechanisms that are in fact safe.
+This prohibition is over state that can carry a result between working trees. It does not extend to state whose sharing can only cause a run to fail: a refusal reached noisily is not the defect this requirement exists to prevent, and demanding that nothing whatever be shared before the refusal would forbid mechanisms that are in fact safe.
 
-This requirement governs state shared *between working trees on one machine*. It
-places no obligation on continuous integration, where each job is an isolated
-checkout and the condition cannot arise.
+This requirement governs state shared *between working trees on one machine*. It places no obligation on continuous integration, where each job is an isolated checkout and the condition cannot arise.
 
-`AGENTS.md` SHALL carry a section binding this requirement to each service it
-governs, naming the state, the namespace, and how a session takes one. A stated
-rule with nothing bound to it is not enforceable by a reviewer, and this
-repository has already run for months in exactly that state.
+`AGENTS.md` SHALL carry a section binding this requirement to each service it governs, naming the state, the namespace, and how a session takes one. A stated rule with nothing bound to it is not enforceable by a reviewer, and this repository has already run for months in exactly that state.
 
 #### Scenario: Two working trees verify the same subject concurrently
 - **WHEN** two working trees on one machine run the same verification subject at the same time

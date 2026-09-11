@@ -46,33 +46,18 @@ Each task converts every citation in its files to the form Decision 1 sets: a de
 
 ## Outcome
 
-Merged as PR #70 at 2026-09-07T20:00:28Z (`4be7fa7`); `validate` and `discover`
-both passed. The operator confirmed the merge and a healthy deploy.
+Merged as PR #70 at 2026-09-07T20:00:28Z (`4be7fa7`); `validate` and `discover` both passed. The operator confirmed the merge and a healthy deploy.
 
-**Confirm gate: satisfied by observation, not waived.** Same search, same
-exclusions, run against the two trunk commits:
+**Confirm gate: satisfied by observation, not waived.** Same search, same exclusions, run against the two trunk commits:
 
 | | Trunk before (`9420798`) | Trunk after (`4be7fa7`) |
 |---|---|---|
 | Pre-archive citations outside `openspec/` | 75 | 0 |
 | Files carrying them | 46 | 0 |
 
-The rule is in `AGENTS.md` on the trunk and the check is in
-`.github/tests/test_ci_configuration.py` on the trunk, so the count holding at
-zero does not depend on anyone remembering — which is what distinguishes this
-from `sweep-stale-terraform-paths`, which cleaned up, changed no rule, and
-re-accumulated in three weeks.
+The rule is in `AGENTS.md` on the trunk and the check is in `.github/tests/test_ci_configuration.py` on the trunk, so the count holding at zero does not depend on anyone remembering — which is what distinguishes this from `sweep-stale-terraform-paths`, which cleaned up, changed no rule, and re-accumulated in three weeks.
 
-The second half of the observation — that a reintroduction fails the check —
-was demonstrated twice during this change, both times by accident and neither
-staged:
+The second half of the observation — that a reintroduction fails the check — was demonstrated twice during this change, both times by accident and neither staged:
 
-1. The `code-review` skill's mutation check reverted `platform/README.md` to its
-   committed content mid-review, silently restoring six citations. The check
-   went red and named all six by file and line; nothing else in the session
-   noticed. Recorded as `docs/change-queue.md` entry 8a.
-2. Rebasing onto the trunk brought in `reclaim-superseded-app-images`, which had
-   written two fresh pre-archive citations into `deploy_user`'s default
-   scenario. The check caught both on the rebase — a change that passed its own
-   review and merged cleanly still introduced the defect this change exists to
-   stop, one day after it was written. Swept in `9c7ce60`.
+1. The `code-review` skill's mutation check reverted `platform/README.md` to its committed content mid-review, silently restoring six citations. The check went red and named all six by file and line; nothing else in the session noticed. Recorded as `docs/change-queue.md` entry 8a.
+2. Rebasing onto the trunk brought in `reclaim-superseded-app-images`, which had written two fresh pre-archive citations into `deploy_user`'s default scenario. The check caught both on the rebase — a change that passed its own review and merged cleanly still introduced the defect this change exists to stop, one day after it was written. Swept in `9c7ce60`.
