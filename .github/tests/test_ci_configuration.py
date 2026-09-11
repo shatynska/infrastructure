@@ -4772,11 +4772,7 @@ class TestChangeDetectionResolvesTheGatesInput(
             f"the change-filter step in `{discovery_key}` declares no patterns, so "
             "this check would pass having read nothing",
         )
-        unmatched = [
-            path
-            for path in self.CONFIGURATION_PATHS
-            if not any(gh_glob_matches(str(pattern), path) for pattern in patterns)
-        ]
+        unmatched = [path for path in self.CONFIGURATION_PATHS if not _selects(patterns, path)]
         self.assertEqual(
             [],
             unmatched,
@@ -4785,11 +4781,7 @@ class TestChangeDetectionResolvesTheGatesInput(
             "reported as touching nothing, the suite would be skipped, and the "
             "required check would conclude success having verified nothing",
         )
-        overmatched = [
-            path
-            for path in self.NON_CONFIGURATION_PATHS
-            if any(gh_glob_matches(str(pattern), path) for pattern in patterns)
-        ]
+        overmatched = [path for path in self.NON_CONFIGURATION_PATHS if _selects(patterns, path)]
         self.assertEqual(
             [],
             overmatched,
@@ -12247,7 +12239,13 @@ INCLUSION_KEYS = frozenset(
     }
 )
 
-LOOKUP_CALL = re.compile(r"lookup\(\s*['\"]([A-Za-z0-9_.]+)['\"]\s*,(.*?)\)", re.DOTALL)
+# `query()` and its alias `q()` invoke the SAME lookup plugins as `lookup()`
+# and read the same files. A pattern matching only `lookup(` leaves either
+# spelling invisible -- and invisible is worse than unrecognised here, since
+# the refusal branch can only refuse a construction it managed to parse.
+LOOKUP_CALL = re.compile(
+    r"\b(?:lookup|query|q)\(\s*['\"]([A-Za-z0-9_.]+)['\"]\s*,(.*?)\)", re.DOTALL
+)
 TASK_START = re.compile(r"^(\s*)-\s+name:\s")
 MODULE_KEY = re.compile(r"^\s*(?:ansible\.builtin\.|ansible\.posix\.|community\.general\.)?([a-z_]+):")
 # What makes an expression worth resolving. `MOLECULE_SCENARIO_DIRECTORY` and
@@ -12411,10 +12409,13 @@ def _reads_in_play(text: str, scenario_dir: str) -> list[tuple[str, str, str]]:
         # it is not the only one that puts a task on the controller. A literal
         # match on it alone lets any of the others carry a read of an excluded
         # path past this check.
+        # Quoted values and trailing comments are ordinary YAML, and a pattern
+        # anchored to a bare value at end of line silently misses both. `$` is
+        # not the discriminator; the value is.
         delegated = re.search(
-            r"^\s*(?:delegate_to:\s*(?:localhost|127\.0\.0\.1|::1)"
-            r"|connection:\s*local"
-            r"|local_action:)\s*$",
+            r"^\s*(?:delegate_to:\s*[\"']?(?:localhost|127\.0\.0\.1|::1)[\"']?"
+            r"|connection:\s*[\"']?local[\"']?"
+            r"|local_action:)\s*(?:#.*)?$",
             block,
             re.MULTILINE,
         ) or re.search(r"^\s*local_action:", block, re.MULTILINE)
@@ -12467,10 +12468,21 @@ def _reads_in_scenario_definition(text: str, scenario_dir: str) -> list[tuple[st
     SO THIS DOES NOT ENUMERATE KEYS. `provisioner.playbooks.*` and
     `provisioner.inventory.links.*` are documented Molecule options naming
     controller paths, and the second is literally how a scenario would come to
-    read `ansible/inventory/` -- the flagship excluded path. Any scalar under
-    this file that looks like a path is reported unless it is permitted, which
-    is the refusing polarity the requirement asks for rather than a key list
-    that goes stale.
+    read `ansible/inventory/` -- the flagship excluded path. Every scalar in
+    this file is examined instead of a chosen few, which is the refusing
+    polarity the requirement asks for rather than a key list that goes stale.
+
+    THE DISCRIMINATOR IS NAVIGATION, NOT THE PRESENCE OF A SLASH, and the
+    difference is load-bearing in both directions. A value counts where it
+    carries `..`, or a leading `./` or `/` left behind where a variable stood.
+    A slash alone does not: `platforms.image` is a registry reference
+    (`geerlingguy/...@sha256:...`) and `platforms.name` carries one only inside
+    a `${VAR:-default}` fallback, and reporting those made this check red on
+    nine scenarios with nothing meaningful to permit. The cost of the narrower
+    rule is that a repository-root-relative value -- `ansible/inventory/x.yml`,
+    with no navigation -- is passed over. Molecule runs with the role directory
+    as its working directory, so such a value resolves to nothing and is not a
+    spelling a working scenario can use.
     """
     try:
         parsed = yaml.safe_load(text)
@@ -12504,7 +12516,14 @@ def _reads_in_scenario_definition(text: str, scenario_dir: str) -> list[tuple[st
         # this check red on every scenario with nothing meaningful to permit,
         # which is the over-wide failure the criterion exists to avoid.
         substituted = "${" in value
-        bare = re.sub(r"\$\{[^}]+\}", "", value).strip()
+        # SUBSTITUTE THE DEFAULT BACK BEFORE STRIPPING. `${VAR:-../../x.yml}`
+        # carries a real repository path in its fallback, and stripping the
+        # whole construct reduces it to nothing -- the read then disappears
+        # before the navigation test ever runs. Every scenario in this
+        # repository already writes `${VAR:-default}` in `platforms[].name`, so
+        # the spelling is established here rather than hypothetical.
+        bare = re.sub(r"\$\{[^}:]+:-([^}]*)\}", r"\1", value)
+        bare = re.sub(r"\$\{[^}]+\}", "", bare).strip()
         if not bare:
             return
         navigates = ".." in bare or bare.startswith(("./", "/"))
@@ -12578,7 +12597,12 @@ def unpermitted_controller_reads(root: Path | None = None) -> list[str]:
     for definition in authored_scenario_files(base):
         scenario_root = definition.parent
         scenario_dir = scenario_root.relative_to(base).as_posix()
-        for path in sorted(scenario_root.rglob("*.yml")):
+        # Molecule lets a scenario name its plays, and `.yaml` is a play
+        # file like any other. Reading one extension only puts the rest of
+        # the scenario outside this check entirely.
+        for path in sorted(
+            [*scenario_root.rglob("*.yml"), *scenario_root.rglob("*.yaml")]
+        ):
             relative = path.relative_to(base).as_posix()
             text = path.read_text(encoding="utf-8", errors="replace")
             if path.name == "molecule.yml":
