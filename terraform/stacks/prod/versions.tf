@@ -24,10 +24,10 @@ terraform {
 }
 
 provider "hcloud" {
-  # HCLOUD_TOKEN is read from the stack, and WHICH token that is
+  # HCLOUD_TOKEN is read from the environment, and WHICH token that is
   # depends on the job:
   #
-  #   - the gated apply job, which declares `stack: production`,
+  #   - the gated apply job, which declares `environment: production`,
   #     resolves that Environment's Read & Write token;
   #   - every other CI job declares no `environment:` and resolves a
   #     repository-scoped Read Only token — but not by this name. It is

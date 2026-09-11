@@ -254,7 +254,7 @@ Note the divergence this does **not** cover: `commerce-ops` runs its own Postgre
 
 **Not blocked; recorded because an archived change is where it would be lost.** Recovered 2026-09-08 by `make-openspec-validation-a-usable-gate` while settling the red archived records. `add-prod-data-volume`'s task 3.5 was left unticked with the note *"Still open; consider doing this as a follow-up plan-only check"* — real outstanding work, sitting in prose inside a change that had already been archived, which is precisely where nobody would look for it. That task is now disclosed under that change's `## Not performed`; the work it names is here.
 
-`stacks/prod` couples the volume to the server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`, so the volume cannot outlive the server it derives its location from. **That coupling has never been exercised against live state.** `terraform/modules/volume/tests/*.tftest.hcl` cannot reach it — the coupling lives in the environment, not the module, and the module's tests do not evaluate the environment's `count` expression.
+`stacks/prod` couples the volume to the server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`, so the volume cannot outlive the server it derives its location from. **That coupling has never been exercised against live state.** `terraform/modules/volume/tests/*.tftest.hcl` cannot reach it — the coupling lives in the stack, not the module, and the module's tests do not evaluate the stack's `count` expression.
 
 Two plan-only reads, **never applied**:
 

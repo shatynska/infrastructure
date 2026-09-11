@@ -4,7 +4,7 @@
 
 # NOT prod's "main-server", and the difference is load-bearing rather than
 # cosmetic. modules/server sets the SERVER's name from this value directly
-# (only the firewall carries the "<stack>-" prefix), and the hcloud
+# (only the firewall carries the "<environment>-" prefix), and the hcloud
 # inventory plugin takes each host's `inventory_hostname` from the server name.
 # Two hosts sharing one would merge under any inventory that reads both
 # projects, and would share a single `<inventory_hostname>-prune-host-images`

@@ -19,7 +19,7 @@
 # workflow. `production` requires a reviewer.
 #
 # SHALL be distinct from every other stack's: two stacks naming the
-# same GitHub Environment share its WRITE token and its protection rules, so an
+# same GitHub Environment share its WRITE token and its protection rules, so a
 # stack meant to be ungated would hold this one's write credential.
 github_environment: production
 
