@@ -146,12 +146,31 @@ SHADOWED_WRITE_TOKEN = "HCLOUD_TOKEN"
 # 3.6.
 HOST_BASELINE_PLAY = "playbooks/host-baseline.yml"
 
-# The `hcloud` inventory plugin's own option for which address it resolves a
-# host to, and the choice that is the host's public address. Both are the
-# PLUGIN's vocabulary rather than this repository's, so neither is a name the
-# implementing author may pick: the delta's "SHALL default to the address an
-# operator's first converge of a host can reach" resolves to this literal.
+# WHERE THE SELECTION LIVES, AND WHY IT IS NOT `connect_with:`.
+#
+# This file first pinned the plugin's own `connect_with:` option, on the
+# reasonable reading that an option naming which address to resolve to is the
+# option that selects one. Task 1.3's live verification -- the task the change
+# discloses as owed precisely because no static read can stand in for it --
+# established that it cannot carry a per-run value AT ALL: `connect_with` is
+# validated against its `choices:` BEFORE the value is templated, so a Jinja
+# expression there is refused as an invalid choice and the source does not
+# parse, for CI and for a workstation alike.
+#
+# The selection is therefore a `compose:` entry for `ansible_host`, which is a
+# Jinja context by design. What this file asserts is unchanged in substance --
+# a selection exists, it resolves to an environment variable, its default is
+# the public address, and both sources read one variable -- and two assertions
+# are ADDED below, each guarding a way the new mechanism can be got wrong that
+# the old one could not.
+#
+# `public_ipv4` remains the plugin's own vocabulary: it is the value
+# `connect_with` defaults to, and therefore the value `ansible_host` already
+# holds when `compose` runs.
 CONNECT_WITH_OPTION = "connect_with"
+COMPOSE_OPTION = "compose"
+COMPOSED_ADDRESS = "ansible_host"
+STRICT_OPTION = "strict"
 PUBLIC_ADDRESS_CHOICE = "public_ipv4"
 
 # The default branch a merge reaches, and a path under the host-configuration
@@ -172,6 +191,8 @@ REQUIREMENT_ARGUMENT = re.compile(r"-r\s+(\S+)")
 PIN = re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*==\s*([^\s#;]+)")
 DEFAULT_FILTER = re.compile(r"""default\(\s*['"]([A-Za-z0-9_]+)['"]""")
 DISPATCH_INPUT = re.compile(r"(?:inputs|event\.inputs)\.environment\b")
+# A Jinja expression sitting in a plain inventory-option value.
+ACTIONS_TEMPLATE = re.compile(r"\{\{")
 
 # The dispatch input's own name. DERIVED -- tasks.md 3.1 gives the workflow "a
 # free-text `environment` input"; no scenario names it. Used only to locate the
@@ -213,17 +234,27 @@ def pinned_ansible(path: Path) -> str | None:
 
 
 class ConnectionSelection:
-    """One inventory source's `connect_with` option, as it is committed."""
+    """One inventory source's per-run connection-address selection.
+
+    Read from the `compose:` entry for `ansible_host` -- see the note above for
+    why not from `connect_with:`. `strict` and any `connect_with` the source
+    still declares are carried too, because each is a way this mechanism fails
+    that the old one could not.
+    """
 
     def __init__(self, source) -> None:
         self.source = source
-        raw = source.document.get(CONNECT_WITH_OPTION)
-        self.declared = raw is not None
-        self.raw = "" if raw is None else str(raw)
+        composed = (source.document.get(COMPOSE_OPTION) or {}).get(COMPOSED_ADDRESS)
+        self.declared = composed is not None
+        self.raw = "" if composed is None else str(composed)
         match = ENV_LOOKUP.search(self.raw) or BARE_TEMPLATE.search(self.raw)
         self.variable: str | None = match.group(1) if match else None
         fallback = DEFAULT_FILTER.search(self.raw)
         self.default: str | None = fallback.group(1) if fallback else None
+        self.strict = source.document.get(STRICT_OPTION) is True
+        self.templated_connect_with = ACTIONS_TEMPLATE.search(
+            str(source.document.get(CONNECT_WITH_OPTION) or "")
+        ) is not None
 
 
 def connection_selections() -> list[ConnectionSelection]:
@@ -684,6 +715,47 @@ class TestTheConnectionAddressIsSelectableAndDefaultsToThePublicOne(unittest.Tes
             "a run supplying no selection must reach the host's public address, which "
             "is what a first converge of a host not yet on the tailnet requires: "
             + "; ".join(offenders),
+        )
+
+    def test_no_source_templates_the_plugins_own_connect_with_option(self) -> None:
+        """DERIVED, from task 1.3's live verification rather than from a
+        scenario. `connect_with` is choice-validated before templating, so a
+        source carrying a Jinja expression there does not parse at all -- the
+        plugin reports the template text itself as an invalid choice. It reads
+        like the obvious mechanism, which is why it is refused by name."""
+        offenders = sorted(
+            selection.source.relative
+            for selection in self.selections
+            if selection.templated_connect_with
+        )
+        self.assertEqual(
+            [],
+            offenders,
+            "these inventory sources put a template in the plugin's `connect_with` "
+            "option, which is validated against its choices BEFORE it is templated -- "
+            f"so the source does not parse, for CI or for a workstation: {offenders}",
+        )
+
+    def test_every_source_makes_an_unhonourable_selection_fail(self) -> None:
+        """SPECIFIED -- "A selection the inventory cannot honour SHALL fail the
+        run rather than falling back to another address".
+
+        Under the mechanism this repository uses, that is `strict: true`: a
+        `compose` expression that raises is SKIPPED silently without it, leaving
+        `ansible_host` at the public address the plugin already set. The
+        requirement's "rather than falling back" is exactly that fallback.
+        """
+        offenders = sorted(
+            selection.source.relative
+            for selection in self.selections
+            if not selection.strict
+        )
+        self.assertEqual(
+            [],
+            offenders,
+            "these inventory sources do not set `strict: true`, so a connection "
+            "address selection they cannot honour is skipped silently and the run "
+            f"connects to the public address instead of failing: {offenders}",
         )
 
     def test_every_source_reads_the_same_selection_variable(self) -> None:

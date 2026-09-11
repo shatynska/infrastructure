@@ -55,23 +55,40 @@ api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_PROD') }}"
 # and on nothing else. A source that always resolved to the tailnet name would
 # make the bootstrap path unreachable.
 #
-# CI SELECTS `hostname`, which this plugin resolves to the server's Hetzner
-# name. Making that name RESOLVE is the converge job's business and not this
-# file's: it maps the name from `tailscaled`'s own netmap rather than relying
-# on MagicDNS, because `tailscale/github-action` passes neither `--accept-dns`
-# nor its negation and "probably on" is the wrong footing for the mechanism
-# every converge depends on.
+# CI SELECTS `hostname`. Making that name RESOLVE is the converge job's
+# business and not this file's: it maps the name from `tailscaled`'s own
+# netmap rather than relying on MagicDNS, because `tailscale/github-action`
+# passes neither `--accept-dns` nor its negation and "probably on" is the
+# wrong footing for the mechanism every converge depends on.
 #
-# A VALUE THIS PLUGIN DOES NOT RECOGNISE fails at option validation, naming
-# the choices it accepts. It does not fall back to another address: a run that
-# silently reached a host by a route its operator did not choose is worse than
-# one that did not connect.
+# WHY THIS IS `compose:` AND NOT THE PLUGIN'S OWN `connect_with:`, which is
+# what it looks like it should be. `connect_with` is validated against its
+# `choices:` BEFORE the value is templated, so a Jinja expression there is
+# rejected as an invalid choice and the source does not parse AT ALL -- not
+# for CI and not for a workstation either. Established by running it against
+# the live API rather than by reading the plugin: the error names the
+# template text itself as the invalid value. `compose:` is a Jinja context by
+# design, evaluated per host after the plugin has set `ansible_host` from
+# `connect_with`'s default -- so the expression below reads that value as its
+# own default and overrides it only when asked to.
+#
+# A VALUE NEITHER KEY NAMES FAILS THE RUN, which is why this is a mapping
+# index rather than a ternary: an unknown key raises, and `strict: true`
+# below turns that into a failed parse instead of a silently skipped compose.
+# `ansible.cfg`'s `any_unparsed_is_failed` then fails the run. A ternary would
+# quietly hand back the public address, and a run that reached a host by a
+# route its operator did not choose is worse than one that did not connect.
 #
 # Deliberately absent from `ansible/.envrc.example`: the variable is set by
 # the converge job and by nothing else, and offering it to the file operators
 # copy would invite a workstation to select an address its first converge
 # cannot use.
-connect_with: "{{ lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true) }}"
+strict: true
+compose:
+  ansible_host: >-
+    {'public_ipv4': ansible_host, 'hostname': hcloud_name}[
+      lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true)
+    ]
 
 # Groups hosts by the `environment` Hetzner label already applied to every
 # resource (see terraform/modules/server's ssh_key.tf) — this plugin has no
@@ -84,6 +101,13 @@ connect_with: "{{ lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default
 # `groups['staging']` is a missing key rather than an empty list. The guard
 # play at the top of playbooks/host-baseline.yml is what turns that into a
 # refusal; without it a play matching no host exits 0.
+# `strict: true` above reaches `keyed_groups` as well as `compose`, and the key
+# is left exactly as it was because that costs nothing. MEASURED rather than
+# assumed, against the live API: with the label absent, a strict parse does not
+# fail -- the host is simply not grouped, and is dropped from the plugin's own
+# `hcloud` group too. Either way it is not in the environment group a play
+# targets, which is what it was before, and the play's own guard refuses on an
+# empty group with a diagnostic naming the environment.
 keyed_groups:
   - key: hcloud_labels.environment
     separator: ""

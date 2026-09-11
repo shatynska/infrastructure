@@ -49,7 +49,24 @@ The consequence is four near-siblings where there were three, which is the point
 
 The `hcloud` inventory plugin sets `ansible_host` to the server's public IPv4 by default, and the cloud firewall admits SSH from one operator ISP `/24`. A GitHub runner is in neither, so a converge from CI over the public address cannot connect, and widening the firewall to GitHub's ranges is not a boundary worth the name.
 
-The tailnet is already there. `platform-deploy.yml` joins it with an OAuth client tagged `tag:ci`, `hardening` admits SSH from `100.64.0.0/10`, and the operator already logs in that way (§6.4). The plugin has a built-in option for this: `connect_with: hostname` sets `ansible_host` to the server's Hetzner name, which is the host's own hostname and therefore the name its tailnet peer carries.
+The tailnet is already there. `platform-deploy.yml` joins it with an OAuth client tagged `tag:ci`, `hardening` admits SSH from `100.64.0.0/10`, and the operator already logs in that way (§6.4). The plugin has a built-in option naming this: `connect_with: hostname` sets `ansible_host` to the server's Hetzner name, which is the host's own hostname and therefore the name its tailnet peer carries.
+
+**But that option cannot carry the selection, and finding out cost a live run.** `connect_with` is validated against its `choices:` **before** its value is templated, so a Jinja expression there is refused as an invalid choice and the source does not parse at all — not for CI, and not for a workstation either. The implementation was written against the assumption that it would template like `api_token` does; task 1.3's verification against the live API is what disproved it, which is the whole reason that task exists and is the reason it must not be skipped. The error names the template text itself as the invalid value, so it reads as a typo rather than as a mechanism that cannot work.
+
+The selection is therefore a `compose:` entry for `ansible_host` — a Jinja context by design, evaluated per host *after* the plugin has set `ansible_host` from `connect_with`'s own default. So the expression reads that value as its default and overrides it only when asked:
+
+```yaml
+strict: true
+compose:
+  ansible_host: >-
+    {'public_ipv4': ansible_host, 'hostname': hcloud_name}[
+      lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true)
+    ]
+```
+
+**A mapping index rather than a ternary, and `strict: true` rather than neither**, because the requirement says a selection the inventory cannot honour fails the run rather than falling back. An unknown key raises; without `strict` a raising `compose` is skipped *silently*, leaving the public address in place — which is the fallback the requirement forbids. Verified in all three states against the live API: unset gives the public IPv4, `hostname` gives the server name, and an unrecognised value fails the parse, which `ansible.cfg`'s `any_unparsed_is_failed` turns into a failed run.
+
+`strict: true` reaches `keyed_groups` as well, and that was measured rather than assumed: with the `environment` label absent the parse still succeeds and the host is simply not grouped, exactly as before. So the grouping key keeps its exact spelling and the assertion that pins it is untouched.
 
 It cannot be unconditional. The **first** converge of a host happens before the host is on the tailnet at all — joining it is what the `tailscale` role does — so a source that always resolved to the tailnet name would make the bootstrap path unreachable. So each source reads the option from an environment variable and defaults to `public_ipv4`:
 
