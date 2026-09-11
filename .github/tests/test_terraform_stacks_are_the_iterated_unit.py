@@ -365,6 +365,106 @@ def old_root_occurrences(root: Path | None = None) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Reading the committed contents of the stack directories
+#
+# Nothing in this suite read `terraform/stacks/**` in either direction until
+# these were added, and code review found four mis-renames there that the four
+# workflow-facing classes above could not have seen -- three of them
+# re-introductions of the exact defects the same commit was fixing elsewhere.
+# Two properties of this suite put that blind spot where it was: the keeper
+# guard reads the four workflow files and no others, and it reads them through
+# `uncommented()`, which strips comments BY DESIGN.
+#
+# All four defects were in comments. So `uncommented()` is the wrong helper
+# here and is deliberately not used; these read the file as text, and a YAML or
+# HCL parser would be wrong for the same reason.
+# --------------------------------------------------------------------------
+
+# A leading comment marker in any of the three languages under this root --
+# `#` for HCL and YAML, `//` and `--` for the forms HCL also accepts.
+COMMENT_MARKER = re.compile(r"^\s*(?:#+|//+|--)\s?")
+
+
+def stack_root_files(root: Path | None = None) -> list[Path]:
+    """Every committed file under the stack root.
+
+    `walked_files()` prunes `.terraform` anywhere, so a provider cache -- whose
+    vendored CHANGELOG is arbitrary third-party prose and would be read as this
+    repository's own text -- is not reached. Everything else under the root is,
+    including files no parser of this suite's would open.
+    """
+    base = (ROOT if root is None else root) / "terraform" / "stacks"
+    if not base.is_dir():
+        return []
+    return walked_files(base)
+
+
+def committed_prose(text: str) -> str:
+    """A file as one line of prose: each line stripped of leading whitespace
+    and of a leading comment marker, joined with single spaces.
+
+    Two reasons it is flattened rather than read line by line. A sentence in a
+    comment block wraps, and one of the four defects this exists for -- "so an
+    stack" -- straddled the break with a `#` between the article and its noun,
+    so no line-wise read could see it. And a claim about a keeper is a property
+    of the sentence, not of the line it happens to start on.
+    """
+    return " ".join(COMMENT_MARKER.sub("", line).strip() for line in text.splitlines())
+
+
+# The keeper senses, and the shape each one's OVER-sweep takes. DERIVED
+# throughout: no scenario states any of this. The senses come from design.md
+# decision 2's four keepers -- a GitHub Environment, the `environment` label
+# and variable, the environment axis and its inventory paths, and
+# `target_environment` -- plus the two further senses code review's first round
+# established, the OS process environment and a pre-commit hook's environment.
+#
+# Each pattern keys on the SENSE, through the context that identifies it, and
+# never on the word `stack`, which is now correct throughout these files. The
+# entries marked (*) are the ones that fired on real committed defects; the
+# rest are other spellings of the same sense, and are labelled here rather than
+# left to look like findings.
+OVERSWEPT_KEEPERS = {
+    # (*) `stack:` presented as a GitHub Actions job key. There is no such key;
+    # the key is `environment:`, and each file that carried this named one key
+    # two ways inside one comment block.
+    "the GitHub Actions job key": re.compile(r"`stack:|\bgithub_stack\b"),
+    # (*) The `environment` Terraform variable and the label carrying its
+    # value. `modules/server` builds `name = "${var.environment}-${var.name}"`,
+    # so a `"<stack>-"` prefix is that variable's value under a wrong name --
+    # and after entry 62 the two diverge, which is the coincidence design.md
+    # decision 2a says not to bake in.
+    "the Terraform variable and its value": re.compile(
+        r'\bvar\.stack\b|"<stack>-|\bstack\s*=\s*"|\bstack label\b'
+    ),
+    # (*) The OS process environment, which is what `HCLOUD_TOKEN` is read
+    # from and the mechanism the bullets under that sentence qualify.
+    "the OS process environment": re.compile(
+        r"\bstack variable\b|\bprocess stack\b"
+        r"|\b(?:read|reads|set|sets|export|exports|exported|resolve|resolves|resolved)"
+        r" (?:from|in|into) the stack\b"
+    ),
+    # The converge play's group handle, governed by a requirement this change
+    # does not modify at all.
+    "the converge play's group handle": re.compile(
+        r"(?<![A-Za-z0-9_])TARGET_STACK(?![A-Za-z0-9_])|\btarget_stack\b"
+    ),
+    # The environment axis as the inventory names it; entry 62 renames these,
+    # not this change.
+    "the inventory's own axis": re.compile(r"\bstack\.hcloud\.yml\b|\bstack_vars\b"),
+    # A pre-commit hook's environment.
+    "a pre-commit hook's environment": re.compile(r"\bhook stacks?\b"),
+}
+
+# (*) An article stranded by a word-level substitution. Its own check rather
+# than a keeper sense: nothing is renamed wrongly here, the sentence is simply
+# ungrammatical, and the same defect had already been fixed once in
+# `host-converge.yml` before it recurred under this root. Both directions are
+# read, because a sweep can strand an article either way.
+STRANDED_ARTICLE = re.compile(r"\ban stacks?\b|\ba environments?\b")
+
+
+# --------------------------------------------------------------------------
 # Reading the workflows
 # --------------------------------------------------------------------------
 
@@ -2317,6 +2417,260 @@ class TestTheHeadingReadDiscriminates(unittest.TestCase):
             "comment posted on every run",
         )
 
+
+class TestNoKeeperWasSweptInsideTheStackDirectories(unittest.TestCase):
+    """MODIFIED requirements: every requirement this change touches whose
+    subject lives under the stack root -- but the class is DERIVED throughout,
+    and says so. No scenario states what a comment inside a stack directory may
+    say.
+
+    What it is for is the half of the sweep that review caught and the suite
+    could not: `TestTheEnvironmentAxisIsNotRenamedWithTheUnit` guards the four
+    keepers in the four WORKFLOW files, through `uncommented()`. Four
+    mis-renames landed in comments under `terraform/stacks/`, where no
+    assertion looked in either direction.
+    """
+
+    def _files(self) -> list[Path]:
+        files = stack_root_files()
+        self.assertTrue(
+            files,
+            "no file was found under the stack root, so every assertion in this "
+            "class would pass having read nothing",
+        )
+        return files
+
+    def test_the_stack_root_carries_files_to_read(self) -> None:
+        """The converse the three checks below need. At two stacks this is not
+        decoration: a census that returned nothing would satisfy all of them."""
+        by_stack: dict = {}
+        for path in self._files():
+            by_stack.setdefault(path.parent.name, []).append(path.name)
+        self.assertTrue(
+            all(names for names in by_stack.values()),
+            f"a stack directory holds no readable file: {by_stack}",
+        )
+        self.assertEqual(
+            sorted(directory.name for directory in stack_directories()),
+            sorted(by_stack),
+            f"the files read do not cover every stack directory: read {sorted(by_stack)}, "
+            f"stacks {sorted(d.name for d in stack_directories())}",
+        )
+
+    def test_no_file_under_the_stack_root_renames_a_keeper(self) -> None:
+        """DERIVED -- design.md decision 2's four keepers, plus the OS process
+        environment and a pre-commit hook's environment, which code review
+        established as two further senses of the same word.
+
+        Read as PROSE rather than through `uncommented()` or a parser: all four
+        real defects were in comments, which is the blind spot this closes.
+        """
+        for path in self._files():
+            stream = committed_prose(path.read_text(encoding="utf-8", errors="replace"))
+            for sense, pattern in sorted(OVERSWEPT_KEEPERS.items()):
+                match = pattern.search(stream)
+                with self.subTest(file=path.name, stack=path.parent.name, sense=sense):
+                    self.assertIsNone(
+                        match,
+                        f"{path.parent.name}/{path.name} names {sense} as a stack: "
+                        f"{stream[max(0, (match.start() if match else 0) - 60):][:150]!r}. "
+                        "The sweep renames the unit the pipeline iterates and nothing "
+                        "else; this sense is a keeper, and a comment explaining a "
+                        "mechanism in a word that mechanism does not use is the same "
+                        "defect as the identifier one layer out",
+                    )
+
+    def test_no_file_under_the_stack_root_left_an_article_behind(self) -> None:
+        """DERIVED. A word-level substitution strands the article in front of
+        the word it replaced, and the sentence reads as a typo rather than as a
+        rename that went wrong -- which is why this recurred after being fixed
+        once in `host-converge.yml`."""
+        for path in self._files():
+            stream = committed_prose(path.read_text(encoding="utf-8", errors="replace"))
+            match = STRANDED_ARTICLE.search(stream)
+            with self.subTest(file=path.name, stack=path.parent.name):
+                self.assertIsNone(
+                    match,
+                    f"{path.parent.name}/{path.name} reads "
+                    f"{stream[max(0, (match.start() if match else 0) - 60):][:140]!r}, "
+                    "where a substitution left the article of the word it replaced",
+                )
+
+    def test_no_file_under_the_stack_root_carries_a_retired_identifier(self) -> None:
+        """DERIVED -- the UNDER-sweep direction, widened from the four workflow
+        files to these sixteen. `TestTheMatrixAndItsOutputsNameTheStack` reads
+        the workflows only, so a retired identifier quoted in a comment here
+        was asserted by nothing."""
+        for path in self._files():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for label, pattern in sorted(RETIRED_IDENTIFIERS.items()):
+                with self.subTest(file=path.name, stack=path.parent.name, identifier=label):
+                    self.assertIsNone(
+                        pattern.search(text),
+                        f"{path.parent.name}/{path.name} still carries the retired "
+                        f"identifier {label!r}",
+                    )
+
+    def test_the_repository_wide_old_root_sweep_reaches_the_stack_directories(self) -> None:
+        """DERIVED. The other half of the under-sweep answer, and it is a
+        question worth asking rather than assuming: `old_root_occurrences()`
+        walks with `walked_files()`, which prunes `openspec/` and several other
+        trees. It does NOT prune `terraform/stacks/`, so the widened old-root
+        sweep does already cover these files -- and this is what makes that
+        statement checkable rather than a claim in a docstring. It goes red if
+        a later pruning rule quietly removes them from that sweep's reach.
+        """
+        reached = {path.resolve() for path in walked_files(ROOT)}
+        missing = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in self._files()
+            if path.resolve() not in reached
+        )
+        self.assertEqual(
+            [],
+            missing,
+            "the repository-wide old-root sweep does not reach these files under the "
+            f"stack root, so nothing checks them for a stale path: {missing}",
+        )
+
+
+class TestTheStackDirectoryReadsDiscriminate(unittest.TestCase):
+    """DERIVED. Nothing here asserts anything about this change.
+
+    The checks above are a static read of a clean tree, so a green result
+    reports only that the files could be read. The material below is the REAL
+    committed text of the four defects, quoted from `93bef69^`, and the real
+    corrected text from `93bef69` -- not a reconstruction, because a
+    reconstruction would establish that the needles match what this test
+    imagines the defects looked like.
+    """
+
+    # Verbatim from `93bef69^`. Each is followed by the corrected line from
+    # `93bef69`, so every needle is exercised in both directions on the same
+    # sentence -- which is what tells a needle that discriminates from one that
+    # matches the surrounding prose.
+    DEFECTS = {
+        "the GitHub Actions job key": (
+            "  #   - the gated apply job, which declares `stack: production`,\n"
+            "  #     resolves that Environment's Read & Write token;",
+            "  #   - the gated apply job, which declares `environment: production`,\n"
+            "  #     resolves that Environment's Read & Write token;",
+        ),
+        "the OS process environment": (
+            "  # HCLOUD_TOKEN is read from the stack, and WHICH token that is\n"
+            "  # depends on the job:",
+            "  # HCLOUD_TOKEN is read from the environment, and WHICH token that is\n"
+            "  # depends on the job:",
+        ),
+        "the Terraform variable and its value": (
+            "# (only the firewall carries the \"<stack>-\" prefix), and the hcloud\n"
+            "# inventory plugin takes each host's `inventory_hostname` from the server name.",
+            "# (only the firewall carries the \"<environment>-\" prefix), and the hcloud\n"
+            "# inventory plugin takes each host's `inventory_hostname` from the server name.",
+        ),
+    }
+
+    # The fourth defect, which is not a keeper sense but a stranded article --
+    # and the one no line-wise read could have caught, because the article and
+    # its noun sit on either side of a comment marker.
+    STRANDED = (
+        "# same GitHub Environment share its WRITE token and its protection rules, so an\n"
+        "# stack meant to be ungated would hold this one's write credential.",
+        "# same GitHub Environment share its WRITE token and its protection rules, so a\n"
+        "# stack meant to be ungated would hold this one's write credential.",
+    )
+
+    def test_the_prose_stream_joins_a_sentence_split_across_comment_lines(self) -> None:
+        self.assertIn(
+            "so an stack meant to be ungated",
+            committed_prose(self.STRANDED[0]),
+            "the prose stream did not bring an article and its noun back together "
+            "across the comment marker between them, so the defect it exists for "
+            "would be invisible to it",
+        )
+
+    def test_each_keeper_needle_reports_the_defect_it_was_written_for(self) -> None:
+        """The load-bearing direction. A needle that matched nothing would let
+        all four defects through exactly as the suite did."""
+        for sense, (defective, _) in self.DEFECTS.items():
+            with self.subTest(sense=sense):
+                self.assertIsNotNone(
+                    OVERSWEPT_KEEPERS[sense].search(committed_prose(defective)),
+                    f"the needle for {sense} does not report the real committed "
+                    f"defect it was written for: {defective!r}",
+                )
+        self.assertIsNotNone(
+            STRANDED_ARTICLE.search(committed_prose(self.STRANDED[0])),
+            "the stranded-article needle does not report the real committed defect",
+        )
+
+    def test_no_needle_fires_on_the_corrected_text(self) -> None:
+        """The other direction, and the one that stops the class being
+        satisfiable only by reverting the fix: the corrected sentences say the
+        SAME things about the same mechanisms, and none of them is an
+        offence."""
+        for sense, (_, corrected) in self.DEFECTS.items():
+            stream = committed_prose(corrected)
+            for other, pattern in sorted(OVERSWEPT_KEEPERS.items()):
+                with self.subTest(sense=sense, needle=other):
+                    self.assertIsNone(
+                        pattern.search(stream),
+                        f"the needle for {other} fires on text that is CORRECT: "
+                        f"{corrected!r}",
+                    )
+        self.assertIsNone(
+            STRANDED_ARTICLE.search(committed_prose(self.STRANDED[1])),
+            "the stranded-article needle fires on the corrected sentence",
+        )
+
+    def test_no_needle_fires_on_the_keeper_senses_written_correctly(self) -> None:
+        """Broader than the pair above: every keeper sense, spelled the way
+        this repository spells it. A needle keyed on the word `stack` rather
+        than on the sense would light these up, and the only route to green
+        would be the over-sweep the class exists against."""
+        kept = (
+            "the gated apply job declares `environment: production`",
+            "github_environment: production",
+            'name = "${var.environment}-${var.name}"',
+            'environment = "prod"',
+            "HCLOUD_TOKEN is read from the environment",
+            "TARGET_ENVIRONMENT is exported into the process environment",
+            "the inventory source is ansible/inventory/prod.hcloud.yml",
+            "a pre-commit hook environment is built against a specific interpreter",
+            "every stack declares its own pipeline configuration",
+            "the stack's own GitHub Environment gates its apply",
+        )
+        stream = committed_prose("\n".join(f"# {line}" for line in kept))
+        for sense, pattern in sorted(OVERSWEPT_KEEPERS.items()):
+            with self.subTest(sense=sense):
+                self.assertIsNone(
+                    pattern.search(stream),
+                    f"the needle for {sense} fires on a keeper written correctly",
+                )
+        self.assertIsNone(STRANDED_ARTICLE.search(stream))
+
+    def test_the_stack_file_census_skips_a_providers_cache(self) -> None:
+        """`.terraform/` holds a vendored provider and its CHANGELOG -- third-
+        party prose this repository did not write. Read as though it were
+        committed text, it would decide these assertions."""
+        directory = tempfile.mkdtemp(prefix="stack-files-")
+        tree = Path(directory)
+        # The suite's own removal idiom, borrowed rather than re-imported:
+        # this module imports no `shutil`, and adding one for a cleanup would
+        # widen its import surface for no reading it does.
+        self.addCleanup(TestTheseReadsDiscriminate._remove, directory)
+        stack = tree / "terraform" / "stacks" / "alpha"
+        (stack / ".terraform" / "providers").mkdir(parents=True)
+        (stack / "main.tf").write_text("# fine\n", encoding="utf-8")
+        (stack / ".terraform" / "providers" / "CHANGELOG.md").write_text(
+            "a vendored changelog mentioning `stack:` and an stack\n", encoding="utf-8"
+        )
+        found = [path.name for path in stack_root_files(tree)]
+        self.assertEqual(
+            ["main.tf"],
+            found,
+            f"the census read inside a provider cache: {found}",
+        )
 
 if __name__ == "__main__":
     unittest.main()

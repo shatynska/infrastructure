@@ -650,3 +650,43 @@ Both files at `HEAD` are clean under the widened pattern, and the widened sweep 
     Ran 769 tests — OK
 
 769 = 766 + the three discriminators. Nothing outside `.github/tests/` was touched; the two instances were already corrected.
+
+## Fifth pass — nothing read `terraform/stacks/**` in either direction
+
+Code review round two found four mis-renames in files the sweep had touched, three of them re-introductions of defects the same commit was fixing elsewhere: the `environment:` job key described as `` `stack: production` ``, "HCLOUD_TOKEN is read from the stack" where the OS process environment is meant, a `"<stack>-"` prefix that is the `environment` Terraform variable's value, and "so an stack" stranded across a line break. All four were corrected in `93bef69` before this pass.
+
+**The reusable finding is not the four instances, it is where they landed.** `TestTheEnvironmentAxisIsNotRenamedWithTheUnit` guards the keepers in the four **workflow** files, and it reads them through `uncommented()`, which strips comments by design. All four defects were in comments, under a root **no assertion in this suite read in either direction**. So the sweep's own fixes landed precisely where the tests do not look, and review was the only thing between them and the trunk — catching them on its second pass, not its first.
+
+### The under-sweep direction, answered rather than assumed
+
+`old_root_occurrences()` walks with `walked_files()`, which prunes `openspec/`, `.git`, `.terraform`, `__pycache__`, `node_modules`, the vendored Galaxy role and every working tree — **but not `terraform/stacks/`**. So the widened old-root sweep already reaches all sixteen files, and it was verified rather than reasoned: the whole-tree walk's file set contains every one of them.
+
+That is now a check rather than a claim in a docstring. `test_the_repository_wide_old_root_sweep_reaches_the_stack_directories` compares the two censuses and goes red if a later pruning rule quietly removes these files from that sweep's reach. Retired **identifiers** were a genuine gap — `TestTheMatrixAndItsOutputsNameTheStack` reads the four workflows only — and `test_no_file_under_the_stack_root_carries_a_retired_identifier` widens that sweep to these sixteen.
+
+### The over-sweep direction, which is the one that bit
+
+`OVERSWEPT_KEEPERS` is a table of **senses**, not of instances. Its six entries come from `design.md` decision 2's four keepers — a GitHub Environment, the `environment` variable and the label carrying its value, the environment axis and its inventory paths, and `target_environment`/`TARGET_ENVIRONMENT` — plus the two further senses review's first round established: the OS process environment and a pre-commit hook's environment. Each pattern keys on the **context that identifies the sense** and never on the word `stack`, which is now correct throughout these files. The three entries that fired on real committed defects are marked `(*)` in the table; the rest are other spellings of the same senses, labelled as such rather than left looking like findings.
+
+`STRANDED_ARTICLE` is separate, because it is a different class: nothing is renamed wrongly, the sentence is simply ungrammatical. Both directions are read (`an stack`, `a environment`), since a sweep can strand an article either way.
+
+**Two constraints on the reads, both load-bearing.** They read the file as **text** — not through `uncommented()`, and not through a YAML or HCL parser, either of which would discard exactly the comments this closes. And they read it as a **prose stream**: each line stripped of leading whitespace and of a leading comment marker, joined with single spaces. The fourth defect straddled a line break with a `#` between the article and its noun, so no line-wise read could have seen it at all.
+
+### That it discriminates — against the real defects, not a reconstruction
+
+**Fixture discriminators (5), permanent.** Their material is the verbatim committed text of each defect from `93bef69^` **paired with its corrected line from `93bef69`**, so every needle is exercised in both directions on the same sentence — which is what separates a needle that discriminates from one matching the surrounding prose. A sixth kind of case holds that no needle fires on the keeper senses spelled the way this repository spells them (`` `environment: production` ``, `name = "${var.environment}-${var.name}"`, `environment = "prod"`, "read from the environment", `TARGET_ENVIRONMENT`, `prod.hcloud.yml`, "a pre-commit hook environment"), because a needle keyed on the word rather than the sense would light all of those up and the only route to green would be the over-sweep the class exists against. One more establishes that the census skips a provider cache — `.terraform/` holds a vendored CHANGELOG whose third-party prose would otherwise decide these assertions.
+
+**And the real tree.** The sixteen files were materialised from `git show 93bef69^:<path>` into a scratch tree and the new checks run against it, with the repository's own working tree untouched:
+
+| Revision | keeper check | stranded-article check | retired-identifier check |
+|---|---|---|---|
+| `93bef69^` (the four defects) | **RED — 5 subtests**: `prod/versions.tf` (job key, process environment), `staging/versions.tf` (job key, process environment), `staging/terraform.tfvars` (Terraform variable) | **RED — 1**: `prod/pipeline.yml` | green |
+| `93bef69` (corrected) | green | green | green |
+
+Six reported occurrences across the four defect classes, each naming the file and the sense. The retired-identifier check is green at both revisions, which is stated rather than glossed: those files carried no retired identifier at either, so it covers that direction going forward rather than having caught anything here.
+
+### Counts
+
+    python3 -m unittest discover --start-directory .github/tests
+    Ran 779 tests — OK
+
+779 = 769 + 5 checks + 5 discriminators. Nothing outside `.github/tests/` was touched.
