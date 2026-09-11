@@ -428,15 +428,20 @@ jobs:
       # apply job could never have fallen back to, leaving the guard passing in
       # exactly the cases it exists to catch.
       #
-      # THAT NAME IS NOW AN UNSET REPOSITORY SECRET, AND THE GUARD IS UNCHANGED
+      # NO ENVIRONMENT DECLARES THAT NAME ANY MORE, AND THE GUARD IS UNCHANGED
       # BY IT. `apply-host-configuration-through-a-gated-workflow` renamed
       # prod's read-only secret, because a job declaring an `environment:` --
       # the host converge -- resolved the old name to the Read & Write token.
-      # So this read now yields the empty string: the digest is of the run id
-      # alone, and an Environment that omits its own write token still resolves
-      # the same empty value and still collides here. If anything the guard
-      # became sharper, since the value it compares against is no longer a real
-      # token that could authenticate anywhere.
+      #
+      # What THIS read resolves to is a separate question from what any
+      # declaration says, and the two are easy to run together: it is whatever
+      # the REPOSITORY secret of this name holds, declared by anyone or not.
+      # That secret is deleted as the last step of that change's migration, so
+      # before then this digests prod's real read-only token and afterwards the
+      # empty string. The guard is live in both states -- neither value is any
+      # Environment's write token -- which is the property that matters, and it
+      # is why the deletion could be sequenced after the first production
+      # converge rather than around this step.
       #
       # Salted with this run's id, so the digest is useless outside the run that
       # produced it and nothing durable about either secret reaches the
@@ -913,12 +918,12 @@ jobs:
       # define `HCLOUD_TOKEN` produces.
       #
       # Live rather than dormant: on every apply the digesting job resolves the
-      # repository-scoped `HCLOUD_TOKEN`, which no environment declares any
-      # more and which therefore resolves to the empty string, while this job
-      # holds its own Environment's write token -- so the digests differ and the
-      # check passes for the right reason. Were the Environment's secret ever
-      # removed, this job would resolve that same empty value and it would
-      # fire.
+      # repository-scoped `HCLOUD_TOKEN` -- a real read-only token until that
+      # migration's last step deletes it, the empty string afterwards -- while
+      # this job holds its own Environment's write token, so the digests differ
+      # and the check passes for the right reason in both states. Were the
+      # Environment's secret ever removed, this job would resolve whichever of
+      # the two the repository holds, match it, and fire.
       - name: Establish that this Environment supplied its own write token
         env:
           EXPECTED_REPOSITORY_DIGEST: ${{ needs.plan.outputs.repository-token-digest }}

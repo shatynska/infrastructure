@@ -144,6 +144,21 @@ jobs:
             name="${base%"$source_suffix"}"
             discovered_names="${discovered_names}${name} "
 
+            # The NAME reaches more surfaces than either declared field does --
+            # the `-i` path, the `--vault-id` label, `-e target_environment=`,
+            # the concurrency group, and the tab-separated record built below,
+            # which a tab in a filename would corrupt into another
+            # environment's row. Refused here for the same reason the two
+            # fields are, and it takes a pathological committed filename to
+            # reach.
+            case "$name" in
+              "" | *[!A-Za-z0-9_-]*)
+                echo "::error::${name}: '${inventory_root}/${base}' yields an environment name that is not letters, digits, underscores and dashes. That name becomes an inventory path, a vault-id label, a play variable and a concurrency group."
+                refused=1
+                continue
+                ;;
+            esac
+
             directory="${environments_root}/${name}"
             declaration="${directory}/${declaration_name}"
             group_vars="${group_vars_root}/${name}.yml"
@@ -248,7 +263,11 @@ jobs:
           # are NOT refused and mean every environment discovered: every `push`
           # supplies an empty value, so conflating empty with unresolvable would
           # fail discovery on every merge. Only a non-empty value is matched.
-          requested="${REQUESTED_ENVIRONMENT:-}"
+          # Trimmed before it is read, so a value that is only whitespace is
+          # EMPTY rather than an environment discovery did not find. The
+          # distinction below is absent-or-empty against named, and this is the
+          # one input a human types by hand.
+          requested="$(printf '%s' "${REQUESTED_ENVIRONMENT:-}" | tr -d '[:space:]')"
           if [ -n "$requested" ]; then
             if ! awk -F'\t' -v want="$requested" '$1 == want { found = 1 } END { exit !found }' "$records"; then
               echo "::error::This run was requested for '${requested}', which discovery did not find. What it did find: ${discovered_names}"
@@ -302,11 +321,24 @@ jobs:
           {
             echo '### Host configuration — what this run will apply'
             echo
+            # A base that does not RESOLVE is the third case, and it must not be
+            # allowed to fail this job. `converge` declares `needs: [discover,
+            # publish]`, so a failure here blocks every environment's converge —
+            # and a force-push or a rewritten history is not a reason to stop
+            # configuring hosts. It reads as the dispatch case does: no diff to
+            # show, and the run applies the committed tree.
+            #
+            # `apply.yml` refuses on this same condition, and the difference is
+            # deliberate: there, an unresolvable base means the set of affected
+            # environments cannot be computed, so applying the wrong set is the
+            # risk. Here the set comes from discovery and the diff is a courtesy
+            # to a reader.
+            if [ -n "${BEFORE_SHA:-}" ] && [ "${BEFORE_SHA:-}" != "$empty_tree" ] \
+               && ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              BEFORE_SHA=""
+            fi
             if [ -z "${BEFORE_SHA:-}" ] || [ "${BEFORE_SHA:-}" = "$empty_tree" ]; then
-              # A dispatched run carries no comparison base. Saying so beats an
-              # empty code fence, which reads as "nothing changed" — and what a
-              # dispatched converge applies is the committed tree, not a diff.
-              echo 'This run was requested by hand and carries no comparison base, so there is no diff to show. It applies the committed host configuration at this ref.'
+              echo 'This run carries no usable comparison base — it was requested by hand, or the base no longer resolves after a force-push — so there is no diff to show. It applies the committed host configuration at this ref.'
             else
               echo '```diff'
               git diff "$BEFORE_SHA" "$AFTER_SHA" -- ansible/
@@ -469,16 +501,26 @@ jobs:
       #   which is inside `deploy_user` — the fourth role — so without this a
       #   wrong password installs Docker, enables UFW and joins the tailnet
       #   before it fails, for a reason that had nothing to do with the host.
-      #   `--list` serialises the group's variables, which forces every block to
-      #   decrypt, and it exercises the Hetzner token and the grouping too.
+      #   `ansible-inventory --list` is NOT what proves it, and an earlier draft
+      #   of this step believed it was: under the pinned `ansible-core` 2.21.3 it
+      #   serialises with the `inventory_legacy` profile, which PRESERVES a
+      #   vaulted value as `{"__ansible_vault": "<ciphertext>"}` rather than
+      #   decrypting it. Verified against 2.21.3 with a labelled block: a wrong
+      #   `--vault-id` exits 0, with output byte-identical to the right one. So
+      #   the `ansible ... -m debug` line below is the proof: templating
+      #   `hostvars[...]` forces every vaulted value that host carries, which is
+      #   what reaches prod's unlabelled `1.1` block too, and it prints a LENGTH
+      #   rather than a value. A wrong password exits 2 with "Attempt to use
+      #   undecryptable variable".
       #
-      #   IT DERIVES THE ADDRESS. Serialising those variables means PRINTING
-      #   them, so the output must reach neither the log nor the disk: `jq`
-      #   narrows the document to the one field wanted. `-e` makes an empty
-      #   result a non-zero exit and `pipefail` makes a failure on the left of
-      #   the pipe fail the step. `jq`'s own stderr is discarded because a parse
-      #   error quotes its input, and a Vault-decrypted value is not a registered
-      #   secret, so nothing would mask it.
+      #   IT DERIVES THE ADDRESS, from the environment's own GROUP rather than
+      #   from every host the source returns. The two coincide today and are not
+      #   the same set: `_meta.hostvars` carries every server in that Hetzner
+      #   project, and the play converges `hosts: {{ target_environment }}`. A
+      #   server that is not in the group is one this job would keyscan and never
+      #   configure. `-e` makes an empty result a non-zero exit and `pipefail`
+      #   makes a failure on the left of the pipe fail the step; `jq`'s own
+      #   stderr is discarded, because a parse error quotes its input.
       #
       #   IT MAKES THAT ADDRESS RESOLVE, without depending on MagicDNS.
       #   `tailscale/github-action` passes `--accept-routes` and neither
@@ -508,28 +550,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          # THE TWO FAILURES ARE SEPARATED, because they send an operator to
-          # different places and only one of them names itself.
+          # THREE FAILURES, SEPARATED, because they send an operator to three
+          # different places and only the first names itself.
           #
-          # `ansible-inventory` failing is a rejected Hetzner token or a Vault
-          # password that does not decrypt this environment's variables, and it
-          # says so on its own stderr — which is NOT redirected, for exactly
-          # that reason. Only `jq`'s stderr is discarded below.
-          #
-          # The document it prints carries decrypted Vault values, so it is held
-          # in a variable and piped: it reaches neither the log nor the disk, and
-          # `jq` narrows it to the one field wanted.
+          # ONE: the Hetzner credential. `ansible-inventory` says so on its own
+          # stderr, which is NOT redirected for exactly that reason.
           if ! inventory=$(ansible-inventory -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" --list \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"); then
-            echo "::error::$TARGET_ENVIRONMENT: resolving the inventory failed, so either its Hetzner credential was rejected or its Vault password does not decrypt this environment's variables. The cause is above, from Ansible itself. This step is what stops that becoming a partially-converged host."
+            echo "::error::$TARGET_ENVIRONMENT: resolving the inventory failed, so its Hetzner credential was absent or rejected. The cause is above, from Ansible itself. This step is what stops that becoming a partially-converged host."
             exit 1
           fi
 
-          # An empty result here is the environment's group resolving to no
+          # TWO: the Vault password. This is the line that actually proves it --
+          # see the block above for why `--list` does not. Templating
+          # `hostvars[...]` forces every vaulted value this host carries, and
+          # `to_json | length` means what is printed is a NUMBER: the values are
+          # decrypted in the process and never rendered.
+          #
+          # `-c local` and `-m debug` so nothing connects to anything: this is a
+          # statement about secrets, and it must not be the step that first
+          # touches the host.
+          if ! ansible -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" "$TARGET_ENVIRONMENT" \
+              -c local -m debug -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
+              --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"; then
+            echo "::error::$TARGET_ENVIRONMENT: this environment's variables did not decrypt, so the Vault password in ANSIBLE_VAULT_PASSWORD is not the one its group_vars were encrypted under. Ansible names the undecryptable variable above. Left to the play, this would have surfaced four roles in, on an already-changed host."
+            exit 1
+          fi
+
+          # THREE: an empty result is the environment's GROUP resolving to no
           # host. The play's own guard has a careful diagnostic for that, which
-          # this step pre-empts by failing first — so it says it here instead.
-          if ! addresses=$(printf '%s' "$inventory" | jq -er '._meta.hostvars | to_entries[] | .value.ansible_host' 2>/dev/null); then
-            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but it names no host to converge. The environment is misspelled, its source belongs to a different Hetzner project, or its server does not exist."
+          # this step pre-empts by failing first -- so it says it here instead.
+          # Selected from the group rather than from `_meta.hostvars`, so the
+          # set keyscanned is the set the play converges.
+          if ! addresses=$(printf '%s' "$inventory" | jq -er --arg env "$TARGET_ENVIRONMENT" \
+              '.[$env].hosts[] as $host | ._meta.hostvars[$host].ansible_host' 2>/dev/null); then
+            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this environment's group names no host to converge. The environment is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different environment label."
             exit 1
           fi
 
@@ -541,9 +596,19 @@ jobs:
               sleep 3
             done
             if [ -z "$peer" ]; then
-              echo "::error::${TARGET_ENVIRONMENT}: '${address}' is in no tailnet peer this runner can see. A stale peer of the same name left behind by a rebuild is the likeliest cause — Tailscale suffixes a rejoining host and the old node keeps the bare name."
+              # The causes, in the order they actually occur. The stale-peer one
+              # is listed because nothing else would suggest it, not because it
+              # is the likeliest: a rebuild leaves the old node holding the bare
+              # name while the new one joins suffixed.
+              echo "::error::${TARGET_ENVIRONMENT}: '${address}' matches no tailnet peer this runner can see. Either the host is not on the tailnet — which is the state of a host whose first converge has not run, and of a new environment's first merge; or the connection-address selection is not in effect, so this is a public address rather than a server name; or the server's name is not the name its peer carries, which task 7.4 exists to rule out; or a rebuild left a stale peer holding that name."
               exit 1
             fi
+            # The derived pair is the evidence that the address selection is in
+            # effect, and 7.5 is where it is read. The NAME is printed and the
+            # tailnet address is not: `platform-deploy.yml` keeps the same class
+            # of value in a secret, so one obtained here — unregistered, and
+            # therefore unmasked — does not belong in a run log.
+            echo "$TARGET_ENVIRONMENT: converging '$address', resolved from the tailnet netmap"
             printf '%s %s\n' "$peer" "$address" | sudo tee -a /etc/hosts >/dev/null
 
             key=""
@@ -553,7 +618,7 @@ jobs:
               sleep 3
             done
             if [ -z "$key" ]; then
-              echo "::error::${TARGET_ENVIRONMENT}: '${address}' (${peer}) offered no host key within the wait. The peer resolves but does not answer, so it is unreachable rather than not yet propagated."
+              echo "::error::${TARGET_ENVIRONMENT}: '${address}' offered no host key within the wait. It resolves to a tailnet peer but does not answer on SSH, so it is unreachable rather than not yet propagated — check the host itself, and UFW before anything else."
               exit 1
             fi
             printf '%s\n' "$key" >>~/.ssh/known_hosts

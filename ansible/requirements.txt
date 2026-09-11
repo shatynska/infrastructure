@@ -28,3 +28,21 @@
 # effective floor for this pin as well; that file records at length why its pins
 # move forward rather than backward.
 ansible-core==2.21.3
+
+# THE INVENTORY PLUGIN'S OWN PYTHON DEPENDENCIES, and they are not optional:
+# `hetzner.hcloud` declares them in its own `requirements.txt`, and
+# `ansible-galaxy collection install` does NOT install a collection's Python
+# requirements -- it installs the collection. `ansible-core` depends on
+# jinja2, PyYAML, cryptography, packaging and resolvelib, and on none of these;
+# `actions/setup-python` ships pip, setuptools and wheel. So a job that installs
+# `ansible-core` alone cannot resolve an inventory at all: the plugin raises
+# `missing_required_lib("requests")` at the first `ansible-inventory`.
+#
+# WHY NOTHING ELSE IN THIS REPOSITORY NEEDED THEM STATED. Both arrive
+# transitively through `molecule-plugins[docker]` in requirements-test.txt, so
+# `ansible-verify.yml` and a workstation that has run the local setup both have
+# them already. This manifest drops Molecule deliberately, and took the
+# dependency with it -- which is exactly the kind of thing that is invisible
+# until the first run on a clean runner.
+requests==2.31.0
+python-dateutil==2.9.0.post0

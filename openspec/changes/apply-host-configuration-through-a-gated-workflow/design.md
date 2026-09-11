@@ -149,7 +149,19 @@ A staging-only operator still must not hold production's password: the two Envir
 
 **A wrong password must not be discovered mid-play.** Ansible decrypts a `!vault` value lazily, at the moment it is templated, and the first such moment in `host-baseline.yml` is inside `deploy_user` — the *fourth* role. A converge that starts with the wrong password therefore installs Docker, enables UFW and joins the tailnet before it fails, which is the partially-converged host §6.3a describes, reached for a reason that had nothing to do with the host. So the job runs a preflight before the play, built on `ansible-inventory --list`: it serialises the group's variables, which forces every `!vault` block in that environment's `group_vars` to decrypt, and it exercises the Hetzner token and the `keyed_groups` grouping in the same command — the three inputs a converge needs before it touches anything.
 
-Serialising those variables means *printing* them, so its output must never reach the run log or the disk. Decision 7 needs one field out of that same document, and the two are therefore **one step**: the `--list` is piped straight into `jq`, which emits the connection addresses and nothing else. That is why this decision states the preflight and Decision 7 states the command.
+**AND `--list` DOES NOT DECRYPT, WHICH THIS DECISION HAD WRONG.** Under the pinned `ansible-core` 2.21.3 it serialises with the `inventory_legacy` profile, which *preserves* a vaulted value as `{"__ansible_vault": "<ciphertext>"}`. Verified against 2.21.3 with a labelled block: a wrong `--vault-id` exits 0, and its output is byte-identical to the right one's. So `--list` proves the Hetzner credential and the grouping, and proves **nothing** about the Vault password — which is the one thing this decision exists to prove. Caught at the code-review gate, after the implementation was written against the claim.
+
+What proves it is a second command in the same step, and it has to force a template rather than a serialisation:
+
+```sh
+ansible -i inventory/<environment>.hcloud.yml <environment> -c local -m debug \
+  -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
+  --vault-id <environment>@"$vault_password_file"
+```
+
+Templating `hostvars[...]` forces every vaulted value that host carries — which is what reaches production's unlabelled `1.1` `ghcr_pull_token` block as well — and `| length` means what is printed is a number. A wrong password exits 2 with *"Attempt to use undecryptable variable"*; a right one exits 0. `-c local` and `-m debug` so that the step that proves a secret is not also the step that first touches a host.
+
+**Two things follow from the correction.** The exposure argument this decision made is void: nothing is decrypted, so the document piped onward carries no plaintext, and the narrowing Decision 7 describes is defence in depth rather than the control it was argued to be. It is kept because it is correct and cheap, and because the next `ansible-core` may serialise differently. And it is a reminder about this whole class of check: a preflight that cannot fail is worse than no preflight, because it is read as evidence.
 
 ### Decision 10: Drift detection stays out, and §6.3 changes anyway
 
