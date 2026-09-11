@@ -559,7 +559,7 @@ jobs:
           # stderr, which is NOT redirected for exactly that reason.
           if ! inventory=$(ansible-inventory -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" --list \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"); then
-            echo "::error::$TARGET_ENVIRONMENT: resolving the inventory failed, so its Hetzner credential was absent or rejected. The cause is above, from Ansible itself. This step is what stops that becoming a partially-converged host."
+            echo "::error::$TARGET_ENVIRONMENT: resolving the inventory failed. Ansible names the cause above and it is the thing to read; the usual one is a Hetzner credential that was absent or rejected, but a connection-address selection this plugin does not accept, a malformed source and a missing collection all land here too. This step is what stops any of them becoming a partially-converged host."
             exit 1
           fi
 
@@ -593,7 +593,7 @@ jobs:
           if ! ansible -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" "$TARGET_ENVIRONMENT" \
               -c local -m debug -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"; then
-            echo "::error::$TARGET_ENVIRONMENT: this environment's variables did not decrypt, so the Vault password in ANSIBLE_VAULT_PASSWORD is not the one its group_vars were encrypted under. Ansible names the undecryptable variable above. Left to the play, this would have surfaced four roles in, on an already-changed host."
+            echo "::error::$TARGET_ENVIRONMENT: templating this environment's variables failed, and Ansible names the variable above. Read that first: the cause this step exists for is a Vault password that is not the one these group_vars were encrypted under — reported as 'Attempt to use undecryptable variable' — but an undefined variable or a bad template in the same file fails here too. Left to the play, either would have surfaced four roles in, on an already-changed host."
             exit 1
           fi
 
