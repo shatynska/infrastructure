@@ -420,40 +420,107 @@ def committed_prose(text: str) -> str:
 # established, the OS process environment and a pre-commit hook's environment.
 #
 # Each pattern keys on the SENSE, through the context that identifies it, and
-# never on the word `stack`, which is now correct throughout these files. The
-# entries marked (*) are the ones that fired on real committed defects; the
-# rest are other spellings of the same sense, and are labelled here rather than
-# left to look like findings.
+# never on the word `stack`, which is correct throughout these files now. A
+# needle firing on the word generally would be worse than no needle.
+#
+# TWO LEGENDS, and the second is the one a reader is most likely to want.
+#
+# (*) marks a spelling that fired on a REAL committed defect, in round one or
+# round two. Everything unmarked is another spelling of the same sense.
+#
+# LIVE / FORWARD COVER marks whether the sense can fire on these sixteen files
+# AT ALL. Three of the six cannot: no file under this root mentions
+# `target_environment`, `--vault-id`, an inventory source or pre-commit, which
+# was checked rather than assumed. Keeping them is right -- a stack directory
+# may grow a comment about any of the three, and a needle added after the fact
+# is a needle added too late -- but the table's six-entry breadth would
+# otherwise overstate what is actually guarded here, so it is said outright.
+# No test asserts the inertness: a file legitimately gaining one of those
+# mentions would then fail a check for having done nothing wrong, and the
+# legend going stale is the cheaper failure.
 OVERSWEPT_KEEPERS = {
-    # (*) `stack:` presented as a GitHub Actions job key. There is no such key;
-    # the key is `environment:`, and each file that carried this named one key
-    # two ways inside one comment block.
-    "the GitHub Actions job key": re.compile(r"`stack:|\bgithub_stack\b"),
-    # (*) The `environment` Terraform variable and the label carrying its
-    # value. `modules/server` builds `name = "${var.environment}-${var.name}"`,
+    # (*) LIVE. A GitHub Environment, in the two forms it takes.
+    #
+    # THE KEY: `stack:` presented as a GitHub Actions job key. There is no such
+    # key; the key is `environment:`, and each file that carried this named one
+    # key two ways inside one comment block.
+    #
+    # THE PROSE: capitalised `Environment` as a proper noun, which is how both
+    # `pipeline.yml` files refer to a GitHub Environment throughout -- prod
+    # carries eight such occurrences and is the densest prose in the repository
+    # in this sense. Renaming capitalised prose is the exact defect round one
+    # found in the workflow sweep, so a needle for the key alone would be blind
+    # to the form most likely to recur here. Three shapes:
+    #
+    #   * `GitHub Stack` outright;
+    #   * a capitalised `Stack` MID-SENTENCE -- "the Stack's protection rules",
+    #     "a Stack-scoped secret", "that Stack requires no reviewer". The
+    #     lookbehind is what keeps a sentence or a bullet legitimately opening
+    #     with the word out of it, and capitalised `Stack` never names the unit
+    #     in this repository, which is always lowercase;
+    #   * `Each Stack` in title case, which is a requirement title -- and
+    #     design.md decision 3 renames no requirement title.
+    "the GitHub Environment": re.compile(
+        r"`stack:"
+        r"|\bgithub_stack\b"
+        r"|\bGitHub Stacks?\b"
+        r"|(?<=[a-z,;] )Stacks?\b"
+        r"|\bEach Stack\b"
+    ),
+    # (*) LIVE. The `environment` Terraform variable, and the label carrying
+    # its value. `modules/server` builds `name = "${var.environment}-${var.name}"`,
     # so a `"<stack>-"` prefix is that variable's value under a wrong name --
     # and after entry 62 the two diverge, which is the coincidence design.md
     # decision 2a says not to bake in.
+    #
+    # The label is matched with OPTIONAL BACKTICKS OR QUOTES around the word,
+    # because backticked is literally how round one's runbook defect was
+    # written -- "the `stack` label" -- and the bare form would have missed the
+    # instance this needle is named for.
     "the Terraform variable and its value": re.compile(
-        r'\bvar\.stack\b|"<stack>-|\bstack\s*=\s*"|\bstack label\b'
+        r"\bvar\.stack\b"
+        r'|"<stack>-'
+        r'|\bstack\s*=\s*"'
+        r"|[`'\"]?stack[`'\"]? labels?\b"
+        r"|\b\w*labels?\.stack\b"
     ),
-    # (*) The OS process environment, which is what `HCLOUD_TOKEN` is read
-    # from and the mechanism the bullets under that sentence qualify.
+    # (*) LIVE. The OS process environment, which is what `HCLOUD_TOKEN` is
+    # read from and the mechanism the bullets under that sentence qualify.
+    #
+    # Keyed on the PREPOSITION AND THE NOUN rather than on a list of verbs. A
+    # closed verb list is a needle that catches the sentence it was written
+    # from and not the next one: "taken from the stack" and "written into the
+    # job's stack file" are the same defect and neither uses a listed verb.
+    # The lookahead keeps a legitimate reference to a stack DIRECTORY out of
+    # it, which is the one thing "from the stack" can innocently mean here.
     "the OS process environment": re.compile(
-        r"\bstack variable\b|\bprocess stack\b"
-        r"|\b(?:read|reads|set|sets|export|exports|exported|resolve|resolves|resolved)"
-        r" (?:from|in|into) the stack\b"
+        r"\bstack (?:variable|variables|file|files)\b"
+        r"|\b(?:job's|runner's|process|shell|step's) stack\b"
+        r"|\b(?:from|into|in|out of) the (?:job's |runner's |process |shell )?stack\b"
+        r"(?!['’]|\s+(?:director|root|name|declaration|configuration|it))"
     ),
-    # The converge play's group handle, governed by a requirement this change
-    # does not modify at all.
+    # FORWARD COVER. The converge play's group handle, governed by a
+    # requirement this change does not modify at all. No file under this root
+    # mentions it today.
     "the converge play's group handle": re.compile(
-        r"(?<![A-Za-z0-9_])TARGET_STACK(?![A-Za-z0-9_])|\btarget_stack\b"
+        r"(?<![A-Za-z0-9_])TARGET_STACK(?![A-Za-z0-9_])"
+        r"|\btarget_stack\b"
+        r"|--vault-id[^\n]{0,40}\bstack\b"
     ),
-    # The environment axis as the inventory names it; entry 62 renames these,
-    # not this change.
-    "the inventory's own axis": re.compile(r"\bstack\.hcloud\.yml\b|\bstack_vars\b"),
-    # A pre-commit hook's environment.
-    "a pre-commit hook's environment": re.compile(r"\bhook stacks?\b"),
+    # FORWARD COVER. The environment axis as the inventory names it; entry 62
+    # renames those paths, not this change. No file under this root names an
+    # inventory source today.
+    "the inventory's own axis": re.compile(
+        r"\bstack\.hcloud\.yml\b|\bstack_vars\b|\binventory/\$?\{?stacks?\b"
+    ),
+    # (*) FORWARD COVER. A pre-commit hook's environment. Round one's defect
+    # was a step name reading "Cache pre-commit stacks", so the needle covers
+    # the adjectival form as well as the possessive one -- the bare `hook
+    # stacks` would have missed the instance it is named for. No file under
+    # this root mentions pre-commit today.
+    "a pre-commit hook's environment": re.compile(
+        r"\bhook stacks?\b|\bpre-commit stacks?\b|\bstacks? for the hooks?\b"
+    ),
 }
 
 # (*) An article stranded by a word-level substitution. Its own check rather
@@ -461,7 +528,9 @@ OVERSWEPT_KEEPERS = {
 # ungrammatical, and the same defect had already been fixed once in
 # `host-converge.yml` before it recurred under this root. Both directions are
 # read, because a sweep can strand an article either way.
-STRANDED_ARTICLE = re.compile(r"\ban stacks?\b|\ba environments?\b")
+STRANDED_ARTICLE = re.compile(
+    r"\ban stacks?\b|\ba environments?\b", re.IGNORECASE
+)
 
 
 # --------------------------------------------------------------------------
@@ -2550,7 +2619,7 @@ class TestTheStackDirectoryReadsDiscriminate(unittest.TestCase):
     # sentence -- which is what tells a needle that discriminates from one that
     # matches the surrounding prose.
     DEFECTS = {
-        "the GitHub Actions job key": (
+        "the GitHub Environment": (
             "  #   - the gated apply job, which declares `stack: production`,\n"
             "  #     resolves that Environment's Read & Write token;",
             "  #   - the gated apply job, which declares `environment: production`,\n"
@@ -2648,6 +2717,139 @@ class TestTheStackDirectoryReadsDiscriminate(unittest.TestCase):
                     f"the needle for {sense} fires on a keeper written correctly",
                 )
         self.assertIsNone(STRANDED_ARTICLE.search(stream))
+
+    # Each widened spelling, paired with the sense whose needle must report it.
+    # Every string here is the spelling its own defect ACTUALLY USED -- the
+    # backticked label, the literal step name, the literal sentence -- rather
+    # than a paraphrase. A needle that would not have caught the instance it is
+    # named for is the thing these exist to prevent.
+    WIDENED_SPELLINGS = (
+        # The GitHub Environment in prose, which is the form the first workflow
+        # sweep got wrong and which both `pipeline.yml` files are dense in.
+        ("the GitHub Environment", "The GitHub Stack this stack's apply job attaches to"),
+        ("the GitHub Environment", "a property of the Stack's protection rules"),
+        ("the GitHub Environment", "a Stack-scoped secret ahead of a repository-scoped one"),
+        (
+            "the GitHub Environment",
+            "two stacks naming the same GitHub Stack share its WRITE token",
+        ),
+        (
+            "the GitHub Environment",
+            'see "Each Stack Declares Its Own Pipeline Configuration"',
+        ),
+        # The label, backticked -- literally how round one's runbook defect was
+        # written.
+        ("the Terraform variable and its value", "the `stack` label names the axis"),
+        ("the Terraform variable and its value", "hcloud_labels.stack is read by"),
+        # The process environment, past the end of any closed verb list.
+        ("the OS process environment", "HCLOUD_TOKEN is taken from the stack"),
+        ("the OS process environment", "written into the job's stack file"),
+        # A pre-commit hook's environment -- literally round one's step name.
+        ("a pre-commit hook's environment", "- name: Cache pre-commit stacks"),
+    )
+
+    # Verbatim from the two `pipeline.yml` files and the two `versions.tf`
+    # files as they stand at HEAD: every line under this root that names a
+    # GitHub Environment in prose. The widened needles MUST stay silent on all
+    # of them, and this is a stronger silence fixture than an invented one --
+    # it is the exact text the live tree carries, eight occurrences of it in
+    # prod's declaration alone.
+    REAL_KEEPER_PROSE = (
+        "# The GitHub Environment this stack's apply job attaches to. REQUIRED.",
+        "# Whether that pauses for a human is a property of the Environment's protection",
+        "# same GitHub Environment share its WRITE token and its protection rules, so a",
+        "# Privilege obliges EVERY stack's GitHub Environment to define",
+        "# an Environment-scoped secret ahead of a repository-scoped one of the same",
+        "# Environment also defines. `.github/tests` asserts that for `HCLOUD_TOKEN`",
+        "# `PRODUCTION` rather than `PROD`, matching the GitHub Environment this",
+        '# discovery step -- see "Each Environment Declares Its Own Pipeline',
+        "#     Environment's Read & Write token. That Environment requires no",
+        "#     nothing in prod's (see the Each Environment Has a Dedicated Hetzner",
+        "# of the Environment's protection rules -- repository settings, which no file",
+        "# The apply job still declares this Environment, so the write token stays",
+        "#   - the gated apply job, which declares `environment: production`,",
+        "  # HCLOUD_TOKEN is read from the environment, and WHICH token that is",
+    )
+
+    def test_each_widened_needle_reports_the_spelling_it_is_named_for(self) -> None:
+        """The gap round three found: keeper 1 had a needle for the job key and
+        none for its prose form, which is the form the first workflow sweep
+        actually got wrong. Three narrower misses came with it -- a backticked
+        `stack` label, a `Cache pre-commit stacks` step name, and a process
+        environment reached by a verb no closed list carried."""
+        for sense, spelling in self.WIDENED_SPELLINGS:
+            with self.subTest(sense=sense, spelling=spelling):
+                self.assertIsNotNone(
+                    OVERSWEPT_KEEPERS[sense].search(committed_prose(spelling)),
+                    f"the needle for {sense} does not report {spelling!r}, which is "
+                    "the spelling that sense's own defect used",
+                )
+
+    def test_the_widened_needles_stay_silent_on_the_real_keeper_prose(self) -> None:
+        """The constraint the widening must not cost: keyed on the sense, never
+        on the word. The material is every line under this root that names a
+        GitHub Environment in prose, quoted verbatim from the live files -- so
+        a needle that fired on capitalisation rather than on the over-sweep
+        would light up the densest correct prose in the repository."""
+        for line in self.REAL_KEEPER_PROSE:
+            stream = committed_prose(line)
+            for sense, pattern in sorted(OVERSWEPT_KEEPERS.items()):
+                with self.subTest(sense=sense, line=line):
+                    self.assertIsNone(
+                        pattern.search(stream),
+                        f"the needle for {sense} fires on prose the live tree "
+                        f"carries and that is CORRECT: {line!r}",
+                    )
+            self.assertIsNone(
+                STRANDED_ARTICLE.search(stream),
+                f"the stranded-article needle fires on correct prose: {line!r}",
+            )
+
+    def test_a_legitimate_reference_to_a_stack_directory_is_not_an_offence(self) -> None:
+        """The process-environment needle is keyed on a preposition and a noun
+        rather than on a verb list, which is wide enough to reach the one
+        innocent thing "from the stack" can mean here."""
+        for innocent in (
+            "the lockfile in the stack directory is committed",
+            "read from the stack root rather than enumerated",
+            "the module source is relative to the stack directory",
+            "taken from the stack's own pipeline declaration",
+            "which stacks exist comes from the stack names discovery finds",
+        ):
+            with self.subTest(text=innocent):
+                self.assertIsNone(
+                    OVERSWEPT_KEEPERS["the OS process environment"].search(
+                        committed_prose(innocent)
+                    ),
+                    f"the process-environment needle fires on {innocent!r}, which "
+                    "names a directory rather than the environment a process reads",
+                )
+
+    def test_the_stranded_article_needle_reads_both_cases(self) -> None:
+        """`a Environment` opening a sentence is the same defect as
+        `a environment` inside one, and a lowercase-only needle would have let
+        the sentence-initial form through."""
+        for stranded in (
+            "so an stack meant to be ungated",
+            "so an Stack meant to be ungated",
+            "A environment declaring nothing is gated",
+            "a environment declaring nothing is gated",
+        ):
+            with self.subTest(text=stranded):
+                self.assertIsNotNone(
+                    STRANDED_ARTICLE.search(committed_prose(stranded)),
+                    f"the stranded-article needle misses {stranded!r}",
+                )
+        for fine in (
+            "an environment declaring nothing is gated",
+            "a stack declaring nothing is gated",
+            "An Environment omitting the write token",
+        ):
+            with self.subTest(text=fine):
+                self.assertIsNone(
+                    STRANDED_ARTICLE.search(committed_prose(fine)),
+                    f"the stranded-article needle fires on correct prose: {fine!r}",
+                )
 
     def test_the_stack_file_census_skips_a_providers_cache(self) -> None:
         """`.terraform/` holds a vendored provider and its CHANGELOG -- third-

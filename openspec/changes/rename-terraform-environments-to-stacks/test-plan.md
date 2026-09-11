@@ -690,3 +690,47 @@ Six reported occurrences across the four defect classes, each naming the file an
     Ran 779 tests — OK
 
 779 = 769 + 5 checks + 5 discriminators. Nothing outside `.github/tests/` was touched.
+
+## Sixth pass — the keeper table had no needle for the sense that caused the original defect
+
+Code review round three cleared the change and flagged `OVERSWEPT_KEEPERS` as thinner than it looked in one place. **Keeper 1 — a GitHub Environment — had a needle for the job key (`` `stack: ``, `github_stack`) and nothing for its prose form**, which is capitalised `Environment` as a proper noun. That is precisely the defect the first workflow sweep made, and both `pipeline.yml` files are the densest prose in the repository in that sense.
+
+The general rule this pass applies: **a needle that would not have caught the instance it is named for is the thing to fix first.** Three narrower misses came from the same rule — the label needle missed the backticked `` `stack` label ``, which is literally how round one's runbook defect was written; the hook needle missed `Cache pre-commit stacks`, literally round one's step name; and the process-environment needle carried a **closed list of nine verbs**, so `taken from the stack` and `written into the job's stack file` both passed. `STRANDED_ARTICLE` was lowercase-only, so `a Environment` opening a sentence passed.
+
+### What each needle now keys on
+
+- **The GitHub Environment** — the key as before, plus three prose shapes: `GitHub Stack` outright; a capitalised `Stack` **mid-sentence** (the lookbehind keeps a sentence or bullet legitimately opening with the word out of it, and capitalised `Stack` never names the unit here, which is always lowercase); and `Each Stack` in title case, which is a requirement title, and `design.md` decision 3 renames no requirement title.
+- **The Terraform variable and its value** — the label with **optional backticks or quotes** around the word, plus `<anything>labels.stack`.
+- **The OS process environment** — keyed on the **preposition and the noun** instead of a verb list. A closed verb list catches the sentence it was written from and not the next one. A lookahead keeps a legitimate reference to a stack *directory* out of it, which is the one thing "from the stack" can innocently mean here.
+- **A pre-commit hook's environment** — the adjectival form alongside the possessive one.
+- **`STRANDED_ARTICLE`** — case-insensitive.
+
+### Proof, in both directions
+
+**Each new spelling against the spelling its own defect used**, never a paraphrase — `test_each_widened_needle_reports_the_spelling_it_is_named_for`, ten cases. Run directly, all ten are caught by their own sense: the four GitHub-Environment prose forms, `` the `stack` label ``, `hcloud_labels.stack`, `HCLOUD_TOKEN is taken from the stack`, `written into the job's stack file`, `- name: Cache pre-commit stacks`, and `a Environment declaring nothing is gated`.
+
+**And the silence direction, on the real tree's own text.** `test_the_widened_needles_stay_silent_on_the_real_keeper_prose` quotes **every line under this root that names a GitHub Environment in prose** — fourteen, verbatim from the live files, eight of them in prod's declaration alone — and holds that no needle fires on any of them. That is a stronger fixture than the invented list it sits beside: a needle keyed on capitalisation rather than on the over-sweep would light up the densest correct prose in the repository. Two further tests hold that a legitimate reference to a stack *directory* is not an offence, and that the article needle reads both cases without firing on `an environment` or `An Environment`.
+
+**What the widening is worth, measured.** Word-level sweeping the two live `pipeline.yml` files and counting hits:
+
+| File, word-level over-swept | Old needle | Widened needle |
+|---|---|---|
+| `prod/pipeline.yml` | 2 | 10 |
+| `staging/pipeline.yml` | **0 — silent** | 4 |
+
+Staging is the case that matters: its only GitHub-Environment mentions are prose, so the old needle would have passed a fully over-swept file without a word.
+
+**And the original defects are still caught.** Re-run against the tree materialised from `93bef69^`: the same five keeper subtests and one article subtest report, and `93bef69` is green.
+
+### The three inert senses — agreed, and said in the legend
+
+The reviewer is right that three of the six senses cannot fire on these sixteen files: **no file under this root mentions `target_environment`, `--vault-id`, an inventory source or pre-commit**, which was checked rather than assumed. They are kept — a stack directory may grow a comment about any of the three, and a needle added after the fact is a needle added too late — but the table now carries a second legend marking each sense **LIVE** or **FORWARD COVER**, so the six-entry breadth does not overstate what is actually guarded here.
+
+**No test asserts the inertness, deliberately.** A file legitimately gaining one of those mentions would then fail a check for having done nothing wrong; a legend going stale is the cheaper failure, and it is one a reader of the table can see.
+
+### Counts
+
+    python3 -m unittest discover --start-directory .github/tests
+    Ran 783 tests — OK
+
+783 = 779 + the four discriminators this widening owes. No needle was narrowed, no test removed, nothing outside `.github/tests/` touched.
