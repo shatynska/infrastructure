@@ -18,6 +18,11 @@ plugin: hetzner.hcloud.hcloud
 # token under the name its provider reads, and is scoped to that directory.
 api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_STAGING') }}"
 
+# Identical to prod's line, and identical on purpose -- read that file for why
+# the default is the public address, why CI selects `hostname`, and why an
+# unrecognised value fails rather than falling back.
+connect_with: "{{ lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true) }}"
+
 keyed_groups:
   - key: hcloud_labels.environment
     separator: ""

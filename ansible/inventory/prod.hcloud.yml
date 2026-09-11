@@ -11,6 +11,18 @@
 # further environment into inventory is adding a file beside this one and a
 # variable beside HCLOUD_TOKEN_PROD -- it is not an edit to this file.
 #
+# THE NEW VARIABLE'S NAME IS NOT FREE. It SHALL be the same name that
+# environment's `terraform/environments/<name>/pipeline.yml` declares as its
+# `read_only_secret` -- see the Dynamic Inventory via hcloud Plugin
+# requirement (openspec/specs/iac-host-configuration/spec.md). The
+# host-converge workflow holds the credential under the DECLARED name and has
+# to export it under the name this file reads; where the two differ the
+# workflow would have to carry the mapping, and a workflow carrying a
+# per-environment mapping is the environment-naming in workflow text that
+# `Each Environment Declares Its Own Pipeline Configuration` forbids. Two
+# environments agreeing by coincidence is what that clause turned into an
+# obligation, and `.github/tests` compares the pair.
+#
 # THE FILENAME IS CONSTRAINED, NOT CHOSEN. The plugin's `verify_file` accepts
 # a path only if it *ends with* `hcloud.yml` or `hcloud.yaml` -- a plain
 # suffix test. `prod.hcloud.yml` passes it; `hcloud-prod.yml` would not, and
@@ -32,6 +44,34 @@ plugin: hetzner.hcloud.hcloud
 # without which this file would resolve to an empty `prod` group -- which is
 # indistinguishable from a destroyed server.
 api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_PROD') }}"
+
+# WHICH ADDRESS A RUN CONNECTS TO, chosen per run and defaulting to the
+# public one -- see "The Address a Converge Connects To Is Selected Per Run"
+# (openspec/specs/iac-host-configuration/spec.md).
+#
+# THE DEFAULT IS WHAT A FIRST CONVERGE NEEDS, and that is why it cannot be the
+# tailnet address: joining the tailnet is something the run itself does, so a
+# host being converged for the first time is reachable on its public address
+# and on nothing else. A source that always resolved to the tailnet name would
+# make the bootstrap path unreachable.
+#
+# CI SELECTS `hostname`, which this plugin resolves to the server's Hetzner
+# name. Making that name RESOLVE is the converge job's business and not this
+# file's: it maps the name from `tailscaled`'s own netmap rather than relying
+# on MagicDNS, because `tailscale/github-action` passes neither `--accept-dns`
+# nor its negation and "probably on" is the wrong footing for the mechanism
+# every converge depends on.
+#
+# A VALUE THIS PLUGIN DOES NOT RECOGNISE fails at option validation, naming
+# the choices it accepts. It does not fall back to another address: a run that
+# silently reached a host by a route its operator did not choose is worse than
+# one that did not connect.
+#
+# Deliberately absent from `ansible/.envrc.example`: the variable is set by
+# the converge job and by nothing else, and offering it to the file operators
+# copy would invite a workstation to select an address its first converge
+# cannot use.
+connect_with: "{{ lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true) }}"
 
 # Groups hosts by the `environment` Hetzner label already applied to every
 # resource (see terraform/modules/server's ssh_key.tf) — this plugin has no

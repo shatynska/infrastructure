@@ -1,0 +1,590 @@
+name: Host Converge
+
+# The host layer's gated path to a host, and the last one this repository moved
+# off a workstation. Shaped like `platform-deploy.yml`: a credential-less job
+# that publishes what the merge changes, then a job per environment that
+# attaches to that environment's own GitHub Environment and holds every
+# credential a converge needs. See the Host Configuration Is Applied by a Gated
+# Workflow requirement (openspec/specs/iac-cicd-pipeline/spec.md).
+#
+# THERE IS NO SAVED-PLAN ARTIFACT HERE AND NO PRETENCE OF ONE. A check-mode run
+# is not a plan: it skips `command` tasks, it is swallowed by roles that ignore
+# errors under check mode, and it must authenticate to the host -- so it could
+# only run in the job the gate exists to withhold the credential from. What the
+# approver reads is the committed diff, which for this layer is complete:
+# everything a converge applies is committed, so there is no provider computing
+# an unknown and no state file to disagree with.
+#
+# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE. Which environments exist comes
+# from discovery over `ansible/inventory/`, and each one's GitHub Environment
+# and read-only secret from its own `terraform/environments/<name>/pipeline.yml`.
+# See the Each Environment Declares Its Own Pipeline Configuration requirement.
+#
+# THE WORKFLOW-LEVEL `paths:` FILTER IS PERMISSIBLE ONLY BECAUSE THIS IS NOT A
+# REQUIRED STATUS CHECK. The opposite rule governs `pr-validation.yml` and
+# `ansible-verify.yml`, which are: a path-filtered required check never reports
+# on a non-matching pull request and leaves it permanently pending. Do not copy
+# this block into either.
+#
+# NO `schedule:` TRIGGER AND NO LIVENESS REPORT, deliberately. Scheduled
+# Workflows Report Their Own Liveness reaches schedule-triggered workflows; this
+# one is reached by a merge and by a dispatch, both of which have someone
+# waiting on them. A heartbeat here would report on runs nobody is missing.
+#
+# Drift detection is NOT this workflow. `--check --diff` against a live host is
+# the host layer's `drift.yml` rather than its `terraform plan`, it needs the
+# credential this workflow's first job must not hold, and its baseline is
+# `changed=2` rather than zero -- see `docs/change-queue.md`.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ansible/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: >-
+          One environment to converge. Leave empty to converge every
+          environment discovery finds.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: discover
+    runs-on: ubuntu-latest
+    # No `environment:` — this job resolves which Environments the run will ask
+    # for, so it cannot itself be gated on one of them.
+    permissions:
+      contents: read
+    outputs:
+      environments: ${{ steps.discover.outputs.environments }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Discover the environments that can be converged
+        id: discover
+        env:
+          # The ONLY thing this step takes from the event, and it arrives as a
+          # variable rather than as an expression so the body below stays
+          # executable off a runner. See that constraint's own comment there.
+          REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+
+          # Enumerates every environment that has a host configuration to apply,
+          # reads each one's committed pipeline declaration, and emits the matrix
+          # the converge job runs over. Nothing here names an environment.
+          #
+          # THIS IS DELIBERATELY NOT IDENTICAL TO THE TERRAFORM WORKFLOWS'
+          # DISCOVERY BODY, and is therefore outside the assertion that holds
+          # those three identical to one another -- which is left covering them
+          # exactly as it did. Two differences make it a different discovery
+          # rather than a fourth copy of that one:
+          #
+          #   THE ROOT. That body enumerates `terraform/environments/*/`. The set
+          #   this workflow runs over is the set of INVENTORY SOURCES, because an
+          #   environment with a Terraform directory and no source is one this
+          #   workflow cannot converge, and a matrix row for it would fail deep
+          #   inside `ansible-playbook` on a `-i` path that does not exist.
+          #
+          #   THE CROSS-CHECK. Both directions are silent failures and both are
+          #   refused by name below: a source whose environment declares no
+          #   pipeline configuration is gated by nothing, and an environment
+          #   declaring one but carrying no source is a host converged by
+          #   nothing -- which reads exactly like an environment with nothing to
+          #   converge. That body sees one of the two sets and can refuse
+          #   neither.
+          #
+          # What it DOES share with them is idiom rather than accident: the flat
+          # `key: value` reader below, the secret-name validation, the refusal to
+          # report success having discovered nothing, and the JSON emission. Four
+          # near-siblings now exist where the decision to keep three copies was
+          # taken; `docs/change-queue.md` carries the entry to factor them out.
+          #
+          # FREE OF ACTIONS EXPRESSIONS ON PURPOSE, which is what lets
+          # `.github/tests` pull this body out and run it against a scratch tree
+          # carrying each refusal. An expression is interpolated before the step
+          # runs, so a body carrying one can be executed nowhere but on a runner
+          # and its refusals would be asserted nowhere. The prohibition includes
+          # naming the interpolation syntax in a comment, which is why this
+          # sentence spells it out in words.
+
+          environments_root="terraform/environments"
+          inventory_root="ansible/inventory"
+          group_vars_root="ansible/inventory/group_vars"
+          declaration_name="pipeline.yml"
+          source_suffix=".hcloud.yml"
+
+          # One flat `key: value` line out of a declaration, with no YAML parser
+          # -- the same reader the Terraform workflows use, and what keeps this
+          # body runnable with nothing but bash, jq and coreutils.
+          field() {
+            sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
+              | head -n 1 \
+              | sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/"
+          }
+
+          if [ ! -d "$inventory_root" ]; then
+            echo "::error::Discovery found no ${inventory_root}/ directory at all, so no environment has a host configuration to apply. Refusing to report success having discovered nothing: an empty matrix skips the converge job and the run reports green having converged nothing."
+            exit 1
+          fi
+
+          records=$(mktemp)
+          refused=0
+          discovered_names=""
+
+          for source in "$inventory_root"/*"$source_suffix"; do
+            [ -f "$source" ] || continue
+            base="$(basename "$source")"
+            name="${base%"$source_suffix"}"
+            discovered_names="${discovered_names}${name} "
+
+            directory="${environments_root}/${name}"
+            declaration="${directory}/${declaration_name}"
+            group_vars="${group_vars_root}/${name}.yml"
+
+            # An inventory source whose environment declares nothing. Its host is
+            # reachable and its converge is gated by no GitHub Environment, which
+            # is the one combination worse than not being converged at all.
+            if [ ! -f "$declaration" ]; then
+              echo "::error::${name}: ${inventory_root}/${base} exists but ${declaration} does not, so this environment's converge would attach to no GitHub Environment and run under a credential named nowhere."
+              refused=1
+              continue
+            fi
+
+            # A source with no variables of its own. The play would converge the
+            # host with none of that environment's own inputs.
+            if [ ! -f "$group_vars" ]; then
+              echo "::error::${name}: ${inventory_root}/${base} exists but ${group_vars} does not, so a converge of this environment would run with none of its own variables."
+              refused=1
+              continue
+            fi
+
+            github_environment="$(field "$declaration" github_environment)"
+            read_only_secret="$(field "$declaration" read_only_secret)"
+
+            incomplete=0
+            if [ -z "$github_environment" ]; then
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's converge job attaches to, and it has no safe default."
+              incomplete=1
+            fi
+            if [ -z "$read_only_secret" ]; then
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, which the converge job exports under the name this environment's inventory source reads."
+              incomplete=1
+            fi
+
+            # A value that is present but unusable is refused by name rather than
+            # passed on. The converge job indexes `secrets[...]` with this name
+            # and exports it as a process-environment variable, and a name GitHub
+            # cannot resolve yields an EMPTY credential rather than an error --
+            # the inventory then authenticates as nobody, far from the cause.
+            case "$read_only_secret" in
+              "") ;;
+              [0-9]* | *[!A-Za-z0-9_]*)
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which is not a GitHub secret name — letters, digits and underscores only, not starting with a digit."
+                incomplete=1
+                ;;
+            esac
+
+            # A name that would overwrite the runner's own or Ansible's own is
+            # refused for the same reason the control-character check below
+            # exists: this value reaches an execution surface. Every such case
+            # fails closed today -- the source never receives its credential and
+            # `any_unparsed_is_failed` refuses -- so this is a guard on committed
+            # data rather than a live hole.
+            case "$read_only_secret" in
+              PATH | HOME | USER | SHELL | LANG | PWD | ANSIBLE_* | GITHUB_* | RUNNER_*)
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which the converge job would export as a process-environment variable of that name, overwriting the runner's own or Ansible's own."
+                incomplete=1
+                ;;
+            esac
+
+            case "${github_environment}${read_only_secret}" in
+              *[[:cntrl:]]*)
+                echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
+                incomplete=1
+                ;;
+            esac
+
+            if [ "$incomplete" -ne 0 ]; then
+              refused=1
+              continue
+            fi
+
+            printf '%s\t%s\t%s\n' "$name" "$github_environment" "$read_only_secret" >>"$records"
+          done
+
+          # The other direction, and the quieter of the two. An environment that
+          # can be provisioned but not converged has a host that this repository
+          # configures with nothing, and no provisioning run says so.
+          if [ -d "$environments_root" ]; then
+            for directory in "$environments_root"/*/; do
+              [ -d "$directory" ] || continue
+              name="$(basename "$directory")"
+              [ -f "${directory}${declaration_name}" ] || continue
+              if [ ! -f "${inventory_root}/${name}${source_suffix}" ]; then
+                echo "::error::${name}: ${directory}${declaration_name} exists but ${inventory_root}/${name}${source_suffix} does not, so this environment can be provisioned and its host configured by nothing."
+                refused=1
+              fi
+            done
+          fi
+
+          if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
+            echo "::error::Discovery found no inventory source under ${inventory_root}/, so no environment has a host configuration to apply. Refusing to report success having discovered nothing."
+            exit 1
+          fi
+
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::Discovery refused the committed tree, so no environment enters the matrix. Every reason is reported above, each naming the environment it belongs to."
+            exit 1
+          fi
+
+          # A run requested by hand may name ONE environment. Absent and empty
+          # are NOT refused and mean every environment discovered: every `push`
+          # supplies an empty value, so conflating empty with unresolvable would
+          # fail discovery on every merge. Only a non-empty value is matched.
+          requested="${REQUESTED_ENVIRONMENT:-}"
+          if [ -n "$requested" ]; then
+            if ! awk -F'\t' -v want="$requested" '$1 == want { found = 1 } END { exit !found }' "$records"; then
+              echo "::error::This run was requested for '${requested}', which discovery did not find. What it did find: ${discovered_names}"
+              rm -f "$records"
+              exit 1
+            fi
+            selected=$(mktemp)
+            awk -F'\t' -v want="$requested" '$1 == want' "$records" >"$selected"
+            mv "$selected" "$records"
+          fi
+
+          discovered=$(jq -R -s -c '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                name: .[0],
+                github_environment: .[1],
+                read_only_secret: .[2]
+              })
+          ' <"$records")
+          rm -f "$records"
+
+          echo "Discovered: ${discovered}"
+          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
+
+  publish:
+    name: publish
+    needs: discover
+    runs-on: ubuntu-latest
+    # No `environment:` and no secret of any kind. This job must start
+    # immediately and stay readable before anyone approves anything — the same
+    # constraint `platform-deploy.yml`'s diff job carries, and the reason a
+    # check-mode run cannot take its place: that would need the credential.
+    permissions:
+      contents: read
+    steps:
+      # `fetch-depth: 0` because the step below diffs the push's own range.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Write the host-configuration diff to the job summary
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          empty_tree="0000000000000000000000000000000000000000"
+          {
+            echo '### Host configuration — what this run will apply'
+            echo
+            if [ -z "${BEFORE_SHA:-}" ] || [ "${BEFORE_SHA:-}" = "$empty_tree" ]; then
+              # A dispatched run carries no comparison base. Saying so beats an
+              # empty code fence, which reads as "nothing changed" — and what a
+              # dispatched converge applies is the committed tree, not a diff.
+              echo 'This run was requested by hand and carries no comparison base, so there is no diff to show. It applies the committed host configuration at this ref.'
+            else
+              echo '```diff'
+              git diff "$BEFORE_SHA" "$AFTER_SHA" -- ansible/
+              echo '```'
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  converge:
+    name: converge (${{ matrix.environment.name }})
+    needs: [discover, publish]
+    runs-on: ubuntu-latest
+    # Every converge job declares an `environment:`, taken from that
+    # environment's own declaration. Whether it pauses for a human is a property
+    # of that Environment's protection rules — repository settings, which no
+    # file here can verify — and not of this workflow.
+    environment: ${{ matrix.environment.github_environment }}
+    permissions:
+      contents: read
+    # Per environment, and NOT cancelled in favour of a later run. A converge
+    # interrupted mid-play leaves a partially-converged host, which
+    # `docs/bootstrap-a-new-host.md` §6.3a treats as an exception; cancelling
+    # one to start another would make it the normal case.
+    concurrency:
+      group: host-converge-${{ matrix.environment.name }}
+      cancel-in-progress: false
+    strategy:
+      # One environment's converge failing must not cancel every other
+      # environment's before it reported.
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+    # Every `run:` step of this job runs from `ansible/`, and that is not
+    # cosmetic: Ansible loads `./ansible.cfg` from the current directory, so from
+    # the repository root it loads NONE — `roles_path` stops resolving and
+    # `any_unparsed_is_failed` reverts to its default, which is the setting
+    # iac-host-configuration's "an inventory source whose credential is absent or
+    # is rejected SHALL fail the run" clause is false without. A converge run
+    # from the wrong directory does not fail; it loses a guard and reports a
+    # rejected token as a destroyed server.
+    defaults:
+      run:
+        working-directory: ansible
+    env:
+      # The deliberate act of selecting the tailnet address, which every
+      # inventory source reads and defaults to the public one without.
+      #
+      # ON THE JOB, not on a step and not on the workflow. On individual steps
+      # the address the preflight derives and the address the play dials could
+      # disagree; at workflow level it would reach the credential-less job
+      # above, which connects to nothing.
+      HCLOUD_CONNECT_WITH: hostname
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # THE CREDENTIAL CANNOT RIDE IN THE JOB'S `env:` BLOCK, and the reason is a
+      # property of Actions rather than of this design: each inventory source
+      # reads its credential under a name of its own, so the entry's KEY would
+      # have to come from the matrix — and Actions evaluates expressions in
+      # `env:` VALUES, not in keys. `apply.yml`'s plan step is not the
+      # counter-example it looks like: its key is the fixed literal every
+      # Terraform provider reads whatever environment it is planning, and the
+      # Ansible sources deliberately do not have that property.
+      #
+      # So it is written once, here, into the job's environment file, and is in
+      # scope for every step after this one exactly as a block entry would have
+      # been.
+      - name: Export this environment's read-only Hetzner credential
+        env:
+          CREDENTIAL_NAME: ${{ matrix.environment.read_only_secret }}
+          CREDENTIAL_VALUE: ${{ secrets[matrix.environment.read_only_secret] }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CREDENTIAL_VALUE:-}" ]; then
+            echo "::error::The repository secret '${CREDENTIAL_NAME}' this environment's declaration names resolved to nothing. Its inventory source would authenticate as nobody, and ansible.cfg's any_unparsed_is_failed would report that as a source it could not parse."
+            exit 1
+          fi
+          # A unique delimiter, which is what makes the heredoc form safe: it
+          # stops a value carrying a newline from injecting a second variable
+          # only where the delimiter itself cannot occur in the value.
+          delimiter="credential-$(openssl rand -hex 16)"
+          {
+            printf '%s<<%s\n' "$CREDENTIAL_NAME" "$delimiter"
+            printf '%s\n' "$CREDENTIAL_VALUE"
+            printf '%s\n' "$delimiter"
+          } >>"$GITHUB_ENV"
+
+      # A runner carries neither an Ansible this repository chose nor any Galaxy
+      # content. The first command this job runs loads the `hcloud` inventory
+      # plugin and the play's first role is `geerlingguy.docker`; a run that
+      # reaches either while it is missing fails deep inside a mechanism and
+      # reads as a broken mechanism rather than as an unprovisioned job.
+      #
+      # Paths are relative to `ansible/` — see this job's `defaults:` above.
+      # Copying `ansible-verify.yml`'s `ansible/`-prefixed spellings, which are
+      # correct in a job that runs from the repository root, would resolve to
+      # `ansible/ansible/…` here.
+      - name: Install the pinned toolchain
+        run: pip install -r requirements.txt
+
+      # Two commands because `-p` applies to roles only, which is the same split
+      # `ansible-verify.yml` makes and for the same reason.
+      - name: Install Galaxy content
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection install -r requirements.yml
+          ansible-galaxy role install -r requirements.yml -p roles
+
+      # Joins this runner to the tailnet the hosts are members of. SSH is only
+      # reachable this way: the cloud firewall admits the operator's range and
+      # nothing else, and widening it to a continuous-integration provider's
+      # address range would replace a boundary with a formality. The OAuth
+      # client is scoped to this job's Environment like every other secret it
+      # uses, and creates an ephemeral per-run node rather than a long-lived
+      # credential.
+      #
+      # No `ping:` here, unlike `platform-deploy.yml`: that input takes an
+      # address, and this job does not know one until the step that derives it.
+      # The wait for tailnet propagation is in that step instead.
+      - name: Connect to the tailnet
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # The two credentials a converge needs, written under `umask 077` and
+      # never echoed. `ANSIBLE_SSH_PRIVATE_KEY` is a dedicated `ansible-ci`
+      # keypair, one per environment and distinct from the operator's own root
+      # key so that rotating CI's does not re-key the human; no role manages
+      # root's `authorized_keys`, so revoking it is an edit on the host.
+      #
+      # Both arrive through `env:` rather than interpolated into the body. The
+      # neighbouring export step has to do that anyway, and it is the better
+      # shape for the same reason there: an expression interpolated into a shell
+      # body is substituted as TEXT before bash parses the line, so a value
+      # carrying a quote or a newline is parsed as shell.
+      - name: Set up the converge credentials
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ANSIBLE_SSH_PRIVATE_KEY }}
+          VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" >~/.ssh/ansible_ci_key
+          chmod 600 ~/.ssh/ansible_ci_key
+          printf '%s' "$VAULT_PASSWORD" >~/.vault-password
+          chmod 600 ~/.vault-password
+
+      # ONE STEP DOING THREE THINGS, and each is why the run stops here rather
+      # than partway through a converge.
+      #
+      #   IT PROVES THE SECRETS. A `!vault` value is decrypted at FIRST USE,
+      #   which is inside `deploy_user` — the fourth role — so without this a
+      #   wrong password installs Docker, enables UFW and joins the tailnet
+      #   before it fails, for a reason that had nothing to do with the host.
+      #   `--list` serialises the group's variables, which forces every block to
+      #   decrypt, and it exercises the Hetzner token and the grouping too.
+      #
+      #   IT DERIVES THE ADDRESS. Serialising those variables means PRINTING
+      #   them, so the output must reach neither the log nor the disk: `jq`
+      #   narrows the document to the one field wanted. `-e` makes an empty
+      #   result a non-zero exit and `pipefail` makes a failure on the left of
+      #   the pipe fail the step. `jq`'s own stderr is discarded because a parse
+      #   error quotes its input, and a Vault-decrypted value is not a registered
+      #   secret, so nothing would mask it.
+      #
+      #   IT MAKES THAT ADDRESS RESOLVE, without depending on MagicDNS.
+      #   `tailscale/github-action` passes `--accept-routes` and neither
+      #   `--accept-dns` nor its negation, so MagicDNS is probably on — and
+      #   probably is the wrong footing for the mechanism every converge depends
+      #   on. `tailscale ip -4` is a lookup in tailscaled's own netmap with no
+      #   resolver involved; mapping its answer in `/etc/hosts` means a failure
+      #   here means "the peer is not in the netmap" rather than "the resolver is
+      #   not configured the way we assumed".
+      #
+      # The keyscan RETRIES because this is the job's first contact with the
+      # tailnet and a new peer propagates with a brief, eventually-consistent
+      # delay. Without the retry an empty scan means "not yet" rather than
+      # "unreachable" — and `ssh-keyscan` exits 0 either way, so the failure
+      # would surface later as a connection error or a host-key mismatch, which
+      # read as a wedged host and as an attack respectively. Neither reads as
+      # propagation.
+      #
+      # What the keyscan does NOT buy is worth stating: on a runner whose
+      # `known_hosts` starts empty the host is always unknown, so this trusts
+      # whatever key is offered, exactly as `StrictHostKeyChecking=accept-new`
+      # would. It is chosen for matching `platform-deploy.yml` and for failing at
+      # a step named for what it was doing.
+      - name: Prove the credentials, derive the address, and trust the host key
+        env:
+          TARGET_ENVIRONMENT: ${{ matrix.environment.name }}
+        run: |
+          set -euo pipefail
+
+          # THE TWO FAILURES ARE SEPARATED, because they send an operator to
+          # different places and only one of them names itself.
+          #
+          # `ansible-inventory` failing is a rejected Hetzner token or a Vault
+          # password that does not decrypt this environment's variables, and it
+          # says so on its own stderr — which is NOT redirected, for exactly
+          # that reason. Only `jq`'s stderr is discarded below.
+          #
+          # The document it prints carries decrypted Vault values, so it is held
+          # in a variable and piped: it reaches neither the log nor the disk, and
+          # `jq` narrows it to the one field wanted.
+          if ! inventory=$(ansible-inventory -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" --list \
+              --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"); then
+            echo "::error::$TARGET_ENVIRONMENT: resolving the inventory failed, so either its Hetzner credential was rejected or its Vault password does not decrypt this environment's variables. The cause is above, from Ansible itself. This step is what stops that becoming a partially-converged host."
+            exit 1
+          fi
+
+          # An empty result here is the environment's group resolving to no
+          # host. The play's own guard has a careful diagnostic for that, which
+          # this step pre-empts by failing first — so it says it here instead.
+          if ! addresses=$(printf '%s' "$inventory" | jq -er '._meta.hostvars | to_entries[] | .value.ansible_host' 2>/dev/null); then
+            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but it names no host to converge. The environment is misspelled, its source belongs to a different Hetzner project, or its server does not exist."
+            exit 1
+          fi
+
+          for address in $addresses; do
+            peer=""
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              peer=$(tailscale ip -4 "$address" 2>/dev/null | head -n 1 || true)
+              [ -n "$peer" ] && break
+              sleep 3
+            done
+            if [ -z "$peer" ]; then
+              echo "::error::${TARGET_ENVIRONMENT}: '${address}' is in no tailnet peer this runner can see. A stale peer of the same name left behind by a rebuild is the likeliest cause — Tailscale suffixes a rejoining host and the old node keeps the bare name."
+              exit 1
+            fi
+            printf '%s %s\n' "$peer" "$address" | sudo tee -a /etc/hosts >/dev/null
+
+            key=""
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              key=$(ssh-keyscan -H "$address" 2>/dev/null || true)
+              [ -n "$key" ] && break
+              sleep 3
+            done
+            if [ -z "$key" ]; then
+              echo "::error::${TARGET_ENVIRONMENT}: '${address}' (${peer}) offered no host key within the wait. The peer resolves but does not answer, so it is unreachable rather than not yet propagated."
+              exit 1
+            fi
+            printf '%s\n' "$key" >>~/.ssh/known_hosts
+          done
+
+      # `tailscale_auth_key` is supplied EMPTY, and that is sound rather than
+      # lucky. This job reaches the host THROUGH the tailnet, so a host that is
+      # not on the tailnet is one it cannot open a session to at all — the run
+      # fails at the step above, before the first play. There is no reachable
+      # state in which a converge from here both connects and needs to run
+      # `tailscale up`. It is supplied rather than omitted so that nothing aborts
+      # on an undefined variable; the guarding `when:` is false on every host
+      # this job can reach.
+      #
+      # One residual path, named rather than hidden: a host that is on the
+      # tailnet but whose `tailscale status` is unparseable satisfies that
+      # `when:` — its POLARITY comment makes unparseable mean NOT connected, on
+      # purpose — and the join then fails with the censored error
+      # `docs/bootstrap-a-new-host.md` §6.3a describes. That is a loud failure on
+      # an already-diagnosable host, and §6.3a is the procedure for it.
+      - name: Converge this environment's host
+        env:
+          TARGET_ENVIRONMENT: ${{ matrix.environment.name }}
+        run: |
+          set -euo pipefail
+          # `target_environment` is on the invocation's own line deliberately:
+          # it is the play's one required input, the guard play refuses without
+          # it, and a reader — human or static check — that takes the first line
+          # of this command must see which environment is being converged.
+          ansible-playbook playbooks/host-baseline.yml -e "target_environment=$TARGET_ENVIRONMENT" \
+            -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" \
+            --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password" \
+            --private-key ~/.ssh/ansible_ci_key \
+            -e tailscale_auth_key=''
