@@ -1733,10 +1733,36 @@ class TestHostConvergeDiscoveryFailsClosed(
 
 
 # `ansible` the ad-hoc command, which is not `ansible-playbook`, not
-# `ansible-inventory` and not `ansible-galaxy`. The negative lookahead on the
-# hyphen is what separates it from its siblings.
-ANSIBLE_ADHOC = re.compile(r"\bansible\b(?!-)")
+# `ansible-inventory`, not `ansible-galaxy`, not `$HOME/.ansible/`, not
+# `ansible.cfg` and not `ansible.builtin.*`. `\b` is too loose for the last
+# three, because `.` is a non-word character on both sides of it; the character
+# classes below exclude a preceding path separator or dot and a following
+# hyphen, dot or word character.
+ANSIBLE_ADHOC = re.compile(r"(?<![\w./-])ansible(?![-\w.])")
 HOSTVARS = re.compile(r"\bhostvars\b")
+
+# THE SPELLING THAT FORCES A VAULTED VALUE TO DECRYPT, pinned deliberately.
+#
+# No static check can decide whether a Jinja expression forces decryption, so
+# this pins the one spelling established by experiment against the pinned
+# `ansible-core` 2.21.3, with a wrong `--vault-id`:
+#
+#     hostvars[inventory_hostname] | to_json | length      rc 2  <- forces
+#     hostvars[inventory_hostname] | length                rc 0
+#     hostvars | length                                    rc 0
+#     hostvars[inventory_hostname].keys() | list | length  rc 0
+#
+# `| length` on the dict counts keys and templates no value, so it never
+# touches a vaulted one. Dropping `| to_json` is a three-character edit that
+# reads as a simplification -- "why serialise it just to take a length?" -- and
+# it restores exactly the defect this guard exists to prevent, with every other
+# predicate here still satisfied.
+#
+# So a legitimate switch to some other forcing filter SHALL go red. That is the
+# point rather than a cost: whether the replacement forces decryption is a
+# question only the wrong-password experiment answers, and going red is what
+# makes someone re-run it instead of reading the code and concluding.
+TO_JSON = re.compile(r"\bto_(?:nice_)?json\b")
 
 VAULT_MARKER = "$ANSIBLE_VAULT"
 # Where a vaulted value may live for the preflight to reach it. `hostvars` for a
@@ -1765,23 +1791,35 @@ class TestTheVaultProofIsTheCommandThatProvesIt(
         name, job = self.converge_job()
         proving = []
         for index, step in enumerate(job.get("steps") or []):
-            body = str(step.get("run") or "")
-            if not invocation_lines(body, ANSIBLE_ADHOC):
-                continue
-            # Both halves matter: the vault argument makes it a statement about
-            # the secret, and `hostvars` makes it a statement about THIS host's
-            # variables rather than about some constant a template could render
-            # without decrypting anything.
-            if not invocation_lines(body, VAULT_ARGUMENT):
-                continue
-            if not HOSTVARS.search(uncommented(body)):
-                continue
-            proving.append(index)
+            # EVERY PREDICATE ON ONE COMMAND, not merely somewhere in the step.
+            # Continuations are joined first, because the real invocation spans
+            # three lines and `invocation_lines` is line-based: matched over the
+            # step, the vault argument would be supplied by the
+            # `ansible-inventory` call sitting beside this one, and an ad-hoc
+            # `ansible` carrying no vault argument at all would satisfy the
+            # check.
+            body = uncommented(str(step.get("run") or ""))
+            joined = re.sub(r"\\\n\s*", " ", body)
+            for line in invocation_lines(joined, ANSIBLE_ADHOC):
+                # Four predicates, each closing a different escape: it is the
+                # ad-hoc command; it carries the vault secret; it reads THIS
+                # host's variables rather than some constant; and it renders
+                # them, which is the only part that forces a decrypt.
+                if not VAULT_ARGUMENT.search(line):
+                    continue
+                if not HOSTVARS.search(line):
+                    continue
+                if not TO_JSON.search(line):
+                    continue
+                proving.append(index)
+                break
         self.assertTrue(
             proving,
-            f"the converge job `{name}` runs no ad-hoc `ansible` command that both "
-            "carries a vault argument and templates `hostvars`, so nothing in it "
-            "forces this environment's vaulted values to decrypt. `ansible-inventory "
+            f"the converge job `{name}` runs no single ad-hoc `ansible` command that "
+            "carries a vault argument, reads `hostvars` AND renders them through "
+            "`to_json`, so nothing in it forces this environment's vaulted values to "
+            "decrypt. `| length` alone counts keys and templates no value. "
+            "`ansible-inventory "
             "--list` does NOT: under the pinned ansible-core it serialises a vaulted "
             "value as ciphertext and exits 0 on a wrong password. Without this, a "
             "stale vault password is discovered four roles into the play, on a host "
@@ -1814,8 +1852,17 @@ class TestEveryVaultedValueIsWhereThePreflightReachesIt(unittest.TestCase):
     """
 
     def _candidates(self):
-        for path in walked_files(ANSIBLE_DIR):
+        # Walked from the REPOSITORY root and filtered, not walked from
+        # `ansible/`. `walked_files` builds its prune keys relative to the root
+        # it is given, so under `walked_files(ANSIBLE_DIR)` the entry
+        # `ansible/roles/geerlingguy.docker` becomes `roles/geerlingguy.docker`
+        # and never matches -- and a developer who has run `ansible-galaxy role
+        # install` would then have this sweep read installed content, against a
+        # docstring promising a static read of committed files.
+        for path in walked_files():
             relative = path.relative_to(ROOT).as_posix()
+            if not relative.startswith("ansible/"):
+                continue
             # A Molecule scenario is a fixture for a role's own tests. It is
             # never resolved by the host-baseline play and never reaches a
             # converge, so a vaulted value in one says nothing about this.

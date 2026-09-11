@@ -590,6 +590,15 @@ jobs:
           # `-c local` and `-m debug` so nothing connects to anything: this is a
           # statement about secrets, and it must not be the step that first
           # touches the host.
+          #
+          # DO NOT DROP `| to_json`. It reads like a needless serialisation
+          # before a length, and it is the only part of this expression that
+          # forces a vaulted value to decrypt. Measured against the pinned
+          # ansible-core with a wrong password: with it, rc 2; without it, rc 0;
+          # and `.keys() | list | length` is rc 0 too, because counting keys
+          # templates no value. `.github/tests` fails the build on its absence
+          # for exactly this reason, and a switch to another forcing filter is
+          # meant to go red until someone re-runs that measurement.
           if ! ansible -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" "$TARGET_ENVIRONMENT" \
               -c local -m debug -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"; then
