@@ -31,10 +31,30 @@ github_environment: production
 # holds one value, so this name SHALL be distinct from every other
 # environment's, or two environments plan under one token.
 #
-# `HCLOUD_TOKEN` is the name prod already uses, which is what makes design.md
-# Decision 1's consequence true: nothing in repository settings moves at N=1.
-# A second environment takes a name of its own.
-read_only_secret: HCLOUD_TOKEN
+# NOT `HCLOUD_TOKEN`, AND THE REASON IS NOT STYLE. Credential Scoping by
+# Privilege obliges EVERY environment's GitHub Environment to define
+# `HCLOUD_TOKEN` as that environment's Read & Write token, and GitHub resolves
+# an Environment-scoped secret ahead of a repository-scoped one of the same
+# name. While only the plan and drift jobs read this field the collision was
+# harmless -- neither declares an `environment:`. The host-converge job does,
+# so read from there `HCLOUD_TOKEN` yields the WRITE token, silently and with
+# no error, from a field that says read-only.
+#
+# So no environment's declared read-only secret may be a name its own
+# Environment also defines. `.github/tests` asserts that for `HCLOUD_TOKEN`
+# specifically, which is the checkable half; the general form is repository
+# settings and is unverifiable from here.
+#
+# `PRODUCTION` rather than `PROD`, matching the GitHub Environment this
+# environment attaches to rather than its directory name. The directory stays
+# `prod`; this is the naming the repository is moving toward, and picking it
+# now costs nothing where renaming the secret again later would.
+#
+# It is also the name prod's inventory source reads and the one
+# `ansible/.envrc.example` names for the same token locally -- which the
+# Dynamic Inventory via hcloud Plugin requirement now obliges to match this
+# field, so the three move together or the build fails.
+read_only_secret: HCLOUD_TOKEN_PRODUCTION
 
 # Whether the Destroy Policy Gate applies to this environment. OPTIONAL;
 # absent means it applies, so a mistake in this file fails safe.

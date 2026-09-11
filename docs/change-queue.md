@@ -46,6 +46,8 @@ Three things make this its own change rather than a fold-in:
 - `tailscale` carries **no Molecule scenario**, so there is nothing to regress against. Any change here should bring the role's first scenario with it.
 - The failure is currently *censored*: the consuming task sets `no_log: true`, so an absent key surfaces as a redacted error rather than a named one. That is worth fixing on its own merits and is invisible from the outside.
 
+**This entry now has a caller it did not have, and it owes a decision because of it.** `host-converge.yml` supplies `tailscale_auth_key` on every converge, as an **empty string** -- deliberately, because a job that reaches a host through the tailnet cannot reach one that is not on the tailnet, so there is no state in which it both connects and needs to run `tailscale up`. That makes "absent" and "empty" two different things here where this entry assumed one: a diagnostic that fires only on *undefined* would never fire for the pipeline, and one that fires on *empty* would fire on every pipeline converge of a host that is already joined -- which is all of them. Whatever this entry builds has to say which it means, and the answer is probably neither on its own but the join condition itself, which is what the entry already says is the hard part.
+
 Recorded by `fix-volume-discovery-and-consistency`, whose `design.md` Decision 3a carries the full reasoning.
 
 ## 11. matrix-the-molecule-suite-over-scenarios
@@ -115,39 +117,15 @@ The entries from here to 31 came out of a second full review on 2026-09-08 (trun
 
 Only what applies to **this** host too is recorded here; the company-only findings (repository visibility, a second approver, an organisation-owned repository) are not this repository's concern. The review's verdict repeated the first audit's: the architecture is sound, and what follows is operational rather than structural. It read the live host as well as the tree, so where an entry cites a host fact, that is what `main-server` showed on 2026-09-08, not an inference from the code.
 
-## 23. apply-host-configuration-through-a-gated-workflow
-
-**Unblocked, in fact and not merely in principle.** It waited on a non-prod host to *converge* against. `configure-the-staging-host` supplied everything a converge needs from this repository on 2026-09-10 -- an inventory source, a `group_vars` of its own, a play that can name it -- and the converge itself, which was operator work, happened the same day: staging is configured, and the values `staging.yml` was committed without were supplied in PR #130.
-
-The block's history, since it moved three times before lifting: recorded on 2026-09-09 when staging was identified; re-pointed on 2026-09-10 when `add-a-staging-environment` delivered staging's Terraform half; re-pointed again when `configure-the-staging-host` delivered the host half; and lifted when that change's converge succeeded.
-
-This remains the one path to production this repository still leaves to a workstation.
-
-Two things that change picked up which this entry inherits. The converge is now invoked as `ansible-playbook playbooks/host-baseline.yml -i inventory/<environment>.hcloud.yml -e target_environment=<environment>`, so a workflow parameterises over the environment rather than hard-coding one. And a run that reaches no host now fails instead of exiting 0 -- which matters more in CI than locally, since a workflow reporting green over a converge that touched nothing is exactly the failure a scheduled job hides.
-
-`ansible/playbooks/host-baseline.yml` is applied by hand: no workflow runs `ansible-playbook` against prod, the Vault password lives only on the operator's machine, and the `tailscale_auth_key` is supplied at the prompt. `AGENTS.md` says nothing ships from a local machine and that local production credentials are for reading, and the Terraform and platform layers honour it; the host layer does not, and a converge that changes UFW rules or authorized keys is at least as consequential as a Compose change.
-
-It is not a dormant layer: 41 commits touched `ansible/` in the 60 days to 2026-09-09. And the Vault password exists on exactly one machine -- lose it and the host cannot be converged at all, by anyone. The company server needs a second operator on day one, which today would mean handing over that password and a root key.
-
-The shape already exists twice in `.github/workflows/`: a credential-less job that shows the reviewer what will change, then a `production`-gated job that applies it. Three things in it are not plumbing.
-
-**Two tasks report drift on every check-mode run, and they are not drift.** Found 2026-09-10 by `configure-the-staging-host`, whose production check-mode run came back `changed=2`. Both are in `tailscale` -- *Add the Tailscale apt signing key* and *Add the Tailscale apt repository* -- and each is an `ansible.builtin.get_url` with no `checksum:`. Reproduced against a local fixture: `get_url` to an existing destination with no checksum reports **changed** under `--check`, because establishing that the file already matches would require downloading it, and check mode will not.
-
-This bears directly on the paragraph below. A drift detector that reports two findings on every single run, forever, is one an operator learns to skip -- the same failure mode this entry names for an approval prompt with nothing to approve. Whatever shape this change takes has to deal with it: pin a `checksum:` (upstream rotates the key, so this is not free), replace `get_url` with a task that can verify itself in check mode, or filter these two by name and say in the workflow why. What it must not do is ship a drift signal whose baseline is two. **And whatever it does, `docs/bootstrap-a-new-host.md` §6.3 changes with it**: that section now tells operators a healthy host reports `changed=2` and names both tasks, so a remedy that leaves it alone would have the document training them to discount the very signal this entry exists to create. Written into §6.3, and this line into here, by `align-the-bootstrap-doc-with-a-real-run` -- before it merged nothing asserted a baseline at all, so this entry's implementer could not have known to look.
-
-**`--check --diff` is not the safety net it looks like.** `docs/bootstrap-a-new-host.md` §6.3 already says not to rely on `--check` for a first run. Beyond that, `command` tasks skip in check mode -- `ops_user`'s three and `swap`'s four -- and `geerlingguy.docker` carries `ignore_errors: "{{ ansible_check_mode }}"` on five tasks, so check-mode failures there are swallowed. The diff is honest about files and packages and blind to anything a command drives. The safety net for *behaviour* is Molecule, which is already a required check and converges a real host per role. What `--check --diff` against the live host adds is **drift**, not a plan: frame it as the host layer's `drift.yml` rather than its `terraform plan`, and the question of whether it is reviewable enough to approve on mostly dissolves.
-
-**The credential is a genuine widening.** CI would hold a key that logs in as `root@prod` -- strictly more powerful than `PLATFORM_DEPLOY_SSH_KEY`, which is pinned to a forced command, and than `HCLOUD_TOKEN`, which can destroy the server but cannot read it. Decide a dedicated `ansible-ci` key, rotatable and distinct from the operator's personal one. Chicken-and-egg, as in 49: the role that installs it is the role CI runs, so its first installation is manual.
-
-**One of the two secrets probably need not move at all.** `tailscale_auth_key` is consumed only by the `tailscale up` task, whose `when:` is false on an already-joined host, so on a normal converge it is never templated. Do not lean on that -- an expired node would abort mid-play on an undefined variable at the worst possible moment -- but no new long-lived secret is needed either: `platform-deploy.yml` already authenticates with `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`, and minting a key from that same client leaves the Vault password as the only genuinely new secret.
-
-**Why staging first, and why 25 waits on this.** This is the riskiest work in the region: a converge that wedges UFW or `tailscaled` locks CI out of the very host it converges. Developed against staging it costs nothing, and is pointed at prod once it works. In the other direction, 25 closes public SSH and would remove the ISP `/24` fallback that makes an unproven CI converge survivable, so it should not precede this.
-
 ## 25. close-public-ssh-and-manage-sshd-explicitly
 
 **Not blocked; a policy decision the hardening role already anticipates.**
 
 Port 22 is open on the cloud firewall and in UFW from one ISP `/24` (`ssh_allowed_cidrs` in `terraform.tfvars`, mirrored in `group_vars/prod.yml`). The tailnet rule in `ansible/roles/hardening/tasks/main.yml` admits SSH from `100.64.0.0/10` independently, and that task's own comment says an empty public CIDR list "is safer than what prod runs". Every non-operator path (the deploy jobs) already uses the tailnet; the public rule exists for the operator alone, and the operator is on the tailnet too.
+
+**What changed when the host converge moved into the pipeline.** This entry used to wait on that, and the wait is over: `host-converge.yml` reaches every host over the tailnet and needs no allowance in the cloud firewall, so closing port 22 does not lock the pipeline out. What it does close is the fallback. Until this entry lands, the ISP `/24` is what makes a converge that wedges `tailscaled` survivable without Hetzner's console -- so the order matters in one direction only: this must not precede a converge pipeline that has been seen to work. It now has one, but "seen to work" means more than one green run on production, not the first.
+
+**One more path to enumerate before closing it**, which did not exist when this entry was written: the *first* converge of a host, and of a rebuilt host, is an operator's from a workstation over the **public** address -- the pipeline reaches a host through the tailnet, and joining the tailnet is what that play does. `docs/bootstrap-a-new-host.md` §6.3 and Appendix B are both that path. Closing public SSH outright would make a new host unreachable by the only thing that can configure it, so this change has to say how a host is bootstrapped afterwards: a temporarily widened `ssh_allowed_cidrs` applied through the pipeline, or Hetzner's console.
 
 Closing it is `ssh_allowed_cidrs = []` -- except that `modules/server`'s validation refuses an empty list on lockout grounds, which was the right default before the tailnet existed and is the thing to revisit now. The Terraform firewall rule and the UFW rule move together (the *Host-Level Security Owned by Ansible, Cloud Firewall Owned by Terraform* requirement's sync obligation), and the change should say what the recovery path is if the tailnet is unreachable: Hetzner's console, which the cloud firewall does not gate.
 
@@ -233,7 +211,9 @@ Four majors is a migration rather than a version bump, which is why this is an e
 
 **Do not inherit that entry's estimate.** It called itself "a one-stanza change in `.github/dependabot.yml`" and was not one: *Automated Dependency Updates* (`openspec/specs/iac-safety-hardening/spec.md`) enumerates its ecosystems by name and the CI-configuration suite reads that enumeration back, so a fourth ecosystem is a stanza **plus** a specification delta widening that enumeration **plus** the tests that hold it. Budget for the same here.
 
-Dependabot watches `terraform` and `github-actions`. Nothing watches the five pip pins: `.github/requirements-ci.txt` (`pre-commit==4.6.2`, `PyYAML==6.0.1`) and `ansible/requirements-test.txt` (`ansible-core==2.21.3`, `molecule==26.8.0`, `molecule-plugins[docker]==26.7.15`). Dependabot's `pip` ecosystem reads both file shapes.
+Dependabot watches `terraform` and `github-actions`. Nothing watches the six pip pins: `.github/requirements-ci.txt` (`pre-commit==4.6.2`, `PyYAML==6.0.1`), `ansible/requirements-test.txt` (`ansible-core==2.21.3`, `molecule==26.8.0`, `molecule-plugins[docker]==26.7.15`) and `ansible/requirements.txt` (`ansible-core==2.21.3`). Dependabot's `pip` ecosystem reads all three file shapes.
+
+**The third manifest arrived with `apply-host-configuration-through-a-gated-workflow` and changes what this entry must do**, because it does not merely add a fourth file to watch. `ansible/requirements.txt` pins `ansible-core` at the version `ansible/requirements-test.txt` pins, and `.github/tests` fails the build on a difference -- so the converge runs the Ansible the Molecule suite verified those roles under. A Dependabot configuration that opened a pull request against one of the two would be red on arrival, every time. Whatever this entry does, the two must move as a pair: a grouped update, or one manifest watched and the other asserted to follow it.
 
 Lower stakes than the platform images were -- these are the test and CI toolchain rather than production services -- but the cost is a few lines and the alternative is the same "when a person notices" that entry 35 is the consequence of.
 
@@ -498,3 +478,41 @@ The rule makes the assertion crisp rather than heuristic: under "one line per pa
 **What this deliberately does not attempt.** Not a formatter. Prettier's `proseWrap: "never"` would auto-fix, but it rewrites list markers, emphasis characters, table alignment and heading style across the tree, and it would rewrite archived records — which `AGENTS.md` says may be touched only to make them say what actually happened. There is also no Node toolchain in this repository to hang it on. markdownlint is the wrong tool for a different reason: `MD013` enforces a maximum line length, and there is no rule for the opposite.
 
 Not blocked. One new module in `.github/tests`, whose constraints it fits: a static read of committed files, no network, no credential, no container.
+
+## 58. detect-host-drift-on-a-schedule
+
+**Not blocked, and deliberately not done by `apply-host-configuration-through-a-gated-workflow`**, which is the change that made it possible and the one that declined it. That change's own `design.md` Decision 10 carries the full reasoning; what follows is what this entry inherits.
+
+A converge applies what is committed. Nothing reports what a host has drifted to between converges, and the host layer is the only one of the three without that: `drift.yml` sweeps Terraform nightly, and the platform stack is redeployed wholesale on every merge. `--check --diff` against a live host is the host layer's `drift.yml` -- not its `terraform plan`, and the distinction is why it could not be folded into the converge workflow. A pre-approval job must hold no credential capable of reaching a host, and a check-mode run has to authenticate.
+
+**It cannot ship with the baseline it has today.** Two `tailscale` tasks -- *Add the Tailscale apt signing key* and *Add the Tailscale apt repository* -- are `ansible.builtin.get_url` with no `checksum:`, and `get_url` to an existing destination with no checksum reports **changed** under `--check`, because establishing that the file already matches would mean downloading it. So a healthy host reports `changed=2`, forever. A drift detector whose baseline is two is one an operator learns to skip, which is the same failure mode as an approval prompt with nothing to approve. Three remedies, none free: pin a `checksum:` (upstream rotates the key), replace `get_url` with a task that can verify itself in check mode, or filter those two by name and say in the workflow why.
+
+**Entry 3b is a prerequisite rather than a neighbour.** The `tailscale` role carries no Molecule scenario, so any of those remedies would be made against nothing. 3b already owns bringing that role its first scenario.
+
+**Two documents move with it.** `docs/bootstrap-a-new-host.md` §6.3 states the `changed=2` baseline and names this entry as owning its removal -- that paragraph is written to change when this lands. And what check mode can see is less than the host: `command` tasks skip under `--check` (`ops_user`'s three, `swap`'s four) and `geerlingguy.docker` carries `ignore_errors: "{{ ansible_check_mode }}"` on five, so a clean check is a statement about files and packages and not about the host. Whatever this ships must say so where it reports, not only in a design document.
+
+Shape it as `drift.yml`'s sibling: scheduled, per environment, an issue per environment deduplicated by title, and a liveness report -- the last is obligatory, since *Scheduled Workflows Report Their Own Liveness* reaches every `schedule:`-triggered workflow.
+
+## 59. manage-root-authorized-keys-from-a-role
+
+**Not blocked. Recorded by `apply-host-configuration-through-a-gated-workflow`, which installs a key it cannot revoke.**
+
+That change gives each environment a dedicated `ansible-ci` keypair whose public half authorises `root` on that host. No role manages `root`'s `authorized_keys`: the file's original entry arrives from Hetzner at server creation, and `hcloud_server.ssh_keys` cannot be changed without recreating the server. So the converge key is appended by hand at `docs/bootstrap-a-new-host.md` §6.6, and **revoking it is an edit on the host** rather than a commit.
+
+That is not a regression -- root's existing key is unmanaged in exactly the same way -- but it is the one credential in this repository with no revocation path through the repository, and it is the most powerful one CI holds.
+
+**Why it is its own change and not a fold-in.** A role that owns `root`'s `authorized_keys` can lock every operator out of a host, which is a different class of risk from anything the `hardening` role does today. It wants scenarios of its own, and the `ops_user` role's per-entry `state:` model -- where revocation is `state: absent` with the entry **left in place** until a converge has removed it -- is the shape to follow rather than invent. Note also that `exclusive: true` is the only form that actually revokes, and is the form that can lock everyone out; a non-exclusive managed list adds keys and never removes one.
+
+**The chicken-and-egg is real either way and is not an argument against it**: the role that would install the key is a role CI runs, so the first installation is manual whichever shape this takes. What the change buys is every installation after the first.
+
+## 60. factor-the-four-environment-discovery-bodies
+
+**Not blocked. Recorded when the fourth one was written.**
+
+`pr-validation.yml`, `apply.yml` and `drift.yml` share one ~160-line environment-discovery body, asserted identical across the three by `.github/tests` -- and that assertion is what makes running one copy evidence about all three. `host-converge.yml` now carries a fourth that is **deliberately not identical**: it enumerates `ansible/inventory/*.hcloud.yml` rather than `terraform/environments/*/`, and it cross-checks the two sets in both directions, which the Terraform body sees only one side of. So it sits outside that assertion, and the family is no longer covered as a whole.
+
+The existing comment in those three anticipated this: *"Copies are not the only available shape … Edit them together, or factor them out together."* It declined a composite action on two grounds, and one of them has since weakened -- it cost "a fourth file in a diff already restructuring three gated workflows", which is not what this change would be.
+
+**A script under `.github/scripts/` is likely simpler than a composite action**, and for a reason specific to this repository: `.github/tests` currently locates a discovery body by step name inside a workflow and executes it against a scratch tree. A script is executed directly, which removes that indirection rather than adding a second one. The shared parts are the flat `key: value` reader, the secret-name validation, the empty-result refusal and the JSON emission; the roots and the cross-checks differ and would stay parameters.
+
+Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.

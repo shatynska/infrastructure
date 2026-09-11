@@ -33,5 +33,5 @@
 # A wrong or missing value fails the run rather than producing an environment
 # with no host in it -- ansible.cfg's `any_unparsed_is_failed`. Without that,
 # a typo here would look exactly like a destroyed server.
-export HCLOUD_TOKEN_PROD="your-read-only-hetzner-token-for-prods-project"
+export HCLOUD_TOKEN_PRODUCTION="your-read-only-hetzner-token-for-prods-project"
 export HCLOUD_TOKEN_STAGING="your-read-only-hetzner-token-for-stagings-project"
