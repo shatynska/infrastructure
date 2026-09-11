@@ -46,6 +46,8 @@ Three things make this its own change rather than a fold-in:
 - `tailscale` carries **no Molecule scenario**, so there is nothing to regress against. Any change here should bring the role's first scenario with it.
 - The failure is currently *censored*: the consuming task sets `no_log: true`, so an absent key surfaces as a redacted error rather than a named one. That is worth fixing on its own merits and is invisible from the outside.
 
+**This entry now has a caller it did not have, and it owes a decision because of it.** `host-converge.yml` supplies `tailscale_auth_key` on every converge, as an **empty string** -- deliberately, because a job that reaches a host through the tailnet cannot reach one that is not on the tailnet, so there is no state in which it both connects and needs to run `tailscale up`. That makes "absent" and "empty" two different things here where this entry assumed one: a diagnostic that fires only on *undefined* would never fire for the pipeline, and one that fires on *empty* would fire on every pipeline converge of a host that is already joined -- which is all of them. Whatever this entry builds has to say which it means, and the answer is probably neither on its own but the join condition itself, which is what the entry already says is the hard part.
+
 Recorded by `fix-volume-discovery-and-consistency`, whose `design.md` Decision 3a carries the full reasoning.
 
 ## 11. matrix-the-molecule-suite-over-scenarios
