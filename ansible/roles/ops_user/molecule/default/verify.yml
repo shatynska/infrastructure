@@ -605,10 +605,18 @@
     # has the same self-match latent in it (its own scenario has never run
     # far enough to reach the assertion); out of scope to fix there.
     #
-    # The second scan, over ansible/inventory/, is DERIVED -- no
-    # scenario names that path, but it is where `ops_user_accounts` and therefore the
-    # committed key material actually lives, so a scan confined to the role
-    # directory would not look where the risk is.
+    # A SECOND SCAN, OVER ansible/inventory/, NO LONGER LIVES HERE. Its own
+    # comment called it DERIVED -- no scenario named that path, but it is where
+    # `ops_user_accounts` and therefore the committed key material actually
+    # lives. That reasoning was sound and pointed past this scenario entirely:
+    # a scan rooted where the risk is, rather than where the scenario is, is a
+    # repository-scope claim, and it ran only on the pull requests that changed
+    # `ansible/`. It is now an assertion in
+    # `.github/tests/test_ci_configuration.py`, widened from the inventory to
+    # every tracked file and running on every pull request. The role-local scan
+    # below stays: a change to this role's own directory selects the suite
+    # anyway. See `narrow-the-molecule-trigger-to-what-it-reads`, design.md
+    # Decision 4.
     # ============================================================
     - name: Scan this role's committed files for embedded private-key material
       ansible.builtin.shell: |
@@ -623,27 +631,13 @@
       delegate_to: localhost
       become: false
 
-    - name: Scan the committed inventory for embedded private-key material (DERIVED)
-      ansible.builtin.shell: |
-        set -o pipefail
-        head='-----BEGIN'
-        tail='PRIVATE KEY-----'
-        grep -rlE -- "${head} (OPENSSH |RSA )?${tail}" "{{ playbook_dir }}/../../../../inventory" || true
-      args:
-        executable: /bin/bash
-      register: ops_user_inventory_private_key_scan
-      changed_when: false
-      delegate_to: localhost
-      become: false
-
-    - name: Assert no operator private key is committed under the role or the inventory
+    - name: Assert no operator private key is committed under this role
       ansible.builtin.assert:
         that:
           - ops_user_role_private_key_scan.stdout | trim == ""
-          - ops_user_inventory_private_key_scan.stdout | trim == ""
         fail_msg: >-
           A private-key marker was found in
-          '{{ ops_user_role_private_key_scan.stdout }}{{ ops_user_inventory_private_key_scan.stdout }}'.
+          '{{ ops_user_role_private_key_scan.stdout }}'.
           Only an operator keypair's public half SHALL be committed to this
           repository; the private half SHALL remain on the operator's own
           machine.

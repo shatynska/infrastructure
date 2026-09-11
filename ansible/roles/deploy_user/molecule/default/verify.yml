@@ -408,104 +408,20 @@
     # ============================================================
     # Scenario: GHCR token is never committed
     #
-    # Not host-state to converge against (the token only ever reaches the
-    # host as a decrypted Vault value, per tasks.md 2.3) -- checked as a
-    # static scan of the committed repository, delegated to localhost,
-    # same technique as the private-key-marker scan further below.
-    # ============================================================
-    - name: Scan the repository for literal GitHub/GHCR token markers
-      ansible.builtin.shell: |
-        set -o pipefail
-        grep -rlE "gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}" "{{ playbook_dir }}/../../../../.." || true
-      args:
-        executable: /bin/bash
-      register: deploy_user_per_app_ghcr_token_marker_scan
-      changed_when: false
-      delegate_to: localhost
-      become: false
-
-    - name: Assert no literal GitHub/GHCR token is committed anywhere in the repository
-      ansible.builtin.assert:
-        that:
-          - deploy_user_per_app_ghcr_token_marker_scan.stdout | trim == ""
-        fail_msg: >-
-          A GitHub/GHCR token-shaped marker was found committed in:
-          {{ deploy_user_per_app_ghcr_token_marker_scan.stdout }} -- the GHCR
-          pull token SHALL be stored outside version control and SHALL NOT
-          appear in plaintext anywhere in the repository.
-
-    # Tests the VALUE of each assignment, wherever the file lives, rather
-    # than the file as a whole. The old form ran `head -c 15 | grep
-    # '^$ANSIBLE_VAULT'` -- a whole-file encryption test -- which flagged
-    # ansible/inventory/group_vars/prod.yml, whose token is an INLINE
-    # `!vault` value inside an otherwise plaintext file. That is this
-    # project's documented and correct pattern, so the scan was reporting a
-    # false positive on a correct tree, and also flagged the scenario
-    # converge files that read the value from the environment.
+    # THE TWO SCANS THAT SERVED THIS SCENARIO NO LONGER LIVE HERE. They were
+    # static reads of the committed repository wearing the shape of host
+    # verification -- one for literal token markers across the whole tree, one
+    # for a `ghcr_pull_token` assigned a committed literal -- and they ran only
+    # on the pull requests that happened to change `ansible/`, which is not the
+    # scope a repository-wide claim needs. Both are now assertions in
+    # `.github/tests/test_ci_configuration.py`, which runs unconditionally on
+    # every pull request and reads the repository's tracked files.
     #
-    # Excluding those files by path would have been simpler and is
-    # deliberately not done: it would blind the scan permanently in exactly
-    # the files most likely to acquire a pasted real token, since running
-    # the credentialled verification means having a live token at the
-    # keyboard while editing them. An assignment is acceptable if its value
-    # is an inline `!vault` value or a `lookup('env', ...)` expression;
-    # anything else is a literal and fails.
-    # (repair-ansible-test-harness, task 6.2.)
-    - name: Find any ghcr_pull_token assignment whose value is a committed literal
-      ansible.builtin.shell: |
-        set -o pipefail
-        python3 - "{{ playbook_dir }}/../../../../.." <<'SCAN'
-        import pathlib, re, sys
-
-        # A line-oriented grep cannot do this correctly: both scenario
-        # converge files assign the token as a YAML FOLDED scalar, so the
-        # assignment line is just `ghcr_pull_token: >-` and the lookup that
-        # makes it acceptable sits on the following lines. Reading the
-        # assignment together with its continuation is the whole point.
-        root = pathlib.Path(sys.argv[1]).resolve()
-        assign = re.compile(r"^([ \t]*)ghcr_pull_token[ \t]*:(.*)$")
-        offenders = []
-
-        for path in sorted(root.rglob("*.y*ml")):
-            if ".git" in path.parts:
-                continue
-            lines = path.read_text(errors="ignore").splitlines()
-            for i, line in enumerate(lines):
-                m = assign.match(line)
-                if not m:
-                    continue
-                indent, value = len(m.group(1)), m.group(2)
-                # Absorb the folded/block continuation: any following line
-                # indented deeper than the assignment itself.
-                for cont in lines[i + 1:]:
-                    if cont.strip() and (len(cont) - len(cont.lstrip())) <= indent:
-                        break
-                    value += " " + cont.strip()
-                if not value.strip():
-                    continue
-                if "!vault" in value or "lookup('env'" in value or 'lookup("env"' in value:
-                    continue
-                offenders.append(f"{path.relative_to(root)}:{i + 1}")
-
-        print("\n".join(offenders))
-        SCAN
-      args:
-        executable: /bin/bash
-      register: deploy_user_per_app_ghcr_token_plaintext_scan
-      changed_when: false
-      delegate_to: localhost
-      become: false
-
-    - name: Assert no ghcr_pull_token assignment carries a committed literal value
-      ansible.builtin.assert:
-        that:
-          - deploy_user_per_app_ghcr_token_plaintext_scan.stdout | trim == ""
-        fail_msg: >-
-          ghcr_pull_token is assigned a value outside an Ansible-Vault-
-          encrypted file in: {{ deploy_user_per_app_ghcr_token_plaintext_scan.stdout }}
-          -- per the GHCR requirement, it SHALL be stored outside version
-          control (Ansible Vault), not merely referenced without a
-          committed default.
+    # The scenario header stays because the scenario is still owed: what
+    # changed is where the obligation is discharged, not whether it is. See the
+    # change `narrow-the-molecule-trigger-to-what-it-reads`, design.md
+    # Decision 4. Nothing below this point verifies it.
+    # ============================================================
 
     # ============================================================
     # Carried forward from the old `default` scenario (test-manifest.md's

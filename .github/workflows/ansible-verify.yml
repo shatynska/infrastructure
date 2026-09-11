@@ -96,9 +96,90 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
         with:
+          # WHAT THE SUITE READS IS NARROWER THAN `ansible/`, and the
+          # difference is spelled as EXCLUSIONS rather than as inclusions. The
+          # two spellings agree on today's tree and disagree on tomorrow's: a
+          # file added under `ansible/` that nobody thought about is, under an
+          # inclusion list, silently not a trigger -- the suite skips and the
+          # gate reports green, which is the failure every other refusal in
+          # this workflow is written to prevent. Under this list the same file
+          # runs the suite: wasteful, visible, and correctable in one line.
+          #
+          # Each exclusion was established by reading the scenarios, not by
+          # reasoning about the directory, and the sweep's own signal is in
+          # design.md Decision 1 of the change below. A path a scenario names
+          # in a COMMENT, or asserts as a substring of an expected failure
+          # message, is not a path that scenario reads -- one scenario does
+          # exactly that with `ansible/inventory/group_vars/<environment>.yml`,
+          # asserting it as a substring of a refusal it expects.
+          #
+          #   inventory/**       reached by exactly one scan, which now lives
+          #                      in `.github/tests` and runs on EVERY pull
+          #                      request rather than on a subset. Excluding it
+          #                      before that move would have withdrawn the only
+          #                      check reading it.
+          #   playbooks/**       reached by nothing. Named in one scenario
+          #                      comment, recording that its role ordering
+          #                      mirrors the baseline playbook's -- and the
+          #                      mirroring is not asserted.
+          #   requirements.txt   the converge workflow's own `ansible-core`.
+          #                      DISTINCT from `requirements-test.txt` and
+          #                      `requirements.yml`, which are NOT excluded:
+          #                      both determine what every scenario runs under,
+          #                      one scenario reads the second of them directly
+          #                      to assert an external role's pin, and every
+          #                      scenario names it as its dependency manifest.
+          #   .envrc*            operator environment scaffolding. `.envrc` is
+          #                      gitignored; `.envrc.example` is a document.
+          #
+          # `ansible.cfg` is deliberately NOT excluded. Two scenario comments
+          # claim it governs their runs -- it does not, Molecule running with
+          # the role directory as its working directory, so configuration
+          # discovery never reaches two levels up -- but a file the scenarios
+          # believe governs them is not one to exclude on the strength of a
+          # sweep, and it changes rarely.
+          #
+          # `predicate-quantifier` IS LOAD-BEARING AND IS NOT A STYLE CHOICE.
+          # The action's DEFAULT is `some`, under which every pattern is
+          # compiled independently and OR-ed: `patterns.some(rule =>
+          # rule.isMatch(filename))`. picomatch INVERTS a matcher built from a
+          # `!`-prefixed pattern, so `'!ansible/inventory/**'` returns true for
+          # every path that is NOT under that directory -- and the OR is then
+          # true for essentially every file in the repository. Left at the
+          # default, these four negations would not narrow anything: they would
+          # make this filter match README.md and terraform/*.tf, and the suite
+          # would start seven containers on EVERY pull request. That is not a
+          # smaller version of the bug this change fixes; it is a strictly
+          # larger one, on a required check whose degraded runs took 75
+          # minutes.
+          #
+          # `some-with-excludes` is the quantifier that means what the list
+          # above reads as: selected where some positive matches AND no
+          # negation matches. It is order-independent -- the positive is
+          # written first for legibility, not for semantics -- and exclusion is
+          # final, no later pattern re-including a file.
+          #
+          # `.github/tests` asserts that this input is DECLARED, because
+          # without it the negations are silently inert and every check over
+          # the declared patterns still passes. That is the "economical and
+          # silent" failure this repository refuses everywhere else, and it is
+          # invisible to any assertion that reads only the pattern list.
+          #
+          # `.github/tests` asserts this declaration, and asserts
+          # separately that `pr-validation.yml`'s lint filter carries NO
+          # negation -- that tier is the compensating coverage for everything
+          # excluded here, so the two must disagree, and both halves are
+          # checked rather than reviewed.
+          #
+          # See the change `narrow-the-molecule-trigger-to-what-it-reads`.
+          predicate-quantifier: 'some-with-excludes'
           filters: |
             ansible:
               - 'ansible/**'
+              - '!ansible/inventory/**'
+              - '!ansible/playbooks/**'
+              - '!ansible/requirements.txt'
+              - '!ansible/.envrc*'
 
       # Resolves whether the suite runs, for both triggers. THE POLARITY IS THE
       # POINT: a run that is not a pull request has no diff, the step above did
@@ -284,7 +365,7 @@ jobs:
                 echo "::error::The suite was skipped on a run that asked for it (run-suite=true). A skipped job is not a passing one: concluding success here would report a green required status check for a suite that verified nothing."
                 exit 1
               fi
-              echo "Nothing under the configuration directory changed, so the suite was skipped rather than run. Concluding success having correctly done no work."
+              echo "Nothing the suite reads changed, so it was skipped rather than run. Files under ansible/ MAY have changed: the suite's change detection excludes the inventory, the playbooks, the converge workflow's own requirements.txt and the .envrc scaffolding, none of which any scenario reads. Those paths are covered by the lint tier in pr-validation.yml, which is triggered by the whole of ansible/ without exclusion. Concluding success having correctly done no work."
               ;;
             *)
               echo "::error::The suite concluded '${MATRIX_RESULT}' (run-suite=${RUN_SUITE}). Only 'success', or a skip on a run that did not ask for the suite, may conclude success."

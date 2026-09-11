@@ -570,3 +570,41 @@ Recorded 2026-09-11 by the naming exploration that produced `docs/naming-convent
 **There is no data migration.** The filesystem lives on the volume and the subdirectories travel with it; only the mountpoint moves, which is an `/etc/fstab` entry and a remount. What it does cost is a stack restart, so Prometheus and Grafana are down for the window and their scrape gap is visible afterwards.
 
 **One trap does the damage if missed.** `ansible.posix.mount` with `state: mounted` adds the new entry and does **not** remove the old one, so the converge leaves `/mnt/main-data` in `/etc/fstab` and the device remounts at two paths on the next reboot. A one-shot task with `state: absent` for the old path is required, and it is the kind of cleanup that is easy to write, easy to verify on the day, and invisible until a reboot months later.
+
+## 65. cache-the-apt-index-within-a-converge
+
+Recorded 2026-09-11 by the investigation that produced `narrow-the-molecule-trigger-to-what-it-reads`, and deliberately outside it: that change moves a filter, this one changes what a role does on a production host.
+
+Three role tasks carry `update_cache: true` with no cache window — both `apt` tasks in `hardening`, and one in `image_prune`; `tailscale` carries a fourth. Each invocation is a full package-index fetch from the Ubuntu archive. Under Molecule the cost multiplies: `hardening` alone pays it six times per job, two tasks across the converge and the idempotence pass of each of its two scenarios, every one of them against a container whose index is stale or empty.
+
+**The measurement that prompted this.** On 2026-09-11 the archive became slow to reach from a GitHub-hosted runner and a single `apt-get update` inside a scenario's container went from 13 seconds to 309 — the `hardening` job from 2.6 minutes to 24.7, and `image_prune` from a steady 9–11 minutes to 74.5. The degradation was upstream and is not this repository's to fix; what is, is that the suite pays that cost six times where once would do.
+
+A `cache_valid_time` would collapse the repeats: a freshly created container has no cache, so the first task still fetches and what a scenario observes about a real install is unchanged, while every later task in the same run skips.
+
+**It is a role behaviour change, not a test tweak, and that is the whole reason it is queued rather than folded in.** The same window applies on a production converge, where the question is how stale an index may be before installing a security-relevant package like `fail2ban` — a judgment about the host, not about CI. It also changes what the idempotence pass exercises: today that pass re-fetches and re-resolves, and afterwards it does not, so a defect only a fresh resolve would expose stops being covered. Neither is an objection; both are what the proposal has to decide rather than assume.
+
+## 66. bound-the-molecule-matrix-with-a-timeout
+
+Recorded 2026-09-11 by the same investigation, and independent of entry 65.
+
+No workflow in `.github/workflows/` declares `timeout-minutes` anywhere, so every job inherits GitHub's 360-minute default. For the Molecule matrix that is the difference between learning about a hung scenario and not: `ansible-verify` is a **required** status check, so a scenario that hangs leaves a pull request pending for six hours with no signal distinguishing it from one that is merely slow.
+
+`AGENTS.md`'s own Molecule section describes several ways a run hangs rather than fails — a `prepare` whose container is torn down under a running play, a `verify` task killed with rc 137 and empty output — which is what makes the unbounded default worth closing rather than theoretical.
+
+**The trade-off is the whole content of the change, and it is sharper than it looks.** A timeout tight enough to catch a hang promptly would have failed the runs of 2026-09-11 described in entry 65, which were slow and green rather than hung: `image_prune` took 74.5 minutes and passed. So the value has to sit above the degraded-but-working ceiling and below six hours, which means it is chosen against observed durations rather than against the baseline — and the baseline, around 10 minutes, is a bad guide. Record the durations the proposal is based on, since they are what a later reader will want when the number looks arbitrary.
+
+Entry 65 would lower both the baseline and the ceiling, so doing that first changes what this one should choose. They are independent in mechanism and not in the number.
+
+## 67. select-the-molecule-matrix-per-role
+
+Recorded 2026-09-11 by `narrow-the-molecule-trigger-to-what-it-reads`, which narrowed the suite's trigger to the paths its scenarios read and deliberately stopped there. That change removed the whole of the safe win — the pull requests touching no role at all, four of the last six to touch `ansible/` — and left this, which is the contested remainder: running only the roles a diff actually touches.
+
+**What makes it a change of its own rather than a refinement of that filter.** Scenarios converge sibling roles. `image_prune`'s converge every one of theirs on `docker`; `ops_user`'s default converges `docker` and `deploy_user`. A matrix selecting only the role whose files changed would therefore skip `image_prune` and `ops_user` on a pull request editing `docker`, and skip them silently — the gate sees a green matrix over the rows it was given. A correct per-role matrix needs the **reverse closure** of a dependency graph derived from scenario text, and deriving that graph wrongly loses coverage with nothing reporting, which is the failure this pipeline is built to refuse.
+
+Three things that change has already built and this one extends rather than repeats:
+
+- **The sweep.** `design.md` Decision 1's table enumerates every controller-side read of a repository file in all seventeen authored scenarios, with the route that finds each. A dependency graph is the same exercise over `roles:` and `include_role:`, and the same lesson applies: that table took three attempts and its last entry was found by the test author, not by either sweep.
+- **The permitted-set mechanism.** `unpermitted_controller_reads` in `.github/tests/test_ci_configuration.py` already reads scenario text statically, keyed on file, construction and resolved target with per-file occurrence counts. A role-dependency check belongs beside it.
+- **The gate's three-way distinction.** `ansible-verify.yml`'s aggregating job distinguishes a discovery failure, a skip that was owed, and a skip that was not. A per-role matrix needs a fourth state — the suite ran, on the subset that was owed — without reopening the hole the third exists to close, and the shared inputs (`requirements.yml`, `requirements-test.txt`, `scripts/run-molecule`, the base-image digests) must still fan out to everything.
+
+**The prize is smaller than the last one.** Of the two recent pull requests that did touch a role, one touched eight files in a single role; per-role selection would have run one job instead of seven. Worth having, not worth rushing: the cost of getting it wrong is a green that verified nothing, on the check that gates every merge.
