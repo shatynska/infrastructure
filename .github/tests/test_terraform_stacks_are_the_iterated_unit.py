@@ -153,6 +153,34 @@ STACK_ROOT = ROOT / "terraform" / "stacks"
 # independent on purpose, so that removing either leaves the other standing.
 OLD_ROOT_SEGMENT = "terraform/" + "environments"
 
+# The directory's own name, with no prefix, taken from the constant above
+# rather than written out a second time -- the assembly rule stated there
+# applies to every literal in this module, not only to the first one.
+OLD_ROOT_DIRECTORY = OLD_ROOT_SEGMENT.rpartition("/")[2]
+
+# What counts as still naming the old root. The union of two shapes, and the
+# second is why this is a regular expression rather than a substring:
+#
+#   1. the PREFIXED path, with or without a trailing slash, exactly as the
+#      constant above spells it; and
+#   2. a BARE reference to the directory -- the word immediately followed by a
+#      slash, whatever prefix it carries or none at all.
+#
+# The second was added after code review found two committed files naming the
+# directory without its `terraform/` prefix -- a `.tftest.hcl` comment reading
+# "(not environments/prod)" and a `docs/change-queue.md` entry -- over which
+# the sweep reported a clean tree. The instances were corrected; this closes
+# the class.
+#
+# It keys on the PATH-LIKE SHAPE and never on the word. The lookbehind rejects
+# a longer identifier that merely ends in it.
+OLD_ROOT_REFERENCE = re.compile(
+    re.escape(OLD_ROOT_SEGMENT)
+    + r"|(?<![A-Za-z0-9_-])"
+    + re.escape(OLD_ROOT_DIRECTORY)
+    + "/"
+)
+
 # Identifiers the rename retires, each with the surface it lived on. Asserted
 # ABSENT from the four workflows, always paired with the presence of its
 # replacement -- an absence assertion alone passes against a deleted file.
@@ -280,6 +308,29 @@ def old_root_occurrences(root: Path | None = None) -> list[str]:
     """Every committed file still naming the old Terraform root, as
     `<path>:<line>`.
 
+    WHAT IS MATCHED. `OLD_ROOT_REFERENCE`, which is the union of two shapes:
+    the prefixed path `terraform/<directory>`, with or without a trailing
+    slash and wherever it appears; and a BARE `<directory>/` reference,
+    whatever prefix it carries or none -- so a comment reading
+    "(not environments/prod)" and a note reading "`environments/prod` couples
+    the volume to the server" are both offences, which they were not until
+    code review found two such files the sweep had passed over.
+
+    WHAT IS DELIBERATELY NOT MATCHED, and this is the boundary a reader should
+    not have to infer from the regular expression:
+
+    * The bare WORD, with no slash after it. `environment` and `environments`
+      stay throughout this repository wherever they name a GitHub Environment,
+      the Hetzner `environment` label, the environment axis, the OS process
+      environment or a pre-commit hook's environment -- none of which this
+      change renames. A pattern keyed on the word rather than on the path-like
+      shape would light up `docs/` and `README.md` in prose many times over and
+      would be unsatisfiable without the overreach the change forbids.
+    * The word immediately preceded by a letter, digit, underscore or hyphen.
+      That is a longer identifier ending in it, not a reference to this
+      directory.
+    * Anything under `openspec/`, per the pruning below.
+
     Walks with `walked_files()`, which prunes `openspec/` wholesale. That is a
     SUPERSET of the exclusion that change's tasks.md 8.4 states -- it names
     `openspec/changes/archive/` and three artifacts of the change in flight --
@@ -305,10 +356,10 @@ def old_root_occurrences(root: Path | None = None) -> list[str]:
         if path.resolve() == here:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        if OLD_ROOT_SEGMENT not in text:
+        if not OLD_ROOT_REFERENCE.search(text):
             continue
         for number, line in enumerate(text.splitlines(), start=1):
-            if OLD_ROOT_SEGMENT in line:
+            if OLD_ROOT_REFERENCE.search(line):
                 offences.append(f"{path.relative_to(base).as_posix()}:{number}")
     return sorted(offences)
 
@@ -1608,6 +1659,78 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         tree = self._tree()
         with self.assertRaises(AssertionError):
             old_root_occurrences(tree)
+
+    def test_the_old_root_sweep_reports_a_bare_directory_reference(self) -> None:
+        """The defect this pair was added for. Two committed files named the
+        directory WITHOUT its `terraform/` prefix -- a `.tftest.hcl` comment
+        and a `docs/change-queue.md` entry -- and the sweep reported a clean
+        tree over both. The instances were corrected before this was written,
+        so the real tree establishes nothing about it; only a fixture can."""
+        tree = self._tree()
+        (tree / "docs").mkdir()
+        (tree / "docs" / "queue.md").write_text(
+            "first line\n"
+            f"`{OLD_ROOT_DIRECTORY}/prod` couples the volume to the server\n"
+            f"the {OLD_ROOT_DIRECTORY}/prod-level variable\n"
+            f"(not {OLD_ROOT_DIRECTORY}/prod)\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            ["docs/queue.md:2", "docs/queue.md:3", "docs/queue.md:4"],
+            old_root_occurrences(tree),
+            "the sweep passed over a bare reference to the old directory, which is "
+            "the class of stale path it was widened to catch -- in a backticked "
+            "citation, in a hyphenated compound and in a parenthetical",
+        )
+
+    def test_the_old_root_sweep_does_not_fire_on_the_word_itself(self) -> None:
+        """The direction that matters more, because a pattern keyed on the word
+        rather than on the path-like shape would be satisfiable only by the
+        overreach this change forbids. Every line below is text this repository
+        keeps, and none of them names a directory."""
+        tree = self._tree()
+        (tree / "docs").mkdir()
+        kept = (
+            "each environment's own GitHub Environment gates its apply",
+            "a pre-commit hook environment is built against a specific interpreter",
+            "the Hetzner `environment` label names the environment axis",
+            "resource labels carry environment = \"prod\"",
+            "TARGET_ENVIRONMENT is exported into the process environment",
+            "two environments do not queue behind each other",
+            "`my_environments` and `sub-environments` are identifiers, not paths",
+            "the environments and/or the stacks",
+        )
+        (tree / "docs" / "prose.md").write_text(
+            "\n".join(kept) + "\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            [],
+            old_root_occurrences(tree),
+            "the sweep fired on prose that names no directory. Keyed on the word "
+            "rather than on the path-like shape it would report `docs/` and "
+            "`README.md` many times over, and the only route to green would be to "
+            "rename the environment axis -- which is the overreach "
+            "`TestTheEnvironmentAxisIsNotRenamedWithTheUnit` exists against",
+        )
+
+    def test_the_old_root_sweep_still_reports_the_prefixed_path(self) -> None:
+        """Widening a pattern can narrow it. This holds that the prefixed form
+        the sweep was written for -- including the form with NO trailing slash,
+        which a bare-directory pattern alone would miss -- is still an offence.
+        """
+        tree = self._tree()
+        (tree / "docs").mkdir()
+        (tree / "docs" / "runbook.md").write_text(
+            f"plan from {OLD_ROOT_SEGMENT}/prod\n"
+            f"the whole of {OLD_ROOT_SEGMENT} moves\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            ["docs/runbook.md:1", "docs/runbook.md:2"],
+            old_root_occurrences(tree),
+            "the widened pattern no longer reports the prefixed path it was "
+            "originally written for",
+        )
 
     def test_the_retired_identifier_patterns_do_not_match_the_keepers(self) -> None:
         """The four keepers all contain the word `environment`. A pattern that

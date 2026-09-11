@@ -610,3 +610,43 @@ The implementation is committed. The suite went to 761 of 762 green, with one fa
     Ran 766 tests — OK
 
 766 = 762 + the four discriminators this repair owes. **The expected end state recorded above as "762 tests, green" is superseded by this figure**, and by nothing else: no test was removed, none was renamed, and the one that was repaired keeps its name, its class and its assertion.
+
+## Fourth pass — the old-root sweep was too narrow by a whole class
+
+`TestNoCommittedFileStillNamesTheOldTerraformRoot` rests on `old_root_occurrences()`, which matched only the **prefixed** path. Code review found two committed files naming the old directory **without** its `terraform/` prefix — a `.tftest.hcl` comment reading "(not environments/prod)" and "the environments/prod-level", and a `docs/change-queue.md` entry reading "`environments/prod` couples the volume to the server" — over which the sweep reported a clean tree. Both instances were corrected in `b86750f`, before this pass; what is recorded here is the closing of the **class**, which is the part a corrected instance does not do.
+
+The first pass's manifest called this "the assertion most likely to be argued with" and wrote its scope into the class docstring. It was argued with in the right direction and was too narrow, not too wide — worth recording, because the failure mode of a completeness proof is silence.
+
+### The widened pattern, and its boundary
+
+`OLD_ROOT_REFERENCE` is the union of two shapes: the prefixed path, with or without a trailing slash, exactly as before; **and** a bare `<directory>/` reference, whatever prefix it carries or none. It keys on the **path-like shape** — the word immediately followed by a slash — and never on the word.
+
+That boundary is now stated in `old_root_occurrences()`'s own docstring rather than left to be inferred from the regular expression, per the request. What it deliberately does **not** match: the bare word with no slash after it, which stays throughout this repository wherever it names a GitHub Environment, the Hetzner `environment` label, the environment axis, the OS process environment or a pre-commit hook's environment; the word preceded by a letter, digit, underscore or hyphen, which is a longer identifier ending in it; and anything under `openspec/`, which the walker prunes as before.
+
+The directory's bare name is derived from `OLD_ROOT_SEGMENT` by `rpartition`, not written out again: the assembly rule that constant carries applies to every literal in the module, not only to the first one.
+
+### That it discriminates — established in both directions
+
+Three fixture-driven discriminators added to `TestTheseReadsDiscriminate`, in that class's own idiom and using its existing scratch-tree helpers. No existing test was edited.
+
+| Test | What it establishes |
+|---|---|
+| `.test_the_old_root_sweep_reports_a_bare_directory_reference` | The defect itself: a bare reference is reported, in a backticked citation, in a hyphenated compound and in a parenthetical — the three forms the two real files used. |
+| `.test_the_old_root_sweep_does_not_fire_on_the_word_itself` | The direction that matters more. Eight lines of text this repository keeps — "each environment's own GitHub Environment", "a pre-commit hook environment is built against a specific interpreter", `environment = "prod"`, `TARGET_ENVIRONMENT`, "two environments do not queue behind each other", `my_environments`, `sub-environments`, "the environments and/or the stacks" — and none is an offence. A pattern keyed on the word would be satisfiable only by the overreach `TestTheEnvironmentAxisIsNotRenamedWithTheUnit` exists against. |
+| `.test_the_old_root_sweep_still_reports_the_prefixed_path` | Widening a pattern can narrow it. The prefixed form is still reported — **including the form with no trailing slash**, which a bare-directory pattern alone would have missed, and which is the way this widening could quietly have lost coverage. |
+
+**And against the two real instances**, read from `b86750f^` so the evidence is the committed text rather than a reconstruction:
+
+| File at `b86750f^` | Old pattern | Widened pattern |
+|---|---|---|
+| `terraform/modules/volume/tests/creation.tftest.hcl` | 0 hits | 2 hits (lines 9, 10) |
+| `docs/change-queue.md` | 0 hits | 1 hit (line 257) |
+
+Both files at `HEAD` are clean under the widened pattern, and the widened sweep over the whole tree reports a clean tree.
+
+### Counts
+
+    python3 -m unittest discover --start-directory .github/tests
+    Ran 769 tests — OK
+
+769 = 766 + the three discriminators. Nothing outside `.github/tests/` was touched; the two instances were already corrected.
