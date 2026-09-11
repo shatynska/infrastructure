@@ -62,7 +62,8 @@ Verification commands referenced below, from this project's conventions:
 
 ## 5. The record
 
-- [ ] 5.1 Delete `docs/change-queue.md` entry 65, which is this change, at the archive. The branch is rebased onto the merge that wrote it, so the entry is present and this is an ordinary deletion — the earlier concern, that it would be performed against a base predating the entry, no longer applies.
+- [x] 5.1 Delete `docs/change-queue.md` entry 65, which is this change, at the archive. The branch is rebased onto the merge that wrote it, so the entry is present and this is an ordinary deletion — the earlier concern, that it would be performed against a base predating the entry, no longer applies.
+      **Performed 2026-09-11 at the archive**, the branch having been fast-forwarded to `d1a51b9`, the merge of this change's pull request. Entry 66 cited the deleted entry by its number twice; both now name this change in prose, which is the form that survives archiving. Entries 68 and 69 and `.github/tests/test_apt_index_staleness_bound.py` already cited it by name and needed no edit.
 - [x] 5.2 Record the single-`apt`-task refactor named in `proposal.md`'s Non-Goals as its own queue entry: collecting each role's installs into one task would cut fetches further, and is a larger change to two roles that moves where a failure surfaces.
 
 ## 6. The observation
@@ -73,11 +74,11 @@ Verification commands referenced below, from this project's conventions:
 
       **Observed 2026-09-11.** Host state unchanged: both scenarios pass unmodified, the idempotence pass reports no change, and no existing assertion was relaxed — the two that were red before this implementation were the derived ones, and they went green by the implementation meeting them rather than by being rewritten.
 
+**The operator confirmed the effect on 2026-09-11**, on this observation. The change merged as pull request #143 (`d1a51b9`) and `Host Converge` ran on that commit with `converge (staging)` and `converge (prod)` both green, so the deploy is healthy. What establishes the effect is the continuous-integration side, which is where this change's saving was always claimed: that pull request's `molecule (hardening)` and `molecule (image_prune)` jobs are green, and those carry the derived assertions that read `cache_updated` directly.
+
+**The production converge was read too, and it bears out the limitation this change documents rather than an effect.** After that converge, `/var/lib/apt/periodic/update-success-stamp` on the prod host stood at 14:38:12 — moved by the *unbounded* `tailscale` install, not by either bounded task — while `/var/lib/apt/lists` stood at 11:11:03, unmoved by the converge at all. That is the stamp the module prefers and never advances, stated in `hardening`'s `defaults/main.yml` and measured here for the first time on a real host. Task timings agree and are worth no more than that: the two later `apt` tasks each lost about 1.3 seconds against a non-`apt` baseline that was unchanged between the two converges (46.1s before, 45.9s after). The production half is `docs/change-queue.md` entry 69's, and this observation is the evidence that it is still owed.
+
 ## 7. Archive
 
-- [ ] 7.1 Once the effect is confirmed, bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request that carries it.
-
-## Not performed
-
-- 5.1 — deleting `docs/change-queue.md` entry 65.
-  Reason: it is the archive step's, not the implementation's. The entry names this change and is deleted when the record is archived, which task 7.1 carries; deleting it now would remove the queue's record of work still in flight.
+- [x] 7.1 Once the effect is confirmed, bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request that carries it.
+      **Performed 2026-09-11.** The effect was confirmed by the operator on the observation below; the branch was brought to the fetched trunk by fast-forward to `d1a51b9`, which is this change's own merge, so nothing was discarded. **The pull request carrying this record necessarily follows the commit that writes this line**, so what is ticked here is the commit and not the merge — this project's convention on a `tasks.md` ending at the archive commit is the reason that distinction is written rather than papered over.
