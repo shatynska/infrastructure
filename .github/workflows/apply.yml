@@ -855,7 +855,7 @@ jobs:
           # one whose every plan failed — where the run is already red for that
           # reason. Failing here would turn a benign merge into a red apply
           # workflow.
-          echo "Environments that produced a saved plan (${count}): ${planned}"
+          echo "Stacks that produced a saved plan (${count}): ${planned}"
           echo "stacks=${planned}" >>"$GITHUB_OUTPUT"
 
   apply:

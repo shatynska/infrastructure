@@ -822,13 +822,13 @@ jobs:
           ansible-galaxy collection install -r ansible/requirements.yml
           ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
 
-      - name: Cache pre-commit stacks
+      - name: Cache pre-commit environments
         if: steps.changes.outputs.ansible == 'true'
         uses: actions/cache@v6
         with:
           path: ~/.cache/pre-commit
           # Keyed on the runner image and Python version as well as the config:
-          # a pre-commit hook stack is built against a specific
+          # a pre-commit hook environment is built against a specific
           # interpreter, so a runner-image bump would otherwise restore a cache
           # that no longer works.
           key: pre-commit-${{ runner.os }}-py${{ steps.setup_python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}

@@ -87,7 +87,7 @@ jobs:
           # rather than a fourth copy of that one:
           #
           #   THE ROOT. That body enumerates `terraform/stacks/*/`. The set
-          #   this workflow runs over is the set of INVENTORY SOURCES, because an
+          #   this workflow runs over is the set of INVENTORY SOURCES, because a
           #   stack with a Terraform directory and no source is one this
           #   workflow cannot converge, and a matrix row for it would fail deep
           #   inside `ansible-playbook` on a `-i` path that does not exist.
@@ -195,7 +195,7 @@ jobs:
 
             # A value that is present but unusable is refused by name rather than
             # passed on. The converge job indexes `secrets[...]` with this name
-            # and exports it as a process-stack variable, and a name GitHub
+            # and exports it as a process environment variable, and a name GitHub
             # cannot resolve yields an EMPTY credential rather than an error --
             # the inventory then authenticates as nobody, far from the cause.
             case "$read_only_secret" in
@@ -214,7 +214,7 @@ jobs:
             # data rather than a live hole.
             case "$read_only_secret" in
               PATH | HOME | USER | SHELL | LANG | PWD | ANSIBLE_* | GITHUB_* | RUNNER_*)
-                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which the converge job would export as a process-stack variable of that name, overwriting the runner's own or Ansible's own."
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which the converge job would export as a process environment variable of that name, overwriting the runner's own or Ansible's own."
                 incomplete=1
                 ;;
             esac
@@ -410,7 +410,7 @@ jobs:
       # Terraform provider reads whatever stack it is planning, and the
       # Ansible sources deliberately do not have that property.
       #
-      # So it is written once, here, into the job's stack file, and is in
+      # So it is written once, here, into the job's environment file, and is in
       # scope for every step after this one exactly as a block entry would have
       # been.
       - name: Export this stack's read-only Hetzner credential

@@ -174,13 +174,15 @@ What remains genuinely duplicated after that pass is two facts. Buying a check f
 
 ## The `terraform.tfvars` parenthetical that names labels
 
-Was `docs/change-queue.md` entry 14, deleted from there and recorded here on 2026-09-09. It was recorded as a correction to batch into whatever change next touched `iac-repo-foundations`. No such change arrived, and a correction waiting for a carrier that may never come is a deferral rather than a queue entry.
+Was `docs/change-queue.md` entry 14, deleted from there and recorded here on 2026-09-09. It was recorded as a correction to batch into whatever change next touched `iac-repo-foundations`. No such change arrived for three months, and a correction waiting for a carrier that may never come is a deferral rather than a queue entry.
 
-*Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<env>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/stacks/prod/` is in `ssh_key.tf`.
+*Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/stacks/prod/` is in `ssh_key.tf`.
 
 The disagreement is **factual, not normative**. The parenthetical is illustrative, the requirement's normative content is that the file is committed and non-secret, and labels genuinely are non-secret environment configuration — simply set on the resource rather than passed through this file. Nothing is permitted or forbidden differently because of it, and no reader is misled about what the requirement demands.
 
 Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the requirement's parenthetical agrees with `terraform.tfvars`" — precisely the cross-file assertion the entry above declines, and on the same reasoning. Paying for that machinery to fix an illustration that misleads nobody inverts the cost.
+
+**A carrier did arrive, and it declined.** `rename-terraform-environments-to-stacks` rewrote this very row on 2026-09-11, moving the `terraform.tfvars` path onto the new Terraform root and leaving `labels` where it stands. That was the right call and is recorded so that the next reader does not take the entry's "no such change arrived" at face value and conclude nobody has looked: a vocabulary sweep is not a substantive modification of this requirement, folding a factual correction into it would have been unrelated scope, and the derived test that correction owes is the cross-file assertion the entry below still declines. What the carrier changed is the path in the row, which had to move with the tree.
 
 **Revisit when** a change modifies *Version Control Excludes State and Secrets* for a substantive reason and can carry the correction — or if the parenthetical is ever read as an inventory rather than an illustration, which is the point at which the disagreement stops being factual and becomes normative.
 

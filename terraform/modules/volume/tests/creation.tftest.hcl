@@ -6,8 +6,8 @@
 #     Creation" (Scenario: Volume is created already attached)
 #
 # These run blocks exercise modules/volume in isolation (not
-# environments/prod), given a server_id as if the prod server were already
-# enabled. They do NOT exercise the environments/prod-level
+# stacks/prod), given a server_id as if the prod server were already
+# enabled. They do NOT exercise the stacks/prod-level
 # `count = var.volume_enabled && var.server_enabled` coupling itself --
 # that composition lives outside this module and outside this test-path
 # glob. See test-manifest.md for what that means for scenario coverage.

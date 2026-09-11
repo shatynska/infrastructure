@@ -552,7 +552,7 @@ The key must be a bare token of letters, digits, `_` and `-`; the role refuses a
 
 ### 6.2 Check the inventory resolves
 
-The inventory is dynamic: it asks the Hetzner API which servers exist and groups them by their `stack` label. It needs the read-only token from `.envrc`.
+The inventory is dynamic: it asks the Hetzner API which servers exist and groups them by their `environment` label. It needs the read-only token from `.envrc`.
 
 ```sh
 cd ansible

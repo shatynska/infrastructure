@@ -9,7 +9,7 @@ variable "server_type" {
 }
 
 variable "image" {
-  description = "Hetzner Cloud image name or ID (e.g. \"ubuntu-24.04\"). Matches prod's: an environment that rehearses prod on a different image rehearses something else."
+  description = "Hetzner Cloud image name or ID (e.g. \"ubuntu-24.04\"). Matches prod's: a stack that rehearses prod on a different image rehearses something else."
   type        = string
 }
 
@@ -35,7 +35,7 @@ variable "web_allowed_cidrs" {
 }
 
 variable "server_enabled" {
-  description = "Whether the staging server should exist. Set false to decommission without losing configuration — every other value here and in terraform.tfvars stays in place, ready to re-enable. This is also the only rollback for this environment that does not orphan resources, and the way to stop paying for staging without deleting its configuration."
+  description = "Whether the staging server should exist. Set false to decommission without losing configuration — every other value here and in terraform.tfvars stays in place, ready to re-enable. This is also the only rollback for this stack that does not orphan resources, and the way to stop paying for staging without deleting its configuration."
   type        = bool
   default     = true
 }
@@ -47,7 +47,7 @@ variable "volume_enabled" {
 }
 
 variable "volume_name" {
-  description = "Name of the staging data volume. Deliberately the same name prod's carries: Hetzner volume names are unique per project, not globally, so a dedicated project frees the name — and the same name means the same on-host mount path, which is what keeps platform/docker-compose.yml's hardcoded /mnt/main-data/... paths correct for both environments."
+  description = "Name of the staging data volume. Deliberately the same name prod's carries: Hetzner volume names are unique per project, not globally, so a dedicated project frees the name — and the same name means the same on-host mount path, which is what keeps platform/docker-compose.yml's hardcoded /mnt/main-data/... paths correct for both stacks."
   type        = string
 }
 
