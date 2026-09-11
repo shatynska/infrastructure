@@ -109,8 +109,8 @@ only, where it could still have been a coincidence of one host.
 
 ## 6. Ship
 
-- [ ] 6.1 Open the pull request once verification passes and the code review has cleared, and wait for the operator's confirmation that it merged. Nothing here deploys.
-- [ ] 6.2 **The confirmation gate is answered, not waived.** Three of the four additions are observable today, against the staging host that already exists and with credentials the operator already holds. Run them and record the output:
+- [x] 6.1 Open the pull request once verification passes and the code review has cleared, and wait for the operator's confirmation that it merged. Nothing here deploys.
+- [x] 6.2 **The confirmation gate is answered, not waived.** Three of the four additions are observable today, against the staging host that already exists and with credentials the operator already holds. Run them and record the output:
 
       - **§6.0's fallback.** In a shell with no direnv hook: `cd ansible && source .envrc && ansible-inventory -i inventory/staging.hcloud.yml --graph` resolves `staging-server`. That is the whole claim of section 1 — that the procedure works without direnv.
       - **§6.3's check-mode baseline.** `ansible-playbook playbooks/host-baseline.yml -i inventory/staging.hcloud.yml -e target_environment=staging --vault-id staging@prompt --private-key ~/.ssh/<company>-root --check --diff` against the converged staging host reports `changed=2`, and the two are the tasks §6.3 now names. Section 3 says a healthy host reads two; this is that sentence being true of a host known to be healthy, on a second environment, which the production run did not establish.
@@ -119,7 +119,67 @@ only, where it could still have been a coincidence of one host.
       **One addition cannot be observed and is the only thing waived**: section 2's failed-converge recovery, which would require deliberately breaking a converge to demonstrate. It is already evidenced by `configure-the-staging-host` 10.2, where the failure happened for real. Name that one as the waived part, in the first waivable class, and let the operator waive it — waiving one's own gate is not the confirmation this step exists to obtain.
 
       An earlier draft of this task claimed the waiver for the whole change on the grounds that the next stage-6 execution is an unscheduled company bootstrap. That is true of the *stage* and false of these three additions, and task 5.3 already commits to running the commands anyway. Recorded because a change that improves a document is exactly the kind most able to dodge a confirmation gate, and it nearly did.
-- [ ] 6.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`. Verify `openspec validate --archived` passes.
+- [x] 6.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`. Verify `openspec validate --archived` passes.
+
+## Ship record
+
+**6.1** Pull request #132, merged as `93fd6e4` on 2026-09-11. Nothing here
+deploys, and none is claimed: a docs-only change matches no path filter in the
+Terraform workflows.
+
+**6.2 — three observations made, one part waived.** The gate is answered.
+
+- **§6.0's fallback.** Satisfied in the authoring session: `ansible/.envrc`
+  sourced in a shell with no direnv hook, after which `ansible-inventory -i
+  inventory/staging.hcloud.yml --graph` resolved `staging-server`. Re-confirmed
+  in this session, in a freshly provisioned working tree, with the same result.
+- **§6.1's token check.** Satisfied in the authoring session: `200` with an
+  `x-oauth-scopes` header naming `read:packages`.
+- **§6.3's check-mode baseline, which was the outstanding one.** Run on
+  2026-09-11 against the converged staging host:
+
+      ansible-playbook playbooks/host-baseline.yml \
+        -i inventory/staging.hcloud.yml -e target_environment=staging \
+        --vault-id staging@<file> --private-key ~/.ssh/<company>-root \
+        --check --diff
+
+  `PLAY RECAP` — `staging-server : ok=74 changed=2 unreachable=0 failed=0
+  skipped=22`, and `localhost : ok=2 changed=0`, the guard play. The two
+  changed tasks are *Add the Tailscale apt signing key* and *Add the Tailscale
+  apt repository* — the two §6.3 names and no others, extracted from the run's
+  own output rather than assumed from the count. This is what the task wanted
+  and `configure-the-staging-host` 10.1 could not give: the figure holding on a
+  second host, so two is the role's property rather than a coincidence of
+  production.
+
+  The run used a password file rather than `staging@prompt` because this
+  session cannot answer an interactive prompt. The file was written by the
+  operator outside the repository, read once, and shredded; the password
+  appears in no transcript, no history and no committed file. The document is
+  unchanged and still prints `@prompt`, which is the right instruction for a
+  human at a terminal.
+
+**The waived part, named as the task requires.** §6.3a's failed-converge
+recovery cannot be observed without deliberately breaking a converge, which is
+the first waivable class — *no observation can actually be made*. **The
+operator waived it on 2026-09-11**, on the grounds the task itself records:
+that path is already evidenced by a failure that happened for real, in
+`configure-the-staging-host`'s task 10.2, where a failure at `tailscale up`
+left `docker` and `hardening` applied and the corrected re-run completed at
+`ok=76 changed=28 failed=0`. No successor change is intended, so the waiver
+names none: there is nothing outstanding to carry, only an observation that
+cannot be manufactured.
+
+The waiver covers that section alone. The other three additions were observed,
+and a waiver of the whole change on the grounds that the next stage-6 execution
+is an unscheduled company bootstrap is what an earlier draft of 6.2 attempted
+and this task list already refused.
+
+**6.3** The change's own branch and working tree were removed before this step,
+so the archive was committed from a new branch cut from the freshly fetched
+trunk at `416b80c` rather than from the branch #132 merged. Nothing is
+discarded by that: the work is on the trunk, which is what the branch would
+have been brought back to. `openspec validate --archived` passes.
 
 Opening the record's own pull request, and removing the branch and working tree
 once it merges, happen after the commit that writes this file, so they are
