@@ -575,8 +575,19 @@ jobs:
           # group the proof below would pass having templated nothing, and a
           # preflight that cannot fail is worse than no preflight -- this
           # change's own words, and they apply to its own check.
+          # THE UNWRAP IS NOT DEFENSIVE, IT IS REQUIRED. `compose` marks its
+          # result UNSAFE, so `ansible_host` serialises as an OBJECT --
+          # {"__ansible_unsafe": "staging-server"} -- rather than as a string.
+          # Taking it raw hands the shell a pretty-printed JSON object, which
+          # word-splits into `{` and fails downstream naming `'{'` as the host.
+          # Ansible itself is unaffected: it understands its own wrapper, and
+          # only this JSON consumer sees it. Observed on the workflow's first
+          # real run, on staging, before the play -- which is where it was
+          # supposed to land.
           if ! addresses=$(printf '%s' "$inventory" | jq -er --arg env "$TARGET_ENVIRONMENT" \
-              '.[$env].hosts[] as $host | ._meta.hostvars[$host].ansible_host' 2>/dev/null); then
+              '.[$env].hosts[] as $host
+               | ._meta.hostvars[$host].ansible_host
+               | if type == "object" then (.__ansible_unsafe // empty) else . end' 2>/dev/null); then
             echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this environment's group names no host to converge. The environment is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different environment label."
             exit 1
           fi
