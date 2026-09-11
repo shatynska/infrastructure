@@ -73,15 +73,25 @@ Verification commands referenced below, from this project's conventions:
 
 ## 5. The record
 
-- [ ] 5.1 Delete `docs/change-queue.md` entry 67, which is this change, at the archive.
+- [x] 5.1 Delete `docs/change-queue.md` entry 67, which is this change, at the archive.
+      **Performed 2026-09-11 at the archive.** No other entry cited it by number, so nothing else needed rewording — entries 68 and 69 name the changes they reference in prose, which is the form that survives archiving.
 
 ## 6. The observation
 
 - [x] 6.1 The effect is visible on this change's own pull request, which touches `.github/`, `ansible/scripts/` and `openspec/` — `ansible/scripts/run-molecule`'s neighbour changing is an unattributable path, so this pull request SHALL run **every** role. That is the widening rule demonstrating itself, and it is the right first observation: a change to the selector that ran a narrowed suite would be the defect.
       **Observed 2026-09-11 on pull request #145**, run `34618647252`. The mechanism ran end to end: `discover` wrote `Selected roles: ["deploy_user", "docker", "hardening", "image_prune", "ops_user", "platform_data_volume", "swap"]`, the matrix took its rows from that, all seven jobs passed, and the gate named the subset back — *"The suite ran and passed on the roles this run owed"*. Seven of seven is the **correct** answer for this diff and is what makes it an observation rather than a formality: the change touches `ansible/scripts/`, which the attribution does not recognise, so the widening rule is what produced it. A narrowed suite here would have been the defect.
 
-- [ ] 6.2 The narrowing is observable only on a later pull request touching exactly one role. Propose that as the observation and say plainly that it cannot be made on this change's own pull request; where no qualifying pull request exists by the time this change would be archived, name the class and ask the operator to waive, recording the waiver here.
+- [x] 6.2 The narrowing is observable only on a later pull request touching exactly one role. Propose that as the observation and say plainly that it cannot be made on this change's own pull request; where no qualifying pull request exists by the time this change would be archived, name the class and ask the operator to waive, recording the waiver here.
+
+**WAIVED BY THE OPERATOR, 2026-09-11.** The class is *an observation you proposed that turns out not to be performable* — and the reason is structural rather than circumstantial, which is why waiting would not have fixed it: **any** pull request that edits the selector touches `ansible/scripts/`, which the attribution does not recognise, so it widens to every role by construction. This change can therefore never observe its own narrowing.
+
+What was observed, and it is not nothing: on pull request #145, run `34618647252`, `discover` computed a selection, the matrix took its rows from it, and the gate named the subset back. The mechanism ran end to end in production. What that run demonstrates is the **widening** rule — correctly, since seven of seven was the right answer for that diff — not the narrowing.
+
+**The narrowing is unobserved, and this record says so rather than implying otherwise.** It will show on the next pull request whose diff is confined to one role's directory: the expected result is a `molecule` matrix carrying that role's closure alone — one job for `hardening`, `platform_data_volume` or `swap`, two for `deploy_user`, four for `docker` — and an `ansible-verify` line naming exactly those roles. `docs/change-queue.md` entry 68 is a queued change that would qualify, but it is not opened here: manufacturing a pull request to satisfy an observation is not an observation.
+
+The successor this waiver names is therefore not a change of its own but the next qualifying pull request, whatever it turns out to be. Where that run does **not** narrow, this change is the wrong change and re-enters at `build`'s review gate.
 
 ## 7. Archive
 
-- [ ] 7.1 Once the effect is confirmed or the gate waived, bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request that carries it.
+- [x] 7.1 Once the effect is confirmed or the gate waived, bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request that carries it.
+      **Performed 2026-09-11.** The gate was waived above; the branch was brought to the fetched trunk by fast-forward to `bde549a`, this change's own merge, so nothing was discarded. **What is ticked here is the commit, not the pull request**, which necessarily follows the commit that writes this line — this project's convention on a `tasks.md` ending at the archive commit is why that distinction is written rather than glossed.
