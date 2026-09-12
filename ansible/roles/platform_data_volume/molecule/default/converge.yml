@@ -50,7 +50,13 @@
   hosts: all
   become: true
   vars:
-    platform_data_volume_device: /dev/loop87
+    # Derived exactly as prepare.yml derives it -- offset 0 of the sixteen minors
+    # this working tree claims. The two plays are separate `ansible-playbook`
+    # invocations with no fact cache between them, so each computes the path
+    # from the one value in the environment rather than one passing it on.
+    platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
+    platform_data_volume_fixture_loop_minor: "{{ platform_data_volume_fixture_loop_base | int + 0 }}"
+    platform_data_volume_device: /dev/loop{{ platform_data_volume_fixture_loop_minor }}
     platform_data_volume_mount_path: /mnt/main
     platform_data_volume_fs_type: ext4
     platform_data_volume_subdirs:
@@ -62,5 +68,20 @@
         owner: "472"
         group: "472"
         mode: "0755"
+  pre_tasks:
+    # Before the role runs, and for a sharper reason than in prepare.yml: an
+    # unset base resolves the device to /dev/loop0 through `| int`, and this
+    # play is the one that hands that path to a role whose job is to FORMAT it.
+    - name: Refuse to run without this working tree's loop-minor base
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_fixture_loop_base is match('^[0-9]+$')
+          - platform_data_volume_fixture_loop_base | int >= 1024
+        fail_msg: >-
+          INFRA_WORKTREE_LOOP_BASE is unset or is not a loop-minor base
+          (read as '{{ platform_data_volume_fixture_loop_base }}'). Run the
+          suite through ansible/scripts/run-molecule, which derives it from
+          this working tree's own path -- see AGENTS.md, "Namespacing Molecule
+          per working tree".
   roles:
     - role: platform_data_volume

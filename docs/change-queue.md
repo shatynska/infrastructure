@@ -672,7 +672,17 @@ On that merge the first of them failed against `galaxy.ansible.com`, resolving `
 
 **What it must not become.** A blind retry loop around an installer that is also this repository's version-pinning mechanism would hide a genuine pin failure — `ansible/requirements.yml` pins exact versions, per `AGENTS.md`, and a resolution error that means *the pinned version is gone* must stay loud. So the change owes a distinction between "could not reach the server" and "the server says this version does not exist", and only the first is retryable.
 
-**Options, in rough order of cost.** A bounded retry with backoff on the install step. `--no-cache` or `--clear-response-cache`, which the error message itself suggests and which costs a slower install. Caching the resolved collections between runs, which trades an upstream dependency for a cache-invalidation problem and interacts with the pinning rule. Or vendoring the collections into the repository, which removes the run-time dependency entirely and is the largest change of the four. Weigh the first against how often this actually happens — once, so far.
+**Options, in rough order of cost.** A bounded retry with backoff on the install step. `--no-cache` or `--clear-response-cache`, which the error message itself suggests and which costs a slower install. Caching the resolved collections between runs, which trades an upstream dependency for a cache-invalidation problem and interacts with the pinning rule. Or vendoring the collections into the repository, which removes the run-time dependency entirely and is the largest change of the four.
+
+**Twice now, and the second instance widens the entry beyond the converge.** On 2026-09-12 the same step failed on a **pull request**, in `ansible-verify.yml`'s Molecule matrix rather than in `host-converge.yml` — PR #161, run 34715212029, job 103611145944, 45 seconds in:
+
+    [ERROR]: Unknown error when attempting to call Galaxy at
+    'https://galaxy.ansible.com/api/v3/collections/hetzner/hcloud/versions/7.0.0/':
+    <urlopen error [Errno 104] Connection reset by peer>
+
+A different collection, a different error and a different workflow, so a fix aimed only at the cache-shaped message above would not have caught it. The install is verbatim the same two commands, and both workflows run them unguarded. **The neighbours passed again**: seven other Molecule roles in that same matrix ran the identical install and every one succeeded, which is the same evidence of transience the production instance gave. Re-running the failed job alone turned it green with no other change.
+
+The cost here is lower than on the converge — a red check and a re-run, not a spent production approval — but it broadens the subject: whatever the fix is, it belongs to **every** workflow that installs Galaxy content, not to `host-converge.yml` alone. Weigh the options above against how often this happens: twice in one day, on two different workflows, against two different collections.
 
 ## 77. make-a-waiting-approval-announce-itself
 
@@ -712,3 +722,13 @@ Each fixture then asks *"is this minor already associated?"* and skips associati
 **`move-the-platform-data-mount` fixed only its own two scenarios**, by detaching the minor unconditionally before associating and then asserting the device starts with no filesystem — the premise its later assertions rest on, checked rather than assumed. What remains is the other three scenarios, which still carry the conditional-associate pattern, and the question of whether the minors should be namespaced per working tree the way the instance name is, or simply always torn down. A minor is one byte of space and the fixture picks it by hand today, so a derivation from the tree's namespace is available; whether it is worth more than an unconditional detach is this entry's judgment to make.
 
 **One thing it must not do.** The `cleanup` and `destroy` actions run inside Molecule's own lifecycle, and a teardown that detaches a minor another scenario is mid-run on would break a suite that Molecule runs sequentially today but may not always. Detaching *your own* minor at the start of `prepare` is safe for that reason and a global sweep is not.
+
+## 79. tighten-the-refusal-scenario-s-own-filesystem-assert
+
+**Not blocked. Recorded 2026-09-12 by `namespace-the-molecule-loop-devices`, whose code review found it in a file that change edits but in a line it does not author.**
+
+`ansible/roles/platform_data_volume/molecule/superseded-path-in-force-refused/verify.yml` asserts `platform_data_volume_blkid.rc != 0` to establish that the role refused *before* formatting the device. That is the scenario's load-bearing assertion: the role's filesystem task is the first thing that changes the host, so a device still carrying no filesystem is the evidence the refusal came first.
+
+**It fails open.** `rc != 0` reads every non-zero code as "no filesystem", and `blkid` returns 1 on a usage error — a probe that did not happen reports the refusal established. The four `prepare.yml` plays of this role were tightened to `rc != 2` by the change that recorded this entry, `rc 2` being the only code that means "looked, found nothing"; measured in the pinned image, twice and independently: unformatted 2, formatted 0, usage error 1, absent device 2. This assert was left alone because it is pre-existing and outside that change's diff, and folding a fifth edit into a file it had not otherwise touched is how a fourth review round becomes a fifth.
+
+**A second, separate hazard in the same assert, which tightening the predicate does NOT close.** Each play redeclares its loop-minor offset by hand, so `verify.yml` and `prepare.yml` could drift apart. A drifted `verify` probes an unassociated minor, gets rc 2, and passes — under `rc != 2` exactly as under `rc != 0`. Whoever takes this entry should fix the rc-1 case and record the drift as still open, rather than closing one believing it closed the other. Deriving both from one place, or asserting in `verify` that the device is the one `prepare` associated, are the two shapes available.

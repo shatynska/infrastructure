@@ -2,14 +2,23 @@
 #
 # Run Molecule with this working tree's own namespace.
 #
-# Molecule shares two handles across every working tree on the machine, and both
-# are stable per role: the instance name, a literal in each scenario's
+# Molecule shares three handles across every working tree on the machine. Two are
+# stable per role: the instance name, a literal in each scenario's
 # `platforms[].name`, and the ephemeral directory, whose id is a checksum of the
 # ROLE DIRECTORY'S BASENAME rather than of its path. Two sessions running one
 # role therefore drive the same container and inherit each other's directory.
 # Such a run can equally PASS against a container the other session converged as
 # fail against it. AGENTS.md's "Namespacing Molecule per working tree" section
 # is the binding; its Testing section carries the hazard in full.
+#
+# The third is the LOOP DEVICE MINOR that `platform_data_volume`'s fixtures
+# claim, and it is shared more widely than either of the others. A loop
+# association is made by the machine's KERNEL and is not namespaced by the
+# container that made it, so it outlives that container and is shared between one
+# working tree's CONSECUTIVE RUNS as much as between two trees. A fixture
+# inheriting one inherits whatever the previous run left on it, including a
+# filesystem a previous converge created -- which makes a scenario whose subject
+# is an unformatted device pass without exercising what it exists to exercise.
 #
 # This script is how a session takes its namespace. Everything it does is
 # deterministic from the working tree, so a later session in the same tree
@@ -19,11 +28,13 @@
 #   ansible/scripts/run-molecule test --all          # from a role directory
 #   ansible/scripts/run-molecule destroy --all       # from a role directory
 #   ansible/scripts/run-molecule --print-namespace   # compute only, run nothing
+#   ansible/scripts/run-molecule --print-loop-base   # compute only, run nothing
 #
-# `--print-namespace` is recognised as the FIRST argument only; anywhere else it
-# is passed through to Molecule, which will reject it. It exists so the
-# namespace can be read without starting a container -- by a session diagnosing
-# a stray container, and by .github/tests, which may not spawn one.
+# Each `--print-*` flag is recognised as the FIRST argument only; anywhere else
+# it is passed through to Molecule, which will reject it. They exist so the
+# namespace and the loop-minor base can be read without starting a container --
+# by a session diagnosing a stray container or a stray association, and by
+# .github/tests, which may not spawn one.
 
 set -euo pipefail
 
@@ -85,6 +96,55 @@ namespace_for() {
 	printf '%s-%s\n' "$stem" "$digest"
 }
 
+loop_base_for() {
+	# The first of sixteen consecutive loop-device MINORS this working tree
+	# claims. A fixture adds its own fixed offset: platform_data_volume's
+	# `default` takes 0, `multiple-devices-discoverable` 1 and 2,
+	# `superseded-path-retired` 3, `superseded-path-in-force-refused` 4, and
+	# `multiple-devices-reverse-order` 5 and 6 -- the two `multiple-devices` arms
+	# take separate pairs because both their containers can be up at once.
+	# Offsets 7 to 15 are spare, so a scenario added later costs no edit here.
+	#
+	# Derived from the SAME absolute path `namespace_for` hashes, and derived
+	# rather than fixed for the reason that whole section exists: an entry point
+	# exporting a constant satisfies every check about the variable's existence
+	# while reinstating the handle every working tree shares.
+	#
+	# THE BAND STARTS AT 1024 because the kernel allocates loop minors from the
+	# bottom upward -- `losetup -f` hands back the lowest free one -- so the low
+	# end is where a machine's real loop devices are. On the workstation this was
+	# written on, /dev/loop0 and /dev/loop1 hold Docker Desktop's ISO cache; an
+	# Ubuntu desktop with snaps can hold thirty or forty.
+	#
+	# AND IT IS NOT CAPPED AT 255, which is the assumption to check before
+	# narrowing it again: a device number carries twenty bits of minor, and the
+	# loop driver creates a device on first open of any minor below that ceiling
+	# rather than only the ones `max_loop` pre-created. Verified inside the pinned
+	# scenario image, whose max_loop reads 8: `mknod -m 0660 /dev/loop<m> b 7 <m>`
+	# then `losetup` succeeded and detached cleanly at 1024, 1032, 5120, 33768,
+	# 33784, 33788, 66544, 66559 and 66560. The number a later change has to clear
+	# is the highest MINOR, not the highest base: the base tops out at
+	# 1024 + 4095*16 = 66544 and the sixteenth offset reaches 66559. 66560 is the
+	# first one outside the band.
+	#
+	# HEADROOM IS A FACTOR OF FIFTEEN, NOT A COMFORTABLE MARGIN. The twenty-bit
+	# limit is 1048576 and 66559 sits 15.75 times below it, so ONE more widening
+	# on this scale -- 16 to 256 -- reaches 1049599 and overflows. Widening the
+	# slot again means cutting the 4096 slot count in the same edit.
+	#
+	# 4096 SLOTS rather than a handful. Two trees hashing to one slot collide on
+	# every minor in it, and the collision is NOT loud: the attribution guard in
+	# the fixtures establishes that a minor's holder is a run of these fixtures,
+	# not that it is this tree's run, so it permits the other tree's association
+	# and the false pass returns. That residual is 1 in 4096 for a pair running
+	# one role at the same moment, and it is disclosed in AGENTS.md rather than
+	# managed by a rule. A registry would make it impossible instead of unlikely,
+	# at the cost of a mechanism this repository would have to keep correct.
+	local root="$1" digest
+	digest=$(digest_of "$root")
+	printf '%s\n' "$((1024 + (16#$digest % 4096) * 16))"
+}
+
 collections_path() {
 	# Collections are shared rather than namespaced: they are read-only content
 	# pinned by ansible/requirements.yml, so two sessions reading them cannot
@@ -124,12 +184,18 @@ collections_are_installed() {
 }
 
 main() {
-	local root namespace collections home
+	local root namespace loop_base collections home
 	root=$(repository_root)
 	namespace=$(namespace_for "$root")
+	loop_base=$(loop_base_for "$root")
 
 	if [ "${1:-}" = "--print-namespace" ]; then
 		printf '%s\n' "$namespace"
+		return 0
+	fi
+
+	if [ "${1:-}" = "--print-loop-base" ]; then
+		printf '%s\n' "$loop_base"
 		return 0
 	fi
 
@@ -157,6 +223,7 @@ main() {
 	mkdir -p "$home"
 
 	INFRA_WORKTREE_NS="$namespace" \
+		INFRA_WORKTREE_LOOP_BASE="$loop_base" \
 		ANSIBLE_HOME="$home" \
 		ANSIBLE_COLLECTIONS_PATH="$collections" \
 		exec molecule "$@"

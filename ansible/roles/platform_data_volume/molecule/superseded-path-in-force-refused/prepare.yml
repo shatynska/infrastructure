@@ -12,18 +12,38 @@
 # that formatted the device would give that assertion away, and an assert
 # misplaced after the mount task would then pass this scenario.
 #
-# /dev/loop91: 87, 88 and 89 are taken by the sibling scenarios of this role
-# and 90 by `superseded-path-retired`. `molecule/default/prepare.yml` records
-# in full why the minor number is hardcoded rather than taken from
-# `losetup -f --show`, and why a CI host that already holds it is a FIXTURE
-# flake rather than a defect in the role.
+# Offset 4: 0 is taken by `default`, 1 and 2 by `multiple-devices-discoverable`,
+# 3 by `superseded-path-retired`, and 5 and 6 by
+# `multiple-devices-reverse-order`. `molecule/default/prepare.yml`
+# records in full why the minor is a fixed offset from a per-working-tree base
+# rather than taken from `losetup -f --show`; `ansible/scripts/run-molecule`'s
+# loop_base_for() records where the base comes from and why it is derived.
 - name: Prepare
   hosts: all
   become: true
   vars:
-    platform_data_volume_device: /dev/loop91
+    # This scenario takes offset 4 of the sixteen minors this working tree claims.
+    # See ansible/scripts/run-molecule's loop_base_for() for the band, the
+    # offsets and why the value is derived rather than fixed.
+    platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
+    platform_data_volume_fixture_loop_minor: "{{ platform_data_volume_fixture_loop_base | int + 4 }}"
+    platform_data_volume_device: /dev/loop{{ platform_data_volume_fixture_loop_minor }}
     platform_data_volume_backing_file: /root/platform-data-volume-refusal-backing.img
   tasks:
+    # FIRST, before anything has touched the host. `| int` turns an unset base
+    # into 0, and /dev/loop0 is a real device on a developer workstation.
+    - name: Refuse to run without this working tree's loop-minor base
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_fixture_loop_base is match('^[0-9]+$')
+          - platform_data_volume_fixture_loop_base | int >= 1024
+        fail_msg: >-
+          INFRA_WORKTREE_LOOP_BASE is unset or is not a loop-minor base
+          (read as '{{ platform_data_volume_fixture_loop_base }}'). Run the
+          suite through ansible/scripts/run-molecule, which derives it from
+          this working tree's own path -- see AGENTS.md, "Namespacing Molecule
+          per working tree".
+
     - name: Refresh the apt cache and install fixture-only loop/filesystem tooling
       ansible.builtin.apt:
         name:
@@ -43,25 +63,58 @@
         path: "{{ platform_data_volume_device }}"
       register: platform_data_volume_loop_node
 
-    - name: Create the fixed loop device node (major 7 = loop) if it does not already exist
-      ansible.builtin.command: mknod -m 0660 {{ platform_data_volume_device }} b 7 91
+    - name: Create the loop device node (major 7 = loop) if it does not already exist
+      ansible.builtin.command: >-
+        mknod -m 0660 {{ platform_data_volume_device }} b 7
+        {{ platform_data_volume_fixture_loop_minor }}
       when: not platform_data_volume_loop_node.stat.exists
       changed_when: true
 
-    # DETACH FIRST, UNCONDITIONALLY. A loop device minor is a kernel-global
-    # handle: it is NOT namespaced by the container, so an association made
-    # inside a Molecule container outlives that container and is still there
-    # on the next run -- `losetup -a` on the host shows it, naming a backing
-    # file inside a container that no longer exists.
+    # READ, REFUSE, RELEASE, then associate. A loop device minor is a
+    # kernel-global handle: it is NOT namespaced by the container, so an
+    # association made inside a Molecule container outlives that container and
+    # is still there on the next run -- `losetup -a` on the host shows it,
+    # naming a backing file inside a container that no longer exists.
     #
     # Associating only "if not already associated" therefore inherits whatever
     # a previous run left on this minor, including a filesystem a previous
     # run's converge created. That is not hypothetical: it is what this
     # scenario met, and it made "no filesystem was created on the device"
-    # fail against contamination rather than against the role. `docs/change-
-    # queue.md` carries the entry for the wider problem -- every scenario of
-    # this role leaks its minor the same way.
-    - name: Detach the fixed loop device, whatever a previous run left on it
+    # fail against contamination rather than against the role.
+    #
+    # The minor is now DERIVED from this working tree's own base rather than
+    # hardcoded, which is what the read and the refusal below are for: a
+    # derived number is one nothing outside this repository has agreed to leave
+    # alone, and `losetup -d` inside a privileged container reaches the HOST's
+    # device. So the minor is released only where its backing file is one this
+    # fixture family creates.
+    - name: Read what this working tree's loop device is currently associated with
+      ansible.builtin.command: losetup --noheadings --output BACK-FILE {{ platform_data_volume_device }}
+      register: platform_data_volume_loop_holder
+      changed_when: false
+      failed_when: false
+
+    # An unassociated minor returns rc 0 with EMPTY stdout rather than a
+    # non-zero rc, and a non-zero rc means the read failed rather than that the
+    # minor is free -- so the guard fails CLOSED on it. See
+    # `molecule/default/prepare.yml` for the three states and how they were
+    # measured.
+    - name: Refuse a loop minor this fixture family cannot attribute to itself
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_loop_holder.rc == 0
+          - platform_data_volume_loop_holder.stdout | trim | length == 0 or
+            platform_data_volume_loop_holder.stdout | trim is match('^/root/platform-data-volume-')
+        fail_msg: >-
+          Refusing to release {{ platform_data_volume_device }}. The read
+          returned rc {{ platform_data_volume_loop_holder.rc }} and
+          '{{ platform_data_volume_loop_holder.stdout | trim }}'. Either it is
+          held by something no fixture of this role creates, or the read itself
+          failed and what holds it is unknown; releasing it could break whatever
+          the host is using it for, so this play refuses rather than reclaiming
+          it.
+
+    - name: Release the loop device from whatever a previous run left on it
       ansible.builtin.command: losetup -d {{ platform_data_volume_device }}
       register: platform_data_volume_loop_detach
       changed_when: platform_data_volume_loop_detach.rc == 0
@@ -76,7 +129,13 @@
       ansible.builtin.command: blkid {{ platform_data_volume_device }}
       register: platform_data_volume_loop_blkid
       changed_when: false
-      failed_when: platform_data_volume_loop_blkid.rc == 0
+      failed_when: platform_data_volume_loop_blkid.rc != 2
+      # `rc != 2`, NOT `rc == 0`: reading "anything non-zero" as clean accepts a
+      # blkid that did not probe at all. Measured in the pinned image -- an
+      # unformatted device gives 2, a formatted one 0, a usage error 1 -- so
+      # only 2 means "looked, found nothing". See `molecule/default/prepare.yml`
+      # for the full note, including why rc 2's other meaning (absent device)
+      # cannot arise here.
       # The premise this scenario's own assertions rest on. Checked here rather
       # than assumed, because the way it fails -- a stale kernel association --
       # is invisible from inside the container and makes a later assertion read

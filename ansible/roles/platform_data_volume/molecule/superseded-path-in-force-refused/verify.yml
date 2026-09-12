@@ -34,11 +34,31 @@
   hosts: all
   become: true
   vars:
-    platform_data_volume_device: /dev/loop91
+    # Derived exactly as prepare.yml and converge.yml derive it -- offset 4 of
+    # the sixteen minors this working tree claims, redeclared here because a
+    # verify playbook does not inherit converge's vars.
+    platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
+    platform_data_volume_fixture_loop_minor: "{{ platform_data_volume_fixture_loop_base | int + 4 }}"
+    platform_data_volume_device: /dev/loop{{ platform_data_volume_fixture_loop_minor }}
     platform_data_volume_mount_path: /mnt/main
     platform_data_volume_exact_outcome_path: /var/tmp/molecule-in-force-exact-outcome.json
     platform_data_volume_trailing_outcome_path: /var/tmp/molecule-in-force-trailing-outcome.json
   tasks:
+    # FIRST. A verify play asserting against /dev/loop0 because the base was
+    # unset would report the role's behaviour against a device belonging to the
+    # host, which is a wrong answer rather than a missing one.
+    - name: Refuse to run without this working tree's loop-minor base
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_fixture_loop_base is match('^[0-9]+$')
+          - platform_data_volume_fixture_loop_base | int >= 1024
+        fail_msg: >-
+          INFRA_WORKTREE_LOOP_BASE is unset or is not a loop-minor base
+          (read as '{{ platform_data_volume_fixture_loop_base }}'). Run the
+          suite through ansible/scripts/run-molecule, which derives it from
+          this working tree's own path -- see AGENTS.md, "Namespacing Molecule
+          per working tree".
+
     - name: Read the outcome recorded for the identically spelled declaration
       ansible.builtin.slurp:
         src: "{{ platform_data_volume_exact_outcome_path }}"
