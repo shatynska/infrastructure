@@ -5,9 +5,9 @@ Guardrails against destructive, unnoticed, or externally-exposed changes — del
 ## Requirements
 
 ### Requirement: Provider-Level Deletion Protection
-Servers and any future volumes managed by this repository SHALL set the Hetzner provider's `delete_protection` attribute (with `rebuild_protection` set to match on resources that support it, as the provider requires), exposed as a module variable so each environment can choose its own value.
+Servers and any future volumes managed by this repository SHALL set the Hetzner provider's `delete_protection` attribute (with `rebuild_protection` set to match on resources that support it, as the provider requires), exposed as a module variable so each stack can choose its own value.
 
-This attribute SHALL NOT be hardcoded, and `lifecycle { prevent_destroy = true }` SHALL NOT be declared inside shared modules under `terraform/modules/`. `prevent_destroy` accepts only a literal value — it cannot read a variable — so placing it in a shared module would make that module permanently undestroyable for every consumer, preventing a future non-prod environment from ever being torn down. Literal `prevent_destroy` MAY be used for genuinely never-destroy resources declared in an environment-specific file under `terraform/environments/prod/`.
+This attribute SHALL NOT be hardcoded, and `lifecycle { prevent_destroy = true }` SHALL NOT be declared inside shared modules under `terraform/modules/`. `prevent_destroy` accepts only a literal value — it cannot read a variable — so placing it in a shared module would make that module permanently undestroyable for every consumer, preventing a future non-prod stack from ever being torn down. Literal `prevent_destroy` MAY be used for genuinely never-destroy resources declared in a stack-specific file under `terraform/stacks/prod/`.
 
 #### Scenario: Prod server is protected against console deletion
 - **WHEN** an operator attempts to delete the prod server through the Hetzner Cloud console or API
@@ -18,8 +18,8 @@ This attribute SHALL NOT be hardcoded, and `lifecycle { prevent_destroy = true }
 - **THEN** the deletion SHALL be refused because the resource carries a server-side protection lock
 
 #### Scenario: Shared module remains reusable by a future non-prod environment
-- **WHEN** a future environment consumes `terraform/modules/server` or `terraform/modules/volume` and sets its deletion-protection variable to `false`
-- **THEN** that environment's resources SHALL be destroyable via `terraform destroy` without editing the shared module
+- **WHEN** a future stack consumes `terraform/modules/server` or `terraform/modules/volume` and sets its deletion-protection variable to `false`
+- **THEN** that stack's resources SHALL be destroyable via `terraform destroy` without editing the shared module
 
 ### Requirement: Data Durability for Stateful Resources
 The prod server SHALL have `backups = true`.
@@ -29,7 +29,7 @@ Deletion protection and destroy gating protect the *resource*; neither protects 
 What the setting buys is bounded, and stating it is what stops it being mistaken for a database backup: a daily, crash-consistent image of the **root disk only** — not of the attached data volume — retained on Hetzner's schedule and restorable only by rolling the whole server back to it. That shortens a rebuild of a host whose disk carries container images and converged configuration. It is not a backup any database is restored from selectively, and the obligation for data that would need one is *No Store on This Host Holds Data Requiring Backup* in this capability.
 
 #### Scenario: Server is created with backups enabled
-- **WHEN** the prod server is created via `terraform/environments/prod/`
+- **WHEN** the prod server is created via `terraform/stacks/prod/`
 - **THEN** automatic backups SHALL be enabled on it
 
 ### Requirement: Default-Deny Network Baseline
@@ -53,37 +53,37 @@ Servers SHALL be provisioned with SSH public key authentication via `hcloud_ssh_
 - **THEN** SSH password authentication SHALL be disabled, and access SHALL require a registered key pair
 
 ### Requirement: Consistent Resource Labeling
-Every `hcloud_*` resource managed by this repository SHALL carry an `environment` label matching its environment folder and a `managed_by = "terraform"` label.
+Every `hcloud_*` resource managed by this repository SHALL carry an `environment` label naming the environment its stack belongs to and a `managed_by = "terraform"` label.
 
 #### Scenario: Prod resources are labeled
-- **WHEN** a `hcloud_server` resource is created via `terraform/environments/prod/`
+- **WHEN** a `hcloud_server` resource is created via `terraform/stacks/prod/`
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`
 
 #### Scenario: Prod volume is labeled
-- **WHEN** the `main-data` `hcloud_volume` resource is created via `terraform/environments/prod/`
+- **WHEN** the `main-data` `hcloud_volume` resource is created via `terraform/stacks/prod/`
 - **THEN** it SHALL carry the labels `environment = "prod"` and `managed_by = "terraform"`
 
 ### Requirement: Write Credentials Confined to the Gated Pipeline
-Each environment's **Read & Write** Hetzner Cloud API token SHALL exist in exactly one location: that environment's own GitHub Environment secret, named `HCLOUD_TOKEN`. No such token SHALL be exported into a shell environment, written to a dotfile, `direnv` file, or any `.tfvars` file, or stored in a local credential helper on any workstation.
+Each stack's **Read & Write** Hetzner Cloud API token SHALL exist in exactly one location: that stack's own GitHub Environment secret, named `HCLOUD_TOKEN`. No such token SHALL be exported into a shell environment, written to a dotfile, `direnv` file, or any `.tfvars` file, or stored in a local credential helper on any workstation.
 
-Local Terraform work SHALL authenticate with that environment's **Read Only** token — the one its declaration names as its read-only secret (see the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability) — which is sufficient for `terraform plan` and refresh and which causes any local `terraform apply` to fail at the Hetzner Cloud API. This states which token a workstation uses, not where the workstation obtains it.
+Local Terraform work SHALL authenticate with that stack's **Read Only** token — the one its declaration names as its read-only secret (see the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability) — which is sufficient for `terraform plan` and refresh and which causes any local `terraform apply` to fail at the Hetzner Cloud API. This states which token a workstation uses, not where the workstation obtains it.
 
 Because the workspace's Execution Mode is Local, the destroy-policy gate, the saved-plan approval gate, and branch protection are properties of the GitHub Actions path to production rather than of Terraform itself — a workstation holding a write-capable token bypasses all three in a single command. This requirement extends the split established by the Credential Scoping by Privilege requirement in the iac-cicd-pipeline capability from CI jobs to workstations.
 
-This holds of every environment, not of production alone. An environment whose GitHub Environment requires no reviewer is not thereby exempt: the reviewer and the credential confinement are independent properties, and an unreviewed environment's write token reaching a workstation is the same bypass with a smaller blast radius rather than a permitted one.
+This holds of every stack, not of production alone. A stack whose GitHub Environment requires no reviewer is not thereby exempt: the reviewer and the credential confinement are independent properties, and an unreviewed stack's write token reaching a workstation is the same bypass with a smaller blast radius rather than a permitted one.
 
-The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents. **That record SHALL state the prohibition over every environment rather than naming one.** A record naming a single environment is read as silent about the others, which is the reading that matters here: an environment named nowhere in the record is one whose write token a reader has been given no reason to treat as confined, and the environment most likely to be omitted is the one added last.
+The prohibition SHALL be recorded where it is loaded without being sought: the repository README runbook for human operators, and a repository-root `AGENTS.md` for coding agents. **That record SHALL state the prohibition over every stack rather than naming one.** A record naming a single stack is read as silent about the others, which is the reading that matters here: a stack named nowhere in the record is one whose write token a reader has been given no reason to treat as confined, and the stack most likely to be omitted is the one added last.
 
 #### Scenario: Local apply is refused by the API
-- **WHEN** an operator or coding agent runs `terraform apply` from a workstation against any environment directory under `terraform/environments/`
-- **THEN** the Hetzner Cloud API SHALL reject the write, because the only token available locally is that environment's read-only one
+- **WHEN** an operator or coding agent runs `terraform apply` from a workstation against any stack directory under `terraform/stacks/`
+- **THEN** the Hetzner Cloud API SHALL reject the write, because the only token available locally is that stack's read-only one
 
 #### Scenario: Local plan remains available
-- **WHEN** an operator runs `terraform plan` from a workstation against any environment directory under `terraform/environments/`
-- **THEN** it SHALL succeed using that environment's read-only token, so that local iteration never requires write credentials
+- **WHEN** an operator runs `terraform plan` from a workstation against any stack directory under `terraform/stacks/`
+- **THEN** it SHALL succeed using that stack's read-only token, so that local iteration never requires write credentials
 
 #### Scenario: A non-production environment's write token is confined identically
-- **WHEN** an environment exists whose GitHub Environment requires no reviewer
+- **WHEN** a stack exists whose GitHub Environment requires no reviewer
 - **THEN** its Read & Write token SHALL still exist only in that Environment's secrets, and SHALL NOT be available on any workstation
 
 #### Scenario: An agent opening the repository is told the boundary
@@ -91,13 +91,13 @@ The prohibition SHALL be recorded where it is loaded without being sought: the r
 - **THEN** a repository-root `AGENTS.md` SHALL state that infrastructure changes reach Hetzner only through the gated pipeline and that `terraform apply` is not run locally
 
 #### Scenario: The record covers an environment added after it was written
-- **WHEN** an environment is added to `terraform/environments/`
+- **WHEN** a stack is added to `terraform/stacks/`
 - **THEN** the README runbook and `AGENTS.md` SHALL already state the prohibition in terms that cover it, rather than requiring an edit naming it before its write token is treated as confined
 
 ### Requirement: Automated Dependency Updates
 The repository SHALL configure Dependabot for the `terraform`, `github-actions` and `docker-compose` package ecosystems, opening pull requests when newer versions become available.
 
-The `terraform` ecosystem configuration SHALL cover **every** directory in the repository that carries a `.terraform.lock.hcl`. A directory holding a lockfile that no Dependabot entry names is not partially covered — it is uncovered, and its provider pins rot with no signal at all. Because Dependabot's `terraform` ecosystem requires each directory to be listed explicitly and offers no discovery mechanism, adding a Terraform module or environment SHALL include adding it here, and the two SHALL be kept in agreement.
+The `terraform` ecosystem configuration SHALL cover **every** directory in the repository that carries a `.terraform.lock.hcl`. A directory holding a lockfile that no Dependabot entry names is not partially covered — it is uncovered, and its provider pins rot with no signal at all. Because Dependabot's `terraform` ecosystem requires each directory to be listed explicitly and offers no discovery mechanism, adding a Terraform module or stack directory SHALL include adding it here, and the two SHALL be kept in agreement.
 
 The `github-actions` ecosystem is required, not optional: a compromised or abandoned third-party action is a more realistic supply-chain risk for this repository than a stale Terraform provider.
 
