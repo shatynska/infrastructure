@@ -390,7 +390,7 @@ Recorded 2026-09-10 by `bootstrap-two-environments`, which needed to tell a comp
 
 `.github/workflows/platform-deploy.yml` is single-environment by construction, in two places that must move together:
 
-- **`environment: production`** is a literal on the deploy job, where the Terraform pipeline reads its environment from each environment's own `pipeline.yml`. The workflow therefore cannot be pointed at a second environment at all.
+- **`environment: main-production`** is a literal on the deploy job, where the Terraform pipeline reads its environment from each stack's own `pipeline.yml`. The workflow therefore cannot be pointed at a second stack at all. `.github/tests` now asserts that this literal equals the `github_environment` the production stack declares, which keeps the two from drifting but does not make the workflow multi-stack — that is still this entry's work.
 - **`PLATFORM_DEPLOY_HOST`** names one host, and the eight `PLATFORM_*` secrets around it are one set held in one GitHub Environment. A second environment needs its own values for every one of them — its own deploy host, its own Postgres credentials, its own Grafana password, its own ACME email.
 
 **Where this came from**, since the entry it was split out of no longer exists. It was recorded as a separate entry rather than a sixth bullet on the former entry 50, which held both halves of "configure the staging host". That entry's *host* half — a play that can target a second environment, an inventory that can see two Hetzner projects, `group_vars/staging.yml`, and the first local converge — was delivered by `configure-the-staging-host`, archived 2026-09-10, which deleted entry 50 with it. Its platform bullet said the stack has to reach the second host; **this** entry is the mechanism that would let it. The two were separable because a converged host is a prerequisite either way, and the host half was already large.
@@ -590,9 +590,9 @@ So the honest framing is that this is the fix for the production half that `cach
 Both `versions.tf` provider comments state prod's read-only secret name wrongly, and have since prod's secret was renamed:
 
 - `terraform/stacks/main-production/versions.tf` says the name "for this stack is `HCLOUD_TOKEN`".
-- `terraform/stacks/main-staging/versions.tf` says "for this stack HCLOUD_TOKEN_STAGING, and for prod HCLOUD_TOKEN".
+- `terraform/stacks/main-staging/versions.tf` says "for this stack HCLOUD_TOKEN_MAIN_STAGING, and for prod HCLOUD_TOKEN". `rename-the-external-services` moved the first name and left the second wrong, adding a parenthesis saying so and pointing here; the error itself is untouched and is still this entry's to fix.
 
-Prod declares `read_only_secret: HCLOUD_TOKEN_PRODUCTION` in its own `pipeline.yml`, and that same file argues at length that the name must **not** be `HCLOUD_TOKEN` — a repository secret of that name is shadowed by the Read & Write token every GitHub Environment defines, so a gated job reading it resolves a write credential silently. `README.md` agrees: "neither is named `HCLOUD_TOKEN`". The comment contradicts the declaration sitting beside it.
+Prod declares `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` in its own `pipeline.yml`, and that same file argues at length that the name must **not** be `HCLOUD_TOKEN` — a repository secret of that name is shadowed by the Read & Write token every GitHub Environment defines, so a gated job reading it resolves a write credential silently. `README.md` agrees: "neither is named `HCLOUD_TOKEN`". The comment contradicts the declaration sitting beside it.
 
 **Why it is its own entry rather than folded into the rename.** It predates that branch — `origin/main`'s copy carries the same claim, and the rename's diff touches those lines only to spell the unit `stack`. Correcting a factual error about credential names inside a vocabulary sweep is unrelated scope, and the sweep's own review is what found it.
 

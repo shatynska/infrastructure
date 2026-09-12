@@ -40,8 +40,8 @@ provider "hcloud" {
   # HCLOUD_TOKEN is read from the environment, and WHICH token that is
   # depends on the job:
   #
-  #   - the apply job, which declares `environment: staging`, resolves that
-  #     Environment's Read & Write token. That Environment requires no
+  #   - the apply job, which declares `environment: main-staging`, resolves
+  #     that Environment's Read & Write token. That Environment requires no
   #     reviewer, so this is the one apply in this repository that reaches
   #     Hetzner without a human. What bounds it is the project boundary, not
   #     a gate: this token can destroy staging's project and can touch

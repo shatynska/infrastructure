@@ -1,7 +1,7 @@
 name: Platform Deploy
 
 # Diff-then-gated-deploy, mirroring apply.yml's plan/apply split so the
-# production Environment's approver sees the exact diff before approving
+# main-production Environment's approver sees the exact diff before approving
 # -- see the Reviewer Sees the Exact Diff Before Approving requirement in
 # iac-platform-deploy-pipeline. Not a required PR check; only the
 # validation step in pr-validation.yml is that.
@@ -70,7 +70,7 @@ jobs:
       # Joins this runner to the same tailnet the host is a member of
       # (connect-platform-deploy-via-tailscale) -- SSH is only reachable
       # this way, not over the public internet, per that change's
-      # design.md. The OAuth client is scoped to the `production`
+      # design.md. The OAuth client is scoped to the `main-production`
       # Environment like every other secret this job uses, and ephemeral
       # per-run nodes are created automatically (tailscale/github-action's
       # own behavior), not a long-lived credential. `ping` waits for the
@@ -151,7 +151,7 @@ jobs:
       # public half of (as this key's own `deploy_apps` entry) -- generated
       # out-of-band there (its tasks.md 2.2's sibling generation for
       # platform), not here. Both this key and the three secrets above
-      # SHALL be scoped to the `production` Environment specifically
+      # SHALL be scoped to the `main-production` Environment specifically
       # (GitHub resolves an Environment-scoped secret ahead of a
       # repository-scoped one of the same name, mirroring apply.yml's
       # HCLOUD_TOKEN pattern), since the accepted content-layer trust
