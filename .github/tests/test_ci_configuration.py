@@ -4850,8 +4850,8 @@ class TestChangeDetectionResolvesTheGatesInput(
     # Under `ansible/`, and deliberately NOT selected: no scenario reads them.
     EXCLUDED_CONFIGURATION_PATHS = (
         "ansible/playbooks/host-baseline.yml",
-        "ansible/inventory/prod.hcloud.yml",
-        "ansible/inventory/group_vars/prod.yml",
+        "ansible/inventory/main-production.hcloud.yml",
+        "ansible/inventory/group_vars/production.yml",
         "ansible/requirements.txt",
         "ansible/.envrc.example",
     )

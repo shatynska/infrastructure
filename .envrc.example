@@ -3,18 +3,18 @@
 #   direnv allow
 #
 # Read Only Hetzner Cloud token only — enough for `terraform plan`/`validate`.
-# Never put a Read & Write token here: each environment's lives exclusively in
-# that environment's own GitHub Environment secret, and an environment whose
-# Environment requires no reviewer is no exception. See AGENTS.md.
+# Never put a Read & Write token here: each stack's lives exclusively in that
+# stack's own GitHub Environment secret, and a stack whose Environment requires
+# no reviewer is no exception. See AGENTS.md.
 #
-# ONE TOKEN, ONE ENVIRONMENT. A Hetzner token is scoped to one project and each
-# environment has a project of its own, so this value reaches exactly one of
-# them. This file at the repository root is prod's; staging's belongs in an
-# .envrc inside terraform/stacks/staging/.
+# ONE TOKEN, ONE STACK. A Hetzner token is scoped to one project and each stack
+# has a project of its own, so this value reaches exactly one of them. This file
+# at the repository root is the main-production stack's; main-staging's belongs
+# in an .envrc inside terraform/stacks/main-staging/.
 #
 # THIS VARIABLE IS TERRAFORM'S, and no longer Ansible's. Its value depends on
 # which directory you are standing in, which suits a tool always run from
-# inside an environment directory and does not suit one always run from
-# ansible/. Ansible reads HCLOUD_TOKEN_PRODUCTION and HCLOUD_TOKEN_STAGING instead,
-# one per inventory source, from ansible/.envrc — see ansible/.envrc.example.
+# inside a stack directory and does not suit one always run from ansible/.
+# Ansible reads HCLOUD_TOKEN_PRODUCTION and HCLOUD_TOKEN_STAGING instead, one
+# per inventory source, from ansible/.envrc — see ansible/.envrc.example.
 export HCLOUD_TOKEN="your-read-only-hetzner-token"

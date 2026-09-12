@@ -107,7 +107,7 @@ Covers stages 0 to 6. Three things sit outside it deliberately: stage 7's platfo
 | Hetzner API token | **4** — read-only and read-write per project | §1.2. **Not six:** each read-only token is *also* exported under a second variable name for Ansible, and a second name is not a second token |
 | HCP workspace | **2** | The two `versions.tf` name `infrastructure-prod` and `infrastructure-staging` |
 | `TF_API_TOKEN` | **1**, shared | *HCP Terraform Access via a Static Token, Unsplit by Privilege* (same spec file), cited for "one value, unsplit by privilege" and not for where it is stored — that requirement predates staging and names only `production`, while §3.3 now sets the token on both Environments |
-| Ansible Vault password | **2** | §6.1 requires it; the two `image_prune_heartbeat_ping_key` blocks carry vault ids `prod` and `staging` |
+| Ansible Vault password | **2** | §6.1 requires it; the two `image_prune_heartbeat_ping_key` blocks carry vault ids `production` and `staging`, one per environment |
 | Tailscale auth key | **1 reusable key serves both joins**; two if single-use, or to revoke one host's join without the other — this repository used two | §5.3, and `ansible/roles/tailscale/tasks/main.yml`, which consumes it once per run and skips an already-joined host |
 | Tailscale OAuth client | **1** | §5.3 — one client serves every repository |
 | GHCR pull token | **1 value** unless you choose two, stored twice — encrypted separately into each stack's `group_vars` under that stack's own Vault password | `ansible/inventory/group_vars/staging.yml` records the shared *account* and the reasoning: read-only against the same packages, so a second "would be a second thing to rotate for no isolation gained". §6.1 permits reuse rather than requiring it, and the ciphertexts cannot be compared to tell which you chose |
@@ -127,7 +127,7 @@ Appendix A is this same set seen from the other end — where each secret lives 
 **One project per stack is a decision, and this is where it is made.** A Hetzner API token is scoped to exactly one project, so the project boundary is what the whole credential split rests on. The pipeline supports either answer; two projects is the recommendation, for two reasons that are hard to see in advance:
 
 - **One project means one Read & Write token covering both stacks**, so staging's apply must sit behind an approver too — otherwise any push to `main` reaches a production-capable credential. An approved staging deploy is as slow as production and stops being used, which is most of what staging is for.
-- **Hetzner volume names are unique per project, not globally.** In one project the second stack's volume cannot also be called `main-data`, so it gets a different name, a different mount path, and `platform/docker-compose.yml`'s hardcoded `/mnt/main-data/prometheus` and `/mnt/main-data/grafana` must be parameterised — or Prometheus and Grafana come up writing to a path that does not exist, silently.
+- **Hetzner volume names are unique per project, not globally.** In one project the second stack's volume cannot also be called `main`, so it gets a different name — and since a mount path is chosen per stack rather than derived from a volume's name, a different mount path, so that `platform/docker-compose.yml`'s hardcoded `/mnt/main-data/prometheus` and `/mnt/main-data/grafana` must be parameterised — or Prometheus and Grafana come up writing to a path that does not exist, silently.
 
 Two projects costs a second token pair to rotate. One project costs the two items above, every time you deploy.
 
@@ -139,7 +139,7 @@ In **each** project: Security → API tokens → Generate API token. Check the p
 |---|---|---|---|
 | Production Read Only | Read | Your workstation, **twice**: the repo-root `.envrc` as `HCLOUD_TOKEN` for Terraform (stage 4.1), and `ansible/.envrc` as `HCLOUD_TOKEN_PRODUCTION` for Ansible (stage 6.0). Plus the repository secret `HCLOUD_TOKEN_PRODUCTION` (stage 3) | Nowhere else |
 | Production Read & Write | Read & Write | The `production` Environment secret `HCLOUD_TOKEN` (stage 3) | Any local file, shell, or note. If you can run `terraform apply` from your laptop, this token is in the wrong place. |
-| Staging Read Only | Read | Your workstation, **twice**: `terraform/stacks/staging/.envrc` as `HCLOUD_TOKEN` for Terraform (stage 4.1), and `ansible/.envrc` as `HCLOUD_TOKEN_STAGING` for Ansible (stage 6.0). Plus the repository secret `HCLOUD_TOKEN_STAGING` (stage 3) | Nowhere else |
+| Staging Read Only | Read | Your workstation, **twice**: `terraform/stacks/main-staging/.envrc` as `HCLOUD_TOKEN` for Terraform (stage 4.1), and `ansible/.envrc` as `HCLOUD_TOKEN_STAGING` for Ansible (stage 6.0). Plus the repository secret `HCLOUD_TOKEN_STAGING` (stage 3) | Nowhere else |
 | Staging Read & Write | Read & Write | The `staging` Environment secret `HCLOUD_TOKEN` (stage 3) | The same places. An ungated apply does not make its token less confined. |
 
 Each token is shown once. Put all four in the password manager immediately, each labelled with its project **and** its permission level.
@@ -158,8 +158,8 @@ You will write these into each stack's `terraform.tfvars` in stage 3. Decide the
 | `server_type` | `cx33` is 4 vCPU / 8 GB; for several services start at `cx43` (8 vCPU / 16 GB) or a `cpx` type. You can resize later, but only upward without a rebuild. **Read the current type names off the console** — the generation changes, and a name that no longer exists fails at apply | `cx33` | `cx23`, roughly half the bill. Deliberately tight: a staging host that cannot fit the stack is what forces container resource limits to be set, rather than deferred until production needs them |
 | `image` | A current Ubuntu LTS | `ubuntu-26.04` | The same. A stack that rehearses production on a different image rehearses something else |
 | `volume_size` | GB for Prometheus and Grafana state (and future logs); resizable upward only | `10` | `10` |
-| `volume_name` | Keep it identical across stacks. Names are unique per project, so a project each frees the name, and the same name means the same on-host mount path — which is what lets `platform/docker-compose.yml` stay unparameterised | `main-data` | `main-data` |
-| `name` | The server's own name, which becomes its `inventory_hostname`. **Must differ between stacks** — two hosts sharing one name merge in any inventory that reads both projects, and share a single `<inventory_hostname>-prune-host-images` heartbeat check, where the live host's weekly success masks the other's dead timer | `main-server` | `staging-server` |
+| `volume_name` | Keep it identical across stacks. Names are unique per project, so a project each frees the name. It is **not** the mount path and does not have to resemble one — the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>` — but both stacks mounting at the same path is what lets `platform/docker-compose.yml` stay unparameterised | `main` | `main` |
+| `name` | The server's own name, which becomes its `inventory_hostname` and its tailnet machine name. **Give it the stack's own name**, which makes it differ between stacks by construction — two hosts sharing one name merge in any inventory that reads both projects, and share a single `<inventory_hostname>-prune-host-images` heartbeat check, where the live host's weekly success masks the other's dead timer | `main-production` | `main-staging` |
 | `ssh_allowed_cidrs` | The public IP ranges allowed to reach SSH. Must not be `0.0.0.0/0`. If everyone will use Tailscale, see `docs/change-queue.md` entry 25 for closing public SSH entirely | one ISP `/24` | The same |
 | `web_allowed_cidrs` | `["0.0.0.0/0"]` for a public web host | `["0.0.0.0/0"]` | `[]` — no web rule at all, until something is deployed there. See stage 5 |
 
@@ -235,15 +235,15 @@ Terraform needs somewhere to keep its state file (the record of what it created)
    grep -rn 'shatynska' --exclude-dir=.git --exclude-dir=openspec .
    ```
 
-   The ones that matter: the `organization` in **both** `terraform/stacks/prod/versions.tf` **and** `terraform/stacks/staging/versions.tf` (your HCP organisation from stage 2), `ghcr_pull_username` in **each** `ansible/inventory/group_vars/<environment>.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
+   The ones that matter: the `organization` in **both** `terraform/stacks/main-production/versions.tf` **and** `terraform/stacks/main-staging/versions.tf` (your HCP organisation from stage 2), `company` in `ansible/inventory/group_vars/all.yml`, `ghcr_pull_username` in **each** `ansible/inventory/group_vars/<environment>.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
 
    Both `versions.tf` files carry it, and changing only production's is the easy miss: staging would then initialise against someone else's HCP organisation, and the error names a workspace rather than an organisation.
 
-4. Edit **both** `terraform.tfvars` files — `terraform/stacks/prod/` and `terraform/stacks/staging/` — with the stage 1.3 decisions for that stack, putting the **public** half of your operator key from stage 0 into each `ssh_public_key`. Everything in these files is non-secret and committed. Check `name` differs between them and `volume_name` does not; stage 1.3 says why each matters.
+4. Edit **both** `terraform.tfvars` files — `terraform/stacks/main-production/` and `terraform/stacks/main-staging/` — with the stage 1.3 decisions for that stack, putting the **public** half of your operator key from stage 0 into each `ssh_public_key`. Everything in these files is non-secret and committed. Check `name` differs between them and `volume_name` does not; stage 1.3 says why each matters.
 
-5. Read `terraform/stacks/staging/pipeline.yml` and accept or change its three values: `github_environment: staging`, `read_only_secret: HCLOUD_TOKEN_STAGING`, and `destroy_policy_gate: false`. These are what stage 3.2 and 3.3 must match — the Environment you create and the repository secret you set take their names from this file, not from any workflow. `terraform/stacks/prod/pipeline.yml` is its counterpart, declaring `github_environment: production` and `read_only_secret: HCLOUD_TOKEN_PRODUCTION`. **Neither stack may declare `HCLOUD_TOKEN`**, and the reason is not style: every GitHub Environment defines that name as its *Read & Write* token, and an Environment secret shadows a repository secret of the same name — so a job attached to an Environment would resolve the write token from a field that says read-only. `.github/tests` fails the build on a declaration that names it.
+5. Read `terraform/stacks/main-staging/pipeline.yml` and accept or change its four values: `github_environment: staging`, `read_only_secret: HCLOUD_TOKEN_STAGING`, `target_environment: staging`, and `destroy_policy_gate: false`. These are what stage 3.2 and 3.3 must match — the Environment you create and the repository secret you set take their names from this file, not from any workflow. `terraform/stacks/main-production/pipeline.yml` is its counterpart, declaring `github_environment: production`, `read_only_secret: HCLOUD_TOKEN_PRODUCTION` and `target_environment: production`. **`target_environment` names the Ansible group, not the stack**, and the two differ: the stack is `main-production` and the group is `production`. It names the play's `hosts:`, the `--vault-id` label and the `group_vars` file, so all three move together. **Neither stack may declare `HCLOUD_TOKEN`**, and the reason is not style: every GitHub Environment defines that name as its *Read & Write* token, and an Environment secret shadows a repository secret of the same name — so a job attached to an Environment would resolve the write token from a field that says read-only. `.github/tests` fails the build on a declaration that names it.
 
-6. Delete the `moved` block at the bottom of `terraform/stacks/prod/ssh_key.tf`. It records a one-time relocation in the original repository and is meaningless in a fresh state. Staging's `ssh_key.tf` has no such block and needs no edit; its own comment says why.
+6. Delete the `moved` block at the bottom of `terraform/stacks/main-production/ssh_key.tf`. It records a one-time relocation in the original repository and is meaningless in a fresh state. Staging's `ssh_key.tf` has no such block and needs no edit; its own comment says why.
 
 7. Run `pre-commit install --hook-type pre-commit --hook-type commit-msg` so your commits are checked the way CI checks them.
 
@@ -307,7 +307,7 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 
 ### 4.1 Prove both configurations locally
 
-Each stack needs its own read-only token in scope, because one token reaches one project. Put production's in the repo-root `.envrc` (copy `.envrc.example`), and staging's in an `.envrc` **inside** `terraform/stacks/staging/` — directory-scoped, so planning staging never leaves staging's token in the shell that plans production. Both paths are gitignored.
+Each stack needs its own read-only token in scope, because one token reaches one project. Put production's in the repo-root `.envrc` (copy `.envrc.example`), and staging's in an `.envrc` **inside** `terraform/stacks/main-staging/` — directory-scoped, so planning staging never leaves staging's token in the shell that plans production. Both paths are gitignored.
 
 Run `direnv allow` in each directory that has one; direnv loads the nearest `.envrc` and does not merge the parent's, which is what keeps the two tokens apart. **Without direnv**, `source` the file for the stack you are about to work on, in a shell you do not then reuse for the other — the export outlives the directory, and carrying staging's token into `prod/` produces the misleading plan described below rather than an error.
 
@@ -316,7 +316,7 @@ This paragraph is about **Terraform's** token only. Ansible has a third `.envrc`
 Then, for each stack in turn:
 
 ```sh
-cd terraform/stacks/prod        # then repeat in staging/
+cd terraform/stacks/main-production   # then repeat in main-staging/
 terraform init
 terraform plan
 ```
@@ -368,7 +368,7 @@ Neither stack's failure withholds the other's apply — that separation is delib
 ### 4.3 Get the addresses and log in
 
 ```sh
-cd terraform/stacks/prod && terraform output        # then repeat in staging/
+cd terraform/stacks/main-production && terraform output   # then repeat in main-staging/
 ```
 
 Each stack's `server_ipv4_address` is that server's public address; you now have two. Record both.
@@ -410,7 +410,7 @@ Two things about staging in stage 6 that differ from production, both deliberate
 
 **Its weekly image prune will report failure until the stack arrives**, and that is expected rather than a fault to chase: with nothing deployed, no application contributes an image and no container holds one, so the keep set is empty and the unit abandons by its own documented contract. See stage 6.5.
 
-**If you decide you do not want it yet**, delete `terraform/stacks/staging/` and `ansible/inventory/staging.hcloud.yml` and `ansible/inventory/group_vars/staging.yml`, drop `HCLOUD_TOKEN_STAGING` from `ansible/.envrc`, remove its `HCLOUD_TOKEN_STAGING` repository secret and its `staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Then skip staging wherever stage 6 says "once per stack". Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
+**If you decide you do not want it yet**, delete `terraform/stacks/main-staging/` and `ansible/inventory/main-staging.hcloud.yml` and `ansible/inventory/group_vars/staging.yml`, drop `HCLOUD_TOKEN_STAGING` from `ansible/.envrc`, remove its `HCLOUD_TOKEN_STAGING` repository secret and its `staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Then skip staging wherever stage 6 says "once per stack". Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
 
 ## Stage 5. Tailscale
 
@@ -452,7 +452,11 @@ Each application repository will need the same two OAuth values in stage 8; one 
 
 **`tag:ci` must reach every host, not production's alone.** The converge job joins the tailnet for whichever stack its matrix row names, and it reaches that host over the tailnet and by no other route — the cloud firewall admits the operator's range and nothing else. An access rule that admits `tag:ci` to one host leaves the other convergeable only from a workstation, which is the state this whole stage exists to end.
 
-**Check:** your workstation appears in Machines; `tag:ci` appears in the policy file without a syntax error; and each server's **machine name is the server's own name** — `main-server` and `staging-server`. That last is what the converge job looks the host up by: it asks `tailscaled` for the peer of that name and maps the answer, rather than trusting DNS. A name that does not match is a converge that cannot find its host. **After a rebuild, delete the old machine**: Tailscale suffixes a rejoining host (`main-server-1`) and the old node keeps the bare name, so the name would resolve to a peer that no longer exists — see Appendix B.
+**Check:** your workstation appears in Machines; `tag:ci` appears in the policy file without a syntax error; and each server's **machine name is the server's own name** — `main-production` and `main-staging`. That last is what the converge job looks the host up by: it asks `tailscaled` for the peer of that name and maps the answer, rather than trusting DNS. A name that does not match is a converge that cannot find its host.
+
+**The machine name is not the same field as the name the host reports, and only one of them is this repository's to set.** The `tailscale` role pins what the host reports, to `{{ inventory_hostname }}`, so that the host's own name — which carries the company, `shatynska-main-production` — never drives it. The *machine* name is assigned when the host first joins and is changed in the Tailscale interface and nowhere else. A rename of either therefore has two halves: a commit for the first, and a click for the second.
+
+**After a rebuild, delete the old machine**: Tailscale suffixes a rejoining host (`main-production-1`) and the old node keeps the bare name, so the name would resolve to a peer that no longer exists — see Appendix B.
 
 ## Stage 6. Ansible: configure the host
 
@@ -462,7 +466,7 @@ The first converge cannot be the pipeline's, and the reason is not caution. The 
 
 This stage is run from your workstation. It installs Docker, the host firewall and fail2ban, joins the tailnet, creates the `deploy` account with a forced-command key per application, creates your unprivileged operator account, mounts the data volume, and arms the weekly image prune.
 
-**Run it once per stack**, production first. Everything below takes the stack as an argument; `<environment>` means `prod` or `staging` throughout, and the two runs share no `group_vars` file, no Hetzner token and no Vault password. What they may share is a value inside those files — the GHCR token and the heartbeat ping key are the same in both, encrypted separately; §0.4 says which is which. Do production first because it is the one you will check most carefully, and staging second because by then you are repeating a procedure you have just seen work.
+**Run it once per stack**, production first. Everything below takes the stack as an argument. **Two names are in play and they are not the same**: `<stack>` means `main-production` or `main-staging` and names the inventory source; `<environment>` means `production` or `staging` and names the Ansible group, the `group_vars` file and the Vault id. Each stack's own `pipeline.yml` states which environment it targets. The two runs share no `group_vars` file, no Hetzner token and no Vault password. What they may share is a value inside those files — the GHCR token and the heartbeat ping key are the same in both, encrypted separately; §0.4 says which is which. Do production first because it is the one you will check most carefully, and staging second because by then you are repeating a procedure you have just seen work.
 
 ### 6.0 The two tokens Ansible reads
 
@@ -655,7 +659,7 @@ The usual causes, in rough order: the key was already consumed, because it was g
 | `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository. **Production's key only** | The **private** half of the *production* platform deploy key from stage 0. Store it now, then delete the local file. **Staging's key is not stored here and must not be deleted** — it stays at `~/.ssh/<company>-platform-staging` and in your password manager until staging gets a deploy path (§0.3) | `platform-deploy.yml`'s deploy job |
 | `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
-**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/`.
+**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/` (the path still carries `-data` while the volume is named `main`; they are independent, and `docs/change-queue.md` entry 64 brings them together); and `hostname` returns `<company>-<stack>`, e.g. `shatynska-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
 
 The web ports are where the two differ, and the difference is the check: **production shows 80 and 443, staging shows neither.** Staging carries `web_allowed_cidrs = []` at both layers, so a staging host with UFW rules for 80/443 means its `group_vars` has drifted from its `terraform.tfvars`.
 
@@ -675,7 +679,7 @@ ansible <environment> -i inventory/<environment>.hcloud.yml \
 
 The journal should carry `prune-host-images: considered N, removed M` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed.
 
-A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service — `main-server-prune-host-images` and `staging-server-prune-host-images`, one per host and distinctly named because the two servers are named differently on purpose. **Give each the period and grace from Appendix A now.** A check created by its own first ping carries the *observer's* default period, not the unit's weekly one, so until you correct it the observer will call a perfectly healthy weekly job overdue within a day.
+A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service — `main-production-prune-host-images` and `main-staging-prune-host-images`, one per host and distinctly named because the two servers are named differently on purpose. **Give each the period and grace from Appendix A now.** A check created by its own first ping carries the *observer's* default period, not the unit's weekly one, so until you correct it the observer will call a perfectly healthy weekly job overdue within a day.
 
 ### 6.5 Staging's prune fails, and that is the expected state
 
@@ -683,7 +687,7 @@ On staging, the run above will not say `considered N, removed M`. It will report
 
 The prune protects images that a deployed application references or a running container holds. On a host where nothing is deployed there are neither, so an empty keep set is the honest answer — and the role treats it as a refusal rather than proceeding, because proceeding would mean `docker image prune -a`, weekly, reporting success. That guard is doing exactly what it exists to do.
 
-So `staging-server-prune-host-images` is red from the moment it exists until the platform stack reaches staging. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
+So `main-staging-prune-host-images` is red from the moment it exists until the platform stack reaches staging. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
 
 ### 6.6 Hand the converge to the pipeline
 
@@ -808,7 +812,7 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 ### 8.2 Infrastructure side
 
 1. Generate the application's deploy key (stage 0.3 table).
-2. Add to `deploy_apps` in `ansible/inventory/group_vars/prod.yml` (and, once an application has a staging deploy path, to `staging.yml` with a keypair of its own):
+2. Add to `deploy_apps` in `ansible/inventory/group_vars/production.yml` (and, once an application has a staging deploy path, to `staging.yml` with a keypair of its own):
 
    ```yaml
    - name: <app>
@@ -909,7 +913,7 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | Production Hetzner Read & Write | `production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
 | Converge key, **per stack** | That stack's Env secret `ANSIBLE_SSH_PRIVATE_KEY`; public half in `root`'s `authorized_keys` on that host | 2 | You generate it (§0.3) | `host-converge.yml`'s converge job, as `root`. **Revoking it is an edit on the host** — no role owns that file |
 | Vault password, **per stack** | Password manager **and** that stack's Env secret `ANSIBLE_VAULT_PASSWORD` | 2 | You chose it (§6.1) | The play, locally and in the converge job. Two places rather than one deliberately: a lost workstation no longer means a host nobody can converge |
-| Staging Hetzner Read Only | `terraform/stacks/staging/.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_STAGING`**; repo secret `HCLOUD_TOKEN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection; staging's Ansible inventory source, locally and in the converge workflow. Two local files here too |
+| Staging Hetzner Read Only | `terraform/stacks/main-staging/.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_STAGING`**; repo secret `HCLOUD_TOKEN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection; staging's Ansible inventory source, locally and in the converge workflow. Two local files here too |
 | Staging Hetzner Read & Write | `staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
 | `TF_API_TOKEN` | Repo secret and **both** Env secrets; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |
@@ -937,8 +941,8 @@ The checks it addresses, and the settings each needs at the observer. A check co
 |---|---|---|---|
 | `infrastructure-drift` | `.github/workflows/drift.yml`, nightly | 1 day | 12 hours |
 | `infrastructure-pre-commit-autoupdate` | `.github/workflows/pre-commit-autoupdate.yml`, weekly | 7 days | 2 days |
-| `main-server-prune-host-images` | `prune-host-images.service` on the production host, weekly | 7 days | 2 days |
-| `staging-server-prune-host-images` | `prune-host-images.service` on the staging host, weekly | 7 days | 2 days |
+| `main-production-prune-host-images` | `prune-host-images.service` on the production host, weekly | 7 days | 2 days |
+| `main-staging-prune-host-images` | `prune-host-images.service` on the staging host, weekly | 7 days | 2 days |
 
 The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system.
 
@@ -950,7 +954,7 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 An important consequence for staging specifically: its data volume is **not** wiped by a rebuild, and its `known_hosts` entry **is** invalidated. The second is the one that bites, because it presents as the converge failing at connection time rather than as a rebuild artefact.
 
-**Delete the old machine from the tailnet, and do it for either stack.** Tailscale deduplicates machine names by suffixing, so a rebuilt host joins as `main-server-1` while the dead node keeps `main-server` — and it keeps it indefinitely, because §6.4 had you disable key expiry on it. `host-converge.yml` looks its target up by that bare name, so every converge would then resolve to a peer that no longer exists and fail at the host-key step, with a message that reads as an unreachable host rather than as a rebuild artefact. That message names this cause, but the fix is here. The same rebuild also costs the host its converge key, which nothing reinstalls: §6.6 again.
+**Delete the old machine from the tailnet, and do it for either stack.** Tailscale deduplicates machine names by suffixing, so a rebuilt host joins as `main-production-1` while the dead node keeps `main-production` — and it keeps it indefinitely, because §6.4 had you disable key expiry on it. `host-converge.yml` looks its target up by that bare name, so every converge would then resolve to a peer that no longer exists and fail at the host-key step, with a message that reads as an unreachable host rather than as a rebuild artefact. That message names this cause, but the fix is here. The same rebuild also costs the host its converge key, which nothing reinstalls: §6.6 again.
 
 **A rebuilt host's first converge is a workstation converge again**, for the same reason a new host's is — it is on no tailnet and carries no converge key until §6.3 and §6.6 have run. That is the one time `ansible-playbook` against an existing host is correct rather than a sign that stage 9 was left unfinished.
 
@@ -962,4 +966,4 @@ Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/ch
 
 **Two stacks are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per stack. What a company still gets that this repository does not is an application stack on the second host, which waits on `docs/change-queue.md` entry 52.
 
-**Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-server` — the name prod's tfvars uses — would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. This stopped being hypothetical when `add-a-staging-stack` added a second stack: staging's `terraform.tfvars` names its server `staging-server` for exactly this reason, and says so where the value is set. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.
+**Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-production` would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. This stopped being hypothetical when `add-a-staging-stack` added a second stack, and the naming scheme's answer is that a server carries its **stack's** name — which makes the two distinct by construction rather than by a choice someone has to remember. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.
