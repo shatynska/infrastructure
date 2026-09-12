@@ -1,0 +1,12 @@
+schema: spec-driven
+created: 2026-09-12
+
+# An OPENED change: a branch and a handoff, with no proposal yet. The session
+# that takes it up writes the proposal and drops the `skip_specs` line below.
+#
+# `openspec validate --all` runs on every pull request and fails a change
+# carrying no specification deltas — "Change must have at least one delta" — so
+# without this the branch cannot pass the required check. `schema:` and
+# `created:` must stay: dropping either makes the change fail to resolve with
+# the same error, which reads as though this setting did not work.
+skip_specs: true
