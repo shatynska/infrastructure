@@ -38,6 +38,12 @@ variables {
   size              = 10
   server_id         = "12345"
   delete_protection = true
+  # Supplied because the module now requires it with no default: `tenant`
+  # (Consistent Resource Labeling, iac-safety-hardening). Without it every
+  # `run` block in this file fails with "No value for required variable"
+  # before it reaches an assertion. Supplying a newly required input is not a
+  # weakening of what this file already asserted; no assertion below is edited.
+  tenant = "main"
 }
 
 run "plan_creates_volume_with_declared_configuration" {

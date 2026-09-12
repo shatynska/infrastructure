@@ -1,0 +1,71 @@
+---
+# Converges the `hostname` role with `company` deliberately NOT supplied --
+# not set here, and the role's own defaults deliberately give it no default,
+# because a name assembled from a blank is a host named for nobody.
+#
+# Scenario under test, from *The Host's Own Name Is Set by the Converge*
+# (openspec/specs/iac-host-configuration/spec.md):
+#
+#   "An absent company variable refuses"
+#     WHEN a converge runs against a host for which the company variable is
+#     not supplied
+#     THEN the run SHALL fail with a diagnostic naming that variable and where
+#     it is expected to be set, before any task acts on the host
+#
+# WHY THE block/rescue AND THE MARKER FILE ARE MANDATORY, NOT STYLISTIC
+# ---------------------------------------------------------------------
+# Two reasons, both structural, and both stated at length in
+# ansible/roles/hardening/molecule/absent-ssh-cidrs/converge.yml, whose shape
+# this follows. Molecule runs `converge` and `verify` as two separate
+# ansible-playbook invocations, so no fact set here survives into verify.yml --
+# a file on the instance is the channel. And without the rescue, the converge
+# exits non-zero, Molecule never runs `verify` at all, and the scenario reports
+# a bare converge failure instead of the assertion it was written to make.
+#
+# The success branch is written too, and matters most: if the check is later
+# softened -- a default added to the role's defaults, the assert relaxed to a
+# warning, the variable given a `| default('')` at the point it is consumed --
+# this converge SUCCEEDS, records `succeeded`, and verify.yml fails on it. A
+# scenario recording only the failure branch would go green in exactly the case
+# it exists to catch.
+- name: Converge
+  hosts: all
+  become: true
+  tasks:
+    - name: Converge hostname with no company supplied
+      block:
+        - name: Run the hostname role
+          ansible.builtin.include_role:
+            name: hostname
+
+        - name: Record that the role completed without failing
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-absent-company-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'succeeded',
+                  'failed_task_name': '',
+                  'failed_action': '',
+                  'failed_msg': ''
+                } | to_nice_json
+              }}
+      rescue:
+        - name: Record the failure the unsupplied input produced
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-absent-company-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_action': ansible_failed_task.action | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}
