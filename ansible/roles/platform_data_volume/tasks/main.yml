@@ -13,9 +13,9 @@
 - name: Refuse a superseded mount path that is also the path in force
   ansible.builtin.assert:
     that:
-      - platform_data_volume_mount_path | regex_replace('/$', '')
+      - platform_data_volume_mount_path | regex_replace('/+$', '')
         not in (platform_data_volume_superseded_mount_paths
-                | map('regex_replace', '/$', '') | list)
+                | map('regex_replace', '/+$', '') | list)
     fail_msg: >-
       platform_data_volume_mount_path ({{ platform_data_volume_mount_path }}) is
       also named in platform_data_volume_superseded_mount_paths
@@ -111,7 +111,7 @@
 
 - name: Retire any superseded mount path from /etc/fstab, without unmounting it
   ansible.posix.mount:
-    path: "{{ item | regex_replace('/$', '') }}"
+    path: "{{ item | regex_replace('/+$', '') }}"
     state: absent_from_fstab
   loop: "{{ platform_data_volume_superseded_mount_paths }}"
   # NORMALISED HERE TOO, and not only in the guard above. `absent_from_fstab`
@@ -155,10 +155,10 @@
       {{ (platform_data_volume_fstab_after.content | default('') | b64decode).splitlines()
          | map('trim') | select() | select('match', '^[^#]')
          | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2')
-         | map('regex_replace', '/$', '') | list }}
+         | map('regex_replace', '/+$', '') | list }}
     platform_data_volume_still_persisted: >-
       {{ platform_data_volume_superseded_mount_paths
-         | map('regex_replace', '/$', '')
+         | map('regex_replace', '/+$', '')
          | select('in', platform_data_volume_fstab_active) | list }}
   ansible.builtin.assert:
     that:

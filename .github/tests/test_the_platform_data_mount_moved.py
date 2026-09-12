@@ -392,6 +392,60 @@ class TestEveryHostVolumeBindLiesUnderTheMountTheRoleEstablishes(unittest.TestCa
     them by path.
     """
 
+    def test_no_inventory_file_overrides_the_mount_path_the_check_reads(self) -> None:
+        """DERIVED -- the premise the assertion below rests on, and it is not a
+        property of the role but of this repository's inventory.
+
+        The containment check reads the ROLE'S DEFAULT. What a host actually
+        mounts at is whatever the inventory supplies, so a
+        `platform_data_volume_mount_path` in a `group_vars` file would move the
+        real mount while the defaults file and the compose file went on
+        agreeing with each other -- green over exactly the drift this check
+        exists to detect.
+
+        That is latent rather than hypothetical: those same files already
+        override `platform_data_volume_subdirs`, and as of this change
+        `platform_data_volume_superseded_mount_paths` too, so overriding this
+        role's inputs in inventory is an established habit.
+
+        Stated as a prohibition rather than as "read the override too", because
+        `platform/docker-compose.yml` hardcodes one path for every stack --
+        `test_a_second_environment.py` asserts the stacks agree with each other
+        for that reason. An inventory that moved the path for one group would
+        break that premise whatever this check then compared against.
+        """
+        # READ AS LINES, NOT PARSED. A `group_vars` file carries Vault-encrypted
+        # values under `!vault` tags, which `yaml.safe_load` refuses outright --
+        # so a parse here fails on every run for a reason that has nothing to do
+        # with what is being asserted. A top-level assignment is a line starting
+        # at column zero, which is the same shape the sweep in this module reads.
+        group_vars = ROOT / "ansible" / "inventory" / "group_vars"
+        if not group_vars.is_dir():
+            self.fail(f"{group_vars} does not exist, so this read has nothing to inspect")
+        files = sorted(group_vars.glob("*.yml"))
+        if not files:
+            self.fail(
+                f"{group_vars} holds no .yml file, so this check would pass having "
+                "read nothing"
+            )
+        offenders = []
+        for path in files:
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if line.startswith(f"{MOUNT_PATH_VARIABLE}:"):
+                    offenders.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
+        self.assertEqual(
+            [],
+            offenders,
+            f"these inventory files set {MOUNT_PATH_VARIABLE}, so the mount path in "
+            f"force is not the role default this check compares against: {offenders}. "
+            "platform/docker-compose.yml hardcodes one path for every stack, so an "
+            "override also breaks the premise that lets it stay unparameterised -- "
+            "either remove it, or parameterise the stack and widen this check to "
+            "read the effective value per group",
+        )
+
     def test_every_stack_bind_under_the_host_volume_root_lies_under_the_role_mount_path(
         self,
     ) -> None:

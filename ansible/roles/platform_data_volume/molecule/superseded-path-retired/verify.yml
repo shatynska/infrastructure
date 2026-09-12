@@ -73,9 +73,16 @@
         # entry too short to have one maps to itself, which cannot equal either
         # path under test and is therefore reported by the checks below rather
         # than silently satisfying them.
+        #
+        # Trailing separators stripped, the same way the role strips them.
+        # Without it this verifier is WEAKER than the implementation it checks:
+        # an fstab target spelled with one would not match the declared path,
+        # and the assertion below would report the superseded path retired
+        # against a file still naming it.
         platform_data_volume_fstab_targets: >-
           {{ fstab_active
              | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2')
+             | map('regex_replace', '/+$', '')
              | list }}
 
     # DERIVED -- a premise check, and it is here because its absence let this
