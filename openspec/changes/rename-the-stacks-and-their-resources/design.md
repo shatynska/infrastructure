@@ -75,6 +75,8 @@ Both inventory sources gain a second `keyed_groups` entry over `hcloud_labels.te
 
 `strict: true` reaches `keyed_groups`, and the previously measured behaviour holds: a host missing the key is not grouped rather than failing the parse. That matters for the window in Decision 10 — between the merge and the apply, no host carries `tenant` and the `main` group does not exist. Nothing reads it, so nothing notices.
 
+**Both modules also reverse their label merge order, which is a behaviour change and not a rename.** They built `merge({axes}, var.labels)`, so a caller supplying `labels = { environment = "…" }` silently replaced an axis. They now build `merge(var.labels, {axes})`, and the axis wins. Recorded here rather than left to the module comments because it is the one thing in this change that alters what an existing input does: *Consistent Resource Labeling* obliges **every** resource to carry one label per axis, and a merge a caller can win does not satisfy a SHALL — it satisfies it for every caller who does not happen to collide, which is a different obligation. Both in-tree callers pass `labels` not at all, so nothing in this repository changes; a consumer relying on the override would now be ignored rather than warned, and that is the cost. New tests on both modules assert it.
+
 ## Decision 6 — The tailnet machine name is renamed out of band and pinned in the repository, and the two are different jobs
 
 **This is not in `docs/change-queue.md` entry 62, and it is the part of this change most able to break production.**

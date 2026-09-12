@@ -67,10 +67,11 @@
 #
 # The two tasks below are what that module's `debian` strategy does, split so
 # each half can use the mechanism that works: the file is written with
-# `unsafe_writes`, which FALLS BACK to a non-atomic write only where the atomic
-# one fails — so a real host still gets the atomic write and the container gets
-# the one it can take — and the running name is set through `sethostname(2)`,
-# which a privileged container may do inside its own UTS namespace.
+# `unsafe_writes` where a caller asks for it — a fallback to a non-atomic write,
+# off by default and set only by this role's own scenarios, for the reason
+# `hostname_unsafe_writes` in the defaults states — and the running name is set
+# through `sethostname(2)`, which a privileged container may do inside its own
+# UTS namespace.
 #
 # WHICH HALF DOES WHAT: the file is what survives a reboot; the `hostname` call
 # is what the current boot answers to. Both are needed, and a role doing only
@@ -83,7 +84,11 @@
     owner: root
     group: root
     mode: "0644"
-    unsafe_writes: true
+    # A FALLBACK, and off unless a caller asks for it -- see
+    # `hostname_unsafe_writes` in this role's defaults for why a real host must
+    # not have it. The scenarios set it because a bind-mounted target is the one
+    # case where the atomic write cannot work at all.
+    unsafe_writes: "{{ hostname_unsafe_writes }}"
 
 - name: Read the name this boot currently answers to
   ansible.builtin.command: hostname
@@ -123,6 +128,7 @@
     mode: "0644"
     # For the reason `/etc/hostname` above carries it: `/etc/hosts` is a bind
     # mount in a container too, so the atomic rename this module ends with
-    # fails there with EBUSY. `unsafe_writes` is a FALLBACK rather than a
-    # replacement -- a real host still gets the atomic write.
-    unsafe_writes: true
+    # fails there with EBUSY. Off by default for the reason stated in this
+    # role's defaults, which matters more for THIS file than for the other one:
+    # a truncated `/etc/hosts` is a host that cannot resolve its own name.
+    unsafe_writes: "{{ hostname_unsafe_writes }}"

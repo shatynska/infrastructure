@@ -21,6 +21,14 @@
   become: true
   vars:
     company: acme
+    # A CONTAINER IS THE ONE PLACE THE ROLE NEEDS THIS, which is why the role
+    # defaults it off and a scenario is what turns it on. `/etc/hostname` and
+    # `/etc/hosts` are bind mounts here, and the atomic rename a write ends with
+    # fails over one with EBUSY -- so without the fallback neither file can be
+    # written and nothing about this role could be exercised at all. A real host
+    # takes the atomic path and must not carry this: see
+    # `hostname_unsafe_writes` in the role's defaults.
+    hostname_unsafe_writes: true
     hostname_expected_name: "{{ company }}-{{ inventory_hostname }}"
   pre_tasks:
     - name: Assert this working tree's namespace leaves room for the derived host name

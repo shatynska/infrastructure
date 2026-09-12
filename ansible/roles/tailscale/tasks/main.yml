@@ -1,11 +1,20 @@
 ---
-# Joins the host to a private tailnet, and pins the name it reports there --
-# per iac-host-configuration's "Host Joins a Private Tailnet for Non-Operator
-# SSH Access" and "The Host's Own Name Is Set by the Converge"
-# requirements (the change connect-platform-deploy-via-tailscale).
-# This exists so the GitHub Actions deploy job can reach the host without
-# widening SSH access on the public internet -- see that change's
-# design.md for the full rationale.
+# Joins the host to a private tailnet, and pins the name it reports there.
+#
+# Two requirements, from two changes, and it is worth saying which is which:
+#
+#   "Host Joins a Private Tailnet for Non-Operator SSH Access"
+#     -- the change connect-platform-deploy-via-tailscale, whose design.md
+#     carries the full rationale. It exists so the GitHub Actions deploy job
+#     can reach the host without widening SSH access on the public internet.
+#
+#   "The Host's Own Name Is Set by the Converge"
+#     -- the change rename-the-stacks-and-their-resources, which added the
+#     `--hostname` pin below. Before it, the name this host reported was
+#     derived from the host's OWN name, which that change prefixes with the
+#     operating company.
+#
+# Both are in openspec/specs/iac-host-configuration/spec.md.
 
 - name: Ensure the apt keyrings directory exists
   ansible.builtin.file:
@@ -157,12 +166,35 @@
   failed_when: false
   check_mode: false
 
+#
+# NO `when:`, AND ITS ABSENCE IS THE POINT. An earlier draft guarded this task
+# on the prefs read having succeeded and parsed -- which, since that read
+# carries `failed_when: false`, meant an unreachable tailscaled SKIPPED the pin
+# silently, left the reported name deriving from the host's own, and let the
+# `hostname` role immediately after change that name with nothing pinning it.
+# That is precisely the window this task exists to close, and it would have
+# closed it only on the runs that did not need closing.
+#
+# The polarity here is the opposite of `tailscale up`'s above and deliberately
+# so. There, skipping is dangerous and attempting is harmless, so an
+# unparseable status means NOT CONNECTED. Here, attempting is harmless --
+# `tailscale set --hostname` to the value already in force is a no-op -- and
+# skipping is the dangerous direction, so the task always runs and a genuinely
+# broken daemon fails loudly on `tailscale set` rather than passing green.
+#
+# `changed_when` carries the parseability guard instead, and its limbs are in
+# the same short-circuiting order the `when:` above uses and for the same
+# reason: `from_json` is reached only once emptiness and shape have been ruled
+# out. It reports NO change only where the prefs read positively established
+# the name was already correct, so a converge that could not read the prefs
+# reports a change rather than silently claiming none.
 - name: Pin the name this host reports to the tailnet
   ansible.builtin.command: "tailscale set --hostname={{ inventory_hostname }}"
-  when: >
-    (tailscale_prefs_check.rc | default(1)) == 0 and
-    (tailscale_prefs_check.stdout | default('') | trim | length) > 0 and
-    ((tailscale_prefs_check.stdout | default('') | trim) is match('^\{'))
   changed_when: >
-    (tailscale_prefs_check.stdout | from_json).Hostname | default('')
-    != inventory_hostname
+    not (
+      (tailscale_prefs_check.rc | default(1)) == 0 and
+      (tailscale_prefs_check.stdout | default('') | trim | length) > 0 and
+      ((tailscale_prefs_check.stdout | default('') | trim) is match('^\{')) and
+      (tailscale_prefs_check.stdout | from_json).Hostname | default('')
+      == inventory_hostname
+    )

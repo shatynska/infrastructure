@@ -560,7 +560,7 @@ The inventory is dynamic: it asks the Hetzner API which servers exist and groups
 
 ```sh
 cd ansible
-ansible-inventory -i inventory/<environment>.hcloud.yml --graph
+ansible-inventory -i inventory/<stack>.hcloud.yml --graph
 ```
 
 You should see that stack's server under `@<environment>`. If the command fails naming the source it could not parse, that stack's token in `ansible/.envrc` is missing or wrong — the run fails rather than showing you an empty inventory, which is the point.
@@ -570,7 +570,7 @@ You should see that stack's server under `@<environment>`. If the command fails 
 ```sh
 cd ansible
 ansible-playbook playbooks/host-baseline.yml \
-  -i inventory/<environment>.hcloud.yml \
+  -i inventory/<stack>.hcloud.yml \
   -e target_environment=<environment> \
   --vault-id <environment>@prompt \
   --private-key ~/.ssh/<company>-root \
@@ -635,11 +635,11 @@ The usual causes, in rough order: the key was already consumed, because it was g
 
    ```sh
    cd ansible
-   ansible <environment> -i inventory/<environment>.hcloud.yml \
+   ansible <environment> -i inventory/<stack>.hcloud.yml \
      --private-key ~/.ssh/<company>-root \
      -m ansible.builtin.systemd_service \
      -a "name=<unit> state=started" --vault-id <environment>@prompt
-   ansible <environment> -i inventory/<environment>.hcloud.yml \
+   ansible <environment> -i inventory/<stack>.hcloud.yml \
      --private-key ~/.ssh/<company>-root \
      -m ansible.builtin.command \
      -a "journalctl -u <unit> -n 20 --no-pager" --vault-id <environment>@prompt
@@ -667,11 +667,11 @@ The web ports are where the two differ, and the difference is the check: **produ
 
 ```sh
 cd ansible
-ansible <environment> -i inventory/<environment>.hcloud.yml \
+ansible <environment> -i inventory/<stack>.hcloud.yml \
   --private-key ~/.ssh/<company>-root \
   -m ansible.builtin.systemd_service \
   -a "name=prune-host-images.service state=started" --vault-id <environment>@prompt
-ansible <environment> -i inventory/<environment>.hcloud.yml \
+ansible <environment> -i inventory/<stack>.hcloud.yml \
   --private-key ~/.ssh/<company>-root \
   -m ansible.builtin.command \
   -a "journalctl -u prune-host-images.service -n 20 --no-pager" --vault-id <environment>@prompt
@@ -706,8 +706,8 @@ The second line is the check, and it is not optional: a key that is installed bu
 **Then store the two secrets, on that stack's GitHub Environment**, not as repository secrets. Both are read only by a job that has passed that Environment's protection rules, which is the whole reason they live there:
 
 ```sh
-gh secret set ANSIBLE_SSH_PRIVATE_KEY --env <the stack> <~/.ssh/<company>-ansible-ci-<environment>
-gh secret set ANSIBLE_VAULT_PASSWORD --env <the stack>
+gh secret set ANSIBLE_SSH_PRIVATE_KEY --env <environment> <~/.ssh/<company>-ansible-ci-<environment>
+gh secret set ANSIBLE_VAULT_PASSWORD --env <environment>
 ```
 
 Then delete the local private half, exactly as you do for the platform deploy key. Keep the Vault password in the password manager — it is still the only thing that can decrypt that stack's `group_vars`, and it is now in two places rather than one, which is the point: a second operator no longer means handing over a password and a root key.
@@ -716,14 +716,14 @@ Then delete the local private half, exactly as you do for the platform deploy ke
 
 **What a healthy converge looks like**, so that a green tick is not the thing you read. Three lines, in this order:
 
-- `<environment>: converging '<server name>', resolved from the tailnet netmap` — a **bare name**. Anything else, a JSON fragment most of all, means the address derivation is wrong rather than the host.
+- `<stack>: converging '<server name>' for group '<environment>', resolved from the tailnet netmap` — the name between the quotes is a **bare name**. Anything else there, a JSON fragment most of all, means the address derivation is wrong rather than the host.
 - `<server name> | SUCCESS => { "msg": <a number> }` — the preflight, which proves this stack's Vault password decrypts its `group_vars` before any role touches the host. A number, never a value.
 - `PLAY RECAP … <server name> : ok=<n> changed=0 failed=0` — **`changed=0` is the expected result on an already-converged host.** A non-zero `changed` is the host having drifted from what the repository says, and is worth understanding before you do anything else. It is not the `changed=2` of §6.3: that is check mode, and this is a real converge.
 
 **A merge that changes nothing under `ansible/` converges nothing, and that is correct.** The workflow is filtered to that directory, so a change to the workflow itself, to `.github/tests/` or to documentation triggers no converge — which is what you want, and is also the case most likely to leave you waiting for a run that is never coming. When you need one anyway — after fixing the workflow, or after rebuilding a host — dispatch it:
 
 ```sh
-gh workflow run host-converge.yml --ref main -f stack=<environment>
+gh workflow run host-converge.yml --ref main -f stack=<stack>
 gh run list --workflow host-converge.yml --limit 1
 ```
 

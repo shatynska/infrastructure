@@ -161,7 +161,7 @@ jobs:
             # shape check of its own further down.
             case "$name" in
               "" | *[!A-Za-z0-9_-]*)
-                echo "::error::${name}: '${inventory_root}/${base}' yields a stack name that is not letters, digits, underscores and dashes. That name becomes an inventory path, a vault-id label, a play variable and a concurrency group."
+                echo "::error::${name}: '${inventory_root}/${base}' yields a stack name that is not letters, digits, underscores and dashes. That name becomes an inventory path and a concurrency group. (The vault-id label and the play variable are the DECLARED GROUP's, which carries a shape check of its own further down.)"
                 refused=1
                 continue
                 ;;

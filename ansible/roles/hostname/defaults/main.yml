@@ -14,3 +14,21 @@
 # is a variable with that value rather than a literal: a distribution that puts
 # it elsewhere is a caller's problem to state, not a reason to edit the role.
 hostname_loopback_address: 127.0.1.1
+
+# Whether this role may fall back to a NON-ATOMIC, in-place write when the
+# atomic one fails. FALSE HERE, AND TRUE ONLY IN THIS ROLE'S OWN MOLECULE
+# SCENARIOS, which is the whole of the setting's purpose.
+#
+# WHY IT IS NEEDED AT ALL: in a container both `/etc/hostname` and `/etc/hosts`
+# are bind mounts, and the rename an atomic write ends with fails over one with
+# EBUSY. Without the fallback neither file can be written in a scenario, and a
+# role nothing can exercise is a role verified by nothing.
+#
+# WHY IT IS NOT ON BY DEFAULT: on a real host the atomic write succeeds, so the
+# fallback would never fire -- except where something is already wrong, a
+# read-only `/etc` being the obvious case. There, falling back means an
+# interrupted in-place write can truncate `/etc/hosts` and leave a host that
+# cannot resolve its own name: the exact condition the loopback task exists to
+# prevent, reached by the mechanism meant to prevent it. Failing loudly is the
+# better outcome, and a real host has no reason to need the fallback.
+hostname_unsafe_writes: false
