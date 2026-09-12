@@ -513,9 +513,10 @@ class TestEachEnvironmentHasAWorkspaceOfItsOwn(unittest.TestCase):
         used to assert. The requirement now forbids COMPUTING a workspace name
         from a stack's directory name: the two are renamed by different
         mechanisms in an order that cannot be reversed, so a derivation is false
-        for the interval between them -- and this repository is inside such an
-        interval until `docs/change-queue.md` entry 63 renames the workspaces.
-        The names may agree; nothing may derive one from the other.
+        for the interval between them -- and this repository was inside such an
+        interval until rename-the-external-services renamed the workspaces and
+        moved the `cloud` blocks after them. The names now agree; nothing may
+        derive one from the other, and nothing here does.
 
         What survives is the obligation itself, asserted here and by the
         collision test below: every stack names a workspace, and no two name the

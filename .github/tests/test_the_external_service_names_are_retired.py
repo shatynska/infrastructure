@@ -73,7 +73,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Mapping, Sequence
 
 from test_ci_configuration import (
     ARCHIVE_SEGMENT,
@@ -215,10 +215,17 @@ def decoded(files: Mapping[str, bytes]) -> dict[str, str]:
 
 
 def retired_name_offences(
-    files: Mapping[str, str], names: Iterable[str] = RETIRED_NAMES
+    files: Mapping[str, str], names: Sequence[str] = RETIRED_NAMES
 ) -> list[str]:
     """Every swept file still naming a retired external service, as
     `<path>:<line>: <name>`, one entry per occurrence.
+
+    `names` is a `Sequence` and not an `Iterable`, which is not pedantry: it is
+    consumed in the innermost loop, so a generator would be exhausted by the
+    first line of the first file and every line after it would be compared
+    against nothing. That is the "finder that searched for nothing" the
+    discriminating class below exists to rule out, and no fixture there would
+    catch it, since all of them pass tuples.
 
     The match is a plain substring on each line rather than a word boundary:
     these names appear inside prose, inside a shell command, inside a YAML

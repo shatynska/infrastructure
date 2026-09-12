@@ -16,7 +16,7 @@
 #
 # Whether that pauses for a human is a property of the Environment's protection
 # rules -- repository settings, which no file here can verify -- and not of the
-# workflow. `production` requires a reviewer.
+# workflow. `main-production` requires a reviewer.
 #
 # SHALL be distinct from every other stack's: two stacks naming the
 # same GitHub Environment share its WRITE token and its protection rules, so a

@@ -994,11 +994,30 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
     def test_there_is_a_name_to_look_for(self) -> None:
         """SPECIFIED -- guards the two assertions below from passing over an
         empty set of names, which is what an unimplemented declaration or an
-        emptied environments directory would produce."""
+        emptied environments directory would produce.
+
+        NON-EMPTINESS IS NOT ENOUGH, and that is the second assertion here. The
+        stack directory names satisfy it on their own, so a `_names()` that
+        silently stopped reading the declarations would keep this green while
+        sweeping for two needles instead of four -- which is exactly the
+        narrowing rename-the-external-services was found to have introduced and
+        then repaired. So the set must also carry a name that is NOT a stack
+        directory: today the Ansible groups, which are the axis the GitHub
+        Environments stopped supplying when they took the stack's own name.
+        """
         self.assertTrue(
             self._names(),
-            "no environment directory and no declared GitHub Environment name was "
-            "found, so a sweep for environment literals would read nothing",
+            "no environment directory, no declared GitHub Environment and no declared "
+            "Ansible group was found, so a sweep for environment literals would read "
+            "nothing",
+        )
+        directories = {directory.name for directory in environment_directories()}
+        beyond = sorted(set(self._names()) - directories)
+        self.assertTrue(
+            beyond,
+            "every name this sweep looks for is a stack directory name, so the "
+            "declarations contributed nothing -- the environment axis is unswept and "
+            "a workflow hardcoding an Ansible group would not be reported",
         )
 
     def test_no_terraform_workflow_names_an_environment_directory(self) -> None:

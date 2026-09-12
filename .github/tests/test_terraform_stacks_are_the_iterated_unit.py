@@ -982,8 +982,11 @@ class TestEachStackNamesAWorkspaceOfItsOwn(unittest.TestCase):
         agree, but that nothing may derive one from the other. The two are
         renamed by different mechanisms in an order that cannot be reversed (the
         HCP interface first, the `cloud` block second), so a derivation is false
-        for the interval between them, and this repository is inside such an
-        interval until `docs/change-queue.md` entry 63.
+        for the interval between them. This repository was inside such an
+        interval and no longer is: rename-the-external-services performed the
+        HCP rename and moved the `cloud` blocks after it, so the two names agree
+        again -- by convention, which the requirement permits, and not by any
+        derivation, which it forbids.
 
         What survives is what the requirement is actually for, and it is
         asserted here and in the sibling below: every stack names a workspace,
