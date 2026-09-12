@@ -118,28 +118,38 @@
       changed_when: false
       failed_when: false
 
-    # THREE STATES, and only the third is a refusal. Measured inside the pinned
-    # image rather than assumed, because the first one reads as the third if you
-    # guess: a minor whose node exists but holds nothing returns **rc 0 with
-    # EMPTY stdout**, not a non-zero rc. A guard checking only the return code
-    # refuses every free minor, and renders its message as "held by ''" -- a
-    # premise check firing on the correct state and reporting the opposite of
-    # the truth.
+    # THREE STATES, measured inside the pinned image rather than guessed,
+    # because the first reads as the third if you guess: a minor whose node
+    # exists but holds nothing returns **rc 0 with EMPTY stdout**, not a
+    # non-zero rc. A guard checking only the return code refuses every free
+    # minor and renders its message as "held by ''" -- a premise check firing
+    # on the correct state and reporting the opposite of the truth.
     #
     #   node exists, unassociated  -> rc 0, stdout ''
-    #   no node at all             -> rc 1, stderr 'No such device'
     #   associated                 -> rc 0, stdout the backing file's path
+    #   no node at all             -> rc 1, stderr 'No such device'
+    #
+    # The third cannot arise here -- the node is created immediately above --
+    # so THE GUARD FAILS CLOSED ON ANY NON-ZERO rc rather than reading it as
+    # "free". `failed_when: false` on the read collapses every failure into a
+    # non-zero rc: a `losetup` without `--output` (busybox's has neither flag),
+    # an unreadable sysfs, the binary absent. Treating those as free would
+    # release whatever the host holds at this minor, which is the one outcome
+    # this guard exists to prevent. Not knowing is a refusal, not a permission.
     - name: Refuse a loop minor this fixture family cannot attribute to itself
       ansible.builtin.assert:
         that:
-          - platform_data_volume_loop_holder.rc != 0 or
-            platform_data_volume_loop_holder.stdout | trim | length == 0 or
-            platform_data_volume_loop_holder.stdout | trim is match('^/root/platform-data-volume-')
+          - platform_data_volume_loop_holder.rc == 0
+          - platform_data_volume_loop_holder.stdout | trim | length == 0 or
+            platform_data_volume_loop_holder.stdout | trim is match('/root/platform-data-volume-')
         fail_msg: >-
-          {{ platform_data_volume_device }} is held by
-          '{{ platform_data_volume_loop_holder.stdout | trim }}', which no fixture
-          of this role creates. Detaching it could break whatever the host is
-          using it for, so this play refuses rather than reclaiming it.
+          Refusing to release {{ platform_data_volume_device }}. The read
+          returned rc {{ platform_data_volume_loop_holder.rc }} and
+          '{{ platform_data_volume_loop_holder.stdout | trim }}'. Either it is
+          held by something no fixture of this role creates, or the read itself
+          failed and what holds it is unknown; releasing it could break whatever
+          the host is using it for, so this play refuses rather than reclaiming
+          it.
 
     - name: Release the loop device from whatever a previous run left on it
       ansible.builtin.command: losetup -d {{ platform_data_volume_device }}

@@ -94,20 +94,24 @@
       failed_when: false
 
     # An unassociated minor returns rc 0 with EMPTY stdout rather than a
-    # non-zero rc -- see `molecule/default/prepare.yml` for the three states and
-    # how they were measured. Reading the return code alone refuses every free
-    # minor and renders the message as "held by ''".
+    # non-zero rc, and a non-zero rc means the read failed rather than that the
+    # minor is free -- so the guard fails CLOSED on it. See
+    # `molecule/default/prepare.yml` for the three states and how they were
+    # measured.
     - name: Refuse a loop minor this fixture family cannot attribute to itself
       ansible.builtin.assert:
         that:
-          - platform_data_volume_loop_holder.rc != 0 or
-            platform_data_volume_loop_holder.stdout | trim | length == 0 or
-            platform_data_volume_loop_holder.stdout | trim is match('^/root/platform-data-volume-')
+          - platform_data_volume_loop_holder.rc == 0
+          - platform_data_volume_loop_holder.stdout | trim | length == 0 or
+            platform_data_volume_loop_holder.stdout | trim is match('/root/platform-data-volume-')
         fail_msg: >-
-          {{ platform_data_volume_device }} is held by
-          '{{ platform_data_volume_loop_holder.stdout | trim }}', which no fixture
-          of this role creates. Detaching it could break whatever the host is
-          using it for, so this play refuses rather than reclaiming it.
+          Refusing to release {{ platform_data_volume_device }}. The read
+          returned rc {{ platform_data_volume_loop_holder.rc }} and
+          '{{ platform_data_volume_loop_holder.stdout | trim }}'. Either it is
+          held by something no fixture of this role creates, or the read itself
+          failed and what holds it is unknown; releasing it could break whatever
+          the host is using it for, so this play refuses rather than reclaiming
+          it.
 
     - name: Release the loop device from whatever a previous run left on it
       ansible.builtin.command: losetup -d {{ platform_data_volume_device }}

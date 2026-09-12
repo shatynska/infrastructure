@@ -668,17 +668,32 @@ def _refusal_between(body: str, start: int, end: int, registered: str | None) ->
     exact thing the requirement forbids -- so the refusal, not the read, is what
     is looked for. `failed_when: false` is not one: it is how the read itself is
     kept from failing.
+
+    THE REGISTERED NAME IS LOOKED FOR IN THE REFUSAL'S OWN TASK, not anywhere
+    after it. Searching the rest of the segment admits precisely the shape the
+    scenario says SHALL fail: a refusal predicated on something else, followed
+    by any task that merely MENTIONS the registered name -- a `debug` printing
+    it will do -- and then an unconditional release. The two moved together in
+    the negative tests below, because deleting the refusal also deleted the only
+    mention, so this was green while establishing nothing.
     """
     if registered is None:
         return False
     segment = body[start:end]
+    boundaries = [match.start() for match in TASK_START.finditer(segment)]
+
+    def task_body_at(offset: int) -> str:
+        opening = max((start for start in boundaries if start <= offset), default=0)
+        closing = min((start for start in boundaries if start > offset), default=len(segment))
+        return segment[opening:closing]
+
     candidates = [match.start() for match in REFUSING_MODULE.finditer(segment)]
     candidates += [
         match.start()
         for match in FAILED_WHEN.finditer(segment)
         if match.group("value").split("#")[0].strip().strip("\"'").lower() not in FALSEY
     ]
-    return any(registered in segment[candidate:] for candidate in sorted(candidates))
+    return any(registered in task_body_at(candidate) for candidate in sorted(candidates))
 
 
 def association_guard_offences(body: str, label: str) -> list[str]:
@@ -735,6 +750,22 @@ COMMAND_WRAPPERS = {"sudo", "env", "nice", "time", "command", "exec"}
 SUBCOMMAND_RUNNERS = {"uv", "poetry", "pipenv", "pdm", "hatch"}
 
 
+# A shell line can invoke several programs, and the one that matters may not be
+# the first. `cd <role> && molecule test --all`, `for r in $roles; do molecule
+# test --all; done` and `(cd <role>; molecule test --all)` each reach the tool
+# directly while leading with something else, so a reader taking only the first
+# command passes all three -- and the workflow would then run the suite with no
+# namespace and no loop base, which fails at `create` or in every fixture play
+# for a reason no assertion names.
+COMMAND_SEPARATOR = re.compile(r"&&|\|\||[;|&()]|(?<![\w-])(?:do|then|else)(?![\w-])")
+
+
+def _commands_in(line: str) -> list[str]:
+    """Each command a single shell line invokes, split on the separators that
+    end one command and begin another."""
+    return [part for part in COMMAND_SEPARATOR.split(line) if part and part.strip()]
+
+
 def _program_of(line: str) -> str | None:
     """The program a shell line invokes, leading environment assignments and
     wrappers skipped."""
@@ -775,9 +806,10 @@ def suite_invocations(workflow: dict) -> list[tuple[str, str, str]]:
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
-            program = _program_of(stripped)
-            if program in {"molecule", ENTRY_POINT_NAME}:
-                found.append((step_label(job_name, index, step), stripped, program))
+            for command in _commands_in(stripped):
+                program = _program_of(command.strip())
+                if program in {"molecule", ENTRY_POINT_NAME}:
+                    found.append((step_label(job_name, index, step), stripped, program))
     return found
 
 

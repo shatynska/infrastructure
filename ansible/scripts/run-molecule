@@ -99,8 +99,10 @@ namespace_for() {
 loop_base_for() {
 	# The first of eight consecutive loop-device MINORS this working tree claims.
 	# A fixture adds its own fixed offset: platform_data_volume's `default` takes
-	# 0, `multiple-devices-*` 1 and 2, `superseded-path-retired` 3 and
-	# `superseded-path-in-force-refused` 4. Three are spare for a scenario added
+	# 0, `multiple-devices-discoverable` 1 and 2, `superseded-path-retired` 3,
+	# `superseded-path-in-force-refused` 4, and `multiple-devices-reverse-order`
+	# 5 and 6 -- the two `multiple-devices` arms take separate pairs because both
+	# their containers can be up at once. Offset 7 is spare for a scenario added
 	# later, so adding one costs no edit here.
 	#
 	# Derived from the SAME absolute path `namespace_for` hashes, and derived

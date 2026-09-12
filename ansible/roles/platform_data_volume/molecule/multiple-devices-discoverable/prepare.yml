@@ -64,26 +64,38 @@
   vars:
     platform_data_volume_fixture_reverse_order: >-
       {{ lookup('env', 'MOLECULE_MULTI_DEVICE_REVERSE_ORDER') | lower in ['1', 'true', 'yes', 'on'] }}
-    # This scenario takes offsets 1 and 2 of the eight minors this working tree
-    # claims -- and `multiple-devices-reverse-order`, which imports this very
-    # file rather than copying it, takes the same two. That is safe because the
-    # release below is unconditional and Molecule runs a role's scenarios
-    # sequentially; giving each arm its own offsets would mean reading
-    # MOLECULE_SCENARIO_NAME here, which spends the property the import exists
-    # to protect. See ansible/scripts/run-molecule's loop_base_for().
+    # EACH ARM TAKES ITS OWN PAIR of the eight minors this working tree claims:
+    # offsets 1 and 2 for `multiple-devices-discoverable`, 5 and 6 for
+    # `multiple-devices-reverse-order`, which imports this very file rather than
+    # copying it. Selected from the same flag the import already branches on, so
+    # separating them costs no new coupling and the file stays one file.
+    #
+    # Sharing one pair would have been safe only under `molecule test --all`,
+    # which runs a role's scenarios sequentially. It is not safe under the
+    # per-scenario invocation AGENTS.md prescribes while a role is red: the two
+    # arms carry deliberately distinct INSTANCE names, so both containers can be
+    # up at once, and the second arm's release would then detach a minor the
+    # first arm's live container has formatted and mounted. The detach becomes a
+    # deferred autoclear and the association that follows fails "resource busy",
+    # with nothing inside either container hinting at the cause.
+    #
+    # See ansible/scripts/run-molecule's loop_base_for() for the band and the
+    # full offset map; offset 7 is spare.
     platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
+    platform_data_volume_fixture_loop_first: "{{ platform_data_volume_fixture_loop_base | int + (5 if platform_data_volume_fixture_reverse_order else 1) }}"
+    platform_data_volume_fixture_loop_second: "{{ platform_data_volume_fixture_loop_base | int + (6 if platform_data_volume_fixture_reverse_order else 2) }}"
     # The lexicographic winner, and therefore the device a deterministic
     # selection must mount whatever order the links were created in.
     platform_data_volume_fixture_first:
       link: scsi-0HC_Volume_100000001
-      device: /dev/loop{{ platform_data_volume_fixture_loop_base | int + 1 }}
+      device: /dev/loop{{ platform_data_volume_fixture_loop_first }}
       backing: /root/platform-data-volume-multi-a.img
-      minor: "{{ platform_data_volume_fixture_loop_base | int + 1 }}"
+      minor: "{{ platform_data_volume_fixture_loop_first }}"
     platform_data_volume_fixture_second:
       link: scsi-0HC_Volume_200000002
-      device: /dev/loop{{ platform_data_volume_fixture_loop_base | int + 2 }}
+      device: /dev/loop{{ platform_data_volume_fixture_loop_second }}
       backing: /root/platform-data-volume-multi-b.img
-      minor: "{{ platform_data_volume_fixture_loop_base | int + 2 }}"
+      minor: "{{ platform_data_volume_fixture_loop_second }}"
     platform_data_volume_fixture_devices:
       - "{{ platform_data_volume_fixture_first }}"
       - "{{ platform_data_volume_fixture_second }}"
@@ -192,18 +204,21 @@
         label: "{{ item.device }}"
 
     # An unassociated minor returns rc 0 with EMPTY stdout rather than a
-    # non-zero rc -- see `molecule/default/prepare.yml` for the three states and
-    # how they were measured. Reading the return code alone refuses every free
-    # minor and renders the message as "held by ''".
+    # non-zero rc, and a non-zero rc means the read failed rather than that the
+    # minor is free -- so the guard fails CLOSED on it. See
+    # `molecule/default/prepare.yml` for the three states and how they were
+    # measured.
     - name: Refuse a loop minor this fixture family cannot attribute to itself
       ansible.builtin.assert:
         that:
-          - item.rc != 0 or
-            item.stdout | trim | length == 0 or
-            item.stdout | trim is match('^/root/platform-data-volume-')
+          - item.rc == 0
+          - item.stdout | trim | length == 0 or
+            item.stdout | trim is match('/root/platform-data-volume-')
         fail_msg: >-
-          {{ item.item.device }} is held by '{{ item.stdout | trim }}', which no
-          fixture of this role creates. Detaching it could break whatever the
+          Refusing to release {{ item.item.device }}. The read returned rc
+          {{ item.rc }} and '{{ item.stdout | trim }}'. Either it is held by
+          something no fixture of this role creates, or the read itself failed
+          and what holds it is unknown; releasing it could break whatever the
           host is using it for, so this play refuses rather than reclaiming it.
       loop: "{{ platform_data_volume_fixture_holders.results }}"
       loop_control:
