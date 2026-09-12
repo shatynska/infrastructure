@@ -188,8 +188,8 @@ TARGET_GROUP_KEY_HINT = "target"
 # it, not relaxed: prod still declares one specific secret and one specific
 # Environment, and a declaration drifting from either still fails.
 PROD_DIRECTORY = "main-production"
-PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_PRODUCTION"
-PROD_GITHUB_ENVIRONMENT = "production"
+PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_PRODUCTION"
+PROD_GITHUB_ENVIRONMENT = "main-production"
 
 TERRAFORM_PLAN = re.compile(r"terraform\s+plan\b")
 TERRAFORM_APPLY = re.compile(r"terraform\s+apply\b")

@@ -15,13 +15,15 @@
 plugin: hetzner.hcloud.hcloud
 
 # This stack's read-only token, from ansible/.envrc. The same name the
-# HCLOUD_TOKEN_STAGING *repository secret* carries, so the local variable and
-# the CI secret do not have to be mentally translated between.
+# HCLOUD_TOKEN_MAIN_STAGING *repository secret* carries, so the local variable
+# and the CI secret do not have to be mentally translated between -- an
+# obligation rather than a convenience, per the Dynamic Inventory requirement
+# the production source's comment cites.
 #
 # Not to be confused with the HCLOUD_TOKEN that direnv exports inside
 # terraform/stacks/main-staging/: that one is Terraform's, is this stack's
 # token under the name its provider reads, and is scoped to that directory.
-api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_STAGING') }}"
+api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_MAIN_STAGING') }}"
 
 # Identical to the production stack's block, and identical on purpose -- read
 # that file for why the default is the public address, why CI selects

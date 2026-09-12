@@ -15,6 +15,7 @@
 # THIS VARIABLE IS TERRAFORM'S, and no longer Ansible's. Its value depends on
 # which directory you are standing in, which suits a tool always run from
 # inside a stack directory and does not suit one always run from ansible/.
-# Ansible reads HCLOUD_TOKEN_PRODUCTION and HCLOUD_TOKEN_STAGING instead, one
-# per inventory source, from ansible/.envrc — see ansible/.envrc.example.
+# Ansible reads HCLOUD_TOKEN_MAIN_PRODUCTION and HCLOUD_TOKEN_MAIN_STAGING
+# instead, one per inventory source, from ansible/.envrc — see
+# ansible/.envrc.example.
 export HCLOUD_TOKEN="your-read-only-hetzner-token"

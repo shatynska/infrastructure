@@ -21,10 +21,13 @@
 # by the source it names with `-i`, not by what a shell happens to export.
 # Bringing a third stack into inventory adds a source and a line here.
 #
-# THE VARIABLE NAMES ARE THE ENVIRONMENT AXIS, NOT THE STACK. They match the
+# THE VARIABLE NAMES ARE THE STACK, NOT THE ENVIRONMENT AXIS. They match the
 # repository secrets each stack's pipeline.yml declares, which is an obligation
-# rather than a coincidence -- and those are renamed by
-# `docs/change-queue.md` entry 63, together with this file.
+# rather than a coincidence: the converge job holds the credential under the
+# declared name and exports it under the name the inventory source reads, and
+# `.github/tests` compares the pair. `MAIN_` is there because repository
+# secrets are one flat namespace and the environment alone stops being unique
+# at a second tenant -- see the production stack's pipeline.yml.
 #
 # THIS FILE IS NOT THE REPOSITORY-ROOT .envrc, AND THE DIFFERENCE MATTERS.
 # That one exports HCLOUD_TOKEN, which is what the *Terraform* provider reads,
@@ -38,5 +41,5 @@
 # A wrong or missing value fails the run rather than producing a group with no
 # host in it -- ansible.cfg's `any_unparsed_is_failed`. Without that, a typo
 # here would look exactly like a destroyed server.
-export HCLOUD_TOKEN_PRODUCTION="your-read-only-hetzner-token-for-main-productions-project"
-export HCLOUD_TOKEN_STAGING="your-read-only-hetzner-token-for-main-stagings-project"
+export HCLOUD_TOKEN_MAIN_PRODUCTION="your-read-only-hetzner-token-for-main-productions-project"
+export HCLOUD_TOKEN_MAIN_STAGING="your-read-only-hetzner-token-for-main-stagings-project"

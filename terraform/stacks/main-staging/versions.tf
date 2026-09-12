@@ -12,7 +12,7 @@ terraform {
   # connection, no HCP-run execution. See the Remote State Backend
   # requirement (openspec/specs/iac-state-management/spec.md).
   #
-  # The `infrastructure-staging` workspace's Execution Mode must be set to
+  # The `main-staging` workspace's Execution Mode must be set to
   # Local in the HCP Terraform UI/API — that setting lives on the workspace,
   # not in this block, and it defaults to remote, so a workspace created and
   # not adjusted is misconfigured rather than merely unconfigured. Under
@@ -23,15 +23,15 @@ terraform {
   # workspace, because a workspace holds one state and two stacks
   # sharing it would each plan the other's resources for destruction.
   #
-  # It is NOT derived from this directory's name, and the two are out of step
-  # until `docs/change-queue.md` entry 63 — read the production stack's
-  # `versions.tf` for why the HCP rename must come first and the `cloud` block
-  # second.
+  # It is NOT derived from this directory's name. The two agree, and they agree
+  # by the convention in `docs/naming-conventions.md` rather than by any rule
+  # here — read the production stack's `versions.tf` for that distinction, and
+  # for why the HCP rename must come first and the `cloud` block second.
   cloud {
     organization = "shatynska"
 
     workspaces {
-      name = "infrastructure-staging"
+      name = "main-staging"
     }
   }
 }
@@ -50,8 +50,11 @@ provider "hcloud" {
   #   - every other CI job declares no `environment:` and resolves a
   #     repository-scoped Read Only token, read as
   #     `secrets[<the name pipeline.yml declares>]` — for this stack
-  #     HCLOUD_TOKEN_STAGING, and for prod HCLOUD_TOKEN. A repository secret
-  #     holds one value, which is why each stack needs a name of its own;
+  #     HCLOUD_TOKEN_MAIN_STAGING, and for prod HCLOUD_TOKEN. A repository
+  #     secret holds one value, which is why each stack needs a name of its
+  #     own. (What it says about prod is wrong and is knowingly left so:
+  #     prod declares a name of its own, and correcting this is
+  #     `docs/change-queue.md` entry 70's work rather than a rename's.);
   #   - locally, whatever the operator exports for THIS directory, which is
   #     staging's Read Only token and is never the Read & Write one.
   #

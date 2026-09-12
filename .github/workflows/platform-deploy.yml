@@ -51,7 +51,16 @@ jobs:
     name: deploy
     needs: diff
     runs-on: ubuntu-latest
-    environment: production # gates this job on required-reviewer approval
+    # Gates this job on required-reviewer approval. The one literal GitHub
+    # Environment name in any workflow here, and it must equal the
+    # `github_environment` the production stack's own pipeline.yml declares --
+    # *Gated Deploy Reuses the Terraform Production Environment*
+    # (openspec/specs/iac-platform-deploy-pipeline/spec.md) obliges the same
+    # Environment to gate both, and `.github/tests` compares the pair. The two
+    # moving in different commits is the hazard: GitHub CREATES an Environment
+    # a workflow names, with no protection rules, so a mismatch deploys
+    # unreviewed rather than failing.
+    environment: main-production
     permissions:
       contents: read
     steps:

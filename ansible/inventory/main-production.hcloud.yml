@@ -9,7 +9,7 @@
 # scoped to one project and each stack has a project of its own, so this file
 # reaches this stack's project and nothing else. Bringing a further stack into
 # inventory is adding a file beside this one and a variable beside
-# HCLOUD_TOKEN_PRODUCTION -- it is not an edit to this file.
+# HCLOUD_TOKEN_MAIN_PRODUCTION -- it is not an edit to this file.
 #
 # A SOURCE IS NAMED FOR ITS STACK; A GROUP IS NAMED FOR ITS AXIS. This file is
 # `main-production` because a Hetzner project is what it reaches. The group a
@@ -37,9 +37,9 @@
 # but a source Ansible reports it cannot parse.
 plugin: hetzner.hcloud.hcloud
 
-# HCLOUD_TOKEN_PRODUCTION, deliberately NOT the plugin's built-in HCLOUD_TOKEN
-# fallback. That name belongs to Terraform, whose provider reads it, and
-# docs/bootstrap-a-new-host.md §4.1 scopes it per stack DIRECTORY via
+# HCLOUD_TOKEN_MAIN_PRODUCTION, deliberately NOT the plugin's built-in
+# HCLOUD_TOKEN fallback. That name belongs to Terraform, whose provider reads
+# it, and docs/bootstrap-a-new-host.md §4.1 scopes it per stack DIRECTORY via
 # direnv -- so its value depends on which directory a shell is in. An Ansible
 # source resolving its project from that would make which project a run
 # reaches a property of shell state rather than of the file the run names.
@@ -50,7 +50,7 @@ plugin: hetzner.hcloud.hcloud
 # with no host in it: ansible.cfg sets `any_unparsed_is_failed`, without which
 # this file would resolve to an empty `production` group -- which is
 # indistinguishable from a destroyed server.
-api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_PRODUCTION') }}"
+api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_MAIN_PRODUCTION') }}"
 
 # WHICH ADDRESS A RUN CONNECTS TO, chosen per run and defaulting to the
 # public one -- see "The Address a Converge Connects To Is Selected Per Run"

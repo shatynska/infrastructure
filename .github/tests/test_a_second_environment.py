@@ -133,29 +133,32 @@ PLATFORM_COMPOSE = ROOT / "platform" / "docker-compose.yml"
 # decommissioned by removing its directory -- which design.md's Rollback names
 # as a legitimate path -- this class fails, and the correct response is to
 # delete it as a change of its own, not to weaken it.
-# RE-POINTED by the change rename-the-stacks-and-their-resources. This is a
-# stack DIRECTORY name, which became `main-staging`; the GitHub Environment
-# below stayed `staging`, because that is a different namespace and entry 63
-# owns it. The two constants carrying different values is the rename's whole
-# point rather than an inconsistency.
+# RE-POINTED twice. The change rename-the-stacks-and-their-resources moved the
+# stack DIRECTORY to `main-staging` and deliberately left the GitHub
+# Environment, the read-only secret and the workspace alone -- each lives in a
+# namespace of its own, renamed by its own interface. This change moved those
+# three, so the four constants now agree.
+#
+# THAT AGREEMENT IS A CONVENTION AND NOT A DERIVATION, and it is worth saying
+# because four equal literals look like three redundant ones. Nothing computes
+# any of them from any other: a directory is renamed by a commit, a workspace in
+# the HCP interface, an Environment and a secret in repository settings. A test
+# deriving one from another would be false for the interval between two of those
+# renames -- see *Remote State Backend* (openspec/specs/iac-state-management/
+# spec.md), which forbids exactly that and permits this agreement.
 SECOND_ENVIRONMENT = "main-staging"
-SECOND_ENVIRONMENT_READ_ONLY_SECRET = "HCLOUD_TOKEN_STAGING"
-SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "staging"
+SECOND_ENVIRONMENT_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_STAGING"
+SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "main-staging"
 SECOND_ENVIRONMENT_DESTROY_GATE = False
-# The workspace this stack has named since it was created. A LITERAL and not a
-# derivation from the directory name: the two stopped agreeing when the change
-# rename-the-stacks-and-their-resources renamed the directory, and they are
-# brought back into agreement by `docs/change-queue.md` entry 63, in the HCP
-# interface first and in `versions.tf` second.
-SECOND_ENVIRONMENT_WORKSPACE = "infrastructure-staging"
-
-# The workspace name form. This one IS specified: "Each environment SHALL have a
-# workspace of its own, named `infrastructure-<environment>`" (Remote State
-# Backend). `<environment>` is resolved to the environment directory's own name,
-# which is the only identifier this repository gives an environment that a
-# static read can reach -- prod's committed `infrastructure-prod` is what fixes
-# that reading.
-WORKSPACE_FORM = "infrastructure-{environment}"
+# The workspace this stack names. A LITERAL, per the note above: it equals the
+# directory name and is not read from it.
+#
+# `WORKSPACE_FORM` stood here and is gone. It encoded the
+# `infrastructure-<environment>` derivation *Remote State Backend* used to
+# oblige and now forbids, nothing referenced it, and a dead constant asserting a
+# retired rule is worse than no constant at all -- the next reader takes it for
+# the rule.
+SECOND_ENVIRONMENT_WORKSPACE = "main-staging"
 
 # --------------------------------------------------------------------------
 # Reading an environment's Terraform configuration
