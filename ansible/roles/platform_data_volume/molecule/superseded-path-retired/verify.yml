@@ -30,7 +30,7 @@
   become: true
   vars:
     # Derived exactly as prepare.yml and converge.yml derive it -- offset 3 of
-    # the eight minors this working tree claims, redeclared here for the same
+    # the sixteen minors this working tree claims, redeclared here for the same
     # reason as the variables below it.
     platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
     platform_data_volume_fixture_loop_minor: "{{ platform_data_volume_fixture_loop_base | int + 3 }}"

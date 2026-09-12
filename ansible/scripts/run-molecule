@@ -97,13 +97,13 @@ namespace_for() {
 }
 
 loop_base_for() {
-	# The first of eight consecutive loop-device MINORS this working tree claims.
-	# A fixture adds its own fixed offset: platform_data_volume's `default` takes
-	# 0, `multiple-devices-discoverable` 1 and 2, `superseded-path-retired` 3,
-	# `superseded-path-in-force-refused` 4, and `multiple-devices-reverse-order`
-	# 5 and 6 -- the two `multiple-devices` arms take separate pairs because both
-	# their containers can be up at once. Offset 7 is spare for a scenario added
-	# later, so adding one costs no edit here.
+	# The first of sixteen consecutive loop-device MINORS this working tree
+	# claims. A fixture adds its own fixed offset: platform_data_volume's
+	# `default` takes 0, `multiple-devices-discoverable` 1 and 2,
+	# `superseded-path-retired` 3, `superseded-path-in-force-refused` 4, and
+	# `multiple-devices-reverse-order` 5 and 6 -- the two `multiple-devices` arms
+	# take separate pairs because both their containers can be up at once.
+	# Offsets 7 to 15 are spare, so a scenario added later costs no edit here.
 	#
 	# Derived from the SAME absolute path `namespace_for` hashes, and derived
 	# rather than fixed for the reason that whole section exists: an entry point
@@ -122,19 +122,20 @@ loop_base_for() {
 	# rather than only the ones `max_loop` pre-created. Verified inside the pinned
 	# scenario image, whose max_loop reads 8: `mknod -m 0660 /dev/loop<m> b 7 <m>`
 	# then `losetup` succeeded and detached cleanly at 1024, 1032, 5120, 33768,
-	# 33784 and 33788 -- both endpoints of this band among them.
+	# 33784, 33788, 66544, 66559 and 66560 -- the last three covering this band's
+	# ceiling, 1024 + 4095*16 = 66544, and the minors just past it.
 	#
 	# 4096 SLOTS rather than a handful. Two trees hashing to one slot collide on
-	# all five minors, and the collision is NOT loud: the attribution guard in the
-	# fixtures establishes that a minor's holder is a run of these fixtures, not
-	# that it is this tree's run, so it permits the other tree's association and
-	# the false pass returns. That residual is 1 in 4096 for a pair running one
-	# role at the same moment, and it is disclosed in AGENTS.md rather than
+	# every minor in it, and the collision is NOT loud: the attribution guard in
+	# the fixtures establishes that a minor's holder is a run of these fixtures,
+	# not that it is this tree's run, so it permits the other tree's association
+	# and the false pass returns. That residual is 1 in 4096 for a pair running
+	# one role at the same moment, and it is disclosed in AGENTS.md rather than
 	# managed by a rule. A registry would make it impossible instead of unlikely,
 	# at the cost of a mechanism this repository would have to keep correct.
 	local root="$1" digest
 	digest=$(digest_of "$root")
-	printf '%s\n' "$((1024 + (16#$digest % 4096) * 8))"
+	printf '%s\n' "$((1024 + (16#$digest % 4096) * 16))"
 }
 
 collections_path() {

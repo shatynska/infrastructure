@@ -12,8 +12,9 @@
 # that formatted the device would give that assertion away, and an assert
 # misplaced after the mount task would then pass this scenario.
 #
-# Offset 4: 0 is taken by `default`, 1 and 2 by the two `multiple-devices`
-# arms, and 3 by `superseded-path-retired`. `molecule/default/prepare.yml`
+# Offset 4: 0 is taken by `default`, 1 and 2 by `multiple-devices-discoverable`,
+# 3 by `superseded-path-retired`, and 5 and 6 by
+# `multiple-devices-reverse-order`. `molecule/default/prepare.yml`
 # records in full why the minor is a fixed offset from a per-working-tree base
 # rather than taken from `losetup -f --show`; `ansible/scripts/run-molecule`'s
 # loop_base_for() records where the base comes from and why it is derived.
@@ -21,7 +22,7 @@
   hosts: all
   become: true
   vars:
-    # This scenario takes offset 4 of the eight minors this working tree claims.
+    # This scenario takes offset 4 of the sixteen minors this working tree claims.
     # See ansible/scripts/run-molecule's loop_base_for() for the band, the
     # offsets and why the value is derived rather than fixed.
     platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
@@ -103,7 +104,7 @@
         that:
           - platform_data_volume_loop_holder.rc == 0
           - platform_data_volume_loop_holder.stdout | trim | length == 0 or
-            platform_data_volume_loop_holder.stdout | trim is match('/root/platform-data-volume-')
+            platform_data_volume_loop_holder.stdout | trim is match('^/root/platform-data-volume-')
         fail_msg: >-
           Refusing to release {{ platform_data_volume_device }}. The read
           returned rc {{ platform_data_volume_loop_holder.rc }} and

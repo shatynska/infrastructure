@@ -64,7 +64,7 @@
   vars:
     platform_data_volume_fixture_reverse_order: >-
       {{ lookup('env', 'MOLECULE_MULTI_DEVICE_REVERSE_ORDER') | lower in ['1', 'true', 'yes', 'on'] }}
-    # EACH ARM TAKES ITS OWN PAIR of the eight minors this working tree claims:
+    # EACH ARM TAKES ITS OWN PAIR of the sixteen minors this working tree claims:
     # offsets 1 and 2 for `multiple-devices-discoverable`, 5 and 6 for
     # `multiple-devices-reverse-order`, which imports this very file rather than
     # copying it. Selected from the same flag the import already branches on, so
@@ -213,7 +213,7 @@
         that:
           - item.rc == 0
           - item.stdout | trim | length == 0 or
-            item.stdout | trim is match('/root/platform-data-volume-')
+            item.stdout | trim is match('^/root/platform-data-volume-')
         fail_msg: >-
           Refusing to release {{ item.item.device }}. The read returned rc
           {{ item.rc }} and '{{ item.stdout | trim }}'. Either it is held by

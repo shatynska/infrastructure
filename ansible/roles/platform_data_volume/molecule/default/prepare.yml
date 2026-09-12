@@ -43,7 +43,7 @@
   hosts: all
   become: true
   vars:
-    # This scenario takes offset 0 of the eight minors this working tree claims.
+    # This scenario takes offset 0 of the sixteen minors this working tree claims.
     # See ansible/scripts/run-molecule's loop_base_for() for the band, the
     # offsets and why the value is derived rather than fixed.
     platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
@@ -141,7 +141,7 @@
         that:
           - platform_data_volume_loop_holder.rc == 0
           - platform_data_volume_loop_holder.stdout | trim | length == 0 or
-            platform_data_volume_loop_holder.stdout | trim is match('/root/platform-data-volume-')
+            platform_data_volume_loop_holder.stdout | trim is match('^/root/platform-data-volume-')
         fail_msg: >-
           Refusing to release {{ platform_data_volume_device }}. The read
           returned rc {{ platform_data_volume_loop_holder.rc }} and

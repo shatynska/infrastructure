@@ -73,6 +73,16 @@ provisioner:
     # See ansible/roles/docker/molecule/default/molecule.yml -- same
     # reasoning, applies to every role's scenario.
     ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+    # PINNED, not merely left unset. Molecule's provisioner merges a scenario's
+    # declared `env` ON TOP OF os.environ (molecule/provisioner/ansible.py at
+    # the pinned 26.8.0), so a variable this scenario does not declare passes
+    # straight through from the operator's shell. An exported
+    # MOLECULE_MULTI_DEVICE_REVERSE_ORDER -- easy to leave set after debugging
+    # the sibling arm -- would otherwise make THIS arm take the reverse arm's
+    # loop-minor offsets as well as its link ordering, reinstating the shared
+    # pair the offsets exist to separate, and reducing the determinism claim to
+    # a single-order observation with both arms testing one arrangement.
+    MOLECULE_MULTI_DEVICE_REVERSE_ORDER: "false"
 
 verifier:
   name: ansible
