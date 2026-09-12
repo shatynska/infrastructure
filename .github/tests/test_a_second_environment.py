@@ -133,10 +133,21 @@ PLATFORM_COMPOSE = ROOT / "platform" / "docker-compose.yml"
 # decommissioned by removing its directory -- which design.md's Rollback names
 # as a legitimate path -- this class fails, and the correct response is to
 # delete it as a change of its own, not to weaken it.
-SECOND_ENVIRONMENT = "staging"
+# RE-POINTED by the change rename-the-stacks-and-their-resources. This is a
+# stack DIRECTORY name, which became `main-staging`; the GitHub Environment
+# below stayed `staging`, because that is a different namespace and entry 63
+# owns it. The two constants carrying different values is the rename's whole
+# point rather than an inconsistency.
+SECOND_ENVIRONMENT = "main-staging"
 SECOND_ENVIRONMENT_READ_ONLY_SECRET = "HCLOUD_TOKEN_STAGING"
 SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "staging"
 SECOND_ENVIRONMENT_DESTROY_GATE = False
+# The workspace this stack has named since it was created. A LITERAL and not a
+# derivation from the directory name: the two stopped agreeing when the change
+# rename-the-stacks-and-their-resources renamed the directory, and they are
+# brought back into agreement by `docs/change-queue.md` entry 63, in the HCP
+# interface first and in `versions.tf` second.
+SECOND_ENVIRONMENT_WORKSPACE = "infrastructure-staging"
 
 # The workspace name form. This one IS specified: "Each environment SHALL have a
 # workspace of its own, named `infrastructure-<environment>`" (Remote State
@@ -491,20 +502,28 @@ class TestEachEnvironmentHasAWorkspaceOfItsOwn(unittest.TestCase):
             "an environment whose backend is misconfigured would be committable",
         )
 
-    def test_every_workspace_name_follows_the_per_environment_form(self) -> None:
-        """SPECIFIED -- "Each environment SHALL have a workspace of its own,
-        named `infrastructure-<environment>`"."""
+    def test_every_environment_names_a_workspace_of_its_own(self) -> None:
+        """SPECIFIED -- "Each stack SHALL have a workspace of its own".
+
+        SUPERSEDED IN PART BY THE CHANGE rename-the-stacks-and-their-resources,
+        which retired the `infrastructure-<environment>` DERIVATION this test
+        used to assert. The requirement now forbids COMPUTING a workspace name
+        from a stack's directory name: the two are renamed by different
+        mechanisms in an order that cannot be reversed, so a derivation is false
+        for the interval between them -- and this repository is inside such an
+        interval until `docs/change-queue.md` entry 63 renames the workspaces.
+        The names may agree; nothing may derive one from the other.
+
+        What survives is the obligation itself, asserted here and by the
+        collision test below: every stack names a workspace, and no two name the
+        same one.
+        """
         self.test_every_environment_configures_an_hcp_workspace_as_its_backend()
-        offenders = sorted(
-            f"{name} -> {backend.workspace!r}"
-            for name, backend in self.backends.items()
-            if backend.workspace != WORKSPACE_FORM.format(environment=name)
-        )
+        unnamed = sorted(name for name, backend in self.backends.items() if not backend.workspace)
         self.assertEqual(
             [],
-            offenders,
-            "these environments name a workspace that is not "
-            f"{WORKSPACE_FORM.format(environment='<environment>')!r}: {offenders}",
+            unnamed,
+            f"these stacks name no workspace in their own `versions.tf`: {unnamed}",
         )
 
     def test_no_two_environments_name_the_same_workspace(self) -> None:
@@ -592,31 +611,47 @@ class TestIdenticalResourceNamesAcrossEnvironmentsAreKept(unittest.TestCase):
 
     def test_every_environment_that_declares_a_volume_names_it_identically(self) -> None:
         """DERIVED -- no scenario states a value. The scenario states that two
-        environments MAY name a resource identically; design.md Decision 4 and
-        tasks.md 2.3 state that staging DOES, `volume_name = "main-data"`, and
-        that this is what keeps `platform/docker-compose.yml` unparameterised.
+        stacks MAY name a resource identically; this requires that they DO,
+        which is stronger, because the failure it catches is silent: a
+        differently named volume plans, applies and mounts, and only the
+        containers that expected the other path notice.
 
-        Recorded as derived because it is stronger than the scenario: the
-        scenario permits a shared name, this requires one. It is asserted
-        rather than left to review because the failure it catches is silent --
-        a differently named volume plans, applies and mounts, and only the
-        containers that expected the old path notice.
+        RE-POINTED by the change rename-the-stacks-and-their-resources, and the
+        re-pointing is the substance rather than a literal moving. This test
+        used to derive the expected volume name FROM the single host path
+        `platform/docker-compose.yml` hardcodes -- `main-data` -- on the premise
+        that the mount path is the volume's name. That premise is now false and
+        deliberately so: the volume is `main` while the mount stays
+        `/mnt/main-data` until `docs/change-queue.md` entry 64 moves it, because
+        the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on
+        the volume's id rather than its name.
 
-        An environment declaring no volume at all is not an offence; it is an
-        environment with nothing to name.
+        So the two propositions are separated. That the stacks agree WITH EACH
+        OTHER is what this test now asserts, and it is the half that matters:
+        it is what lets `platform/docker-compose.yml` stay unparameterised. That
+        a volume's name need not match its mount path is asserted by
+        `test_a_stack_and_its_environment_are_named_separately`.
+
+        A stack declaring no volume at all is not an offence; it is a stack with
+        nothing to name.
         """
         self.test_the_platform_stack_hardcodes_exactly_one_volume_mount_name()
         mounted = hardcoded_volume_mount_names(read_text(PLATFORM_COMPOSE)).pop()
-        offenders = sorted(
-            f"{name} -> {value!r}"
-            for name, value in self.declared.items()
-            if value != mounted
+        distinct = sorted(set(self.declared.values()))
+        offenders = (
+            sorted(f"{name} -> {value!r}" for name, value in self.declared.items())
+            if len(distinct) > 1
+            else []
         )
         self.assertEqual(
             [],
             offenders,
-            f"platform/docker-compose.yml bind-mounts /mnt/{mounted}/..., so these "
-            f"environments would mount their volume somewhere nothing reads: {offenders}",
+            "these stacks name their volume differently from each other: "
+            f"{offenders}. platform/docker-compose.yml bind-mounts one hardcoded "
+            f"path (/mnt/{mounted}/...) for every stack, so the stacks agreeing with "
+            "each other is what keeps it unparameterised. They need not agree with "
+            "that path -- the on-host device is keyed on the volume's id -- but they "
+            "do have to agree with one another",
         )
 
 
@@ -975,13 +1010,23 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
         )
 
     def test_the_second_environment_names_its_own_workspace(self) -> None:
-        """SPECIFIED as to form -- "named `infrastructure-<environment>`", and
-        "no two environments SHALL share one". DERIVED as to which environment
-        that is: tasks.md 1.4 and 2.1 name `infrastructure-staging`."""
+        """SPECIFIED -- "Each stack SHALL have a workspace of its own", and "no
+        two stacks SHALL share one". DERIVED as to the value: the workspace
+        `infrastructure-staging` is what this stack's `versions.tf` has named
+        since it was created.
+
+        RE-POINTED by the change rename-the-stacks-and-their-resources, which
+        renamed the DIRECTORY to `main-staging` and deliberately left the
+        workspace alone -- an HCP workspace is renamed in that interface before
+        any `versions.tf` naming it is pushed, so the two cannot move in one
+        commit, and `docs/change-queue.md` entry 63 is where this one moves. The
+        expected value is therefore a literal rather than a derivation from the
+        directory's name, which is what that change's requirement now forbids.
+        """
         self.test_a_second_environment_directory_exists()
         backend = environment_backends()[SECOND_ENVIRONMENT]
         self.assertEqual(
-            WORKSPACE_FORM.format(environment=SECOND_ENVIRONMENT),
+            SECOND_ENVIRONMENT_WORKSPACE,
             backend.workspace,
             f"{SECOND_ENVIRONMENT}'s `cloud` block names {backend.workspace!r}",
         )

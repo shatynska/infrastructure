@@ -1,0 +1,34 @@
+---
+# `galaxy_info` exists only to give this role a resolvable fully-qualified
+# name, and is not a step towards publishing it anywhere. Molecule's bundled
+# ansible-compat resolves an FQRN for any role carrying a meta/main.yml before
+# it will install it locally, and without these two keys it refuses the whole
+# scenario. The `docker` role's own meta/main.yml carries the full diagnosis.
+#
+# Its absence is also what `ansible-lint`'s syntax check on
+# playbooks/host-baseline.yml fails on, reporting "The role 'hostname' was not
+# found" against a role directory that plainly exists -- which reads as a broken
+# path rather than as a missing file.
+galaxy_info:
+  namespace: shatynska
+  role_name: hostname
+  author: shatynska
+  description: >-
+    Sets the host's own name from the operating company and the host's
+    inventory identity, and makes the host resolve it.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+
+# None declared, and the ordering this role needs is NOT expressible here.
+# `hostname` must run after `tailscale`, because the name a host reports to the
+# tailnet derives from the host's own name until that role pins it -- but a
+# `dependencies:` entry would make `tailscale` run as a dependency of this role
+# rather than in its own place in the play, which is not what the play wants.
+# The constraint lives in playbooks/host-baseline.yml's role list, where it is
+# stated in a comment and asserted by `.github/tests`.
+dependencies: []

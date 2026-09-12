@@ -3,7 +3,15 @@ module "server" {
 
   source = "../../modules/server"
 
+  # Same two axes prod's stack carries, and `staging` was already spelled in
+  # full -- only `prod` was abbreviated, which is why this value does not move
+  # while the directory around it does.
+  tenant      = "main"
   environment = "staging"
+
+  # `main`, and identical to prod's on purpose: a firewall name is unique per
+  # Hetzner project and staging has a project of its own, so the name is free.
+  firewall_name = "main"
 
   name        = var.name
   server_type = var.server_type
@@ -33,6 +41,7 @@ module "volume" {
 
   source = "../../modules/volume"
 
+  tenant      = "main"
   environment = "staging"
 
   name      = var.volume_name

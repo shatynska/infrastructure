@@ -1,10 +1,14 @@
 locals {
+  # Caller labels FIRST and the axes SECOND, so a caller cannot override an
+  # axis. The same merge order modules/server uses, for the reason stated
+  # there.
   labels = merge(
+    var.labels,
     {
+      tenant      = var.tenant
       environment = var.environment
       managed_by  = "terraform"
-    },
-    var.labels
+    }
   )
 }
 

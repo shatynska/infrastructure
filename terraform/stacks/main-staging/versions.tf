@@ -22,6 +22,11 @@ terraform {
   # The name is this stack's own: no two stacks share a
   # workspace, because a workspace holds one state and two stacks
   # sharing it would each plan the other's resources for destruction.
+  #
+  # It is NOT derived from this directory's name, and the two are out of step
+  # until `docs/change-queue.md` entry 63 — read the production stack's
+  # `versions.tf` for why the HCP rename must come first and the `cloud` block
+  # second.
   cloud {
     organization = "shatynska"
 

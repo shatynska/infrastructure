@@ -1,0 +1,19 @@
+---
+# Variables every host gets, from every inventory source.
+#
+# THIS FILE HOLDS ONE THING AND IS MEANT TO. `company` is the single value a
+# clone of this repository operated by a different company changes, and it is
+# here rather than in a role's `defaults/` because a default is a value the
+# role chose and this one is the consuming project's. See "The Host's Own Name
+# Is Set by the Converge" (openspec/specs/iac-host-configuration/spec.md) and
+# `docs/naming-conventions.md`.
+#
+# WHERE IT IS READ, and why the host ends up with two names rather than one:
+# the `hostname` role sets the host's own name to `{{ company }}-{{
+# inventory_hostname }}` -- `shatynska-main-production` -- while the name the
+# host reports to the tailnet stays `{{ inventory_hostname }}` alone. That
+# divergence is the naming rule doing its job. `inventory_hostname` lives
+# inside a repository belonging to one company; the host's own name is read on
+# a workstation that serves two, and is the only repository-side value that
+# reaches one.
+company: shatynska

@@ -155,6 +155,21 @@ GATE_KEY_HINT = "destroy"
 SECRET_KEY_HINTS = ("secret", "token")
 ENVIRONMENT_KEY_HINT = "environment"
 
+# The Ansible group a stack's converge targets, added by the change
+# rename-the-stacks-and-their-resources. It is resolved here ONLY so that it
+# does not collide with the hint above: its name also carries `environment`,
+# and without a pass of its own every declaration would report two fields
+# naming the GitHub Environment and this module would go red for every stack.
+#
+# It is NOT required by this module, and that is the point. The workflows this
+# module reads -- validation, plan, apply, drift -- run no converge and never
+# read this field; only `host-converge.yml` does, and
+# `test_a_stack_and_its_environment_are_named_separately` is where its absence
+# is an offence. A field is required of the discovery that reads it: refusing a
+# stack here for a field only a converge consumes would fail a Terraform-only
+# pull request for a reason that change does not have.
+TARGET_GROUP_KEY_HINT = "target"
+
 # Prod's own two declared values, asserted rather than assumed anywhere they
 # matter.
 #
@@ -172,7 +187,7 @@ ENVIRONMENT_KEY_HINT = "environment"
 # The assertion below is therefore re-pointed at the proposition that replaced
 # it, not relaxed: prod still declares one specific secret and one specific
 # Environment, and a declaration drifting from either still fails.
-PROD_DIRECTORY = "prod"
+PROD_DIRECTORY = "main-production"
 PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_PRODUCTION"
 PROD_GITHUB_ENVIRONMENT = "production"
 
@@ -201,6 +216,10 @@ class Declaration:
         self.offences = offences
         self.github_environment: str | None = None
         self.read_only_secret: str | None = None
+        # The Ansible group this stack's converge targets. Resolved here so it
+        # does not collide with the GitHub Environment hint; None is not an
+        # offence in this module -- see TARGET_GROUP_KEY_HINT.
+        self.target_group: str | None = None
         # Absent means applicable. The delta states it as a scenario -- "An
         # environment declaring nothing is gated" -- and design.md Decision 6
         # states it as the default: "a mistake in the declaration fails safe".
@@ -284,6 +303,30 @@ def _resolve_fields(declaration: Declaration) -> None:
             )
         else:
             declaration.read_only_secret = value
+
+    # BEFORE the GitHub Environment pass, and the order is the whole reason
+    # this block exists: both field names carry `environment`, so resolving the
+    # Environment first would find two keys and report an ambiguity that is not
+    # one. Popping this key leaves exactly the field the hint below means.
+    target_group_keys = [
+        key for key in remaining if TARGET_GROUP_KEY_HINT in _normalised(key)
+    ]
+    if len(target_group_keys) > 1:
+        declaration.offences.append(
+            f"{declaration.name}: more than one field names the Ansible group this "
+            f"stack's converge targets ({sorted(map(str, target_group_keys))}), so "
+            "which one the converge reads is ambiguous"
+        )
+    elif target_group_keys:
+        key = target_group_keys[0]
+        value = remaining.pop(key)
+        if not isinstance(value, str) or not value.strip():
+            declaration.offences.append(
+                f"{declaration.name}: field {key!r} is {value!r}, which is not an "
+                "Ansible group name; a converge targets a play's `hosts:` with it"
+            )
+        else:
+            declaration.target_group = value
 
     environment_keys = [key for key in remaining if ENVIRONMENT_KEY_HINT in _normalised(key)]
     if len(environment_keys) != 1:
@@ -697,7 +740,31 @@ class DeclarationTreeFixtureMixin:
         _, template, _ = self._template()
         mapping = dict(template)
         mapping[self._key_for(mapping, lambda key: any(h in key for h in SECRET_KEY_HINTS))] = secret
-        mapping[self._key_for(mapping, lambda key: ENVIRONMENT_KEY_HINT in key)] = environment
+        # EXCLUDES the target-group hint, and the exclusion is load-bearing:
+        # both field names carry `environment`, so without it this would set
+        # whichever of the two the template happens to list first -- leaving one
+        # fixture declaration naming a GitHub Environment in the field that
+        # names an Ansible group, or the reverse. The same collision
+        # `_resolve_fields` disambiguates, one layer out.
+        mapping[
+            self._key_for(
+                mapping,
+                lambda key: ENVIRONMENT_KEY_HINT in key
+                and TARGET_GROUP_KEY_HINT not in key,
+            )
+        ] = environment
+        # PER-STACK, and not left at the template's value. Every fixture
+        # declaration is built from the production stack's own, so leaving this
+        # field alone would give every stack in a synthetic tree the one group
+        # that stack declares -- and a fixture meant to exercise "this stack
+        # carries no variables of its own" would find another stack's
+        # `group_vars` file and pass. It is spelled from the same argument the
+        # GitHub Environment is, because these fixtures need the two distinct
+        # per stack rather than realistic: the real tree's `main-production` and
+        # `production` are asserted against the real tree.
+        target_keys = [key for key in mapping if TARGET_GROUP_KEY_HINT in _normalised(key)]
+        for key in target_keys:
+            mapping[key] = environment
         gate_keys = [key for key in mapping if GATE_KEY_HINT in _normalised(key)]
         if gate is None:
             for key in gate_keys:

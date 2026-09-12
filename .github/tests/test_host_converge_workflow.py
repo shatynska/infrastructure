@@ -642,8 +642,27 @@ class TestAnEnvironmentThatCanBeProvisionedCanBeConverged(unittest.TestCase):
         `test_host_configuration_names_its_environment
         .TestEachEnvironmentHasAnInventorySourceOfItsOwn`; the variables half is
         held nowhere else, and it is the half the converge job's discovery
-        refuses on (tasks.md 3.2)."""
+        refuses on.
+
+        RE-POINTED by the change rename-the-stacks-and-their-resources, and the
+        re-pointing is the substance rather than a literal moving. The
+        requirement now reads that a stack carrying a pipeline declaration SHALL
+        carry an inventory source of its own, and that the `group_vars` file ITS
+        DECLARED GROUP names SHALL exist -- two different names where there used
+        to be one. A source is named for its STACK, because a Hetzner project is
+        what it reaches; a `group_vars` file is named for the GROUP, because
+        that is what a `group_vars` file is for. The two coincided while this
+        repository had one tenant, and this test used to assume the coincidence
+        by looking for `group_vars/<stack directory name>.yml`.
+
+        The declared group is read from the stack's own declaration. Where a
+        stack declares none, the stack's own name is used and the offence reads
+        as it did before: an undeclared group is an offence
+        `test_a_stack_and_its_environment_are_named_separately` raises, and
+        raising it here as well would report two failures for one defect.
+        """
         sources = {source.environment for source in inventory_sources()}
+        declarations = environment_declarations()
         missing = []
         for name in self.environments:
             if name not in sources:
@@ -651,10 +670,12 @@ class TestAnEnvironmentThatCanBeProvisionedCanBeConverged(unittest.TestCase):
                     f"{name}: carries a pipeline declaration but no inventory source, "
                     "so it can be provisioned and converged by nothing"
                 )
-            if not (GROUP_VARS_DIR / f"{name}.yml").is_file():
+            declaration = declarations.get(name)
+            group = getattr(declaration, "target_group", None) or name
+            if not (GROUP_VARS_DIR / f"{group}.yml").is_file():
                 missing.append(
-                    f"{name}: carries no "
-                    f"{(GROUP_VARS_DIR / f'{name}.yml').relative_to(ROOT).as_posix()}, "
+                    f"{name}: declares the group {group!r} but carries no "
+                    f"{(GROUP_VARS_DIR / f'{group}.yml').relative_to(ROOT).as_posix()}, "
                     "so a converge of it would run with no variables of its own"
                 )
         self.assertEqual(
@@ -1440,8 +1461,17 @@ class HostConvergeTreeFixtureMixin(DeclarationTreeFixtureMixin):
                     yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
                 )
             if has_group_vars:
-                (inventory / "group_vars" / f"{name}.yml").write_text(
-                    "---\n# fixture variables for this environment\n", encoding="utf-8"
+                # NAMED FOR THE DECLARED GROUP, NOT FOR THE STACK, and read back
+                # out of the tree this fixture just wrote rather than assumed.
+                # The two coincided while a stack and its environment were one
+                # word; discovery now resolves this file from the declaration,
+                # so a fixture naming it after the directory would be refused by
+                # a CORRECT discovery for the right reason and would read as a
+                # defect in the workflow.
+                declaration = environment_declarations(directory).get(name)
+                group = getattr(declaration, "target_group", None) or name
+                (inventory / "group_vars" / f"{group}.yml").write_text(
+                    "---\n# fixture variables for this group\n", encoding="utf-8"
                 )
 
     def _convergeable(self, directory: Path, names) -> None:

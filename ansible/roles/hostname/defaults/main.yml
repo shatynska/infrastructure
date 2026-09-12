@@ -1,0 +1,16 @@
+---
+# `company` is deliberately ABSENT from this file, and that is the role's
+# principal design decision rather than an omission. It has no safe default:
+# the name it helps build is the one a workstation serving more than one
+# company reads, so a default would name every host for whoever wrote this role.
+# The role asserts it by name instead -- see tasks/main.yml and *A Role's
+# Absent Required Input Is Reported by Name*
+# (openspec/specs/iac-host-configuration/spec.md). It is supplied from
+# `ansible/inventory/group_vars/all.yml`, which is the one file a second
+# company's clone changes.
+
+# The address the host's own name is mapped to in /etc/hosts. Debian and Ubuntu
+# use 127.0.1.1 rather than 127.0.0.1 for a host's own name, which is why this
+# is a variable with that value rather than a literal: a distribution that puts
+# it elsewhere is a caller's problem to state, not a reason to edit the role.
+hostname_loopback_address: 127.0.1.1

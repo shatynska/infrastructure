@@ -9426,9 +9426,9 @@ class TestLockfileDiscoveryPrunesWorkingTrees(unittest.TestCase):
         tree, where the answer is known."""
         found = terraform_lockfile_directories()
         self.assertIn(
-            "/terraform/stacks/prod",
+            "/terraform/stacks/main-production",
             found,
-            "lockfile discovery no longer finds the prod environment's own "
+            "lockfile discovery no longer finds the production stack's own "
             f"lockfile, so the Dependabot coverage check reads less than the "
             f"repository holds: {sorted(found)}",
         )

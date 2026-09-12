@@ -1,5 +1,15 @@
+variable "tenant" {
+  description = "Tenant this volume belongs to (e.g. \"main\"). Applied as the `tenant` label. An input rather than a literal, so a second tenant can consume this module unchanged."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.tenant)) > 0
+    error_message = "tenant must not be empty."
+  }
+}
+
 variable "environment" {
-  description = "Environment name this volume belongs to (e.g. \"prod\"). Applied as the `environment` label."
+  description = "Environment name this volume belongs to, spelled in full (e.g. \"production\"). Applied as the `environment` label."
   type        = string
 
   validation {
@@ -9,7 +19,7 @@ variable "environment" {
 }
 
 variable "name" {
-  description = "Name of the volume."
+  description = "Name of the volume. A volume never leaves its Hetzner project, so it is named on the rank axis (\"main\") rather than for what consumes it. The on-host mount path is derived from the volume's id (`/dev/disk/by-id/scsi-0HC_Volume_<id>`) and not from this name, so renaming a volume does not disturb an existing mount."
   type        = string
 }
 

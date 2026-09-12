@@ -490,15 +490,33 @@ OVERSWEPT_KEEPERS = {
     #     "a Stack-scoped secret", "that Stack requires no reviewer". The
     #     lookbehind is what keeps a sentence or a bullet legitimately opening
     #     with the word out of it, and capitalised `Stack` never names the unit
-    #     in this repository, which is always lowercase;
-    #   * `Each Stack` in title case, which is a requirement title -- and
-    #     design.md decision 3 renames no requirement title.
+    #     in this repository, which is always lowercase.
+    #
+    #     THE TRAILING LOOKAHEAD WAS ADDED by the change
+    #     rename-the-stacks-and-their-resources, which renamed *Each Environment
+    #     Declares Its Own Pipeline Configuration* to *Each Stack Declares Its
+    #     Own Pipeline Configuration* -- so both `pipeline.yml` files now cite a
+    #     requirement whose Title Case name carries the word, and the limb fired
+    #     on the correct citation. A capitalised word FOLLOWING is what
+    #     distinguishes a Title Case name from the common-noun misuse this limb
+    #     is for: every shape round one of that change's review actually found
+    #     -- "Stack's", "Stack-scoped", "Stack requires" -- is followed by
+    #     punctuation or a lowercase word and is still caught;
+    # The `Each Stack` limb is GONE, and its removal is a supersession rather
+    # than a relaxation. It was forward cover written while *Each Environment
+    # Declares Its Own Pipeline Configuration* still carried that title, on the
+    # reasoning that "design.md decision 3 renames no requirement title". The
+    # change rename-the-stacks-and-their-resources renames exactly that title,
+    # so both `pipeline.yml` files now cite *Each Stack Declares Its Own
+    # Pipeline Configuration* correctly -- and the limb fired on the correct
+    # citation. A needle that reddens on the right answer is worse than no
+    # needle. The other four limbs are untouched and still carry the two shapes
+    # round one of that change's review actually found.
     "the GitHub Environment": re.compile(
         r"`stack:"
         r"|\bgithub_stack\b"
         r"|\bGitHub Stacks?\b"
-        r"|(?<=[a-z,;] )Stacks?\b"
-        r"|\bEach Stack\b"
+        r"|(?<=[a-z,;] )Stacks?\b(?! [A-Z])"
     ),
     # (*) LIVE. The `environment` Terraform variable, and the label carrying
     # its value. `modules/server` builds `name = "${var.environment}-${var.name}"`,
@@ -692,8 +710,13 @@ class TestTheTerraformRootIsNamedForTheStack(unittest.TestCase):
         requirement's own scenario "Adding a future environment does not
         require restructuring" obliges that adding a stack be adding a
         directory, so an assertion enumerating today's two would be the defect
-        that scenario forbids. What IS fixed is that `prod` is among them --
-        the delta names `terraform/stacks/prod/` in four capabilities.
+        that scenario forbids. What IS fixed is that the production stack is
+        among them -- the delta names its directory in four capabilities.
+
+        RE-POINTED by the change rename-the-stacks-and-their-resources, which
+        renamed that directory to `main-production`. The proposition is
+        unchanged and the literal moved with the tree; the assertion is no
+        weaker than it was.
         """
         directories = stack_directories()
         self.assertTrue(
@@ -704,11 +727,11 @@ class TestTheTerraformRootIsNamedForTheStack(unittest.TestCase):
             "directory has not been moved yet",
         )
         self.assertIn(
-            "prod",
+            "main-production",
             [directory.name for directory in directories],
-            "the delta specs name `terraform/stacks/prod/` in iac-repo-foundations, "
-            "iac-safety-hardening, iac-state-management and iac-cicd-pipeline; the "
-            f"stack root holds {[d.name for d in directories]}",
+            "the delta specs name `terraform/stacks/main-production/` in "
+            "iac-repo-foundations, iac-safety-hardening, iac-state-management and "
+            f"iac-cicd-pipeline; the stack root holds {[d.name for d in directories]}",
         )
 
     def test_no_terraform_directory_is_still_divided_by_the_environment_axis(self) -> None:
@@ -939,24 +962,34 @@ class TestEachStackNamesAWorkspaceDerivedFromItsOwnName(unittest.TestCase):
             found[directory.name] = match.group(1) if match else None
         return found
 
-    def test_every_stack_names_a_workspace_derived_from_its_stack_name(self) -> None:
-        """SPECIFIED -- "Each stack SHALL have a workspace of its own, named
-        `infrastructure-<stack>`", and scenario "State is not stored locally",
-        which runs `terraform init` "in a stack directory under
-        `terraform/stacks/`"."""
+    def test_every_stack_names_a_workspace_in_its_own_versions_file(self) -> None:
+        """SPECIFIED -- "Each stack SHALL have a workspace of its own", and
+        scenario "State is not stored locally", which runs `terraform init` "in
+        a stack directory under `terraform/stacks/`".
+
+        SUPERSEDED IN PART BY THE CHANGE rename-the-stacks-and-their-resources,
+        which retired the `infrastructure-<stack>` DERIVATION this test used to
+        assert. The requirement now says a workspace's name SHALL NOT be
+        COMPUTED from its stack's directory name -- not that the two may not
+        agree, but that nothing may derive one from the other. The two are
+        renamed by different mechanisms in an order that cannot be reversed (the
+        HCP interface first, the `cloud` block second), so a derivation is false
+        for the interval between them, and this repository is inside such an
+        interval until `docs/change-queue.md` entry 63.
+
+        What survives is what the requirement is actually for, and it is
+        asserted here and in the sibling below: every stack names a workspace,
+        in its own `versions.tf`, and no two name the same one.
+        """
         workspaces = self._workspaces()
         self.assertTrue(workspaces, "no stack directory to read; see the first test")
-        wrong = {
-            name: workspace
-            for name, workspace in sorted(workspaces.items())
-            if workspace != f"{WORKSPACE_PREFIX}{name}"
-        }
+        unnamed = sorted(name for name, workspace in workspaces.items() if not workspace)
         self.assertEqual(
-            {},
-            wrong,
-            "these stacks name a workspace that is not `infrastructure-<stack>`: "
-            f"{wrong}. A stack's name is its directory name, and this change renames "
-            "no directory -- `prod` and `staging` are kept deliberately",
+            [],
+            unnamed,
+            f"these stacks name no workspace in their own `versions.tf`: {unnamed}. A "
+            "stack whose `cloud` block names no workspace has no state of its own, "
+            "and the failure surfaces at `terraform init` rather than here",
         )
 
     def test_no_two_stacks_name_the_same_workspace(self) -> None:
@@ -1349,14 +1382,25 @@ class TestTheEnvironmentAxisIsNotRenamedWithTheUnit(unittest.TestCase):
                     "change's diff",
                 )
 
-    def test_the_target_environment_handle_is_derived_from_the_stack_name(self) -> None:
-        """DERIVED -- that change's design.md decision 2 and tasks.md 3.5: "the
-        assignment becomes `TARGET_ENVIRONMENT: ${{ matrix.stack.name }}` and
-        carries a comment saying why the two names differ".
+    def test_the_target_environment_handle_keeps_its_name(self) -> None:
+        """DERIVED -- that change's design.md decision 2: the handle "keeps its
+        name and changes its source". Renaming the variable itself would break
+        `ansible/playbooks/host-baseline.yml`, `.ansible-lint` and
+        `.pre-commit-config.yaml`, which read it under this name.
 
-        The two coincide today at one tenant. Asserting the ASSIGNMENT rather
-        than the values is what keeps this true when entry 62 makes the group
-        `production` while the stack is `main-production`.
+        SUPERSEDED IN PART BY THE CHANGE rename-the-stacks-and-their-resources,
+        and this test's own docstring predicted it: it used to assert the
+        assignment reads `matrix.stack.name`, "what keeps this true when entry
+        62 makes the group `production` while the stack is `main-production`".
+        Entry 62 is that change, and the prediction was wrong in one direction
+        -- the group stopped being derivable from the stack's name at all, so
+        reading `matrix.stack.name` became the defect rather than the
+        obligation. Where the value now comes from is asserted by
+        `test_a_stack_and_its_environment_are_named_separately`, against the
+        stack's own declaration.
+
+        What survives here is the half this class is for: the handle's NAME is
+        part of the environment axis and did not move when the unit was renamed.
         """
         workflow = load_yaml(HOST_CONVERGE)
         assignments = []
@@ -1367,19 +1411,22 @@ class TestTheEnvironmentAxisIsNotRenamedWithTheUnit(unittest.TestCase):
         self.assertTrue(
             assignments,
             "no step in host-converge.yml assigns TARGET_ENVIRONMENT, so the converge "
-            "play is given no group to target",
+            "play is given no group to target -- and the handle's name is read by "
+            "ansible/playbooks/host-baseline.yml, .ansible-lint and "
+            ".pre-commit-config.yaml, none of which this change renames",
         )
         wrong = [
             (label, value)
             for label, value in assignments
-            if "matrix.stack.name" not in value
+            if "matrix.environment" in value
         ]
         self.assertEqual(
             [],
             wrong,
-            f"these TARGET_ENVIRONMENT assignments do not read `matrix.stack.name`: "
-            f"{wrong}. The handle keeps its name and changes its source; a handle still "
-            "reading `matrix.environment.name` is a rename that stopped halfway",
+            f"these TARGET_ENVIRONMENT assignments still read a `matrix.environment` "
+            f"key: {wrong}. That key was renamed to `matrix.stack` when the unit was "
+            "renamed; a handle still reading the old one is a rename that stopped "
+            "halfway",
         )
 
     def test_every_gated_job_still_attaches_to_the_github_environment_its_stack_declares(
@@ -1437,12 +1484,17 @@ class TestTheEnvironmentAxisIsNotRenamedWithTheUnit(unittest.TestCase):
         scenarios, which assert `environment = "prod"` on resources created via
         `terraform/stacks/prod/`.
 
-        DERIVED for the equality with the directory name: the delta deliberately
-        anchors the label to the environment axis rather than to the directory,
-        and that change's proposal.md keeps the VALUES `prod` and `staging`
-        unchanged, leaving entry 62 to spell them in full. So the equality holds
-        now and is asserted now, and is the first thing entry 62 will have to
-        restate.
+        SUPERSEDED IN PART, AND RE-POINTED RATHER THAN DELETED. This test used
+        to assert the environment label EQUALS the stack's directory name. That
+        equality held only while a repository had one tenant, and this test's
+        own docstring said so: "the first thing entry 62 will have to restate".
+        The change rename-the-stacks-and-their-resources restated it -- the
+        directory is `main-production` and the label is `production` -- so the
+        equality is now the defect rather than the obligation, and asserting its
+        NEGATION is what this class is for: the axis is not the unit. What the
+        label must positively be is asserted by
+        `test_a_stack_and_its_environment_are_named_separately`, which reads it
+        against the stack's own declared group rather than against its name.
         """
         directories = stack_directories()
         self.assertTrue(directories, "no stack directory to read; see the first test")
@@ -1451,12 +1503,22 @@ class TestTheEnvironmentAxisIsNotRenamedWithTheUnit(unittest.TestCase):
                 labels: dict = {}
                 for key, value in LABEL_ASSIGNMENT.findall(stack_terraform_text(directory)):
                     labels.setdefault(key, set()).add(value)
-                self.assertEqual(
-                    {directory.name},
-                    labels.get("environment", set()),
-                    f"{directory.name} declares environment labels "
-                    f"{sorted(labels.get('environment', set()))}, which is not exactly "
-                    f"{{{directory.name!r}}}. This change renames no environment VALUE",
+                declared = labels.get("environment", set())
+                self.assertTrue(
+                    declared,
+                    f"{directory.name} declares no `environment` label at all. The "
+                    "axis survived the rename of the unit; a stack that carries no "
+                    "environment label is one no inventory source can group",
+                )
+                self.assertNotIn(
+                    directory.name,
+                    declared,
+                    f"{directory.name} declares an environment label equal to its own "
+                    f"DIRECTORY name ({sorted(declared)}). The two coincided while "
+                    "this repository had one tenant and they are separate axes: a "
+                    "stack is a (tenant, environment) pair and the label is the "
+                    "environment alone. A label that tracks the directory is the "
+                    "coincidence this class exists to stop being relied on",
                 )
                 self.assertIn(
                     "terraform",
@@ -2835,10 +2897,17 @@ class TestTheStackDirectoryReadsDiscriminate(unittest.TestCase):
             "the GitHub Environment",
             "two stacks naming the same GitHub Stack share its WRITE token",
         ),
-        (
-            "the GitHub Environment",
-            'see "Each Stack Declares Its Own Pipeline Configuration"',
-        ),
+        # RETIRED by the change rename-the-stacks-and-their-resources, and
+        # retired rather than repaired because the string stopped being a
+        # defect. It was `see "Each Stack Declares Its Own Pipeline
+        # Configuration"` -- a citation of a requirement title that did not
+        # exist when this fixture was written, which is what made it an
+        # over-sweep. That change renames the requirement to exactly that title,
+        # so both `pipeline.yml` files now carry the string as the CORRECT
+        # citation. Keeping the fixture would oblige the needle to redden on the
+        # right answer. The `Stack's` and `Stack-scoped` entries above cover the
+        # common-noun misuse this sense is actually for, which is what the
+        # retired entry was standing in for and not an instance of.
         # The label, backticked -- literally how round one's runbook defect was
         # written.
         ("the Terraform variable and its value", "the `stack` label names the axis"),

@@ -1,13 +1,24 @@
 ---
-# The prod server was created with only a single SSH key and no root
+# Variables for the `production` GROUP, which is not the same name as the
+# stack whose host it holds: the stack is `main-production` and this file is
+# named for the Ansible group, which is the environment axis alone. A second
+# tenant's production stack would read this same file, which is what an
+# environment-wide baseline means.
+#
+# THE VAULT-ID LABEL BELOW IS `production` AND FOLLOWS THIS FILE, not the
+# stack. The password protects an environment's secrets -- `staging.yml` says
+# in as many words that a staging-only operator must not hold production's --
+# so the label is on the environment axis too.
+#
+# The server was created with only a single SSH key and no root
 # password (terraform/modules/server/main.tf's own comment: providing a
 # key at creation means Hetzner never sets one) -- root is the only
 # login this host has. Without this, Ansible defaults to the local
 # operator's own username, which fails with "Permission denied".
 ansible_user: root
 
-# Non-secret prod configuration, mirroring
-# terraform/stacks/prod/terraform.tfvars's ssh_allowed_cidrs and
+# Non-secret configuration, mirroring
+# terraform/stacks/main-production/terraform.tfvars's ssh_allowed_cidrs and
 # web_allowed_cidrs exactly -- see ansible/roles/hardening/README.md for
 # why these two are hand-kept in sync rather than generated from
 # Terraform, and why that matters (they drifted once already: this
@@ -25,9 +36,9 @@ hardening_web_allowed_cidrs:
 # repository's PLATFORM_DEPLOY_SSH_KEY Environment secret; commerce-ops's
 # lives in that application's own repository's Environment secret, per
 # tasks.md 2.2). `platform`'s entry is the same keypair that already
-# authenticates prod today (tasks.md 2.1's "existing platform public key")
-# -- restricting its authorized_keys entry to deploy-receive, rather than
-# rotating it, is what lets the migration in design.md's Migration Plan
+# authenticates the production host today (tasks.md 2.1's "existing platform
+# public key") -- restricting its authorized_keys entry to deploy-receive,
+# rather than rotating it, is what lets the migration in design.md's Migration Plan
 # proceed without needing a new secret on the platform-deploy.yml side.
 deploy_apps:
   - name: platform
@@ -55,8 +66,8 @@ ops_user_accounts:
   - name: ops-claude
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICc/YzvZTHHNETGGAy89vD7IpzTU3jDAphOeKD6q5Kiu ops-claude"
 
-# Subdirectories platform_data_volume creates on the mounted main-data
-# volume for platform/docker-compose.yml's Prometheus and Grafana services
+# Subdirectories platform_data_volume creates on the mounted `main` volume
+# for platform/docker-compose.yml's Prometheus and Grafana services
 # to bind-mount (add-platform-monitoring). Owner/group match each image's
 # own upstream default user, so no `user:` override is needed in the
 # Compose service definitions: 65534/65534 is prom/prometheus's default
@@ -101,12 +112,13 @@ ghcr_pull_token: !vault |
 # above is: a party who holds it can suppress this alarm by reporting success
 # on the unit's behalf. Encrypt it in place, never in plain text:
 #
-#   ansible-vault encrypt_string --name image_prune_heartbeat_ping_key '<key>'
+#   ansible-vault encrypt_string --vault-id production@prompt \
+#     --name image_prune_heartbeat_ping_key '<key>'
 #
 # and paste the result here. `docs/bootstrap-a-new-host.md` Appendix A records
 # where the key comes from and what each check it addresses needs.
 image_prune_heartbeat_ping_key: !vault |
-  $ANSIBLE_VAULT;1.2;AES256;prod
+  $ANSIBLE_VAULT;1.2;AES256;production
   32666131326262663338653964353436363565666630623438363531323166656364626131636164
   3562333239653133346637663034393262396265643463350a373463353763353332363232623930
   34613734656263653731326263363062346464656431303366316565616430363438393861353866

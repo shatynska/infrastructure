@@ -1,6 +1,6 @@
 ---
 # This stack's pipeline configuration, read by .github/workflows/'s
-# discovery step -- see "Each Environment Declares Its Own Pipeline
+# discovery step -- see "Each Stack Declares Its Own Pipeline
 # Configuration" (openspec/specs/iac-cicd-pipeline/spec.md).
 #
 # It lives here, beside the terraform.tfvars it belongs to, so the folder is
@@ -45,16 +45,48 @@ github_environment: production
 # specifically, which is the checkable half; the general form is repository
 # settings and is unverifiable from here.
 #
-# `PRODUCTION` rather than `PROD`, matching the GitHub Environment this
-# stack attaches to rather than its directory name. The directory stays
-# `prod`; this is the naming the repository is moving toward, and picking it
-# now costs nothing where renaming the secret again later would.
+# `PRODUCTION` rather than `PROD`, chosen ahead of the rename that made it the
+# environment's own spelling. It is the environment axis in full, and it is not
+# this stack's directory name either -- the directory is `main-production`,
+# because a stack is a (tenant, environment) pair and a repository secret is
+# one flat namespace. `docs/change-queue.md` entry 63 renames this to
+# `HCLOUD_TOKEN_MAIN_PRODUCTION`, which is why it is still spelled this way.
 #
-# It is also the name prod's inventory source reads and the one
+# It is also the name this stack's inventory source reads and the one
 # `ansible/.envrc.example` names for the same token locally -- which the
-# Dynamic Inventory via hcloud Plugin requirement now obliges to match this
-# field, so the three move together or the build fails.
+# Dynamic Inventory requirement now obliges to match this field, so the three
+# move together or the build fails.
 read_only_secret: HCLOUD_TOKEN_PRODUCTION
+
+# The Ansible group this stack's converge targets. REQUIRED, and read only by
+# the host-configuration workflow -- the validation, plan, apply and drift
+# workflows run no converge, and refusing a stack there for the absence of a
+# field only a converge consumes would fail a Terraform-only pull request for a
+# reason that change does not have.
+#
+# DECLARED RATHER THAN DERIVED, AND THAT IS THE POINT OF THE FIELD. A stack is
+# a (tenant, environment) pair; the group is the environment alone. They were
+# one word until this stack was renamed, and `host-converge.yml` fed the group
+# from the stack's name because at one tenant the two coincide. They no longer
+# do: this stack is `main-production` and its group is `production`. Splitting
+# the name on `-` would work on these two names and fail silently on the next
+# -- as a group that does not exist, reported several steps after the run
+# began.
+#
+# IT NAMES THREE THINGS, WHICH MOVE TOGETHER: the play's `hosts:`, the
+# `--vault-id` label that environment's secrets are labelled under, and the
+# `group_vars` file the converge reads. All three describe the environment. The
+# stack's own name still names the inventory source and the concurrency group,
+# because those follow the Hetzner project.
+#
+# UNLIKE THE TWO FIELDS ABOVE, THIS CARRIES NO UNIQUENESS OBLIGATION, and the
+# difference is deliberate rather than an oversight. Two stacks naming one
+# GitHub Environment share a write token; two naming one read-only secret share
+# a credential. Two stacks naming one Ansible group share a set of host
+# variables, which is what an environment-wide baseline across tenants is. A
+# future `analytics-production` declares `production` here too, and reads the
+# same `group_vars/production.yml`.
+target_environment: production
 
 # Whether the Destroy Policy Gate applies to this stack. OPTIONAL;
 # absent means it applies, so a mistake in this file fails safe.
@@ -64,5 +96,5 @@ read_only_secret: HCLOUD_TOKEN_PRODUCTION
 # It is deliberately not named for the inverse: `disposable: true` and
 # `destroy_policy_gate: true` are the same value and opposite meanings, and
 # nothing in a value can tell a reader which was meant. A stack that
-# exists to be rebuilt may set this `false`; prod may not.
+# exists to be rebuilt may set this `false`; this one may not.
 destroy_policy_gate: true

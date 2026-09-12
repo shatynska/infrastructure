@@ -3,7 +3,19 @@ module "server" {
 
   source = "../../modules/server"
 
-  environment = "prod"
+  # The two axes this stack is identified on, each carried as a label of its
+  # own rather than as a segment of a name -- see Consistent Resource Labeling
+  # (openspec/specs/iac-safety-hardening/spec.md). `production` is spelled in
+  # full: `prod` and `preprod` share a prefix, and this value is read by prefix
+  # in more places than it is read whole.
+  tenant      = "main"
+  environment = "production"
+
+  # `main`, on the rank axis. A firewall never leaves its Hetzner project, so a
+  # second one here would be the extra one and would be named beside this. It is
+  # passed rather than derived: the module used to build
+  # "<environment>-<name>", which would now read `production-main-production`.
+  firewall_name = "main"
 
   name        = var.name
   server_type = var.server_type
@@ -32,7 +44,8 @@ module "volume" {
 
   source = "../../modules/volume"
 
-  environment = "prod"
+  tenant      = "main"
+  environment = "production"
 
   name      = var.volume_name
   size      = var.volume_size

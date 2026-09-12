@@ -1,0 +1,133 @@
+---
+# The main-production STACK's inventory source -- see "Dynamic Inventory via
+# the hcloud Plugin, One Source per Stack" (iac-host-configuration). Hosts are
+# resolved live from Hetzner Cloud's API on every run rather than from a
+# committed hosts file, so a disabled/destroyed server (server_enabled = false
+# in terraform/stacks/main-production) yields no stale inventory entry.
+#
+# ONE SOURCE PER STACK, and each names its own credential. A Hetzner token is
+# scoped to one project and each stack has a project of its own, so this file
+# reaches this stack's project and nothing else. Bringing a further stack into
+# inventory is adding a file beside this one and a variable beside
+# HCLOUD_TOKEN_PRODUCTION -- it is not an edit to this file.
+#
+# A SOURCE IS NAMED FOR ITS STACK; A GROUP IS NAMED FOR ITS AXIS. This file is
+# `main-production` because a Hetzner project is what it reaches. The group a
+# play targets, the `--vault-id` label and the `group_vars` file are
+# `production`, because those describe the environment. The two were one word
+# until this stack was renamed and they are independent by construction now --
+# the value is read from this stack's own `pipeline.yml` and parsed out of
+# neither name.
+#
+# THE CREDENTIAL VARIABLE'S NAME IS NOT FREE. It SHALL be the same name this
+# stack's `terraform/stacks/<name>/pipeline.yml` declares as its
+# `read_only_secret` -- see the Dynamic Inventory requirement
+# (openspec/specs/iac-host-configuration/spec.md). The host-converge workflow
+# holds the credential under the DECLARED name and has to export it under the
+# name this file reads; where the two differ the workflow would have to carry
+# the mapping, and a workflow carrying a per-stack mapping is the stack-naming
+# in workflow text that `Each Stack Declares Its Own Pipeline Configuration`
+# forbids. Two stacks agreeing by coincidence is what that clause turned into
+# an obligation, and `.github/tests` compares the pair.
+#
+# THE FILENAME IS CONSTRAINED, NOT CHOSEN. The plugin's `verify_file` accepts
+# a path only if it *ends with* `hcloud.yml` or `hcloud.yaml` -- a plain
+# suffix test. `main-production.hcloud.yml` passes it;
+# `hcloud-main-production.yml` would not, and the symptom is not a naming error
+# but a source Ansible reports it cannot parse.
+plugin: hetzner.hcloud.hcloud
+
+# HCLOUD_TOKEN_PRODUCTION, deliberately NOT the plugin's built-in HCLOUD_TOKEN
+# fallback. That name belongs to Terraform, whose provider reads it, and
+# docs/bootstrap-a-new-host.md §4.1 scopes it per stack DIRECTORY via
+# direnv -- so its value depends on which directory a shell is in. An Ansible
+# source resolving its project from that would make which project a run
+# reaches a property of shell state rather than of the file the run names.
+# Ansible's own credentials live in ansible/.envrc (see .envrc.example beside
+# it), which direnv loads here and which does not export HCLOUD_TOKEN at all.
+#
+# An absent, empty or rejected value fails the run rather than yielding a group
+# with no host in it: ansible.cfg sets `any_unparsed_is_failed`, without which
+# this file would resolve to an empty `production` group -- which is
+# indistinguishable from a destroyed server.
+api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_PRODUCTION') }}"
+
+# WHICH ADDRESS A RUN CONNECTS TO, chosen per run and defaulting to the
+# public one -- see "The Address a Converge Connects To Is Selected Per Run"
+# (openspec/specs/iac-host-configuration/spec.md).
+#
+# THE DEFAULT IS WHAT A FIRST CONVERGE NEEDS, and that is why it cannot be the
+# tailnet address: joining the tailnet is something the run itself does, so a
+# host being converged for the first time is reachable on its public address
+# and on nothing else. A source that always resolved to the tailnet name would
+# make the bootstrap path unreachable.
+#
+# CI SELECTS `hostname`. Making that name RESOLVE is the converge job's
+# business and not this file's: it maps the name from `tailscaled`'s own
+# netmap rather than relying on MagicDNS, because `tailscale/github-action`
+# passes neither `--accept-dns` nor its negation and "probably on" is the
+# wrong footing for the mechanism every converge depends on.
+#
+# WHY THIS IS `compose:` AND NOT THE PLUGIN'S OWN `connect_with:`, which is
+# what it looks like it should be. `connect_with` is validated against its
+# `choices:` BEFORE the value is templated, so a Jinja expression there is
+# rejected as an invalid choice and the source does not parse AT ALL -- not
+# for CI and not for a workstation either. Established by running it against
+# the live API rather than by reading the plugin: the error names the
+# template text itself as the invalid value. `compose:` is a Jinja context by
+# design, evaluated per host after the plugin has set `ansible_host` from
+# `connect_with`'s default -- so the expression below reads that value as its
+# own default and overrides it only when asked to.
+#
+# A VALUE NEITHER KEY NAMES FAILS THE RUN, which is why this is a mapping
+# index rather than a ternary: an unknown key raises, and `strict: true`
+# below turns that into a failed parse instead of a silently skipped compose.
+# `ansible.cfg`'s `any_unparsed_is_failed` then fails the run. A ternary would
+# quietly hand back the public address, and a run that reached a host by a
+# route its operator did not choose is worse than one that did not connect.
+#
+# Deliberately absent from `ansible/.envrc.example`: the variable is set by
+# the converge job and by nothing else, and offering it to the file operators
+# copy would invite a workstation to select an address its first converge
+# cannot use.
+strict: true
+compose:
+  ansible_host: >-
+    {'public_ipv4': ansible_host, 'hostname': hcloud_name}[
+      lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true)
+    ]
+
+# ONE GROUP PER AXIS, keyed on the Hetzner labels every resource already
+# carries -- this plugin has no `group_by` option, so grouping is done via the
+# `constructed` fragment's `keyed_groups`. `separator: ""` (with no `prefix`)
+# makes each group name the label's value alone, so a play can target
+# `production` or `main` directly.
+#
+# The two exist for different baselines: `environment` is what a converge
+# targets today, and `tenant` is the tenant-wide one a second environment of
+# the same tenant would share. There is no `group_vars/main.yml` yet, and that
+# is deliberate -- nothing belongs to a tenant-wide baseline, and creating an
+# empty file to match a table would be the scheme written down twice. The group
+# exists so that the label is queryable from Ansible, which is what a label is
+# for.
+#
+# A group exists only where some host carries the label, so under this source
+# `groups['staging']` is a missing key rather than an empty list. The guard
+# play at the top of playbooks/host-baseline.yml is what turns that into a
+# refusal; without it a play matching no host exits 0. That also covers the
+# interval between this file merging and the apply that adds the `tenant`
+# label: until then no host carries it, `groups['main']` is absent, and nothing
+# reads it.
+#
+# `strict: true` above reaches `keyed_groups` as well as `compose`, and both
+# keys are left exactly as they are because that costs nothing. MEASURED rather
+# than assumed, against the live API: with a label absent, a strict parse does
+# not fail -- the host is simply not grouped, and is dropped from the plugin's
+# own `hcloud` group too. Either way it is not in the group a play targets,
+# which is what it was before, and the play's own guard refuses on an empty
+# group with a diagnostic naming it.
+keyed_groups:
+  - key: hcloud_labels.environment
+    separator: ""
+  - key: hcloud_labels.tenant
+    separator: ""

@@ -7,12 +7,24 @@
 # the operator's personal key, imported into Terraform under
 # modules/server (see the now-deleted import.tf) before being relocated
 # here.
+#
+# NAMED ON THE IDENTITY AXIS, NOT THE RANK ONE. A key is distinguished by what
+# it authenticates, never by which of several it is: a second key here would be
+# a deploy key, a CI key, or another person's, and `main` would say nothing
+# about any of them. This one is the operator's root credential, whose
+# workstation half is `~/.ssh/<company>-root`.
 resource "hcloud_ssh_key" "this" {
-  name       = "prod"
+  name       = "operator"
   public_key = var.ssh_public_key
 
+  # Declared here rather than by a module, and inside the labeling obligation
+  # all the same -- see Consistent Resource Labeling
+  # (openspec/specs/iac-safety-hardening/spec.md), whose scenario "An SSH key a
+  # stack owns directly is labeled" exists because a resource outside a module
+  # is the one a labeling sweep misses.
   labels = {
-    environment = "prod"
+    tenant      = "main"
+    environment = "production"
     managed_by  = "terraform"
   }
 }

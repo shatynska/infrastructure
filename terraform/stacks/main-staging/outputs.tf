@@ -9,11 +9,11 @@ output "server_ipv4_address" {
 }
 
 output "volume_id" {
-  description = "ID of the staging data volume, or null if volume_enabled is false (or server_enabled is false, since the volume can't exist without the server)."
+  description = "ID of the staging stack's volume, or null if volume_enabled is false (or server_enabled is false, since the volume can't exist without the server)."
   value       = one(module.volume[*].id)
 }
 
 output "volume_linux_device" {
-  description = "Device path of the staging data volume as seen inside the server's guest OS, or null if the volume doesn't currently exist."
+  description = "Device path of the staging stack's volume as seen inside the server's guest OS, or null if the volume doesn't currently exist."
   value       = one(module.volume[*].linux_device)
 }

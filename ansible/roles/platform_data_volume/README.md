@@ -1,6 +1,6 @@
 # platform_data_volume
 
-Mounts the platform's dedicated data volume — the Terraform-provisioned `main-data` Hetzner Volume (`terraform/stacks/<environment>/terraform.tfvars`, `terraform/modules/volume`) — at a fixed host path, formatting it if it has no filesystem yet, and persists the mount in `/etc/fstab` so it survives a reboot without a manual step. Also creates whatever subdirectories a `platform/` service needs to bind-mount, each with its own declared ownership and permissions, before that service can rely on them existing.
+Mounts the platform's dedicated data volume — the Terraform-provisioned `main` Hetzner Volume (`terraform/stacks/<stack>/terraform.tfvars`, `terraform/modules/volume`) — at a fixed host path, formatting it if it has no filesystem yet, and persists the mount in `/etc/fstab` so it survives a reboot without a manual step. Also creates whatever subdirectories a `platform/` service needs to bind-mount, each with its own declared ownership and permissions, before that service can rely on them existing.
 
 Implements `iac-host-configuration`'s ADDED "Platform Data Volume Is Mounted at a Fixed Host Path" requirement — see `openspec/specs/iac-host-configuration/spec.md`, and `add-platform-monitoring`'s `design.md`, for the full rationale, including why the volume's device path is discovered on-host rather than hand-copied from Terraform's output.
 
@@ -24,6 +24,6 @@ Four Molecule scenarios cover this: `default` (device supplied explicitly), `no-
 | Variable | Default | Description |
 |---|---|---|
 | `platform_data_volume_device` | `""` (discovered) | Block device path. Empty means "discover it" (see above); set explicitly to override. |
-| `platform_data_volume_mount_path` | `/mnt/main-data` | Fixed host path the volume is mounted at. |
+| `platform_data_volume_mount_path` | `/mnt/main-data` | Fixed host path the volume is mounted at. **Not the volume's name**, and it no longer resembles it: the volume is `main` and this path still carries `-data` until `docs/change-queue.md` entry 64 moves it. The two are independent by construction — the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on the volume's id — which is what let the volume be renamed with no migration and no remount. |
 | `platform_data_volume_fs_type` | `ext4` | Filesystem created if the device is unformatted, and expected on an already-formatted one. |
 | `platform_data_volume_subdirs` | `[]` | List of `{path, owner, group, mode}` — one entry per `platform/` service that bind-mounts a subdirectory of the volume. Empty means no subdirectory is created. |

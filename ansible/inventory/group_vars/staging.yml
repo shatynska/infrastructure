@@ -1,6 +1,12 @@
 ---
-# Staging's host variables. Written from scratch rather than copied from
-# prod.yml and edited: `docs/deferred-work.md`'s "Two gaps in required-input
+# Variables for the `staging` GROUP. This file did not move when its stack's
+# directory did -- the stack is now `main-staging` while the group stays
+# `staging`, because `staging` was already the environment axis spelled in full
+# and only `prod` was abbreviated. It is the clearest demonstration in the
+# repository that a stack's name and its group's name are independent.
+#
+# Written from scratch rather than copied from the production group's file and
+# edited: `docs/deferred-work.md`'s "Two gaps in required-input
 # validation that only the play could close" names this file as the first
 # moment a group_vars is written from scratch, and so the first moment either
 # gap has a real case rather than a constructed one.
@@ -8,17 +14,17 @@
 # The staging server was created with only a single SSH key and no root
 # password (terraform/modules/server/main.tf's own comment: providing a key
 # at creation means Hetzner never sets one) -- root is the only login this
-# host has, exactly as on prod.
+# host has, exactly as on the production host.
 ansible_user: root
 
 # Non-secret staging configuration, mirroring
-# terraform/stacks/staging/terraform.tfvars's ssh_allowed_cidrs and
+# terraform/stacks/main-staging/terraform.tfvars's ssh_allowed_cidrs and
 # web_allowed_cidrs exactly -- see ansible/roles/hardening/README.md for why
 # these two are hand-kept in sync rather than generated from Terraform, and
 # why that matters.
 #
-# The SSH range is the same operator ISP range prod allows: the cloud
-# firewall is no wider for staging than for prod.
+# The SSH range is the same operator ISP range production allows: the cloud
+# firewall is no wider for staging than for production.
 hardening_ssh_allowed_cidrs:
   - "176.104.184.0/24"
 
@@ -50,20 +56,25 @@ hardening_web_allowed_cidrs: []
 # is not a boundary against the key holder -- it buys blast-radius
 # containment against mistakes, attribution, and revocability.
 #
-# The same operator key prod carries, deliberately: this is the human's own
-# identity, not a per-environment credential, and giving one person two keys
+# The same operator key the production host carries, deliberately: this is the
+# human's own identity, not a per-environment credential, and giving one
+# person two keys
 # for two hosts buys nothing and loses attribution when one is rotated.
 ops_user_accounts:
   - name: ops-claude
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICc/YzvZTHHNETGGAy89vD7IpzTU3jDAphOeKD6q5Kiu ops-claude"
 
-# Subdirectories platform_data_volume creates on the mounted main-data volume
-# for platform/docker-compose.yml's Prometheus and Grafana services to
-# bind-mount. Identical to prod's, and identical on purpose: staging's volume
-# is named `main-data` too (volume names are unique per Hetzner project, not
-# globally), so /mnt/main-data/prometheus and /mnt/main-data/grafana are
-# correct here as written and platform/docker-compose.yml stays
-# unparameterised across environments.
+# Subdirectories platform_data_volume creates on the mounted `main` volume for
+# platform/docker-compose.yml's Prometheus and Grafana services to bind-mount.
+# Identical to the production group's, and identical on purpose: both stacks
+# mount at the same path, so /mnt/main-data/prometheus and
+# /mnt/main-data/grafana are correct here as written and
+# platform/docker-compose.yml stays unparameterised across stacks.
+#
+# The path is NOT the volume's name and no longer resembles it. The volume is
+# `main` in both projects; the mount stays /mnt/main-data until
+# `docs/change-queue.md` entry 64 moves it, and the on-host device is keyed on
+# the volume's id rather than on either.
 #
 # Owner/group match each image's own upstream default user, so no `user:`
 # override is needed in the Compose service definitions: 65534/65534 is
@@ -80,17 +91,18 @@ platform_data_volume_subdirs:
     mode: "0755"
 
 # ghcr_pull_username is not secret (it's the GitHub account the token belongs
-# to) and is committed in plain text. The same account prod uses: the token
-# is read-only (`read:packages`) against the same packages, so a second
+# to) and is committed in plain text. The same account production uses: the
+# token is read-only (`read:packages`) against the same packages, so a second
 # account would be a second thing to rotate for no isolation gained.
 ghcr_pull_username: shatynska
 
 # ---------------------------------------------------------------------------
 # STILL TO BE SUPPLIED. Everything below is generated out-of-band by the
 # operator, on their own workstation, and encrypted in place under the
-# `staging` vault id -- NOT prod's. A staging-only operator must not hold the
-# password protecting production's secrets, which is what reusing prod's
-# vault id would mean.
+# `staging` vault id -- NOT production's. A staging-only operator must not hold
+# the password protecting production's secrets, which is what reusing
+# production's vault id would mean. That label follows the ENVIRONMENT and not
+# the stack, which is why it did not move when this stack's directory did.
 #
 # THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET CONVERGED. Two of the three
 # below are what `host-baseline.yml` refuses on, and it is worth being exact
@@ -129,13 +141,13 @@ ghcr_pull_username: shatynska
 #
 # So this file's state is PENDING the operator, not finished. Until it is
 # completed there is no converged staging host, no prune timer and no
-# `staging-server-prune-host-images` check.
+# `main-staging-prune-host-images` check.
 # ---------------------------------------------------------------------------
 
 # Per-application deploy public keys (add-per-app-deploy-keys). Safe to
 # commit -- public keys, not secrets.
 #
-# STAGING'S OWN KEYPAIR, NOT PROD'S. One leaked private half must not deploy
+# STAGING'S OWN KEYPAIR, NOT PRODUCTION'S. One leaked private half must not deploy
 # to both environments. Generate it on the workstation, commit the public
 # half here, and keep the private half for the change that deploys the
 # platform stack to staging -- it becomes that environment's own
@@ -182,10 +194,10 @@ ghcr_pull_token: !vault |
 #   ansible-vault encrypt_string --vault-id staging@prompt '<ping key>' \
 #     --name image_prune_heartbeat_ping_key
 #
-# It is the same project ping key prod uses, and it addresses a DIFFERENT
-# check because the check name is derived from inventory_hostname: staging's
-# server is named `staging-server`, so the check is
-# `staging-server-prune-host-images`. docs/bootstrap-a-new-host.md Appendix A
+# It is the same project ping key production uses, and it addresses a DIFFERENT
+# check because the check name is derived from inventory_hostname: this stack's
+# server is named `main-staging`, so the check is
+# `main-staging-prune-host-images`. docs/bootstrap-a-new-host.md Appendix A
 # records the period and grace to give it -- a check created by its first
 # ping carries the observer's default until corrected.
 #
