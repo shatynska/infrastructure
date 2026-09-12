@@ -1,0 +1,221 @@
+---
+# Verifies the outcomes converge.yml recorded for the two self-defeating
+# declarations, and -- separately, which is the half most easily left out --
+# that the host is in the state a refusal BEFORE any host-changing task leaves
+# it.
+#
+# What each assertion establishes, and its provenance:
+#
+#   outcome == 'failed'          SPECIFIED -- "the run SHALL fail". On its own
+#   (both spellings)             it establishes little: a role could fail here
+#                                for an unrelated reason, which is why it is
+#                                never the last assertion.
+#   'assert' in failed_action    SPECIFIED -- "SHALL fail before any task that
+#                                changes the host has run", read together with
+#                                the requirement's existing idiom for a
+#                                refusal. A substring test, as
+#                                `no-device-discoverable/verify.yml` does,
+#                                because a recorded action may be short
+#                                (`assert`) or fully qualified.
+#   message names the path       SPECIFIED -- "a diagnostic naming that path".
+#   message names both inputs    SPECIFIED -- "and both inputs it was read
+#                                from -- the fixed path's and the superseded
+#                                declaration's". The tokens asserted are the
+#                                two variable names, which is DERIVED: the
+#                                requirement says "inputs", and the names are
+#                                this role's own (`defaults/main.yml`, and that
+#                                change's tasks.md 1.2).
+#   the host is unchanged        SPECIFIED -- "SHALL fail before any task that
+#                                changes the host has run". Three independent
+#                                reads, each keyed to a different task of the
+#                                role, so the run reports WHICH host-changing
+#                                task ran rather than only that one did.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_device: /dev/loop91
+    platform_data_volume_mount_path: /mnt/main
+    platform_data_volume_exact_outcome_path: /var/tmp/molecule-in-force-exact-outcome.json
+    platform_data_volume_trailing_outcome_path: /var/tmp/molecule-in-force-trailing-outcome.json
+  tasks:
+    - name: Read the outcome recorded for the identically spelled declaration
+      ansible.builtin.slurp:
+        src: "{{ platform_data_volume_exact_outcome_path }}"
+      register: platform_data_volume_exact_raw
+
+    - name: Read the outcome recorded for the trailing-separator declaration
+      ansible.builtin.slurp:
+        src: "{{ platform_data_volume_trailing_outcome_path }}"
+      register: platform_data_volume_trailing_raw
+
+    - name: Report both recorded outcomes
+      ansible.builtin.debug:
+        msg:
+          - "{{ platform_data_volume_exact_raw.content | b64decode | from_json }}"
+          - "{{ platform_data_volume_trailing_raw.content | b64decode | from_json }}"
+
+    - name: Assert both self-defeating declarations were refused rather than converged
+      vars:
+        exact: "{{ platform_data_volume_exact_raw.content | b64decode | from_json }}"
+        trailing: "{{ platform_data_volume_trailing_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - exact.outcome == "failed"
+          - trailing.outcome == "failed"
+        fail_msg: >-
+          A declaration naming the path in force among the superseded paths
+          converged instead of failing (identical spelling:
+          '{{ exact.outcome }}'; trailing separator:
+          '{{ trailing.outcome }}'). Retiring that path would remove the very
+          boot-time entry the same run establishes, leaving a host that mounts
+          and serves correctly until it reboots and then comes up with no data
+          volume at all. It SHALL NOT be resolved by silently excluding the
+          fixed path from what is retired: that converges a contradictory
+          declaration cleanly and hides the inventory mistake that produced
+          it -- and a mistake that converges is one nobody fixes.
+        success_msg: >-
+          Both spellings were refused.
+        quiet: true
+
+    - name: Assert the refusal came from the role's own declaration check
+      vars:
+        exact: "{{ platform_data_volume_exact_raw.content | b64decode | from_json }}"
+        trailing: "{{ platform_data_volume_trailing_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'assert' in exact.failed_action"
+          - "'assert' in trailing.failed_action"
+        fail_msg: >-
+          At least one run failed somewhere other than a declaration check --
+          identical spelling failed at '{{ exact.failed_task_name }}' (action
+          '{{ exact.failed_action }}'), trailing separator at
+          '{{ trailing.failed_task_name }}' (action
+          '{{ trailing.failed_action }}'). A run that dies at the mount, at
+          the filesystem task or on an undefined variable has already reached
+          past the point this requirement puts the refusal before.
+        success_msg: >-
+          Both refusals came from a declaration check rather than from a task
+          that acts on the host.
+        quiet: true
+
+    - name: Assert each diagnostic names the path and both inputs it was read from
+      vars:
+        exact: "{{ platform_data_volume_exact_raw.content | b64decode | from_json }}"
+        trailing: "{{ platform_data_volume_trailing_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_mount_path in exact.failed_msg
+          - "'platform_data_volume_mount_path' in exact.failed_msg"
+          - "'platform_data_volume_superseded_mount_paths' in exact.failed_msg"
+          - platform_data_volume_mount_path in trailing.failed_msg
+          - "'platform_data_volume_mount_path' in trailing.failed_msg"
+          - "'platform_data_volume_superseded_mount_paths' in trailing.failed_msg"
+        fail_msg: >-
+          A refusal's message does not name the path and both inputs it was
+          read from (identical spelling: '{{ exact.failed_msg }}'; trailing
+          separator: '{{ trailing.failed_msg }}'). An operator meeting this
+          has to be told which path collided and which two inputs supplied it
+          -- one of them inventory, one of them the role's own default -- or
+          the message names a contradiction without saying where to go and fix
+          it.
+        success_msg: >-
+          Both diagnostics name the colliding path and both inputs.
+        quiet: true
+
+    # ============================================================
+    # "AND SHALL fail before any task that changes the host has run"
+    #
+    # Three reads, each keyed to a different task of the role, in the order
+    # those tasks run: the filesystem task, the mount-point directory, and the
+    # mount itself with its /etc/fstab entry. A role whose declaration check
+    # sits after the mount task passes every assertion above and fails these.
+    # ============================================================
+    - name: Read any filesystem the fixture's device now carries
+      ansible.builtin.command: blkid {{ platform_data_volume_device }}
+      register: platform_data_volume_blkid
+      changed_when: false
+      failed_when: false
+
+    - name: Assert no filesystem was created on the device
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_blkid.rc != 0
+        fail_msg: >-
+          The fixture's device now carries a filesystem
+          ('{{ platform_data_volume_blkid.stdout }}'), so the role's format
+          task ran before it refused. That task is the first one that changes
+          the host, and the requirement puts the refusal in front of it: a
+          refusal arriving later is a partial application, not a refusal to
+          proceed.
+        success_msg: >-
+          The device is still unformatted, so the format task never ran.
+        quiet: true
+
+    - name: Stat the fixed mount path's directory
+      ansible.builtin.stat:
+        path: "{{ platform_data_volume_mount_path }}"
+      register: platform_data_volume_mount_point_stat
+
+    - name: Assert the mount point directory was never created
+      ansible.builtin.assert:
+        that:
+          - not platform_data_volume_mount_point_stat.stat.exists
+        fail_msg: >-
+          {{ platform_data_volume_mount_path }} exists, so the role's
+          directory task ran before it refused. Nothing else in this scenario
+          creates it -- prepare.yml supplies a loop device and nothing more.
+        success_msg: >-
+          The mount point directory was never created.
+        quiet: true
+
+    - name: Read the live mount table entry for the fixed mount path
+      ansible.builtin.command: >-
+        findmnt --noheadings --output SOURCE,TARGET
+        --mountpoint {{ platform_data_volume_mount_path }}
+      register: platform_data_volume_findmnt
+      changed_when: false
+      failed_when: false
+
+    - name: Read /etc/fstab
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: platform_data_volume_fstab_raw
+
+    - name: Assert neither run mounted the device or persisted it in /etc/fstab
+      vars:
+        # `splitlines()`, not `split('\n')`: inside a FOLDED scalar YAML
+        # performs no escape processing, so backslash-n reaches the template as
+        # two literal characters, nothing matches, and the file comes back as
+        # one element -- an empty reduction that satisfies a "not in" assertion
+        # having examined nothing.
+        fstab_targets: >-
+          {{ (platform_data_volume_fstab_raw.content | b64decode).splitlines()
+             | map('trim')
+             | select()
+             | select('match', '^[^#]')
+             | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2')
+             | list }}
+      ansible.builtin.assert:
+        that:
+          # The premise: an empty reduction would satisfy both absences below
+          # having read nothing. A container's /etc/fstab always carries
+          # entries.
+          - fstab_targets | length > 0
+          - platform_data_volume_findmnt.rc != 0
+          - platform_data_volume_mount_path not in fstab_targets
+          # The trailing-separator spelling, checked separately: a role
+          # normalising one side only could write the entry under it.
+          - (platform_data_volume_mount_path ~ '/') not in fstab_targets
+        fail_msg: >-
+          The device is mounted at {{ platform_data_volume_mount_path }}
+          (findmnt rc {{ platform_data_volume_findmnt.rc }}:
+          '{{ platform_data_volume_findmnt.stdout }}') or that path is
+          persisted in /etc/fstab ({{ fstab_targets }}). The run refused, but
+          only after establishing the mount -- which is the ordering this
+          scenario exists to pin down, because a refusal arriving after the
+          retirement loop would have removed the entry it had just written.
+        success_msg: >-
+          Nothing was mounted and nothing reached /etc/fstab: the refusal
+          arrived before any task that changes the host.
+        quiet: true

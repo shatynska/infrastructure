@@ -1,0 +1,370 @@
+---
+# Verifies iac-host-configuration's MODIFIED "Platform Data Volume Is Mounted
+# at a Fixed Host Path" requirement
+# (openspec/specs/iac-host-configuration/spec.md) in the three scenarios the
+# change `move-the-platform-data-mount` adds and this scenario covers: "A
+# superseded mount path is declared", "No superseded mount path is declared"
+# and "A running service still holds the superseded path".
+#
+# Written before the role has any retirement task. Nothing here was shaped to
+# match an implementation; every assertion traces to the delta spec's scenario
+# text, to that requirement's own normative prose, or -- where marked DERIVED
+# -- to this pass's own judgement. See this change's test-plan.md for the full
+# classification and for what this scenario does NOT establish.
+#
+# PATHS ARE COMPARED EXACTLY, NEVER BY SUBSTRING, and in this scenario that is
+# not a stylistic preference. The fixed path in force and the superseded path
+# are BOTH in /etc/fstab when the converge begins, and the fixed one is a
+# proper string prefix of the superseded one -- so the `in stdout` idiom the
+# sibling scenarios use would let the superseded line satisfy an assertion
+# about the fixed one, and the removal assertion would fail against a correct
+# role. Every check below compares a whole field, or asks findmnt about an
+# exact mountpoint.
+#
+# The superseded path itself is named ONCE per file in this scenario, on the
+# declaration line the .github/tests sweep exempts, and reached through that
+# variable everywhere else -- including in prose like this paragraph, which is
+# why it is worded rather than spelled.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_device: /dev/loop90
+    platform_data_volume_mount_path: /mnt/main
+    platform_data_volume_fs_type: ext4
+    # Declared in the inline flow form the .github/tests sweep exempts. A
+    # verify playbook does not inherit converge's vars, so this is redeclared
+    # here rather than referenced -- the same reasoning `molecule/default`'s
+    # verify.yml records for its own redeclarations.
+    platform_data_volume_superseded_mount_paths: ["/mnt/main-data"]
+    platform_data_volume_holder_pid_file: /var/tmp/molecule-superseded-path-holder.pid
+    platform_data_volume_holder_marker: prometheus/holder-marker.txt
+    platform_data_volume_outcome_path: /var/tmp/molecule-superseded-path-retired-outcome.json
+  tasks:
+    - name: Read /etc/fstab
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: platform_data_volume_fstab_raw
+
+    # `splitlines()`, not `split('\n')`: inside a FOLDED scalar YAML performs no
+    # escape processing, so the two characters backslash-n reach the template as
+    # themselves, nothing ever matches, and the whole file comes back as a
+    # single element. The reduction then yields an empty list and every
+    # membership assertion below passes having examined nothing -- which is the
+    # first thing this scenario actually did, before the premise check that now
+    # follows it was added.
+    - name: Reduce /etc/fstab to its active entries and to the mount point each one names
+      vars:
+        fstab_active: >-
+          {{ (platform_data_volume_fstab_raw.content | b64decode).splitlines()
+             | map('trim')
+             | select()
+             | select('match', '^[^#]')
+             | list }}
+      ansible.builtin.set_fact:
+        platform_data_volume_fstab_active: "{{ fstab_active }}"
+        # The SECOND field of each active entry, which is the mount point. An
+        # entry too short to have one maps to itself, which cannot equal either
+        # path under test and is therefore reported by the checks below rather
+        # than silently satisfying them.
+        platform_data_volume_fstab_targets: >-
+          {{ fstab_active
+             | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2')
+             | list }}
+
+    # DERIVED -- a premise check, and it is here because its absence let this
+    # scenario report a pass it had not earned. Both assertions that follow are
+    # membership tests over the reduction above, and an EMPTY reduction
+    # satisfies "the superseded path is not among these" exactly as a correct
+    # retirement does. A container's own /etc/fstab always carries entries, so
+    # an empty list means the read or the reduction is broken, never that the
+    # host has no boot-time mounts.
+    - name: Assert /etc/fstab was read and reduced to something at all
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_fstab_active | length > 0
+          - platform_data_volume_fstab_targets | length == platform_data_volume_fstab_active | length
+        fail_msg: >-
+          /etc/fstab reduced to no active entry at all (entries:
+          {{ platform_data_volume_fstab_active }}; mount points:
+          {{ platform_data_volume_fstab_targets }}). Every assertion below is a
+          membership test over that reduction, and an empty one satisfies the
+          absence assertions vacuously -- so this scenario would report the
+          superseded path retired without having looked at the file.
+        success_msg: >-
+          /etc/fstab was read and reduced to at least one active entry, so the
+          membership assertions below have something to examine.
+        quiet: true
+
+    # ============================================================
+    # Scenario: A superseded mount path is declared
+    #
+    # SPECIFIED, both halves. "the superseded path SHALL NOT remain in what the
+    # host mounts at boot" is the first assertion; "the device SHALL be mounted
+    # at the fixed path in force" is the second and third.
+    #
+    # The first is the whole point of the change and is the assertion that
+    # separates a role using `ansible.posix.mount` with `state: mounted` alone
+    # -- which adds the new entry and leaves the old one -- from one that also
+    # retires the old. A host in that state converges green, passes findmnt,
+    # serves every container, and mounts one device at two paths at its next
+    # reboot.
+    # ============================================================
+    - name: Assert no active /etc/fstab entry still names the superseded path
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_superseded_mount_paths[0] not in platform_data_volume_fstab_targets
+        fail_msg: >-
+          An active /etc/fstab entry still names
+          {{ platform_data_volume_superseded_mount_paths[0] }} as a mount
+          point (entries: {{ platform_data_volume_fstab_active }}). A host
+          that has converged at both paths mounts one device at two paths at
+          its next reboot, with two sets of the dependent subdirectories
+          underneath and nothing to say which a service reads -- and nothing
+          observing the running host detects it, because it arrives only at
+          that boot.
+        success_msg: >-
+          The superseded path is gone from what the host mounts at boot.
+        quiet: true
+
+    - name: Assert the fixed path in force is what the host mounts at boot
+      vars:
+        fixed_entries: >-
+          {{ platform_data_volume_fstab_active
+             | select('match', '^\S+\s+' ~ (platform_data_volume_mount_path | regex_escape) ~ '(\s|$)')
+             | list }}
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_mount_path in platform_data_volume_fstab_targets
+          - fixed_entries | length >= 1
+          - fixed_entries[0].split()[0] == platform_data_volume_device
+          - fixed_entries[0].split()[2] == platform_data_volume_fs_type
+        fail_msg: >-
+          No well-formed active /etc/fstab entry mounts
+          {{ platform_data_volume_device }} at
+          {{ platform_data_volume_mount_path }} as
+          {{ platform_data_volume_fs_type }} (entries:
+          {{ platform_data_volume_fstab_active }}). Retiring the superseded
+          path SHALL NOT be achieved by leaving the host with no boot-time
+          mount at all, which is what this assertion stands against.
+        success_msg: >-
+          The fixed path in force is persisted in /etc/fstab, on the expected
+          device and filesystem.
+        quiet: true
+
+    - name: Read the live mount table entry for the fixed path in force
+      # `--mountpoint`, not `--target`: `--target` resolves to the nearest
+      # ANCESTOR mount, so against a path that is not itself a mount point it
+      # reports the container's own root filesystem and rc 0. This scenario's
+      # whole subject is which of two paths carries the mount, so the
+      # exact-mountpoint form is the only one that discriminates.
+      ansible.builtin.command: >-
+        findmnt --noheadings --output SOURCE,TARGET,FSTYPE
+        --mountpoint {{ platform_data_volume_mount_path }}
+      register: platform_data_volume_fixed_findmnt
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the device is live-mounted at the fixed path in force
+      vars:
+        fields: "{{ platform_data_volume_fixed_findmnt.stdout.split() }}"
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_fixed_findmnt.rc == 0
+          - fields | length >= 3
+          - fields[0] == platform_data_volume_device
+          - fields[1] == platform_data_volume_mount_path
+          - fields[2] == platform_data_volume_fs_type
+        fail_msg: >-
+          {{ platform_data_volume_mount_path }} is not a mount point of
+          {{ platform_data_volume_device }} (findmnt rc
+          {{ platform_data_volume_fixed_findmnt.rc }}:
+          '{{ platform_data_volume_fixed_findmnt.stdout }}').
+        success_msg: >-
+          The device is mounted at the fixed path in force.
+        quiet: true
+
+    # ============================================================
+    # Scenario: A running service still holds the superseded path
+    #
+    # SPECIFIED. "the run SHALL succeed, AND SHALL NOT unmount that path or
+    # otherwise interrupt that service's access to the data under it."
+    #
+    # The run having succeeded is established by the converge having completed
+    # at all -- Molecule fails the scenario otherwise -- so what is left to
+    # check, and what these assertions are, is that the live mount and the
+    # holder both survived it. A role reaching for `state: absent` or
+    # `state: unmounted` instead of `absent_from_fstab` either fails the
+    # converge on a busy target or succeeds having pulled the filesystem out
+    # from under the holder; both are caught here.
+    # ============================================================
+    - name: Read the live mount table entry for the superseded path
+      ansible.builtin.command: >-
+        findmnt --noheadings --output SOURCE,TARGET,FSTYPE
+        --mountpoint {{ platform_data_volume_superseded_mount_paths[0] }}
+      register: platform_data_volume_superseded_findmnt
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the live mount at the superseded path was not disturbed
+      vars:
+        fields: "{{ platform_data_volume_superseded_findmnt.stdout.split() }}"
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_superseded_findmnt.rc == 0
+          - fields | length >= 3
+          - fields[0] == platform_data_volume_device
+          - fields[1] == platform_data_volume_superseded_mount_paths[0]
+        fail_msg: >-
+          {{ platform_data_volume_superseded_mount_paths[0] }} is no longer a
+          mount point of {{ platform_data_volume_device }} (findmnt rc
+          {{ platform_data_volume_superseded_findmnt.rc }}:
+          '{{ platform_data_volume_superseded_findmnt.stdout }}'). Retiring a
+          superseded path SHALL NOT require disturbing a service that
+          currently holds it: the converge removes the boot-time entry and
+          nothing else, and the services are retired from the old path by
+          their own redeployment, whose scope this role's does not reach.
+        success_msg: >-
+          The live mount at the superseded path is untouched, which is what
+          the retirement is specified to leave alone.
+        quiet: true
+
+    # The pid file is read off the INSTANCE with slurp rather than with a
+    # `file` lookup: a lookup is evaluated on the controller, which in a
+    # Molecule run is this machine and not the container the fixture wrote it
+    # in.
+    - name: Read the pid the holding process recorded for itself
+      ansible.builtin.slurp:
+        src: "{{ platform_data_volume_holder_pid_file }}"
+      register: platform_data_volume_holder_pid_raw
+
+    - name: Read the holding process's current working directory
+      ansible.builtin.command: >-
+        readlink /proc/{{ (platform_data_volume_holder_pid_raw.content | b64decode | trim) }}/cwd
+      register: platform_data_volume_holder_cwd
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the process holding the superseded path still holds it
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_holder_cwd.rc == 0
+          - (platform_data_volume_holder_cwd.stdout | trim) == platform_data_volume_superseded_mount_paths[0]
+        fail_msg: >-
+          The process that held {{ platform_data_volume_superseded_mount_paths[0] }}
+          across the converge is gone, or its working directory is no longer
+          that path (readlink rc
+          {{ platform_data_volume_holder_cwd.rc }}:
+          '{{ platform_data_volume_holder_cwd.stdout }}'). It stands in for the
+          running Prometheus and Grafana that hold the old path at the moment
+          it moves; a converge that interrupts it has done what the
+          requirement forbids. A working directory reported as
+          '(deleted)' or resolving elsewhere means the filesystem was pulled
+          out from under it.
+        success_msg: >-
+          The holding process survived the converge with its access to the
+          data under the superseded path intact.
+        quiet: true
+
+    # DERIVED -- no scenario states it. It is what establishes that this
+    # scenario's fixture is the one design.md Decision 2 requires: ONE device
+    # mounted at TWO paths, rather than two directories that merely look alike.
+    # A fixture using a second loop device or a tmpfs passes every assertion
+    # above while exercising none of the mechanism the change's end state rests
+    # on, and the first place the real thing would then be tried is staging's
+    # unattended converge against a live host.
+    - name: Read the marker file through the fixed path in force
+      ansible.builtin.slurp:
+        src: >-
+          {{ platform_data_volume_mount_path }}/{{
+          platform_data_volume_holder_marker }}
+      register: platform_data_volume_marker_raw
+      failed_when: false
+
+    - name: Assert the two paths resolve to one filesystem
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_marker_raw.content is defined
+          - "'written through the superseded path' in (platform_data_volume_marker_raw.content | b64decode)"
+        fail_msg: >-
+          The file this scenario's prepare.yml wrote THROUGH the superseded
+          path is not readable through {{ platform_data_volume_mount_path }}.
+          The two paths are then not one filesystem, which means this fixture
+          never exercised the double mount of one device that the end state of
+          this change depends on -- and every assertion above about the
+          superseded path would have been satisfied by a second, unrelated
+          device.
+        success_msg: >-
+          One device, two mount points, one filesystem: the marker written
+          through the superseded path reads back through the fixed one.
+        quiet: true
+
+    # ============================================================
+    # Scenario: No superseded mount path is declared
+    #
+    # SPECIFIED. "the run SHALL change nothing about the host's boot-time mount
+    # configuration beyond the fixed path in force, and SHALL NOT fail for the
+    # absence."
+    #
+    # Two forms, and this scenario covers both. THE FIRST -- a host for which
+    # no superseded path is declared at all -- is converge.yml's second run of
+    # the role with the declaration emptied, and is what these checksums are.
+    # THE SECOND -- a host whose superseded paths have already been retired --
+    # is Molecule's own `idempotence` action, which re-runs converge.yml
+    # against the host this one left and fails the scenario on any task
+    # reporting a change. That is the state EVERY converge after the first is
+    # in, under this change's Decision 3, so it is the steady state rather than
+    # an edge case.
+    # ============================================================
+    - name: Read the checksums converge.yml recorded either side of the empty-declaration run
+      ansible.builtin.slurp:
+        src: "{{ platform_data_volume_outcome_path }}"
+      register: platform_data_volume_outcome_raw
+
+    - name: Assert an empty superseded declaration changed nothing about /etc/fstab
+      vars:
+        outcome: "{{ platform_data_volume_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - outcome.fstab_before_empty_declaration == outcome.fstab_after_empty_declaration
+        fail_msg: >-
+          Running the role with an empty superseded declaration changed
+          /etc/fstab (checksum
+          {{ outcome.fstab_before_empty_declaration }} became
+          {{ outcome.fstab_after_empty_declaration }}). The empty list is the
+          ordinary state of a host whose fixed path has never moved, and it
+          SHALL leave the boot-time mount configuration alone rather than
+          being read as "retire everything" or as a missing input.
+        success_msg: >-
+          An empty declaration changed nothing about the host's boot-time
+          mount configuration.
+        quiet: true
+
+    # DERIVED, and deliberately LAST: it is the only task here that could
+    # itself change the host. It establishes that this scenario's fixture
+    # really did present the condition the "running service" scenario is about
+    # -- a BUSY mount -- rather than an idle one that any implementation would
+    # have survived. Without it, a role that did unmount the superseded path
+    # would be reported as compliant by a scenario whose premise never held.
+    # The unmount is expected to be refused, so nothing is expected to change.
+    - name: Attempt to unmount the superseded path, to confirm it was busy throughout
+      ansible.builtin.command: umount {{ platform_data_volume_superseded_mount_paths[0] }}
+      register: platform_data_volume_umount_attempt
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the superseded path was genuinely held, so the converge faced a busy target
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_umount_attempt.rc != 0
+        fail_msg: >-
+          The superseded path unmounted cleanly, so nothing was holding it and
+          this scenario never presented the case it claims to: a converge that
+          reached for `state: absent` or `state: unmounted` would have
+          succeeded here too. The holder prepare.yml starts is what makes the
+          run's success meaningful; if this fails, the fixture is what needs
+          repair, not the role.
+        success_msg: >-
+          The superseded path was busy throughout, so the converge succeeded
+          against a target an unmount would have failed on.
+        quiet: true

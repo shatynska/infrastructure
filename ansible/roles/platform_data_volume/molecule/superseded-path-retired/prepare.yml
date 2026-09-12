@@ -1,0 +1,182 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing
+# here may set up the thing under test (the retirement of a superseded mount
+# path, which the role does not do yet). It builds the one host state this
+# scenario is about and that no container is in by default: a device already
+# mounted at a path this repository has since superseded, persisted in
+# /etc/fstab, with a running process holding it.
+#
+# THE LIVE MOUNT IS THE SCENARIO'S OWN LOOP DEVICE, AND THAT IS LOAD-BEARING.
+# The role then mounts THE SAME DEVICE at the fixed path in force, so the host
+# ends the converge with one device mounted at two paths -- which is the end
+# state this change's Decision 2 rests on and the one mechanically uncertain
+# step in its forward run. A fixture whose superseded path held a SECOND loop
+# device, or a tmpfs, would pass every assertion in verify.yml while exercising
+# none of that, and the first place the real thing would then be tried is
+# staging's unattended converge against a live host.
+#
+# The fixed loop minor number (/dev/loop90), and why it is hardcoded rather
+# than taken from `losetup -f --show`, is the same reasoning
+# `molecule/default/prepare.yml` records in full: `prepare` and `converge` are
+# separate ansible-playbook invocations and this project's ansible.cfg sets no
+# fact_caching backend, so a dynamically chosen path would have no channel to
+# reach converge.yml. 87, 88 and 89 are taken by the sibling scenarios of this
+# role; 90 and 91 are this change's two. A CI host whose kernel already holds
+# /dev/loop90 is a FIXTURE flake, not a defect in the role.
+#
+# `prepare` runs once, after `create` and before `converge`, and is NOT re-run
+# for the `idempotence` action. That is what makes the `idempotence` action
+# meaningful here: the superseded /etc/fstab entry is established exactly once,
+# the first converge retires it, and the second converge therefore meets the
+# delta's "already been retired" case rather than a re-established one.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    # The path this repository is moving off. Declared in the inline flow form
+    # the sweep in .github/tests exempts, and referenced through the variable
+    # everywhere below, so this scenario carries the needle on one line per
+    # file rather than scattered through its fixture.
+    platform_data_volume_superseded_mount_paths: ["/mnt/main-data"]
+    platform_data_volume_device: /dev/loop90
+    platform_data_volume_fs_type: ext4
+    platform_data_volume_backing_file: /root/platform-data-volume-retire-backing.img
+    platform_data_volume_holder_pid_file: /var/tmp/molecule-superseded-path-holder.pid
+    platform_data_volume_holder_marker: prometheus/holder-marker.txt
+  tasks:
+    - name: Refresh the apt cache and install fixture-only loop/filesystem tooling
+      ansible.builtin.apt:
+        name:
+          - util-linux
+          - e2fsprogs
+        state: present
+        update_cache: true
+        cache_valid_time: 0
+
+    - name: Create a sparse backing file to stand in for the attached Hetzner Volume
+      ansible.builtin.command: truncate -s 512M {{ platform_data_volume_backing_file }}
+      args:
+        creates: "{{ platform_data_volume_backing_file }}"
+
+    - name: Check whether the fixed loop device node already exists
+      ansible.builtin.stat:
+        path: "{{ platform_data_volume_device }}"
+      register: platform_data_volume_loop_node
+
+    - name: Create the fixed loop device node (major 7 = loop) if it does not already exist
+      ansible.builtin.command: mknod -m 0660 {{ platform_data_volume_device }} b 7 90
+      when: not platform_data_volume_loop_node.stat.exists
+      changed_when: true
+
+    - name: Check whether the fixed loop device is already associated with a backing file
+      ansible.builtin.command: losetup {{ platform_data_volume_device }}
+      register: platform_data_volume_loop_check
+      changed_when: false
+      failed_when: false
+
+    - name: Associate the backing file with the fixed loop device
+      ansible.builtin.command: >-
+        losetup {{ platform_data_volume_device }} {{ platform_data_volume_backing_file }}
+      when: platform_data_volume_loop_check.rc != 0
+      changed_when: true
+
+    # Unlike `molecule/default`, this fixture DOES format the device: it mounts
+    # it itself, before the role runs, and an unformatted device cannot be
+    # mounted. Formatting an unformatted device is `default`'s subject and is
+    # not re-tested here; the role's own filesystem task is a documented no-op
+    # against a device that already carries one.
+    - name: Check whether the fixture's device already carries a filesystem
+      ansible.builtin.command: blkid {{ platform_data_volume_device }}
+      register: platform_data_volume_blkid
+      changed_when: false
+      failed_when: false
+
+    - name: Create the filesystem the fixture's own mount needs
+      ansible.builtin.command: mkfs.{{ platform_data_volume_fs_type }} {{ platform_data_volume_device }}
+      when: platform_data_volume_blkid.rc != 0
+      changed_when: true
+
+    - name: Ensure the superseded mount path exists
+      ansible.builtin.file:
+        path: "{{ platform_data_volume_superseded_mount_paths[0] }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Check whether the device is already mounted at the superseded path
+      ansible.builtin.command: >-
+        findmnt --noheadings --output TARGET
+        --mountpoint {{ platform_data_volume_superseded_mount_paths[0] }}
+      register: platform_data_volume_superseded_findmnt
+      changed_when: false
+      failed_when: false
+
+    # The raw command, not ansible.posix.mount: that module is the thing under
+    # test in converge, and a fixture built out of it would make a defect in it
+    # capable of hiding itself. This mounts and does NOT touch /etc/fstab; the
+    # fstab entry is written separately below, so the two halves of the
+    # superseded state are established independently of each other.
+    - name: Mount the fixture's device at the superseded path  # noqa: command-instead-of-module
+      ansible.builtin.command: >-
+        mount {{ platform_data_volume_device }}
+        {{ platform_data_volume_superseded_mount_paths[0] }}
+      when: platform_data_volume_superseded_findmnt.rc != 0
+      changed_when: true
+
+    - name: Create the subdirectory a running service would bind-mount, under the superseded path
+      ansible.builtin.file:
+        path: >-
+          {{ platform_data_volume_superseded_mount_paths[0] }}/{{
+          platform_data_volume_holder_marker | dirname }}
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Written THROUGH the superseded path, onto the device. verify.yml reads it
+    # back through the fixed path in force, which is how this scenario
+    # establishes that the two paths are one filesystem rather than two
+    # directories that merely look alike.
+    - name: Write a marker file on the device, through the superseded path
+      ansible.builtin.copy:
+        dest: >-
+          {{ platform_data_volume_superseded_mount_paths[0] }}/{{
+          platform_data_volume_holder_marker }}
+        content: |
+          written through the superseded path by this scenario's prepare.yml
+        owner: root
+        group: root
+        mode: "0644"
+
+    # The /etc/fstab half of the superseded state -- the half this change is
+    # actually about, since it is what a reboot reads. `state: present` writes
+    # the entry and does not mount, which is why it is safe here after the live
+    # mount above.
+    - name: Persist the superseded path in /etc/fstab, as a converged host of this fleet already has it
+      ansible.posix.mount:
+        path: "{{ platform_data_volume_superseded_mount_paths[0] }}"
+        src: "{{ platform_data_volume_device }}"
+        fstype: "{{ platform_data_volume_fs_type }}"
+        state: present
+
+    # Stands in for the running Prometheus or Grafana that holds the old path
+    # at the moment the converge runs. A process whose CURRENT WORKING
+    # DIRECTORY is on that mount makes it busy, so `umount` of it returns
+    # EBUSY -- which is exactly the condition the delta says the converge SHALL
+    # NOT fail on and SHALL NOT resolve by unmounting. verify.yml's last task
+    # confirms the fixture really did present that condition.
+    - name: Start a long-lived process holding the superseded path, standing in for a running service
+      ansible.builtin.shell: |
+        set -eu
+        setsid sh -c 'cd "{{ platform_data_volume_superseded_mount_paths[0] }}" \
+          && echo $$ > "{{ platform_data_volume_holder_pid_file }}" \
+          && exec sleep 3600' </dev/null >/dev/null 2>&1 &
+      args:
+        creates: "{{ platform_data_volume_holder_pid_file }}"
+      changed_when: true
+
+    - name: Wait for the holding process to record its own pid
+      ansible.builtin.wait_for:
+        path: "{{ platform_data_volume_holder_pid_file }}"
+        timeout: 30
