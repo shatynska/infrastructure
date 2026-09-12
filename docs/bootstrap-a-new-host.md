@@ -8,7 +8,7 @@ What you will have at the end:
 - **The production server** configured (Docker, host firewall, a private network, restricted deploy accounts) by Ansible.
 - A shared platform stack **on the production server**: Traefik with automatic TLS, PostgreSQL, Prometheus, Alertmanager, Grafana, alerts to Slack, and an external heartbeat.
 - A path for any application repository to deploy itself **to the production host** from its own GitHub Actions workflow.
-- **A staging server, configured but running nothing** — stage 6 converges it alongside production: Docker, the host firewall, the tailnet, the operator and deploy accounts, the mounted data volume, the weekly image prune. What it does not have is an application stack, a hostname or an open web port, because `platform-deploy.yml` still deploys to one stack. "From here on, two hosts" says which and what closes it. That is the honest end state today; it is not an oversight in this procedure.
+- **A staging server, configured but running nothing** — stage 6 converges it alongside production: Docker, the host firewall, the tailnet, the operator and deploy accounts, the mounted data volume, the weekly image prune. What it does not have is an application stack, a **public DNS name** or an open web port, because `platform-deploy.yml` still deploys to one stack. (It does have a host name of its own — the converge sets that on every host; this is about DNS and a certificate.) "From here on, two hosts" says which and what closes it. That is the honest end state today; it is not an oversight in this procedure.
 
 **Two servers is a standing cost**, not a one-off configuration: two instances and two volumes billed monthly, two hosts to patch and rebuild, two token pairs to rotate. Staging is roughly half production's bill. Decide you want that before stage 1, because the decisions that follow are shaped by it and are awkward to unpick afterwards. If you want one stack, this document still works: delete the second directory under `terraform/stacks/`, skip its secrets, and read every "two" below as "one" — including §0.4's table, which says so in its own terms.
 
@@ -401,7 +401,7 @@ You now have two servers, and **stage 6 configures both**. It is written once an
 
 - **`.github/workflows/platform-deploy.yml` declares `environment: production`** and deploys to a single `PLATFORM_DEPLOY_HOST`. The platform stack has no per-stack path at all. That is `docs/change-queue.md`'s platform-per-stack entry.
 
-So after stage 6 the staging server is a **configured** host — Docker, UFW and fail2ban, on the tailnet, data volume mounted, operator account, deploy account — with no application stack on it. Its cloud firewall still opens no web port (`web_allowed_cidrs = []`), and it has no hostname and no certificate; those come with the stack, in the queue entry for staging's web exposure.
+So after stage 6 the staging server is a **configured** host — Docker, UFW and fail2ban, on the tailnet, data volume mounted, operator account, deploy account — with no application stack on it. Its cloud firewall still opens no web port (`web_allowed_cidrs = []`), and it has no **public DNS name** and no certificate; those come with the stack, in the queue entry for staging's web exposure. Its own host name is set, like production's — the `hostname` role runs on every converge.
 
 Two things about staging in stage 6 that differ from production, both deliberate:
 
@@ -577,6 +577,8 @@ ansible-playbook playbooks/host-baseline.yml \
   -e tailscale_auth_key=<tskey-auth-... from stage 5>
 ```
 
+**`company` must be right before this run, and nothing checks it for you.** The play's `hostname` role gives the host its own name, `<company>-<inventory_hostname>` — `shatynska-main-production` on the repository this was cloned from. It reads `company` from `ansible/inventory/group_vars/all.yml`, which is the single file a clone changes (§3.1 lists it among the things to edit). The role asserts the variable by name and refuses before touching the host if it is unset, so the failure you would get is loud — but it cannot tell that the value is *someone else's company*, and a host named for the repository you cloned from is a thing you find out months later on a shell prompt. Check it now, not after the converge.
+
 **Do not add `--limit`.** The stack already selects the host set, there is nothing to narrow, and a limit filters the guard play's `localhost` out — so a run that reaches no host would exit 0 again, which is the failure the guard exists to end. `--tags` is safe — the guard is tagged `always` — with the single exception of `--skip-tags always`, which names that tag and switches the guard off.
 
 Two prompts: the Vault password, and (if the key has one) the operator key's passphrase. A first run takes several minutes; Docker's installation is the slow part. A second run immediately afterwards should report `changed=0`; if it does not, something is not idempotent and worth understanding before moving on.
@@ -657,7 +659,16 @@ The usual causes, in rough order: the key was already consumed, because it was g
 | `ghcr_pull_token` | One encrypted block per stack, of the same token value unless you chose two | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
 | `image_prune_heartbeat_ping_key` | One encrypted block per stack, of the same project ping key | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3, and addresses a different check per host because the check name comes from the host's name |
 | `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository. **Production's key only** | The **private** half of the *production* platform deploy key from stage 0. Store it now, then delete the local file. **Staging's key is not stored here and must not be deleted** — it stays at `~/.ssh/<company>-platform-staging` and in your password manager until staging gets a deploy path (§0.3) | `platform-deploy.yml`'s deploy job |
-| `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
+| `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | **Either** the server's tailnet IPv4 (`100.x.y.z`) **or** its tailnet machine name (`main-production`) — `platform-deploy.yml` accepts both and tests which it was given. **They fail differently, and that is the thing to choose on**; see below. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
+
+**Which form to put in `PLATFORM_DEPLOY_HOST`, and why it is a real choice.** An earlier version of this document recommended the literal IP because it "avoids a resolution step", which is true and is not the reason that matters. The two forms survive different events, and neither survives both:
+
+| Value | Survives a **rename** of the server | Survives a **rebuild** of the host |
+|---|---|---|
+| Tailnet IPv4 | **Yes** — the address is unchanged | **No** — a rebuilt host joins with a new address |
+| Tailnet machine name | **No** — the machine is renamed with the server | **No** — Tailscale suffixes the rejoining node (`main-production-1`) and the dead one keeps the bare name, until you delete it as Appendix B says |
+
+So the IP is the more durable of the two, and the name's advantage is only that it reads as a name. Whichever you choose, **it is not a value that maintains itself**: the rename case actually occurred — `rename-the-stacks-and-their-resources` renamed both servers and had to update this secret as a named step — and the rebuild case is Appendix B's. Nothing in this repository can check it, and nothing fails until the next merge touching `platform/`, which then fails looking like a network problem. Put it in the password manager entry beside the value, so the next person changing either one knows this exists.
 
 **Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/` (the path still carries `-data` while the volume is named `main`; they are independent, and `docs/change-queue.md` entry 64 brings them together); and `hostname` returns `<company>-<stack>`, e.g. `shatynska-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
 
