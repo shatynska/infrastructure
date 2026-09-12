@@ -517,20 +517,6 @@ The existing comment in those three anticipated this: *"Copies are not the only 
 
 Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.
 
-## 63. rename-the-external-services
-
-Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **No longer blocked**: `rename-the-stacks-and-their-resources` has landed, and the stack directories, the Hetzner resources and the labels now carry the scheme's names.
-
-Four renames that live outside the repository, none of which Terraform performs: the HCP workspaces to `main-production` and `main-staging`, the GitHub Environments to the same, the repository read-only secrets from `HCLOUD_TOKEN_PRODUCTION` and `HCLOUD_TOKEN_STAGING` to `HCLOUD_TOKEN_MAIN_PRODUCTION` and `HCLOUD_TOKEN_MAIN_STAGING`, and the two Hetzner projects. The only code it touches is each `versions.tf`'s `cloud` block and each `pipeline.yml`'s two declared names — **not its third**: `target_environment` names the Ansible group, which is the environment axis and is already spelled in full.
-
-**Entry 62 left two things pointing here, and both are commitments rather than notes.** Each `versions.tf` now carries a comment saying its workspace name and its directory name are deliberately out of step until this entry, and *Remote State Backend* (`openspec/specs/iac-state-management/spec.md`) was rewritten to forbid **computing** a workspace name from a directory name while explicitly permitting the two to agree — which is what this entry makes them do. A requirement that had forbidden the agreement would have made this entry unperformable.
-
-**One name `rename-the-stacks-and-their-resources` did not change and this one does not either**: `PLATFORM_DEPLOY_HOST`, the `production` Environment secret holding the host's tailnet machine name. Its **name** is correct as it stands and is not this entry's work. Its *value* was updated to `main-production` by the operator on 2026-09-12, as one of that change's out-of-band steps — after its merge rather than before it, which cost nothing because `platform-deploy.yml` runs only on a merge touching `platform/` and none occurred in the window. That timing is worth knowing rather than repeating: a stale value there fails nothing until the next platform change, and then fails looking like a network problem.
-
-**Order is load-bearing and the window between steps is broken CI.** The HCP workspace is renamed in the HCP interface *first*, which preserves its state; pushing `versions.tf` ahead of that points at a workspace that does not exist, and the next plan proposes creating every resource from scratch. GitHub cannot rename a secret at all — the new name is created, `pipeline.yml` is flipped, and the old one is deleted afterwards. Renaming a GitHub Environment does keep its secrets and its protection rules, which matters more than it did: since `apply-host-configuration-through-a-gated-workflow` those Environments hold the converge credentials as well as the Hetzner write token. The Hetzner project rename is cosmetic and its tokens survive it.
-
-It is separated from `rename-the-stacks-and-their-resources` precisely because none of it is provable by a plan: every step is a click whose effect no file in this repository can verify. Mixing it with a Terraform change would produce one pull request whose green result means less than it appears to.
-
 ## 64. move-the-platform-data-mount
 
 Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **No longer blocked**: `rename-the-stacks-and-their-resources` renamed the volume. Independent of entry 63 and may go before or after it.

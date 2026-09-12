@@ -147,12 +147,14 @@ REPLACEMENTS = {
 #       declaration by its own module, so a constant left behind while the
 #       declaration moves fails there.
 #
-#   `docs/change-queue.md` -- holds identified changes, deleted when archived
-#       (AGENTS.md). The entry for this very change names all four retired
-#       literals as the work it describes, and is deleted in the archive commit,
-#       which is after the merge. Without this exemption the assertion is red on
-#       the pull request for an entry the repository's own convention requires
-#       to still be there.
+#   `docs/change-queue.md` WAS EXEMPT AND IS NOT ANY MORE, which is the
+#       exemption machinery working rather than a loosening. Entry 63 named all
+#       four retired literals as the work it described, and a queue entry is
+#       deleted only when its change archives -- so the file had to be exempt
+#       across the whole of that change and no longer. The assertion below
+#       requires a whole-path exemption to still CONTAIN a retired name, so
+#       deleting entry 63 in the archive commit turned it red and the repair was
+#       to delete the exemption in that same commit. It is swept from here on.
 #
 # `docs/deferred-work.md` is deliberately NOT exempt, though it is the paired
 # surface: an entry there records work not done, and about a rename that means
@@ -164,7 +166,10 @@ EXEMPT_PREFIXES = (
     ".github/tests/",
 )
 
-EXEMPT_PATHS = ("docs/change-queue.md",)
+# No whole-path exemption stands today. Kept as an empty tuple rather than
+# removed, because the assertion that each one still earns its keep is what
+# emptied it, and the next change needing one should find the mechanism here.
+EXEMPT_PATHS: tuple[str, ...] = ()
 
 # Files the sweep must reach for a green result to mean anything. One per
 # surface the change edits, at four different depths. DERIVED -- no scenario
@@ -569,12 +574,20 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             CHANGE_PATH_PREFIX + ARCHIVE_SEGMENT + "/2026-01-01-something/proposal.md",
             CHANGE_PATH_PREFIX + "some-change-in-flight" + "/tasks.md",
             ".github/tests/test_the_external_service_names_are_retired.py",
-            "docs/change-queue.md",
         ):
             with self.subTest(path=path):
                 self.assertEqual(
                     [], retired_name_offences({path: "infrastructure-prod\n"})
                 )
+
+        # `docs/change-queue.md` was the fourth case here until its exemption
+        # expired with entry 63. It is swept now, and is asserted as swept rather
+        # than dropped from this class: a path that stops being exempt and is
+        # merely deleted from the list leaves nothing saying which way it goes.
+        self.assertEqual(
+            ["docs/change-queue.md:1: infrastructure-prod"],
+            retired_name_offences({"docs/change-queue.md": "infrastructure-prod\n"}),
+        )
 
     def test_a_path_merely_resembling_an_exempt_one_is_still_swept(self) -> None:
         """The exemptions are prefixes and whole paths, so a file whose name

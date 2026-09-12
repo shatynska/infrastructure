@@ -2,7 +2,9 @@
 
 How everything this repository creates is named, and the one rule the scheme follows.
 
-> **NOT YET IN EFFECT.** This document records a decision taken on 2026-09-11; the repository does not match it yet. What it describes arrives through `docs/change-queue.md` entries 61, 62, 63 and 64, in that order. Whoever archives the last of the four deletes this banner — until then, read this as the target and the tree as the present. Entry 62's pull-request plan is what proves the Hetzner renames are in-place updates rather than replacements; nothing here asserts that in advance.
+> **NOT YET IN EFFECT.** This document records a decision taken on 2026-09-11; the repository does not match it yet. What it describes was to arrive through `docs/change-queue.md` entries 61, 62, 63 and 64, in that order. Entries 61, 62 and 63 have archived; **64 and 75 remain**, and whoever archives the last of them deletes this banner. Until then, read this as the target and the tree as the present.
+>
+> **Entry 75 was not in the original four and is the one name this scheme cannot buy cheaply.** Entry 63 was scoped to rename the two GitHub Environments along with the workspaces, the repository secrets and the Hetzner projects, and found that GitHub offers no way to rename a deployment Environment at all — so moving one means re-creating it and re-entering every secret it holds, three of which are SSH private halves this repository's own bootstrap has the operator delete once stored. That was deferred rather than paid. **A new deployment pays nothing**, because it names its Environments correctly when it creates them; `docs/bootstrap-a-new-host.md` §3.2 says so at the moment of choosing.
 
 ## The rule
 
@@ -46,7 +48,7 @@ A **stack** is one Terraform root module: one state, one Hetzner project, one bl
 
     stack name                 main-production
       ├── directory            terraform/stacks/main-production/
-      ├── GitHub Environment   main-production
+      ├── GitHub Environment   main-production     (entry 75; see the banner)
       ├── HCP workspace        main-production
       ├── Hetzner project      main-production
       ├── read-only secret     HCLOUD_TOKEN_MAIN_PRODUCTION     (upper-cased, - → _)

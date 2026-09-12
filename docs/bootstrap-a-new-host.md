@@ -261,6 +261,10 @@ All of these are in Settings on github.com, or via `gh`.
    The names must match what each stack's `pipeline.yml` declares (step 5 of 3.1), and they must differ from each other: two stacks naming one GitHub Environment would share its write token and its protection rules, so the ungated one would hold the reviewed one's credential. Discovery fails the pipeline, naming both, if they ever collide.
 
    **What makes an ungated apply safe is the project boundary from stage 1, and nothing else.** Staging's write token can destroy staging's Hetzner project and cannot touch production's. Whether an Environment requires a reviewer is a repository setting that no file in this repository can verify — which cuts both ways: nothing will tell you if `production` loses its reviewer either.
+
+   **AN ENVIRONMENT'S NAME CANNOT BE CHANGED AFTER YOU CREATE IT, SO CHOOSE IT HERE RATHER THAN LATER.** GitHub offers no rename: not in the interface, and not in the REST API, which exposes only create-or-update, read and delete with the name in the path (measured 2026-09-12 by `rename-the-external-services`). Moving an Environment therefore means creating a second one, re-entering **every** secret it holds — a value GitHub will not read back to you — re-adding its protection rules, and deleting the first. On this repository that is twenty-one secrets across the two, three of which are SSH private halves §0.3 has you delete once stored, so each needs a key rotation with a step on the host.
+
+   **A NEW DEPLOYMENT SHOULD THEREFORE NAME THESE FOR ITS STACKS: `main-production` and `main-staging`**, matching the stack directories, the HCP workspaces, the read-only secrets and the inventory sources. `docs/naming-conventions.md` asks for exactly that, and the only reason this repository's own Environments are still `production` and `staging` is that they were created before the scheme existed and cannot now be renamed cheaply — `docs/change-queue.md` entry 75 carries that debt and its price. **For you the correct names cost nothing**, because you are creating them for the first time. If you do use the stack names, set each stack's `github_environment` to match in step 5 of §3.1, and read §6.6's note about which argument `gh secret set --env` takes.
 2. **Label.** Issues → Labels → New label: `destroy-override`. A merged pull request must carry this label for the apply workflow to accept a plan that deletes or replaces a resource. Without it, such plans fail on purpose.
 3. **Workflow token.** Settings → Actions → General → Workflow permissions: **Read repository contents and packages permissions**. Each workflow declares the little it needs on top.
 4. **Merge methods.** Leave merge commits enabled. The destroy gate reads the pull request number from the merge commit message; squash and rebase merges fall back to a slower API lookup.
@@ -563,7 +567,9 @@ cd ansible
 ansible-inventory -i inventory/<stack>.hcloud.yml --graph
 ```
 
-You should see that stack's server under `@<environment>`. If the command fails naming the source it could not parse, that stack's token in `ansible/.envrc` is missing or wrong — the run fails rather than showing you an empty inventory, which is the point.
+You should see that stack's server under `@<environment>`, and under `@<tenant>` as well — one group per axis. If the command fails naming the source it could not parse, that stack's token in `ansible/.envrc` is missing or wrong — the run fails rather than showing you an empty inventory, which is the point.
+
+**`Invalid Hetzner Cloud API Token: unable to authenticate (unauthorized)` does not mean the token is wrong.** It means the plugin was handed an empty one, and it says the same thing whether the value is revoked, mistyped, or *absent* — an unset variable templates to the empty string and Hetzner rejects that exactly as it rejects a bad token. So check the variable **name** before you go looking at Hetzner: the name this source reads must match the one your `ansible/.envrc` exports, and a checkout on an older commit reads an older name. That is the cheap explanation and it is usually the right one.
 
 ### 6.3 Run the playbook
 
@@ -728,6 +734,11 @@ gh secret set ANSIBLE_VAULT_PASSWORD --env <environment>
 Then delete the local private half, exactly as you do for the platform deploy key. Keep the Vault password in the password manager — it is still the only thing that can decrypt that stack's `group_vars`, and it is now in two places rather than one, which is the point: a second operator no longer means handing over a password and a root key.
 
 **Check**, on the next merge that touches `ansible/`: the run shows the diff before any approval; staging converges unattended; production's job waits. Read staging's before approving production's — that is what makes staging the rehearsal rather than a second production.
+
+**Two ways a gated converge fails that are not about your host, met on 2026-09-12 and worth recognising rather than diagnosing twice.**
+
+- **It dies at *Install Galaxy content*, before Ansible reads anything.** That step runs `ansible-galaxy install` against `galaxy.ansible.com` at converge time, with no retry and nothing vendored, so an upstream hiccup fails the job — and on the production path it fails *after* you have granted the approval, which then has to be requested and granted again. The signature is a `[WARNING]: Skipping Galaxy server` line naming a collection, followed by an `[ERROR]` about the ansible-galaxy cache. Re-run the failed job; it is transient. `docs/change-queue.md` entry 76 is the change that would stop it.
+- **It sits waiting behind a converge you forgot about.** Converges are serialised per stack, and an approval request that nobody grants stays pending for as long as GitHub keeps it. A production converge raised at 06:26 was still waiting when a later merge raised its own; the new one reported *"waiting on converge (main-production) … to complete"*, which reads like a stuck job and is a queue. **Approval requests look identical to each other** — the Terraform apply, the host converge and the platform deploy all gate on the same Environment and render the same prompt — so read which *workflow* and which *job* you are approving, not just the Environment name.
 
 **What a healthy converge looks like**, so that a green tick is not the thing you read. Three lines, in this order:
 
