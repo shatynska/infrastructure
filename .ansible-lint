@@ -47,6 +47,7 @@ mock_roles:
   - hardening
   - deploy_user
   - tailscale
+  - hostname
   - ops_user
   - platform_data_volume
   - swap

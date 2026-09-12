@@ -22,6 +22,14 @@ variables {
   location          = "fsn1"
   ssh_key_id        = "12345"
   ssh_allowed_cidrs = ["203.0.113.0/24"]
+  # Supplied because the module now requires them with no default: `tenant`
+  # (Consistent Resource Labeling, iac-safety-hardening) and `firewall_name`
+  # (the firewall's name stops being derived). Without both, every `run` block
+  # in this file fails with "No value for required variable" before it reaches
+  # an assertion. Supplying a newly required input is not a weakening of what
+  # this file already asserted; no assertion below is edited.
+  tenant        = "main"
+  firewall_name = "main"
 }
 
 run "plan_ssh_rule_is_always_present" {

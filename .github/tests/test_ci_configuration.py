@@ -4850,8 +4850,8 @@ class TestChangeDetectionResolvesTheGatesInput(
     # Under `ansible/`, and deliberately NOT selected: no scenario reads them.
     EXCLUDED_CONFIGURATION_PATHS = (
         "ansible/playbooks/host-baseline.yml",
-        "ansible/inventory/prod.hcloud.yml",
-        "ansible/inventory/group_vars/prod.yml",
+        "ansible/inventory/main-production.hcloud.yml",
+        "ansible/inventory/group_vars/production.yml",
         "ansible/requirements.txt",
         "ansible/.envrc.example",
     )
@@ -9426,9 +9426,9 @@ class TestLockfileDiscoveryPrunesWorkingTrees(unittest.TestCase):
         tree, where the answer is known."""
         found = terraform_lockfile_directories()
         self.assertIn(
-            "/terraform/stacks/prod",
+            "/terraform/stacks/main-production",
             found,
-            "lockfile discovery no longer finds the prod environment's own "
+            "lockfile discovery no longer finds the production stack's own "
             f"lockfile, so the Dependabot coverage check reads less than the "
             f"repository holds: {sorted(found)}",
         )

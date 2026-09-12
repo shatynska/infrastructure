@@ -1,6 +1,6 @@
 ---
 # Mounts the platform's dedicated data volume (the Terraform-provisioned
-# `main-data` Hetzner Volume) at a fixed host path, formats it if needed,
+# `main` Hetzner Volume) at a fixed host path, formats it if needed,
 # persists the mount across reboot, and creates the subdirectories
 # monitoring's containers bind-mount into — iac-host-configuration's ADDED
 # "Platform Data Volume Is Mounted at a Fixed Host Path" requirement
@@ -52,9 +52,9 @@
     fail_msg: >-
       No platform_data_volume_device was supplied and no
       /dev/disk/by-id/scsi-0HC_Volume_* device was found on this host. Is the
-      main-data Hetzner Volume actually attached (volume_enabled in
-      terraform/stacks/<environment>/terraform.tfvars, for the
-      environment this run targets)?
+      `main` Hetzner Volume actually attached (volume_enabled in
+      terraform/stacks/<stack>/terraform.tfvars, for the stack whose host this
+      run targets)?
 
 - name: Format the data volume, if it has no filesystem yet
   community.general.filesystem:

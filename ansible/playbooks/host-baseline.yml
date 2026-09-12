@@ -67,8 +67,8 @@
         quiet: true
 
     # `| default([])` is load-bearing. `keyed_groups` creates a group only
-    # where some host carries the label, so under prod's inventory source the
-    # key `staging` is not an empty list -- it is absent, and indexing
+    # where some host carries the label, so under the production stack's
+    # inventory source the key `staging` is not an empty list -- it is absent, and indexing
     # `groups` raises a Jinja error instead of reaching this message.
     - name: Fail loudly if the target environment resolved to no host
       ansible.builtin.assert:
@@ -114,6 +114,21 @@
     - role: docker
     - role: hardening
     - role: tailscale
+    # AFTER `tailscale`, AND THE ORDER IS LOAD-BEARING RATHER THAN TIDY. This
+    # role sets the host's OWN name to `{{ company }}-{{ inventory_hostname }}`.
+    # Until `tailscale` above pins it, the name a host REPORTS to the tailnet is
+    # derived from its own name -- so running this first would tell the tailnet
+    # a name nothing intends, for as long as the rest of this play takes or
+    # fails in, and every unattended converge and deploy reaches this host by
+    # that name. `.github/tests` asserts this ordering, because nothing else
+    # holds it and this list has been reordered before.
+    #
+    # An earlier draft of the change that added this role put it FIRST, on the
+    # reasoning that nothing depends on it. That was wrong, and it is recorded
+    # rather than quietly dropped: "nothing depends on this" is the kind of
+    # claim that reads as obviously true, which is why the dependency went
+    # unnoticed. See ansible/roles/hostname/README.md.
+    - role: hostname
     - role: deploy_user
     # After `docker`: the `docker` group must exist before an operator
     # account can join it (the change add-ops-account).

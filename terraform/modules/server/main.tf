@@ -1,17 +1,34 @@
 locals {
+  # Caller labels FIRST and the axes SECOND, so a caller cannot override an
+  # axis. Consistent Resource Labeling
+  # (openspec/specs/iac-safety-hardening/spec.md) obliges every resource to
+  # carry one label per axis its stack is identified on; a caller-supplied
+  # `tenant` or `environment` winning the merge would satisfy the merge and
+  # defeat the obligation, and it would do so silently -- the plan is clean and
+  # the wrong value is visible only in the Hetzner console.
   labels = merge(
+    var.labels,
     {
+      tenant      = var.tenant
       environment = var.environment
       managed_by  = "terraform"
-    },
-    var.labels
+    }
   )
 }
 
 # Default-deny inbound: only the rules declared here are allowed in.
 # Outbound traffic is unrestricted by omitting any "out" rule.
+#
+# ITS NAME IS AN INPUT, NOT AN EXPRESSION OVER THE SERVER'S. It used to be
+# "<environment>-<name>", which after the stack rename would read
+# `production-main-production` -- the stack's name with its environment half in
+# front of it. Deriving it from `var.tenant` instead would produce the right
+# string today and assert something false: that a stack has one firewall and
+# that its name is the tenant's. A firewall is project-local and is
+# distinguished from a second one by rank, so the caller names it. See the
+# change rename-the-stacks-and-their-resources, design.md decision 4.
 resource "hcloud_firewall" "this" {
-  name   = "${var.environment}-${var.name}"
+  name   = var.firewall_name
   labels = local.labels
 
   rule {

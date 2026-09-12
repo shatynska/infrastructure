@@ -1,5 +1,15 @@
+variable "tenant" {
+  description = "Tenant this server belongs to (e.g. \"main\"). Applied as the `tenant` label. An input rather than a literal, so a second tenant can consume this module unchanged."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.tenant)) > 0
+    error_message = "tenant must not be empty."
+  }
+}
+
 variable "environment" {
-  description = "Environment name this server belongs to (e.g. \"prod\"). Applied as the `environment` label."
+  description = "Environment name this server belongs to, spelled in full (e.g. \"production\"). Applied as the `environment` label. Not abbreviated: `prod` and `preprod` share a prefix, and a label value is read by prefix in more places than it is read whole."
   type        = string
 
   validation {
@@ -9,8 +19,18 @@ variable "environment" {
 }
 
 variable "name" {
-  description = "Name of the server."
+  description = "Name of the server. This repository gives it the name of the stack the server belongs to, because a server's name reaches the tailnet and the heartbeat account, both of which hold every stack a company owns."
   type        = string
+}
+
+variable "firewall_name" {
+  description = "Name of the firewall this module creates. An input of its own rather than an expression over `environment` and `name`: a firewall never leaves its Hetzner project, so it is distinguished from a second firewall in the same stack by rank (\"main\") rather than by the server it protects. No default — a module that guesses a Hetzner resource's name is one whose consumer can forget to name it, and the name is what an operator reads in the console."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.firewall_name)) > 0
+    error_message = "firewall_name must not be empty."
+  }
 }
 
 variable "server_type" {

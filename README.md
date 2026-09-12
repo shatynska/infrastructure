@@ -7,10 +7,10 @@ Manual, ad-hoc server provisioning is hard to audit and drifts silently from wha
 ## Non-goals
 
 - **Multi-cloud support.** Hetzner Cloud only.
-- **Multi-region deployment.** A single region for the foreseeable future — `location = "hel1"` in `terraform/stacks/prod/terraform.tfvars`.
+- **Multi-region deployment.** A single region for the foreseeable future — `location = "hel1"` in `terraform/stacks/main-production/terraform.tfvars`.
 - **Container orchestration.** Plain VMs via `hcloud_server`; no Kubernetes, Nomad, or similar.
 
-A staging stack is *not* a non-goal, and is no longer hypothetical: `terraform/stacks/staging/` exists (see Status below).
+A staging stack is *not* a non-goal, and is no longer hypothetical: `terraform/stacks/main-staging/` exists (see Status below).
 
 ## Repository layout
 
@@ -50,7 +50,7 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
 
    Never put a **Read & Write** token here or in any other local file. This holds for every stack: each one's write token lives exclusively in that stack's own GitHub Environment secret — prod's in `production`, staging's in `staging` — and a stack whose Environment requires no reviewer is no exception, since the reviewer and the confinement are independent. What belongs in this file is a **Read Only** token, and nothing else. See `AGENTS.md`.
 
-   **One token reaches one stack**, because each stack has a Hetzner project of its own and a Hetzner token cannot span projects. Put prod's read-only token in the repo-root `.envrc`, and staging's in an `.envrc` inside `terraform/stacks/staging/` — directory-scoped, so planning staging never leaves staging's token in the shell that plans prod.
+   **One token reaches one stack**, because each stack has a Hetzner project of its own and a Hetzner token cannot span projects. Put the production stack's read-only token in the repo-root `.envrc`, and staging's in an `.envrc` inside `terraform/stacks/main-staging/` — directory-scoped, so planning one never leaves its token in the shell that plans the other.
 
    Without `direnv`, `source .envrc` from the repo root once per shell — it is a plain `export`. That path loses the isolation above, since the export outlives the directory: source the stack's own file in a shell you do not reuse for another stack.
 
@@ -59,7 +59,7 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
    ```sh
    cd ansible
    cp .envrc.example .envrc && direnv allow    # fill in both tokens first
-   ansible-inventory -i inventory/prod.hcloud.yml --graph      # or staging
+   ansible-inventory -i inventory/main-production.hcloud.yml --graph   # or main-staging
    ```
 
    **If you use direnv**, the `allow` step is not optional: direnv refuses to load an unallowed `.envrc`, so a correctly filled file still yields `Invalid Hetzner Cloud API Token` without it. **If you do not**, drop that half and `source .envrc` instead — these are plain exports, and unlike Terraform's `.envrc` files above, neither variable is one whose value depends on which directory you are in.
@@ -191,11 +191,11 @@ GitHub automatically disables `schedule`-triggered workflows after 60 days witho
 
 ## Status
 
-The bootstrap is done. `prod` is provisioned from `terraform/stacks/prod/`, configured by `ansible/playbooks/host-baseline.yml`, and runs `platform/`'s Compose stack; applications deploy onto it from their own repositories, through the per-application deploy-key path the `deploy_user` role sets up. Project identity, scope, and non-goals are recorded in the change `project-foundation`'s design.md; every change since is recorded under `openspec/`.
+The bootstrap is done. `main-production` is provisioned from `terraform/stacks/main-production/`, configured by `ansible/playbooks/host-baseline.yml`, and runs `platform/`'s Compose stack; applications deploy onto it from their own repositories, through the per-application deploy-key path the `deploy_user` role sets up. Project identity, scope, and non-goals are recorded in the change `project-foundation`'s design.md; every change since is recorded under `openspec/`.
 
-`staging` is the second stack, provisioned from `terraform/stacks/staging/` and reached by the same pipeline: it is planned on every pull request that affects it, applied on merge, and swept by the nightly drift run. Two things distinguish it from prod, both deliberate and both recorded in its own `pipeline.yml` — its apply requires no reviewer, and the destroy-policy gate does not apply to it. Neither is a relaxation of where its write credential lives; that is identical to prod's. It runs in a **separate Hetzner Cloud project**, which is what makes both safe and what frees it to reuse prod's `main-data` volume name, and therefore the same on-host mount path.
+`main-staging` is the second stack, provisioned from `terraform/stacks/main-staging/` and reached by the same pipeline: it is planned on every pull request that affects it, applied on merge, and swept by the nightly drift run. Two things distinguish it from production, both deliberate and both recorded in its own `pipeline.yml` — its apply requires no reviewer, and the destroy-policy gate does not apply to it. Neither is a relaxation of where its write credential lives; that is identical to production's. It runs in a **separate Hetzner Cloud project**, which is what makes both safe and what frees it to carry a volume named `main` exactly as the production stack does, and therefore the same on-host mount path.
 
-**Two servers now run**, one per stack: prod's `cx33` (4 vCPU / 8 GB) and staging's `cx23` (2 vCPU), each with its own 10 GB `main-data` volume, in separate Hetzner projects. Two bills, two hosts to patch and converge, two tailnet members to keep track of — staging costs roughly half what prod does and is not free in either money or attention.
+**Two servers now run**, one per stack and each named for its stack: `main-production` on a `cx33` (4 vCPU / 8 GB) and `main-staging` on a `cx23` (2 vCPU), each with its own 10 GB volume named `main`, in separate Hetzner projects. Two bills, two hosts to patch and converge, two tailnet members to keep track of — staging costs roughly half what production does and is not free in either money or attention.
 
 What staging is *not*, yet: configured. It carries no Ansible group variables, no platform stack and no DNS records, so it is a provisioned host rather than a place applications deploy to. `docs/change-queue.md` records that half.
 

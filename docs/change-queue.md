@@ -27,8 +27,8 @@ Source comments in this repository currently mix three kinds of text with no way
 
 Only the first kind survives archiving. Concrete instances of the other two (the `platform/docker-compose.yml` header, formerly listed first, was removed by `fix-volume-discovery-and-consistency`, which was editing that file anyway):
 
-- `terraform/stacks/prod/ssh_key.tf:20-28` — a `moved` block that documents its own removal condition ("Safe to delete once the next apply has run") from a change archived 2026-08-18.
-- `terraform/stacks/prod/main.tf:19-21` — explains a value the file no longer holds.
+- `terraform/stacks/main-production/ssh_key.tf` — a `moved` block that documents its own removal condition ("Safe to delete once the next apply has run") from a change archived 2026-08-18.
+- `terraform/stacks/main-production/main.tf` — explains a value the file no longer holds.
 
 The tailscale role is 48 comment lines against 90 non-blank; this is a style question with a real maintenance cost, not a cosmetic one.
 
@@ -121,7 +121,7 @@ Only what applies to **this** host too is recorded here; the company-only findin
 
 **Not blocked; a policy decision the hardening role already anticipates.**
 
-Port 22 is open on the cloud firewall and in UFW from one ISP `/24` (`ssh_allowed_cidrs` in `terraform.tfvars`, mirrored in `group_vars/prod.yml`). The tailnet rule in `ansible/roles/hardening/tasks/main.yml` admits SSH from `100.64.0.0/10` independently, and that task's own comment says an empty public CIDR list "is safer than what prod runs". Every non-operator path (the deploy jobs) already uses the tailnet; the public rule exists for the operator alone, and the operator is on the tailnet too.
+Port 22 is open on the cloud firewall and in UFW from one ISP `/24` (`ssh_allowed_cidrs` in `terraform.tfvars`, mirrored in `group_vars/production.yml`). The tailnet rule in `ansible/roles/hardening/tasks/main.yml` admits SSH from `100.64.0.0/10` independently, and that task's own comment says an empty public CIDR list "is safer than what prod runs". Every non-operator path (the deploy jobs) already uses the tailnet; the public rule exists for the operator alone, and the operator is on the tailnet too.
 
 **What changed when the host converge moved into the pipeline.** This entry used to wait on that, and the wait is over: `host-converge.yml` reaches every host over the tailnet and needs no allowance in the cloud firewall, so closing port 22 does not lock the pipeline out. What it does close is the fallback. Until this entry lands, the ISP `/24` is what makes a converge that wedges `tailscaled` survivable without Hetzner's console -- so the order matters in one direction only: this must not precede a converge pipeline that has been seen to work. It now has one, but "seen to work" means more than one green run on production, not the first.
 
@@ -378,7 +378,7 @@ Bounded in the meantime by how rotation actually happens here: it is a manual ac
 
 Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the gap by falling into it.
 
-That change shipped `terraform/stacks/staging/terraform.tfvars` with `server_type` deliberately unassigned, and `variables.tf` declares it with no default. Nothing in this repository detects that. The consequence is not subtle once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run Terraform with `-input=false`, so the plan exits non-zero with `No value for required variable`, the conclusion step fails the required check, and a nightly drift sweep would fail for that environment every night and take the shared heartbeat with it — but it is detected by a *plan*, which needs a credential, a workspace and a network. The same fact is a pure static read: for each environment directory, every variable `variables.tf` declares without a `default` appears as an assignment in `terraform.tfvars`.
+That change shipped `terraform/stacks/main-staging/terraform.tfvars` with `server_type` deliberately unassigned, and `variables.tf` declares it with no default. Nothing in this repository detects that. The consequence is not subtle once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run Terraform with `-input=false`, so the plan exits non-zero with `No value for required variable`, the conclusion step fails the required check, and a nightly drift sweep would fail for that environment every night and take the shared heartbeat with it — but it is detected by a *plan*, which needs a credential, a workspace and a network. The same fact is a pure static read: for each environment directory, every variable `variables.tf` declares without a `default` appears as an assignment in `terraform.tfvars`.
 
 That places it squarely in `.github/tests`, whose subject is any property that is a static read of a committed file, and which may make no network call and invoke no Terraform binary. The parser is the only real work: `terraform.tfvars` assignments and `variable` blocks with and without defaults, without importing HCL machinery the suite does not have. `test_a_second_environment.py` already reads `terraform.tfvars` for volume names and can lend its approach.
 
@@ -405,7 +405,7 @@ Once converged, staging's `deploy` account is authorised for `platform` under a 
 
 **Entry 53 is blocked on this one**, and the coupling is worth reading from this end too: 53 opens 80/443 on staging, and opening them before there is a stack behind them is the state `add-a-staging-environment` deliberately avoided. Do this first.
 
-**Staging's prune check will be red until this lands** -- from the converge that arms the timer, not from now. `staging-server-prune-host-images` does not exist until the unit's first activation pings it into being. Once it does, it reports failure every week, because a host with nothing deployed has an empty keep set, which the prune treats as a refusal rather than licence to remove everything. That was accepted deliberately and bounded by this entry; if it stays red long enough to be tuned out, that is the signal to revisit rather than to mute it.
+**Staging's prune check will be red until this lands** -- from the converge that arms the timer, not from now. `main-staging-prune-host-images` does not exist until the unit's first activation pings it into being. Once it does, it reports failure every week, because a host with nothing deployed has an empty keep set, which the prune treats as a refusal rather than licence to remove everything. That was accepted deliberately and bounded by this entry; if it stays red long enough to be tuned out, that is the signal to revisit rather than to mute it.
 
 ## 53. expose-staging-on-the-web
 
@@ -413,7 +413,7 @@ Once converged, staging's `deploy` account is authorised for `platform` under a 
 
 Staging is a configured host with no way in from the internet:
 
-- **`web_allowed_cidrs = []`** in `terraform/stacks/staging/terraform.tfvars`, mirrored by `hardening_web_allowed_cidrs: []` in `ansible/inventory/group_vars/staging.yml`. Both layers must open together — for any given port exactly one layer is the documented access gate, and opening one while assuming the other is closed is the split this repository's firewall convention exists to prevent.
+- **`web_allowed_cidrs = []`** in `terraform/stacks/main-staging/terraform.tfvars`, mirrored by `hardening_web_allowed_cidrs: []` in `ansible/inventory/group_vars/staging.yml`. Both layers must open together — for any given port exactly one layer is the documented access gate, and opening one while assuming the other is closed is the split this repository's firewall convention exists to prevent.
 - **No hostnames and no DNS records.** Manual, because DNS is in no repository (`docs/deferred-work.md`, "Managing DNS in Terraform", whose revisit trigger now points here — this is the first time the manual edit would be made twice, which is the moment that entry says to weigh doing it in Terraform).
 - **No certificates**, which follow from the hostnames via Traefik's ACME path.
 
@@ -446,7 +446,7 @@ Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, which sends a reade
 
     # THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET CONVERGED.
 
-and closes it with "this file's state is PENDING the operator, not finished. Until it is completed there is no converged staging host, no prune timer and no `staging-server-prune-host-images` check." All three values it lists as missing were supplied in PR #130, and the host converged the same evening -- `configure-the-staging-host`'s archived task list records the run and the checks that followed it.
+and closes it with "this file's state is PENDING the operator, not finished. Until it is completed there is no converged staging host, no prune timer and no `staging-server-prune-host-images` check." (That check is `main-staging-prune-host-images` since entry 62 renamed the server; the quotation is left as the file wrote it.) All three values it lists as missing were supplied in PR #130, and the host converged the same evening -- `configure-the-staging-host`'s archived task list records the run and the checks that followed it.
 
 The banner was correct when written and is the kind of text that goes stale silently: nothing fails, and a reader who trusts it draws a wrong conclusion about the environment. What replaces it is not just deletion — the paragraphs under it explain *which* absence refuses a converge and which is tolerated, and that reasoning is worth keeping in some form for whoever writes the next environment's `group_vars` from scratch.
 
@@ -546,9 +546,13 @@ Five hazards, each of which has a quiet failure mode:
 
 ## 63. rename-the-external-services
 
-Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **Blocked on entry 62.**
+Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **No longer blocked**: entry 62 has landed, and the stack directories, the Hetzner resources and the labels now carry the scheme's names.
 
-Four renames that live outside the repository, none of which Terraform performs: the HCP workspaces to `main-production` and `main-staging`, the GitHub Environments to the same, the repository read-only secrets from `HCLOUD_TOKEN_PRODUCTION` and `HCLOUD_TOKEN_STAGING` to `HCLOUD_TOKEN_MAIN_PRODUCTION` and `HCLOUD_TOKEN_MAIN_STAGING`, and the two Hetzner projects. The only code it touches is each `versions.tf`'s `cloud` block and each `pipeline.yml`'s two declared names.
+Four renames that live outside the repository, none of which Terraform performs: the HCP workspaces to `main-production` and `main-staging`, the GitHub Environments to the same, the repository read-only secrets from `HCLOUD_TOKEN_PRODUCTION` and `HCLOUD_TOKEN_STAGING` to `HCLOUD_TOKEN_MAIN_PRODUCTION` and `HCLOUD_TOKEN_MAIN_STAGING`, and the two Hetzner projects. The only code it touches is each `versions.tf`'s `cloud` block and each `pipeline.yml`'s two declared names — **not its third**: `target_environment` names the Ansible group, which is the environment axis and is already spelled in full.
+
+**Entry 62 left two things pointing here, and both are commitments rather than notes.** Each `versions.tf` now carries a comment saying its workspace name and its directory name are deliberately out of step until this entry, and *Remote State Backend* (`openspec/specs/iac-state-management/spec.md`) was rewritten to forbid **computing** a workspace name from a directory name while explicitly permitting the two to agree — which is what this entry makes them do. A requirement that had forbidden the agreement would have made this entry unperformable.
+
+**One name entry 62 did not change and this one does not either**: `PLATFORM_DEPLOY_HOST`, the `production` Environment secret holding the host's tailnet machine name. Its *value* is updated to `main-production` by the operator as one of entry 62's own out-of-band steps, between that change's approval and its merge (its `tasks.md` 10.3). The secret's **name** is correct as it stands and is not this entry's work; if that value was never updated, `platform-deploy.yml` cannot reach the host and that is where to look first.
 
 **Order is load-bearing and the window between steps is broken CI.** The HCP workspace is renamed in the HCP interface *first*, which preserves its state; pushing `versions.tf` ahead of that points at a workspace that does not exist, and the next plan proposes creating every resource from scratch. GitHub cannot rename a secret at all — the new name is created, `pipeline.yml` is flipped, and the old one is deleted afterwards. Renaming a GitHub Environment does keep its secrets and its protection rules, which matters more than it did: since `apply-host-configuration-through-a-gated-workflow` those Environments hold the converge credentials as well as the Hetzner write token. The Hetzner project rename is cosmetic and its tokens survive it.
 
@@ -556,9 +560,11 @@ It is separated from entry 62 precisely because none of it is provable by a plan
 
 ## 64. move-the-platform-data-mount
 
-Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **Blocked on entry 62**, which renames the volume; independent of entry 63 and may go before or after it.
+Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **No longer blocked**: entry 62 renamed the volume. Independent of entry 63 and may go before or after it.
 
-`/mnt/main-data` becomes `/mnt/main`, so that the mount path matches the volume's new name. It touches `platform_data_volume_mount_path`, the two bind mounts in `platform/docker-compose.yml`, the `.github/tests` literals that assert them, and the documents that quote the path.
+`/mnt/main-data` becomes `/mnt/main`, so that the mount path matches the volume's name. **The volume is already `main`** — entry 62 renamed it and deliberately left the path alone, because the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on the volume's id, so the two are independent and the rename cost no migration. What remains is the path itself: `platform_data_volume_mount_path`, the two bind mounts in `platform/docker-compose.yml`, the `.github/tests` literals that assert them, and the several comments entry 62 left saying the two differ **until this entry** — those are a commitment to perform it, and deleting them is part of the work.
+
+**`.github/tests` asserts that the two stacks agree with each other on the volume's name, and no longer that either agrees with the mount path.** Entry 62 separated those two propositions; this entry is where the second becomes true again.
 
 **There is no data migration.** The filesystem lives on the volume and the subdirectories travel with it; only the mountpoint moves, which is an `/etc/fstab` entry and a remount. What it does cost is a stack restart, so Prometheus and Grafana are down for the window and their scrape gap is visible afterwards.
 
@@ -610,8 +616,8 @@ So the honest framing is that this is the fix for the production half that `cach
 
 Both `versions.tf` provider comments state prod's read-only secret name wrongly, and have since prod's secret was renamed:
 
-- `terraform/stacks/prod/versions.tf` says the name "for this stack is `HCLOUD_TOKEN`".
-- `terraform/stacks/staging/versions.tf` says "for this stack HCLOUD_TOKEN_STAGING, and for prod HCLOUD_TOKEN".
+- `terraform/stacks/main-production/versions.tf` says the name "for this stack is `HCLOUD_TOKEN`".
+- `terraform/stacks/main-staging/versions.tf` says "for this stack HCLOUD_TOKEN_STAGING, and for prod HCLOUD_TOKEN".
 
 Prod declares `read_only_secret: HCLOUD_TOKEN_PRODUCTION` in its own `pipeline.yml`, and that same file argues at length that the name must **not** be `HCLOUD_TOKEN` — a repository secret of that name is shadowed by the Read & Write token every GitHub Environment defines, so a gated job reading it resolves a write credential silently. `README.md` agrees: "neither is named `HCLOUD_TOKEN`". The comment contradicts the declaration sitting beside it.
 

@@ -1,0 +1,53 @@
+---
+# Converges the `hostname` role with `company` supplied, against an instance
+# created under a different name -- which is the state of a host whose server
+# was renamed in the provisioning layer and which nothing has re-converged.
+#
+# `company` is supplied here rather than taken from the repository's own
+# `group_vars/all.yml`: a scenario reading the real inventory would assert the
+# value this repository happens to hold, and the requirement is about the name
+# being DERIVED from that variable, not about its value. `acme` is deliberately
+# not `shatynska` for the same reason.
+#
+# THE LENGTH GUARD BELOW IS A RIG CHECK, NOT AN ASSERTION ABOUT THE ROLE.
+# `inventory_hostname` under Molecule is this scenario's instance name, which
+# carries the per-working-tree namespace, and the role prefixes the company to
+# it. On a working tree whose name is long enough, the result crosses the
+# 64-byte limit the kernel enforces and `hostnamectl` fails -- which would read
+# as a defect in the role. The guard names the real cause instead. It runs
+# before the role, so it cannot mask a failure the role caused.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    company: acme
+    # A CONTAINER IS THE ONE PLACE THE ROLE NEEDS THIS, which is why the role
+    # defaults it off and a scenario is what turns it on. `/etc/hostname` and
+    # `/etc/hosts` are bind mounts here, and the atomic rename a write ends with
+    # fails over one with EBUSY -- so without the fallback neither file can be
+    # written and nothing about this role could be exercised at all. A real host
+    # takes the atomic path and must not carry this: see
+    # `hostname_unsafe_writes` in the role's defaults.
+    hostname_unsafe_writes: true
+    hostname_expected_name: "{{ company }}-{{ inventory_hostname }}"
+  pre_tasks:
+    - name: Assert this working tree's namespace leaves room for the derived host name
+      ansible.builtin.assert:
+        that:
+          - hostname_expected_name | length <= 64
+        fail_msg: >-
+          '{{ hostname_expected_name }}' is
+          {{ hostname_expected_name | length }} bytes, over the kernel's
+          64-byte host-name limit. This is a fact about THIS WORKING TREE, not
+          about the role: `inventory_hostname` under Molecule is this
+          scenario's instance name, which carries the working tree's namespace
+          (`ansible/scripts/run-molecule --print-namespace`). Run this scenario
+          from a working tree with a shorter name.
+        success_msg: >-
+          The derived name fits within the kernel's limit, so a failure below
+          is the role's.
+        quiet: true
+  tasks:
+    - name: Run the hostname role
+      ansible.builtin.include_role:
+        name: hostname

@@ -252,8 +252,8 @@ CONFIGURATION_DIRECTORY_POSITIVE = "ansible/**"
 # test's tuple and tasks.md 2.4 asserts the LINT tier still selects; the pair
 # read together is this change's whole safety argument.
 EXCLUDED_FROM_THE_SUITE = (
-    "ansible/inventory/prod.hcloud.yml",
-    "ansible/inventory/group_vars/prod.yml",
+    "ansible/inventory/main-production.hcloud.yml",
+    "ansible/inventory/group_vars/production.yml",
     "ansible/playbooks/host-baseline.yml",
     "ansible/requirements.txt",
     "ansible/.envrc.example",

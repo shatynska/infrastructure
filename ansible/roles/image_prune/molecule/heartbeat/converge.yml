@@ -88,7 +88,7 @@
     image_prune_heartbeat_base_url: http://127.0.0.1:8099
     # NOT A CREDENTIAL. The sink accepts any key; this value names no real
     # project and grants access to nothing. In production this arrives from an
-    # Ansible Vault variable (`ansible/inventory/group_vars/prod.yml`).
+    # Ansible Vault variable (`ansible/inventory/group_vars/production.yml`).
     image_prune_heartbeat_ping_key: fixture-key-not-a-real-ping-key
     deploy_apps:
       - name: solo

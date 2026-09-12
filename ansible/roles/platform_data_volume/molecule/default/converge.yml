@@ -1,6 +1,6 @@
 ---
 # Converges the platform_data_volume role against the fixed loop device
-# prepare.yml set up (standing in for the real, already-attached `main-data`
+# prepare.yml set up (standing in for the real, already-attached `main`
 # Hetzner Volume -- see prepare.yml's comment for why a loop device at a
 # fixed minor number, not a real block device, and why molecule.yml still
 # needs `privileged: true` despite no systemd requirement of this role's

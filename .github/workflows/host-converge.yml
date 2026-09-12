@@ -15,10 +15,18 @@ name: Host Converge
 # everything a converge applies is committed, so there is no provider computing
 # an unknown and no state file to disagree with.
 #
-# NO STACK IS NAMED ANYWHERE IN THIS FILE. Which stacks exist comes
-# from discovery over `ansible/inventory/`, and each one's GitHub Environment
-# and read-only secret from its own `terraform/stacks/<name>/pipeline.yml`.
-# See the Each Environment Declares Its Own Pipeline Configuration requirement.
+# NO STACK IS NAMED ANYWHERE IN THIS FILE, AND NEITHER IS ANY ANSIBLE GROUP.
+# Which stacks exist comes from discovery over `ansible/inventory/`, and each
+# one's GitHub Environment, read-only secret and target Ansible group from its
+# own `terraform/stacks/<name>/pipeline.yml`. See the Each Stack Declares Its
+# Own Pipeline Configuration requirement.
+#
+# A STACK HAS TWO NAMES HERE AND THEY ARE NOT INTERCHANGEABLE. The stack's own
+# name reaches the inventory path and the concurrency group, because those
+# follow the Hetzner project. Its DECLARED GROUP reaches the play's `hosts:`,
+# the `--vault-id` label and the `group_vars` file, because those follow the
+# environment. They were one word until `main-production` and `production`
+# stopped coinciding; every place below that uses one says which.
 #
 # THE WORKFLOW-LEVEL `paths:` FILTER IS PERMISSIBLE ONLY BECAUSE THIS IS NOT A
 # REQUIRED STATUS CHECK. The opposite rule governs `pr-validation.yml` and
@@ -144,16 +152,16 @@ jobs:
             name="${base%"$source_suffix"}"
             discovered_names="${discovered_names}${name} "
 
-            # The NAME reaches more surfaces than either declared field does --
-            # the `-i` path, the `--vault-id` label, `-e target_environment=`,
-            # the concurrency group, and the tab-separated record built below,
-            # which a tab in a filename would corrupt into another
-            # stack's row. Refused here for the same reason the two
-            # fields are, and it takes a pathological committed filename to
-            # reach.
+            # The NAME reaches the `-i` path, the concurrency group and the
+            # tab-separated record built below, which a tab in a filename would
+            # corrupt into another stack's row. Refused here for the same reason
+            # the declared fields are, and it takes a pathological committed
+            # filename to reach. It no longer reaches the vault-id label or the
+            # play variable -- those follow the declared group, which carries a
+            # shape check of its own further down.
             case "$name" in
               "" | *[!A-Za-z0-9_-]*)
-                echo "::error::${name}: '${inventory_root}/${base}' yields a stack name that is not letters, digits, underscores and dashes. That name becomes an inventory path, a vault-id label, a play variable and a concurrency group."
+                echo "::error::${name}: '${inventory_root}/${base}' yields a stack name that is not letters, digits, underscores and dashes. That name becomes an inventory path and a concurrency group. (The vault-id label and the play variable are the DECLARED GROUP's, which carries a shape check of its own further down.)"
                 refused=1
                 continue
                 ;;
@@ -161,7 +169,6 @@ jobs:
 
             directory="${stacks_root}/${name}"
             declaration="${directory}/${declaration_name}"
-            group_vars="${group_vars_root}/${name}.yml"
 
             # An inventory source whose stack declares nothing. Its host is
             # reachable and its converge is gated by no GitHub Environment, which
@@ -172,18 +179,44 @@ jobs:
               continue
             fi
 
-            # A source with no variables of its own. The play would converge the
-            # host with none of that stack's own inputs.
-            if [ ! -f "$group_vars" ]; then
-              echo "::error::${name}: ${inventory_root}/${base} exists but ${group_vars} does not, so a converge of this stack would run with none of its own variables."
-              refused=1
-              continue
-            fi
-
             github_environment="$(field "$declaration" github_environment)"
             read_only_secret="$(field "$declaration" read_only_secret)"
+            target_environment="$(field "$declaration" target_environment)"
 
             incomplete=0
+            # THE GROUP IS DECLARED, NOT DERIVED, AND THIS IS WHERE THAT BECOMES
+            # A REFUSAL. The stack's name used to stand in for it, because at one
+            # tenant the two coincide -- `prod` was the directory, the group, the
+            # vault-id label and the group_vars filename all at once. They no
+            # longer do: this repository's stacks are `main-production` and
+            # `main-staging` while their groups are `production` and `staging`.
+            # Splitting the name on `-` would work on those two and fail silently
+            # on the next, as a group that does not exist, reported several steps
+            # into a run.
+            #
+            # READ ONLY HERE, and deliberately not by the discovery body that
+            # `pr-validation.yml`, `apply.yml` and `drift.yml` share: those run no
+            # converge and read nothing Ansible. A field is required of the
+            # discovery that reads it -- refusing a stack there for the absence of
+            # this one would fail a Terraform-only pull request for a reason the
+            # change does not have.
+            if [ -z "$target_environment" ]; then
+              echo "::error::${name}: ${declaration} declares no 'target_environment'. That field names the Ansible group this stack's converge targets -- the play's hosts, the vault-id label and the group_vars file -- and it has no safe default: the stack's own name is not it except by coincidence at one tenant."
+              incomplete=1
+            fi
+            # The group_vars file follows the DECLARED GROUP and not the stack:
+            # a group_vars file is named for the group whose hosts it supplies.
+            # Two stacks of different tenants in one environment share it, which
+            # is what an environment-wide baseline means and is why no
+            # uniqueness is asserted on this field.
+            if [ -n "$target_environment" ]; then
+              group_vars="${group_vars_root}/${target_environment}.yml"
+              if [ ! -f "$group_vars" ]; then
+                echo "::error::${name}: ${declaration} declares 'target_environment: ${target_environment}' but ${group_vars} does not exist, so a converge of this stack would run with none of that environment's variables."
+                incomplete=1
+              fi
+            fi
+
             if [ -z "$github_environment" ]; then
               echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this stack's converge job attaches to, and it has no safe default."
               incomplete=1
@@ -219,9 +252,21 @@ jobs:
                 ;;
             esac
 
-            case "${github_environment}${read_only_secret}" in
+            # The declared group reaches an execution surface exactly as the two
+            # fields above do -- an inventory group name, a `--vault-id` label
+            # and a `-e` assignment on the play's own command line -- so it is
+            # held to the same shape the stack's name is held to further up.
+            case "$target_environment" in
+              "") ;;
+              *[!A-Za-z0-9_-]*)
+                echo "::error::${name}: ${declaration} states 'target_environment: ${target_environment}', which is not letters, digits, underscores and dashes. That name becomes an inventory group, a vault-id label and a play variable."
+                incomplete=1
+                ;;
+            esac
+
+            case "${github_environment}${read_only_secret}${target_environment}" in
               *[[:cntrl:]]*)
-                echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
+                echo "::error::${name}: ${declaration} carries a control character in 'github_environment', 'read_only_secret' or 'target_environment'. Refusing to read a declaration this step cannot represent."
                 incomplete=1
                 ;;
             esac
@@ -231,7 +276,7 @@ jobs:
               continue
             fi
 
-            printf '%s\t%s\t%s\n' "$name" "$github_environment" "$read_only_secret" >>"$records"
+            printf '%s\t%s\t%s\t%s\n' "$name" "$github_environment" "$read_only_secret" "$target_environment" >>"$records"
           done
 
           # The other direction, and the quieter of the two. A stack that
@@ -288,7 +333,8 @@ jobs:
             | map({
                 name: .[0],
                 github_environment: .[1],
-                read_only_secret: .[2]
+                read_only_secret: .[2],
+                target_environment: .[3]
               })
           ' <"$records")
           rm -f "$records"
@@ -547,18 +593,29 @@ jobs:
       # would. It is chosen for matching `platform-deploy.yml` and for failing at
       # a step named for what it was doing.
       - name: Prove the credentials, derive the address, and trust the host key
-        # THE NAME AND ITS SOURCE DIFFER ON PURPOSE, and the difference is
-        # about to become real. `TARGET_ENVIRONMENT` names the ANSIBLE GROUP
-        # this play converges -- the environment axis -- and is governed by
-        # *Host Configuration Names the Environment It Targets*. It is fed from
-        # the STACK name because the two coincide at one tenant and nowhere
-        # else: after `docs/change-queue.md` entry 62 the group is `production`
-        # while the stack is `main-production`, and re-deriving this is that
-        # entry's work. Renaming the variable itself would break
+        # TWO HANDLES, AND THEY NAME DIFFERENT THINGS. They used to be one,
+        # fed from the stack's name because at one tenant a stack and its
+        # environment coincide. They no longer do -- `main-production` is the
+        # stack and `production` is the group -- so each surface below takes
+        # whichever of the two it actually describes.
+        #
+        #   STACK               the inventory source's filename. A source
+        #                       reaches one Hetzner project, and that is what a
+        #                       stack is.
+        #   TARGET_ENVIRONMENT  the Ansible group: the `jq` key selecting the
+        #                       host set, the `--vault-id` label those hosts'
+        #                       secrets are labelled under, and the play's own
+        #                       `hosts:`. Governed by *Host Configuration Names
+        #                       the Environment It Targets*.
+        #
+        # `TARGET_ENVIRONMENT` keeps its name: renaming it would break
         # `ansible/playbooks/host-baseline.yml`, `.ansible-lint` and
-        # `.pre-commit-config.yaml`, which read it under this name.
+        # `.pre-commit-config.yaml`, which read it under this one. What changed
+        # is where its value comes from -- the stack's own declaration rather
+        # than the stack's name.
         env:
-          TARGET_ENVIRONMENT: ${{ matrix.stack.name }}
+          STACK: ${{ matrix.stack.name }}
+          TARGET_ENVIRONMENT: ${{ matrix.stack.target_environment }}
         run: |
           set -euo pipefail
 
@@ -567,9 +624,9 @@ jobs:
           #
           # ONE: the Hetzner credential. `ansible-inventory` says so on its own
           # stderr, which is NOT redirected for exactly that reason.
-          if ! inventory=$(ansible-inventory -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" --list \
+          if ! inventory=$(ansible-inventory -i "inventory/$STACK.hcloud.yml" --list \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"); then
-            echo "::error::$TARGET_ENVIRONMENT: resolving the inventory failed. Ansible names the cause above and it is the thing to read; the usual one is a Hetzner credential that was absent or rejected, but a connection-address selection this plugin does not accept, a malformed source and a missing collection all land here too. This step is what stops any of them becoming a partially-converged host."
+            echo "::error::$STACK: resolving the inventory failed. Ansible names the cause above and it is the thing to read; the usual one is a Hetzner credential that was absent or rejected, but a connection-address selection this plugin does not accept, a malformed source and a missing collection all land here too. This step is what stops any of them becoming a partially-converged host."
             exit 1
           fi
 
@@ -598,7 +655,7 @@ jobs:
               '.[$env].hosts[] as $host
                | ._meta.hostvars[$host].ansible_host
                | if type == "object" then (.__ansible_unsafe // empty) else . end' 2>/dev/null); then
-            echo "::error::$TARGET_ENVIRONMENT: the inventory resolved, but this stack's environment group names no host to converge. The stack is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different 'environment' label."
+            echo "::error::$STACK: the inventory resolved, but the group '$TARGET_ENVIRONMENT' this stack declares names no host to converge. The declared group is misspelled, its source belongs to a different Hetzner project, that project's server does not exist, or the server carries a different 'environment' label."
             exit 1
           fi
 
@@ -620,10 +677,10 @@ jobs:
           # templates no value. `.github/tests` fails the build on its absence
           # for exactly this reason, and a switch to another forcing filter is
           # meant to go red until someone re-runs that measurement.
-          if ! ansible -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" "$TARGET_ENVIRONMENT" \
+          if ! ansible -i "inventory/$STACK.hcloud.yml" "$TARGET_ENVIRONMENT" \
               -c local -m debug -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" \
               --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password"; then
-            echo "::error::$TARGET_ENVIRONMENT: templating this environment's group variables failed, and Ansible names the variable above. Read that first: the cause this step exists for is a Vault password that is not the one these group_vars were encrypted under — reported as 'Attempt to use undecryptable variable' — but an undefined variable or a bad template in the same file fails here too. Left to the play, either would have surfaced four roles in, on an already-changed host."
+            echo "::error::$STACK: templating the '$TARGET_ENVIRONMENT' group's variables failed, and Ansible names the variable above. Read that first: the cause this step exists for is a Vault password that is not the one these group_vars were encrypted under — reported as 'Attempt to use undecryptable variable' — but an undefined variable or a bad template in the same file fails here too. Left to the play, either would have surfaced four roles in, on an already-changed host."
             exit 1
           fi
 
@@ -639,7 +696,7 @@ jobs:
               # is listed because nothing else would suggest it, not because it
               # is the likeliest: a rebuild leaves the old node holding the bare
               # name while the new one joins suffixed.
-              echo "::error::${TARGET_ENVIRONMENT}: '${address}' matches no tailnet peer this runner can see. Either the host is not on the tailnet — which is the state of a host whose first converge has not run, and of a new stack's first merge; or the connection-address selection is not in effect, so this is a public address rather than a server name; or the server's name is not the name its peer carries, which task 7.4 exists to rule out; or a rebuild left a stale peer holding that name."
+              echo "::error::${STACK}: '${address}' matches no tailnet peer this runner can see. Either the host is not on the tailnet — which is the state of a host whose first converge has not run, and of a new stack's first merge; or the connection-address selection is not in effect, so this is a public address rather than a server name; or the server's name is not the name its peer carries, which task 7.4 exists to rule out; or a rebuild left a stale peer holding that name."
               exit 1
             fi
             # The derived pair is the evidence that the address selection is in
@@ -647,7 +704,7 @@ jobs:
             # tailnet address is not: `platform-deploy.yml` keeps the same class
             # of value in a secret, so one obtained here — unregistered, and
             # therefore unmasked — does not belong in a run log.
-            echo "$TARGET_ENVIRONMENT: converging '$address', resolved from the tailnet netmap"
+            echo "$STACK: converging '$address' for group '$TARGET_ENVIRONMENT', resolved from the tailnet netmap"
             printf '%s %s\n' "$peer" "$address" | sudo tee -a /etc/hosts >/dev/null
 
             key=""
@@ -657,7 +714,7 @@ jobs:
               sleep 3
             done
             if [ -z "$key" ]; then
-              echo "::error::${TARGET_ENVIRONMENT}: '${address}' offered no host key within the wait. It resolves to a tailnet peer but does not answer on SSH, so it is unreachable rather than not yet propagated — check the host itself, and UFW before anything else."
+              echo "::error::${STACK}: '${address}' offered no host key within the wait. It resolves to a tailnet peer but does not answer on SSH, so it is unreachable rather than not yet propagated — check the host itself, and UFW before anything else."
               exit 1
             fi
             printf '%s\n' "$key" >>~/.ssh/known_hosts
@@ -679,11 +736,11 @@ jobs:
       # `docs/bootstrap-a-new-host.md` §6.3a describes. That is a loud failure on
       # an already-diagnosable host, and §6.3a is the procedure for it.
       - name: Converge this stack's host
-        # Fed from the stack name for the reason the credential-proving step
-        # above states: this names the Ansible group, not the stack, and the
-        # two coincide only at one tenant.
+        # Two handles for the reason the credential-proving step above states:
+        # the inventory path is the stack's and everything else is the group's.
         env:
-          TARGET_ENVIRONMENT: ${{ matrix.stack.name }}
+          STACK: ${{ matrix.stack.name }}
+          TARGET_ENVIRONMENT: ${{ matrix.stack.target_environment }}
         run: |
           set -euo pipefail
           # `target_environment` is on the invocation's own line deliberately:
@@ -691,7 +748,7 @@ jobs:
           # it, and a reader — human or static check — that takes the first line
           # of this command must see which stack is being converged.
           ansible-playbook playbooks/host-baseline.yml -e "target_environment=$TARGET_ENVIRONMENT" \
-            -i "inventory/$TARGET_ENVIRONMENT.hcloud.yml" \
+            -i "inventory/$STACK.hcloud.yml" \
             --vault-id "$TARGET_ENVIRONMENT@$HOME/.vault-password" \
             --private-key ~/.ssh/ansible_ci_key \
             -e tailscale_auth_key=''

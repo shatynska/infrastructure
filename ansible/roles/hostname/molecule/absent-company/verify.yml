@@ -1,0 +1,157 @@
+---
+# Verifies the outcome converge.yml recorded for a run with `company` not
+# supplied, and -- separately -- that the host's own name was not changed
+# before the run stopped.
+#
+# Provenance of each assertion (full classification in this change's
+# `test-plan.md`). The requirement is *The Host's Own Name Is Set by the
+# Converge* (openspec/specs/iac-host-configuration/spec.md), scenario "An
+# absent company variable refuses":
+#
+#   outcome == 'failed'            SPECIFIED -- "the run SHALL fail". On its own
+#                                  it establishes nothing: a role that simply
+#                                  consumed an undefined variable also fails.
+#                                  Which is why it is never the last assertion.
+#   'assert' in failed_action      SPECIFIED -- "SHALL fail by name rather than
+#                                  converge a host under a name assembled from
+#                                  a blank", read through the same clause the
+#                                  requirement borrows: *A Role's Absent
+#                                  Required Input Is Reported by Name*. A
+#                                  substring test, as
+#                                  hardening/molecule/absent-ssh-cidrs does,
+#                                  because a recorded action may be short
+#                                  (`assert`) or fully qualified.
+#   message names `company`        SPECIFIED -- "a diagnostic naming that
+#                                  variable".
+#   message names                  The clause "and where it is expected to be
+#   ansible/inventory/group_vars/  set" is SPECIFIED; the choice of that
+#   all.yml                        particular path to satisfy it is DERIVED --
+#                                  the requirement says the variable is "held in
+#                                  one place, applying to every host", and this
+#                                  change's tasks.md 4.4 creates that file. The
+#                                  full literal is asserted rather than a
+#                                  `group_vars/` substring, which would also
+#                                  match an environment file and so would pass
+#                                  against a diagnostic pointing somewhere a
+#                                  second company's clone must not edit.
+#   the name is unchanged          SPECIFIED -- "before any task acts on the
+#                                  host". Setting the host's name is this
+#                                  role's first and principal host-changing
+#                                  task, so the created name still being in
+#                                  place is the observable form of "a refusal
+#                                  to proceed rather than a partial
+#                                  application".
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    hostname_outcome_path: /var/tmp/molecule-absent-company-outcome.json
+    hostname_created_name: absent-company
+  tasks:
+    - name: Read the outcome converge.yml recorded for the unsupplied-input run
+      ansible.builtin.slurp:
+        src: "{{ hostname_outcome_path }}"
+      register: hostname_absent_company_outcome_raw
+
+    - name: Report the recorded outcome
+      ansible.builtin.debug:
+        var: hostname_absent_company_outcome_raw.content | b64decode | from_json
+
+    - name: Assert the run failed rather than naming the host from a blank
+      vars:
+        absent_company_outcome: "{{ hostname_absent_company_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - absent_company_outcome.outcome == "failed"
+        fail_msg: >-
+          The hostname role converged without `company` having been supplied.
+          The input has no safe default -- a name assembled from a blank is a
+          host named for nobody, and it is the name every unattended consumer
+          then resolves -- so the role SHALL detect that it was not supplied
+          and stop. A default added to the role's defaults, or a
+          `| default('')` at the point the variable is consumed, looks exactly
+          like this from the outside.
+        success_msg: >-
+          The run failed, as required. (Which failure it was is what the next
+          assertions decide -- on its own this establishes nothing.)
+        quiet: true
+
+    - name: Assert the failure came from an explicit check, not from a task that consumed the variable
+      vars:
+        absent_company_outcome: "{{ hostname_absent_company_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'assert' in absent_company_outcome.failed_action"
+        fail_msg: >-
+          The run failed, but not at an explicit check -- the failing task was
+          '{{ absent_company_outcome.failed_task_name }}' (action
+          '{{ absent_company_outcome.failed_action }}', message
+          '{{ absent_company_outcome.failed_msg }}'). This is the assertion
+          that discriminates a role which reports the input by name from one
+          that merely dies on it: an undefined-variable error names the
+          expression that failed rather than the decision the operator has to
+          make, and is indistinguishable from a defect in the role itself.
+        success_msg: >-
+          The failure came from an explicit check rather than from a task that
+          consumed the variable.
+        quiet: true
+
+    - name: Assert the failure was not an undefined-variable error raised by a consuming task
+      vars:
+        absent_company_outcome: "{{ hostname_absent_company_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'undefined variable' not in absent_company_outcome.failed_msg | lower"
+        fail_msg: >-
+          The recorded failure message is an undefined-variable error:
+          '{{ absent_company_outcome.failed_msg }}'. Stated separately from the
+          task-identity assertion above so that the run reports WHICH wrong
+          failure occurred, rather than only that the right one did not.
+        success_msg: >-
+          The failure was not an undefined-variable error.
+        quiet: true
+
+    - name: Assert the diagnostic names the variable and where it is expected to be set
+      vars:
+        absent_company_outcome: "{{ hostname_absent_company_outcome_raw.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'company' in absent_company_outcome.failed_msg"
+          - "'ansible/inventory/group_vars/all.yml' in absent_company_outcome.failed_msg"
+        fail_msg: >-
+          The run failed at a check, but its message does not name both the
+          variable and where it is expected to be set:
+          '{{ absent_company_outcome.failed_msg }}'. An operator reading it has
+          to be told which input was not supplied and how to supply it -- and
+          for this one, where to supply it is the single file a second
+          company's clone changes, not an environment's variables file.
+        success_msg: >-
+          The diagnostic names `company` and the file it is expected to be set
+          in.
+        quiet: true
+
+    # ============================================================
+    # "before any task acts on the host": a refusal to proceed, not a partial
+    # application.
+    # ============================================================
+    - name: Read the name the host answers to
+      ansible.builtin.command: hostname
+      register: hostname_observed
+      changed_when: false
+
+    - name: Assert the host's own name was not changed before the run stopped
+      ansible.builtin.assert:
+        that:
+          - hostname_observed.stdout == hostname_created_name
+        fail_msg: >-
+          The instance answers to '{{ hostname_observed.stdout }}' rather than
+          the name it was created with, '{{ hostname_created_name }}', after a
+          converge that failed for want of `company`. Setting the host's name
+          is this role's first host-changing task, so its having run means the
+          check did not precede it: the run renamed the host and then refused,
+          which is a partial application. The check has to be the role's FIRST
+          task.
+        success_msg: >-
+          The host still answers to the name it was created with, so the run
+          stopped before the role's first host-changing task.
+        quiet: true

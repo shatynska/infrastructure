@@ -1,0 +1,56 @@
+---
+# This stack's pipeline configuration, read by .github/workflows/'s
+# discovery step -- see "Each Stack Declares Its Own Pipeline
+# Configuration" (openspec/specs/iac-cicd-pipeline/spec.md).
+#
+# This file is what made adding staging a matter of adding a directory: no
+# file under .github/workflows/ changed to bring this stack into the
+# validation, plan, apply and drift workflows.
+
+# The GitHub Environment this stack's apply job attaches to. REQUIRED.
+#
+# `staging` requires NO reviewer, which is the point of it: an approved
+# staging deploy is as slow as prod and stops being used. That is a property
+# of the Environment's protection rules -- repository settings, which no file
+# here can verify -- and not of the workflow.
+#
+# The apply job still declares this Environment, so the write token stays
+# confined to that job. Only the reviewer is dropped; the confinement is
+# independent of it. What bounds an unreviewed apply is that staging's Read &
+# Write token belongs to a Hetzner project holding staging alone.
+github_environment: staging
+
+# The repository secret holding this stack's read-only Hetzner token.
+# REQUIRED.
+#
+# Not `HCLOUD_TOKEN`: that name is the production stack's, a repository secret
+# holds one value, and two stacks planning under one token is the defect this
+# field exists to prevent. Discovery fails the pipeline naming both offenders
+# if two stacks ever declare the same name.
+read_only_secret: HCLOUD_TOKEN_STAGING
+
+# The Ansible group this stack's converge targets. REQUIRED. Read the
+# production stack's declaration for why this is declared rather than derived
+# from the stack's name, and for why it alone among the required fields carries
+# no uniqueness obligation.
+#
+# `staging` was already the environment axis spelled in full -- only `prod` was
+# abbreviated -- so this stack's group name did not move while its directory
+# did, and `group_vars/staging.yml` stayed where it was. That is the clearest
+# demonstration in the repository that the two names are independent.
+target_environment: staging
+
+# Whether the Destroy Policy Gate applies to this stack. OPTIONAL;
+# absent means it applies, so a mistake in this file fails safe.
+#
+# `false` here, and stated rather than omitted. Staging is rebuilt on purpose
+# -- rehearsing a destructive change is what it is for -- and requiring an
+# override label on every destructive plan against a disposable stack
+# trains the operator to apply the label, which is the same failure mode as
+# an approval prompt with nothing to approve.
+#
+# POLARITY IS LOAD-BEARING AND LIVES IN THE NAME: this field names the GATE,
+# so `false` means the gate does NOT apply. `disposable: true` would be the
+# same value with the opposite spelling, and nothing in a value can tell a
+# reader which was meant. Prod may not set this false; staging may.
+destroy_policy_gate: false

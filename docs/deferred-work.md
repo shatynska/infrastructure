@@ -30,7 +30,7 @@ No consumer does. Splitting them adds a variable, a validation and a test for a 
 
 ## Generating Ansible's CIDR variables from Terraform
 
-`ansible/inventory/group_vars/prod.yml:17-20` hand-mirrors `terraform/stacks/prod/terraform.tfvars`'s `ssh_allowed_cidrs` and `web_allowed_cidrs`. These have drifted once already, and the file's own comment records what that cost: UFW rules assumed `web_allowed_cidrs` was unset when it was in fact `["0.0.0.0/0"]`, which would have left the host firewall blocking traffic the cloud firewall already permitted.
+`ansible/inventory/group_vars/production.yml` hand-mirrors `terraform/stacks/main-production/terraform.tfvars`'s `ssh_allowed_cidrs` and `web_allowed_cidrs`. These have drifted once already, and the file's own comment records what that cost: UFW rules assumed `web_allowed_cidrs` was unset when it was in fact `["0.0.0.0/0"]`, which would have left the host firewall blocking traffic the cloud firewall already permitted.
 
 Deriving them from Terraform output would remove the drift class entirely, and is deliberately not done: it would make an Ansible run depend on Terraform state and an HCP Terraform token, coupling the two layers that this repository's structure exists to keep separate. The reasoning is recorded in `ansible/roles/hardening/README.md`; it is repeated here because the audit re-surfaced the drift risk as live rather than settled.
 
@@ -131,7 +131,7 @@ Was `docs/change-queue.md` entry 3a, deleted from there and recorded here on 202
 
 It is not taken here either, and for a reason that entry did not state. Refusing makes the role's success depend on **what else is attached to the host**, which the role does not own. A second Hetzner Volume mounted for some unrelated purpose would break `host-baseline.yml` on every run thereafter, and a converge that stops is a worse failure than a mount that is merely arbitrary — particularly since the pick is not arbitrary. Two Molecule scenarios hold it deterministic: `multiple-devices-discoverable` and `multiple-devices-reverse-order`, one per directory-read arrangement, since either alone would pass a role selecting `files[0]` or `files | last`.
 
-The third arm — telling the role which device is `main-data` — is the `linux_device` hand-copying that `add-platform-monitoring` already considered and rejected. So all three are settled: the pick stays deterministic, inference stays, and the ambiguity stays tolerated.
+The third arm — telling the role which device is the stack's `main` volume — is the `linux_device` hand-copying that `add-platform-monitoring` already considered and rejected. So all three are settled: the pick stays deterministic, inference stays, and the ambiguity stays tolerated.
 
 **Revisit when** a second volume is actually attached to a host in this project. That is the first moment the question has a live case to be right about, and the operator answering it is answering about something real rather than deciding a hypothetical. Prod has one volume today.
 
@@ -164,7 +164,7 @@ One thing did change in the exposure. Staging's `group_vars` deliberately leaves
 
 Was `docs/change-queue.md` entry 13, deleted from there and recorded here on 2026-09-09.
 
-`refresh-readme-accuracy` found two README statements that had gone stale against committed files and that nothing noticed for weeks: the region, stated as `fsn1` while `terraform/stacks/prod/terraform.tfvars` said `hel1`, and the Molecule scenario count, stated as eight against twelve in the tree. Both are inside what `.github/tests` can assert — a static read of two committed files, no network, no credential, no container runtime — and this repository already enforces a documentation convention that way.
+`refresh-readme-accuracy` found two README statements that had gone stale against committed files and that nothing noticed for weeks: the region, stated as `fsn1` while `terraform/stacks/main-production/terraform.tfvars` said `hel1`, and the Molecule scenario count, stated as eight against twelve in the tree. Both are inside what `.github/tests` can assert — a static read of two committed files, no network, no credential, no container runtime — and this repository already enforces a documentation convention that way.
 
 It is not done, because **the better fix has already been applied and generalises where an assertion does not.** That same change replaced the answer with the command that produces it wherever the useful content was a count or a list; the Repository layout section is now a `git ls-files` pipeline rather than an enumeration. A fact derived on read cannot go stale, so it needs no assertion. A fact that is asserted still has to be edited in the same commit as whatever it mirrors, or the build goes red — so an assertion converts a silent staleness into a standing editing obligation, which is a trade rather than a win. Rewriting the next stale fact as its own command is cheaper and leaves nothing behind.
 
@@ -176,7 +176,7 @@ What remains genuinely duplicated after that pass is two facts. Buying a check f
 
 Was `docs/change-queue.md` entry 14, deleted from there and recorded here on 2026-09-09. It was recorded as a correction to batch into whatever change next touched `iac-repo-foundations`. No such change arrived for three months, and a correction waiting for a carrier that may never come is a deferral rather than a queue entry.
 
-*Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/stacks/prod/` is in `ssh_key.tf`.
+*Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/stacks/main-production/` is in `ssh_key.tf`.
 
 The disagreement is **factual, not normative**. The parenthetical is illustrative, the requirement's normative content is that the file is committed and non-secret, and labels genuinely are non-secret environment configuration — simply set on the resource rather than passed through this file. Nothing is permitted or forbidden differently because of it, and no reader is misled about what the requirement demands.
 
@@ -262,7 +262,7 @@ Separating the plan and apply concurrency groups stops a queued *plan* cancellin
 
 Recorded by `add-a-staging-environment`, whose `design.md` Decision 7 settles it by modifying a requirement rather than implementing one.
 
-*Environment and Module Folder Structure* (`openspec/specs/iac-repo-foundations/spec.md`) used to prescribe that ordered promotion "SHALL be achieved by sequencing apply jobs within a single workflow (lower environment first, then the gated production environment)". At one environment that sentence described nothing. At two it describes a mechanism the apply workflow does not have, so it was unmet the day staging existed.
+*Stack and Module Folder Structure* (`openspec/specs/iac-repo-foundations/spec.md`) used to prescribe that ordered promotion "SHALL be achieved by sequencing apply jobs within a single workflow (lower environment first, then the gated production environment)". At one environment that sentence described nothing. At two it describes a mechanism the apply workflow does not have, so it was unmet the day staging existed.
 
 **It was not implemented, and the reason is not effort.** Sequencing staging's apply ahead of prod's makes prod's apply depend on staging's outcome, which is the coupling *Gated Production Apply Applies the Reviewed Plan* (`openspec/specs/iac-cicd-pipeline/spec.md`) exists to remove: a broken staging would become a reason a correct prod fix cannot reach production. That requirement states the obligation for plans, and it holds here for the same mechanical reason — a stage-scoped dependency cannot tell this environment's outcome from another's.
 

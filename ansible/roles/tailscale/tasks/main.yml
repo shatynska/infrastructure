@@ -1,10 +1,20 @@
 ---
-# Joins the prod host to a private tailnet, per iac-host-configuration's
-# ADDED "Host Joins a Private Tailnet for Non-Operator SSH Access"
-# requirement (the change connect-platform-deploy-via-tailscale).
-# This exists so the GitHub Actions deploy job can reach the host without
-# widening SSH access on the public internet -- see that change's
-# design.md for the full rationale.
+# Joins the host to a private tailnet, and pins the name it reports there.
+#
+# Two requirements, from two changes, and it is worth saying which is which:
+#
+#   "Host Joins a Private Tailnet for Non-Operator SSH Access"
+#     -- the change connect-platform-deploy-via-tailscale, whose design.md
+#     carries the full rationale. It exists so the GitHub Actions deploy job
+#     can reach the host without widening SSH access on the public internet.
+#
+#   "The Host's Own Name Is Set by the Converge"
+#     -- the change rename-the-stacks-and-their-resources, which added the
+#     `--hostname` pin below. Before it, the name this host reported was
+#     derived from the host's OWN name, which that change prefixes with the
+#     operating company.
+#
+# Both are in openspec/specs/iac-host-configuration/spec.md.
 
 - name: Ensure the apt keyrings directory exists
   ansible.builtin.file:
@@ -96,8 +106,15 @@
 # iac-host-configuration's "Host is reachable over the tailnet" scenario
 # unsatisfied on a real run. Skipping is the dangerous direction here;
 # attempting `tailscale up` on an already-connected host is harmless.
+#
+# `--hostname` PINS THE NAME THIS HOST REPORTS, and it is not decoration. With
+# no pin the reported name is derived from the host's OWN name, which the
+# `hostname` role sets to `{{ company }}-{{ inventory_hostname }}` -- and every
+# unattended consumer resolves the server's name, not that one. Measured on the
+# live production host before this was added: `tailscale debug prefs` returned
+# `"Hostname": ""`, so nothing pinned it and the derivation was live.
 - name: Bring the host onto the tailnet
-  ansible.builtin.command: "tailscale up --authkey={{ tailscale_auth_key }}"
+  ansible.builtin.command: "tailscale up --authkey={{ tailscale_auth_key }} --hostname={{ inventory_hostname }}"
   when: >
     (tailscale_status_check.rc | default(1)) != 0 or
     (tailscale_status_check.stdout | default('') | trim | length) == 0 or
@@ -105,3 +122,85 @@
     (tailscale_status_check.stdout | from_json).BackendState | default('') != "Running"
   changed_when: true # this task only ever runs when the host wasn't already connected, so it always represents a real state change
   no_log: true
+
+# THE SAME PIN, FOR A HOST ALREADY ON THE TAILNET. `tailscale up` above runs
+# only on a host that is not connected, so without this an existing host --
+# which is every host this repository has -- would keep deriving its reported
+# name from its own name, and the `hostname` role is about to change that.
+#
+# THIS DOES NOT RENAME THE TAILNET MACHINE, and reading it as though it does is
+# the mistake the change that added it made first. A machine's name is assigned
+# at REGISTRATION and lives in the tailnet's own records; `--hostname` sets what
+# the host REPORTS, which is a different field. Measured against tailscale
+# 1.102.3 on the live tailnet: two peers report `HostName: helen` while carrying
+# `DNSName: helen` and `helen-1`, so the two differ persistently; and
+# `tailscale ip -4 helen-1` answers for a name no peer reports, so resolution --
+# which is what `host-converge.yml` and `platform-deploy.yml` depend on --
+# reaches the machine name. Renaming a machine is done in the Tailscale
+# interface and is an operator step of a change, never a converge's.
+#
+# So this task is DEFENCE rather than mechanism: it keeps the host's own name
+# from driving the machine name somewhere nobody chose. Whether Tailscale would
+# carry a reported-name change into the machine name is then a question that
+# does not need answering -- with the pin in place both outcomes are the name
+# this repository intends.
+#
+# THE PIN RUNS UNCONDITIONALLY AND THE *REPORT* IS WHAT IS CONDITIONAL, which
+# is the opposite of the shape `tailscale up` above uses and is deliberate.
+# `tailscale set --hostname` to the value already in force is a no-op that exits
+# 0, so gating the task on the name differing would buy nothing and would make
+# the role's correctness depend on the same JSON read twice. `changed_when`
+# instead compares against what the host reported BEFORE the task ran, so a
+# converge whose only effect was to re-assert an already-correct name reports no
+# change -- which is what makes a play recap readable as evidence, and the recap
+# is what stands in for the Molecule scenario this role does not have.
+#
+# The `when:` that remains guards PARSEABILITY and nothing else: the same three
+# limbs, in the same order and for the same reasons, that guard the `from_json`
+# call above. A host whose tailscaled cannot be read is one this task cannot
+# report on.
+- name: Read the name this host currently reports to the tailnet
+  ansible.builtin.command: tailscale debug prefs
+  register: tailscale_prefs_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+#
+# NO `when:`, AND ITS ABSENCE IS THE POINT. An earlier draft guarded this task
+# on the prefs read having succeeded and parsed -- which, since that read
+# carries `failed_when: false`, meant an unreachable tailscaled SKIPPED the pin
+# silently, left the reported name deriving from the host's own, and let the
+# `hostname` role immediately after change that name with nothing pinning it.
+# That is precisely the window this task exists to close, and it would have
+# closed it only on the runs that did not need closing.
+#
+# The polarity here is the opposite of `tailscale up`'s above and deliberately
+# so. There, skipping is dangerous and attempting is harmless, so an
+# unparseable status means NOT CONNECTED. Here, attempting is harmless --
+# `tailscale set --hostname` to the value already in force is a no-op -- and
+# skipping is the dangerous direction, so the task always runs and a genuinely
+# broken daemon fails loudly on `tailscale set` rather than passing green.
+#
+# `changed_when` carries the guard instead, and its limbs are in the same
+# short-circuiting order the `when:` above uses and for the same reason:
+# `from_json` is reached only once emptiness and shape have been ruled out. It
+# reports NO change only where the prefs read positively established the name
+# was already correct, so a converge that could not read the prefs reports a
+# change rather than silently claiming none.
+#
+# `is match('^\{')` is a SHAPE guard and not a parseability one -- it reads the
+# first character, so stdout that opens with `{` and is then truncated still
+# reaches `from_json` and raises. That is deliberate here where it would not
+# have been under the old `when:`: failing is now the correct direction, and a
+# daemon answering with half a document is one this task should not report on.
+- name: Pin the name this host reports to the tailnet
+  ansible.builtin.command: "tailscale set --hostname={{ inventory_hostname }}"
+  changed_when: >
+    not (
+      (tailscale_prefs_check.rc | default(1)) == 0 and
+      (tailscale_prefs_check.stdout | default('') | trim | length) > 0 and
+      ((tailscale_prefs_check.stdout | default('') | trim) is match('^\{')) and
+      (tailscale_prefs_check.stdout | from_json).Hostname | default('')
+      == inventory_hostname
+    )

@@ -1,0 +1,48 @@
+---
+# The main-staging STACK's inventory source. Identical to
+# main-production.hcloud.yml but for the credential it names -- read that file
+# for why one source per stack, why a source is named for its stack while a
+# group is named for its axis, why the filename must end in `hcloud.yml`, and
+# why the credential is not the plugin's bare HCLOUD_TOKEN fallback.
+#
+# This stack has a Hetzner project of its own (add-a-staging-environment), so
+# this source reaches that project and nothing else.
+#
+# THIS STACK IS WHERE THE TWO NAMES ARE EASIEST TO SEE APART. Its directory and
+# this file moved to `main-staging` while its group stayed `staging` and its
+# `group_vars/staging.yml` did not move at all -- because `staging` was already
+# the environment axis spelled in full and only `prod` was abbreviated.
+plugin: hetzner.hcloud.hcloud
+
+# This stack's read-only token, from ansible/.envrc. The same name the
+# HCLOUD_TOKEN_STAGING *repository secret* carries, so the local variable and
+# the CI secret do not have to be mentally translated between.
+#
+# Not to be confused with the HCLOUD_TOKEN that direnv exports inside
+# terraform/stacks/main-staging/: that one is Terraform's, is this stack's
+# token under the name its provider reads, and is scoped to that directory.
+api_token: "{{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN_STAGING') }}"
+
+# Identical to the production stack's block, and identical on purpose -- read
+# that file for why the default is the public address, why CI selects
+# `hostname`, why this is `compose:` rather than the plugin's own
+# `connect_with:`, and why an unrecognised value fails rather than falling
+# back.
+strict: true
+compose:
+  ansible_host: >-
+    {'public_ipv4': ansible_host, 'hostname': hcloud_name}[
+      lookup('ansible.builtin.env', 'HCLOUD_CONNECT_WITH') | default('public_ipv4', true)
+    ]
+
+# ONE GROUP PER AXIS, the same two the production stack's source keys on and
+# for the same reasons -- read that file. `strict: true` above reaches
+# `keyed_groups` as well as `compose`, and both keys are left exactly as they
+# are because that costs nothing. MEASURED rather than assumed, against the
+# live API: with a label absent, a strict parse does not fail -- the host is
+# simply not grouped, and is dropped from the plugin's own `hcloud` group too.
+keyed_groups:
+  - key: hcloud_labels.environment
+    separator: ""
+  - key: hcloud_labels.tenant
+    separator: ""
