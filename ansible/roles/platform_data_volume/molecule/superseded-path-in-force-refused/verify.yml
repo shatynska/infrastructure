@@ -184,11 +184,22 @@
 
     - name: Assert the fstab reduction can find a path that is present
       vars:
+        # A synthetic fstab as TEXT, in a literal block scalar. YAML gives a
+        # block scalar real newlines, so this needs no escape and cannot repeat
+        # the folded-scalar mistake the comment below `fstab_targets` records --
+        # which the first version of this control made anyway, by reaching for
+        # backslash-n inside a folded scalar.
+        #
+        # Text rather than a ready-made list, so the control runs `.splitlines()`
+        # -- the step that trap breaks. A control that started from a list would
+        # pass while the reduction it stands for returned one unsplit element and
+        # satisfied every `not in` below having examined nothing.
+        fstab_control_text: |
+          # a comment
+
+          {{ platform_data_volume_device }} {{ platform_data_volume_mount_path }} ext4 defaults 0 0
         fstab_control: >-
-          {{ ['# a comment',
-              '',
-              platform_data_volume_device ~ ' ' ~ platform_data_volume_mount_path
-              ~ ' ext4 defaults 0 0']
+          {{ fstab_control_text.splitlines()
              | map('trim')
              | select()
              | select('match', '^[^#]')
@@ -225,7 +236,6 @@
              | list }}
       ansible.builtin.assert:
         that:
-          - platform_data_volume_mount_path not in fstab_targets
           - platform_data_volume_findmnt.rc != 0
           - platform_data_volume_mount_path not in fstab_targets
           # The trailing-separator spelling, checked separately: a role

@@ -101,9 +101,17 @@
 
 - name: Retire any superseded mount path from /etc/fstab, without unmounting it
   ansible.posix.mount:
-    path: "{{ item }}"
+    path: "{{ item | regex_replace('/$', '') }}"
     state: absent_from_fstab
   loop: "{{ platform_data_volume_superseded_mount_paths }}"
+  # NORMALISED HERE TOO, and not only in the guard above. `absent_from_fstab`
+  # matches the fstab name EXACTLY -- it expands `~` and `$VAR` and nothing
+  # else -- so a declared path carrying a trailing separator, against an fstab
+  # naming it without one, reports `changed=False` and removes nothing. A
+  # declaration one character off would
+  # converge green, `ok`, with both paths still persisted: the two-paths-at-boot
+  # state this task exists to prevent, reached through the task meant to prevent
+  # it.
   # `absent_from_fstab` rather than `absent` or `unmounted`, and the difference
   # is the whole point: both of those unmount, and at the moment a path moves a
   # running Prometheus or Grafana holds a bind into the old one -- so an
@@ -116,6 +124,38 @@
   # No `when:` guard -- an empty loop runs no iterations, and a declared path
   # already absent from /etc/fstab reports no change, which is the state every
   # converge after the first is in.
+
+- name: Read /etc/fstab back after retiring the superseded paths
+  ansible.builtin.slurp:
+    src: /etc/fstab
+  register: platform_data_volume_fstab_after
+  when: platform_data_volume_superseded_mount_paths | length > 0
+
+- name: Assert no superseded path is still persisted in /etc/fstab
+  vars:
+    platform_data_volume_fstab_active: >-
+      {{ (platform_data_volume_fstab_after.content | b64decode).splitlines()
+         | map('trim') | select() | select('match', '^[^#]')
+         | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2') | list }}
+    platform_data_volume_still_persisted: >-
+      {{ platform_data_volume_superseded_mount_paths
+         | map('regex_replace', '/$', '')
+         | select('in', platform_data_volume_fstab_active) | list }}
+  ansible.builtin.assert:
+    that:
+      - platform_data_volume_still_persisted | length == 0
+    fail_msg: >-
+      These superseded mount paths are still named in /etc/fstab after the
+      retirement task ran: {{ platform_data_volume_still_persisted | join(', ') }}.
+      The device would mount at more than one path on the next reboot.
+  when: platform_data_volume_superseded_mount_paths | length > 0
+  # THE ROLE CHECKS ITS OWN WORK, because the retirement above cannot report
+  # having failed. `absent_from_fstab` is a no-op on anything it does not match
+  # -- a spelling it does not normalise, or a malformed line it skips for not
+  # splitting into six fields -- and a no-op reports `changed=False`, which is
+  # also what a correct already-retired run reports. The two are
+  # indistinguishable from the module's result, and the difference between them
+  # only becomes visible at a reboot months later.
 
 - name: Create the dependent subdirectories on the mounted volume, with per-service ownership
   ansible.builtin.file:

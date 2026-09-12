@@ -79,6 +79,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Mapping
 
 import yaml
 
@@ -227,7 +228,16 @@ def stack_host_volume_mounts(compose: Path | None = None) -> list[tuple[str, str
     found = []
     for service, mount in service_mounts(compose):
         source = mount.get("source")
-        if isinstance(source, str) and source.startswith(HOST_VOLUME_ROOT):
+        # The bare root is collected as well as everything under it: a bind
+        # whose source is exactly `/mnt` would otherwise escape the collector
+        # and never be containment-checked. Written as an equality plus a
+        # `HOST_VOLUME_ROOT` prefix rather than as a prefix of `/mnt`, because
+        # the latter also collects `/mnt-other/...`, which is a different
+        # directory and none of this check's business.
+        if isinstance(source, str) and (
+            source.rstrip("/") == HOST_VOLUME_ROOT.rstrip("/")
+            or source.startswith(HOST_VOLUME_ROOT)
+        ):
             found.append((service, source))
     return found
 
@@ -262,7 +272,9 @@ def stack_mounts_outside_the_role_mount_path(
 # --------------------------------------------------------------------------
 
 
-def superseded_path_occurrences(root: Path | None = None) -> list[str]:
+def superseded_path_occurrences(
+    root: Path | None = None, exemptions: Mapping[str, str] | None = None
+) -> list[str]:
     """Every committed file still naming the superseded mount path, as
     `<path>:<line>`.
 
@@ -278,10 +290,19 @@ def superseded_path_occurrences(root: Path | None = None) -> list[str]:
     and has no tracked files, so those are walked. That path exists for the
     discriminators below and is not a second way of reading the repository.
 
+    An `exemptions` argument substitutes for `EXEMPT_WHOLE_PATHS`, so that the
+    exempting half can be exercised over a scratch tree rather than asserted
+    only by the repository-level sweep happening to be green. It mirrors the
+    argument `exemptions_naming_no_occurrence` already takes, which is what lets
+    one discriminator hold both halves of an exemption to account.
+
     Raises rather than reporting a clean tree when it reads no file at all: a
     sweep that read nothing would otherwise report success having verified
     nothing.
     """
+    exempt_whole_paths = (
+        EXEMPT_WHOLE_PATHS if exemptions is None else tuple(exemptions)
+    )
     here = Path(__file__).resolve()
     contents: dict[str, str] = {}
     if root is None:
@@ -310,7 +331,7 @@ def superseded_path_occurrences(root: Path | None = None) -> list[str]:
 
     offences: list[str] = []
     for name, text in contents.items():
-        if name.startswith(EXEMPT_PREFIXES) or name in EXEMPT_WHOLE_PATHS:
+        if name.startswith(EXEMPT_PREFIXES) or name in exempt_whole_paths:
             continue
         if SUPERSEDED_MOUNT_PATH not in text:
             continue
@@ -762,6 +783,18 @@ class TestTheSweepDiscriminates(unittest.TestCase):
                 "docs/kept.md": f"observed at {SUPERSEDED_MOUNT_PATH}\n",
                 "docs/expired.md": "nothing here names the path\n",
             }
+        )
+        self.assertEqual(
+            [],
+            superseded_path_occurrences(tree, exemptions),
+            "the exempt file's occurrence was reported, so a whole-path "
+            "exemption does not actually exempt",
+        )
+        self.assertNotEqual(
+            [],
+            superseded_path_occurrences(tree, {}),
+            "the same tree with no exemption reported nothing, so the assertion "
+            "above passes whether or not the exemption does any work",
         )
         self.assertEqual(
             [],
