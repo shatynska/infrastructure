@@ -621,3 +621,50 @@ Prod declares `read_only_secret: HCLOUD_TOKEN_PRODUCTION` in its own `pipeline.y
 
 **Whether a check can hold it.** Probably: the declared `read_only_secret` and the names these comments assert are both static reads of committed files, which is `.github/tests`' own subject, and the suite already reads every `pipeline.yml`. Worth deciding when the change is proposed rather than now — a comment asserting a secret name is harder to locate reliably than a declaration stating one, and a check that locates it badly is worse than the prose.
 
+## 71. narrow-the-converge-trigger-to-what-a-converge-reads
+
+**Not blocked. Recorded 2026-09-12, from the merge of `rename-terraform-environments-to-stacks` (PR #148).**
+
+`host-converge.yml` triggers on any merge to `main` touching `ansible/`, with no filter on *what* under `ansible/` changed. That merge's entire `ansible/` diff was **eleven lines, every one a comment** — citation paths in two role READMEs, a role's `tasks/main.yml`, a Molecule `prepare.yml`, the two inventory sources, both `group_vars` files and `.envrc.example`. It converged production and staging: run `34669351690`, nine minutes against prod, `changed=0` on both hosts.
+
+Idempotency is what made that harmless, and "we rely on idempotency" is a weaker guarantee than "it does not run". A converge changes the host firewall, the accounts that may log in and the container runtime; a comment fix should not reach a production host to discover it has nothing to do.
+
+**The asymmetry that makes this visible.** `ansible-verify.yml`'s Molecule trigger was deliberately narrowed by `narrow-the-molecule-trigger-to-what-it-reads` and now excludes `ansible/inventory/**`, the playbooks, the converge workflow's own `requirements.txt` and `.envrc*`. Those exclusions are exactly why the same merge ran 2 Molecule roles of 7. The converge trigger never got the same treatment, and it has the larger blast radius of the two.
+
+**Why this is NOT a copy of that change, and the reason is the whole difficulty.** The two triggers read different sets, and the exclusion lists are close to inverses:
+
+- Molecule may exclude `ansible/inventory/**` because no scenario reads it. A **converge** reads the inventory source and the `group_vars` for its stack — they are its inputs, not its scaffolding. Excluding them would be a defect.
+- Molecule may exclude the playbooks because scenarios have their own converge playbooks. A converge runs `playbooks/host-baseline.yml` itself.
+- Both may exclude `ansible/.envrc*`, a document and a gitignored operator file.
+
+So the safe exclusion set is roughly: documentation (`**/README.md`), `.envrc*`, and Molecule's own scenario directories — which a converge never reads. The role `tasks/`, `defaults/`, `handlers/`, `templates/` and `meta/`, the playbooks, the inventory and the `group_vars` all stay.
+
+**The failure mode to design against, and it is the expensive one.** Getting the Molecule filter wrong under-runs a test suite, which is loud on the next real change. Getting this one wrong means **a host silently not converging when it should** — the merge reports green, the host keeps its old firewall or its old container runtime, and nothing says so. That asymmetry argues for a conservative exclusion list and for the same `some-with-excludes` quantifier discipline `ansible-verify.yml` already documents, plus a `.github/tests` assertion that every path a converge actually reads is **not** excluded.
+
+**Weigh it against the alternative of doing nothing.** The cost today is wall-clock and a standing risk that a documentation change perturbs production. The benefit of the current coarse trigger is that it cannot under-converge. That is a real benefit and this entry should not be taken as a foregone conclusion — a reviewer may decide the coarse trigger is the right answer for the host layer precisely because the failure mode is silent.
+
+## 72. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
+
+**Not blocked. Recorded 2026-09-12, from the same merge.**
+
+`apply (prod)` failed with Terraform's raw error:
+
+    Error: Saved plan is stale
+    The given plan file can no longer be applied because the state was changed
+    by another operation after the plan was created.
+
+That is the gate working — *Gated Production Apply Applies the Reviewed Plan* obliges applying the **exact** plan a human reviewed, and Terraform refused a plan that no longer matched state. What is missing is that `apply.yml` says nothing about it. The job already fails cleanly for the neighbouring case — a missing or expired plan artifact gets a named `::error::` and a stated recovery — and a stale plan, which is at least as likely, gets nothing.
+
+**Why it is at least as likely.** Prod's apply waits for a required reviewer, and that wait is the window. On this run the plan was saved at 03:04:16 and the apply began at 03:18:51; staging, which requires no reviewer, applied 12 seconds after its plan and succeeded. **The gate that makes production safe is the same thing that makes its saved plan perishable**, and the longer the approval takes the more certain this becomes.
+
+**What the evidence showed**, recorded because the diagnosis took an HCP state-version query that the next person should not have to repeat. Prod's state serial moved 44 → 45 at 03:18:20, thirty-one seconds before the apply job started, and the two versions are **identical in every resource attribute** — same lineage, same four resources, no value changed. Nothing about the infrastructure moved; only the serial. Staging's serial 3 was written at 03:04:38 by its own no-op apply, which is the same signature, so a Terraform operation that changes nothing still bumps the serial and still invalidates a saved plan made against the previous one.
+
+**What the change owes:**
+
+- A named failure for this case, distinguishing it from the artifact case: what a stale plan means, that no infrastructure change was lost, and that the recovery is a **fresh run of the whole workflow** rather than re-running the failed job, which re-downloads the same stale artifact and fails identically.
+- A decision on whether the message should name the likely causes. A local `terraform plan` or `apply` against the stack during the approval window is one; this repository permits the former and forbids the latter, and if a permitted local `plan` can invalidate a pending production apply then that is a hole in the workflow's own rules and belongs in `AGENTS.md` rather than only in an error message.
+
+**What wrote serial 45 was not identified, and the elimination is recorded so it is not repeated.** Not continuous integration: six workflow runs existed that day, none was active at 03:18:20, and the apply was a single attempt whose job was queued at 03:04:22 and started at 03:18:50 on approval. Not the operator's checkout: its `.terraform/` had not been touched for three weeks, and the operator merged and approved and did nothing else. Not the working trees of the change itself, whose every local run used `-backend=false` and so never reached remote state. Not an HCP health assessment: `assessments-enabled` is `false` on that workspace. The remaining avenue is the workspace's own **States** view in the HCP interface, which labels each version with its source — worth a look before this change is designed, because a cause nobody can name is a cause nobody can prevent, and the recovery this entry specifies is correct whether or not the cause is ever found.
+
+**Not in scope here:** auto-replanning on staleness. That would apply a plan no human reviewed, which is the requirement this entry exists to respect.
+
