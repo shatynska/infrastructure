@@ -5694,10 +5694,10 @@ CLASSIFIED_STACK_STORES = {
         "Per-Application Databases limits it to technical or temporary records"
     ),
     "traefik_letsencrypt": "certificates re-issued on demand by the certificate authority",
-    "/mnt/main-data/prometheus": (
+    "/mnt/main/prometheus": (
         "rolling retention Prometheus enforces on itself, bounded by both time and size"
     ),
-    "/mnt/main-data/grafana": (
+    "/mnt/main/grafana": (
         "split -- the provisioned datasource and dashboards are reproduced by a "
         "redeploy; the rest is non-durable under the dashboard-state policy"
     ),
@@ -6132,13 +6132,13 @@ class TestTheStoreCensusIsARealReadOfTheFile(unittest.TestCase):
 
     def test_a_host_bind_mount_added_to_a_service_is_caught_with_no_test_edit(self) -> None:
         """SPECIFIED -- the same scenario's limb covering a host bind mount,
-        which is the form both `/mnt/main-data` stores take."""
+        which is the form both `/mnt/main` stores take."""
         fixture = self.compose_fixture(
             self.BASE
-            + "  uploads:\n    image: nginx:1.29.3\n    volumes:\n      - /mnt/main-data/uploads:/srv/uploads\n"
+            + "  uploads:\n    image: nginx:1.29.3\n    volumes:\n      - /mnt/main/uploads:/srv/uploads\n"
         )
         self.assertEqual(
-            ["/mnt/main-data/uploads (uploads -> /srv/uploads)"],
+            ["/mnt/main/uploads (uploads -> /srv/uploads)"],
             unclassified_stack_declared_stores(fixture),
             "a host bind mount added to the stack was not caught",
         )
@@ -6225,7 +6225,7 @@ class TestTheStoreCensusIsARealReadOfTheFile(unittest.TestCase):
         fixture = self.compose_fixture(
             self.BASE
             + "  postgres:\n    image: postgres:16.15\n    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
-            "  prometheus:\n    image: prom/prometheus:v3.7.3\n    volumes:\n      - /mnt/main-data/prometheus:/prometheus\n",
+            "  prometheus:\n    image: prom/prometheus:v3.7.3\n    volumes:\n      - /mnt/main/prometheus:/prometheus\n",
             extra="volumes:\n  postgres_data:\n",
         )
         self.assertEqual([], unclassified_stack_declared_stores(fixture))
@@ -6285,7 +6285,7 @@ class TestTheStatedReasonsForTheClassifiedStoresStillHold(unittest.TestCase):
 
     def test_the_retention_bounds_govern_the_store_the_classification_names(self) -> None:
         """SPECIFIED -- the classification names a particular store,
-        `/mnt/main-data/prometheus`, and the retention flags bound whatever
+        `/mnt/main/prometheus`, and the retention flags bound whatever
         directory `--storage.tsdb.path` names. If those two came apart, the
         bounds would be enforced over a directory other than the classified
         store, and every assertion above would still pass."""
@@ -6295,10 +6295,10 @@ class TestTheStatedReasonsForTheClassifiedStoresStillHold(unittest.TestCase):
             f"the {TSDB_SERVICE} service names no {TSDB_PATH_FLAG}, so nothing "
             f"states which directory its retention bounds",
         )
-        targets = bind_mount_targets(TSDB_SERVICE, "/mnt/main-data/prometheus")
+        targets = bind_mount_targets(TSDB_SERVICE, "/mnt/main/prometheus")
         self.assertTrue(
             targets,
-            "the stack no longer mounts /mnt/main-data/prometheus into the "
+            "the stack no longer mounts /mnt/main/prometheus into the "
             f"{TSDB_SERVICE} service, so the store the classification names is not "
             "the one this service writes into",
         )
@@ -6333,10 +6333,10 @@ class TestTheStatedReasonsForTheClassifiedStoresStillHold(unittest.TestCase):
         provisioned dashboards are written inside the very directory the table
         classifies, so a provider path outside it would mean the reproduced
         half is not part of the store the row is about."""
-        targets = bind_mount_targets(DASHBOARD_SERVICE, "/mnt/main-data/grafana")
+        targets = bind_mount_targets(DASHBOARD_SERVICE, "/mnt/main/grafana")
         self.assertTrue(
             targets,
-            "the stack no longer mounts /mnt/main-data/grafana into the "
+            "the stack no longer mounts /mnt/main/grafana into the "
             f"{DASHBOARD_SERVICE} service, so the store the classification names is "
             "not the one this service writes into",
         )
@@ -6430,7 +6430,7 @@ class TestTheStatedReasonChecksAreARealReadOfTheFile(unittest.TestCase):
         command = "".join(f"      - {flag}\n" for flag in flags)
         return self.compose_fixture(
             "---\nservices:\n  prometheus:\n    image: prom/prometheus:v3.7.3\n"
-            "    command:\n" + command + "    volumes:\n      - /mnt/main-data/prometheus:/prometheus\n"
+            "    command:\n" + command + "    volumes:\n      - /mnt/main/prometheus:/prometheus\n"
         )
 
     def grafana_fixture(
@@ -6444,7 +6444,7 @@ class TestTheStatedReasonChecksAreARealReadOfTheFile(unittest.TestCase):
             "      - source: grafana_dashboard_provider\n"
             "        target: /etc/grafana/provisioning/dashboards/dashboards.yml\n"
             f"      - source: grafana_dashboard_host\n        target: {dashboard_target}\n"
-            "    volumes:\n      - /mnt/main-data/grafana:/var/lib/grafana\n\n"
+            "    volumes:\n      - /mnt/main/grafana:/var/lib/grafana\n\n"
             + self.PROVIDER_CONTENT.format(provider_path=provider_path)
         )
 
@@ -6497,7 +6497,7 @@ class TestTheStatedReasonChecksAreARealReadOfTheFile(unittest.TestCase):
         from this repository that reproduces Grafana's dashboards"."""
         fixture = self.compose_fixture(
             "---\nservices:\n  grafana:\n    image: grafana/grafana:12.3.0\n"
-            "    volumes:\n      - /mnt/main-data/grafana:/var/lib/grafana\n"
+            "    volumes:\n      - /mnt/main/grafana:/var/lib/grafana\n"
         )
         offences = grafana_provisioning_offences(fixture)
         self.assertTrue(

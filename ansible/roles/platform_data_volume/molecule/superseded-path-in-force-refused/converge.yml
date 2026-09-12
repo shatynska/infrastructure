@@ -1,0 +1,129 @@
+---
+# Converges `platform_data_volume` twice against a host nothing has yet
+# changed, each time with the FIXED PATH IN FORCE also named among the
+# superseded paths -- once spelled identically, once differing only in a
+# trailing separator.
+#
+# Scenario under test, from iac-host-configuration's MODIFIED "Platform Data
+# Volume Is Mounted at a Fixed Host Path" requirement
+# (openspec/specs/iac-host-configuration/spec.md):
+#
+#   "A path is declared superseded and is also the path in force"
+#     WHEN the host-baseline playbook runs with the fixed path in force also
+#     named among the superseded paths, whether spelled identically or
+#     differing only in a trailing separator
+#     THEN the run SHALL fail with a diagnostic naming that path and both
+#     inputs it was read from -- the fixed path's and the superseded
+#     declaration's -- AND SHALL fail before any task that changes the host has
+#     run
+#
+# WHY BOTH SPELLINGS ARE RUN, rather than the identical one alone. The
+# requirement names the trailing-separator spelling explicitly and forbids
+# resolving it by exclusion, so a role comparing raw strings passes the first
+# run and converges the second -- leaving a host that mounts, serves every
+# container, and comes up at its next boot with no data volume mounted at all.
+# That is the defect this change exists to prevent, reached from the other
+# side, and it is equally invisible on a running host.
+#
+# WHY THE OUTCOME IS RECORDED TO A FILE RATHER THAN ASSERTED HERE
+# ---------------------------------------------------------------
+# Same mechanism and same reason as `no-device-discoverable/converge.yml`:
+# Molecule runs `converge` and `verify` as two separate ansible-playbook
+# invocations, so no fact set here survives into verify.yml. A marker file on
+# the instance is the channel.
+#
+# Each outcome is written on BOTH branches, and the SUCCESS branch is the one
+# that matters most: a role that silently filters the fixed path out of the
+# declaration -- the tempting one-liner the requirement forbids -- converges
+# cleanly, records `succeeded`, and is failed by verify.yml. A scenario
+# recording only the failure branch would go green in exactly the case it
+# exists to catch.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_device: /dev/loop91
+    platform_data_volume_mount_path: /mnt/main
+    platform_data_volume_fs_type: ext4
+    platform_data_volume_exact_outcome_path: /var/tmp/molecule-in-force-exact-outcome.json
+    platform_data_volume_trailing_outcome_path: /var/tmp/molecule-in-force-trailing-outcome.json
+  tasks:
+    - name: Converge with the fixed path in force also declared superseded, spelled identically
+      block:
+        - name: Run the platform_data_volume role with a self-defeating declaration
+          ansible.builtin.include_role:
+            name: platform_data_volume
+          vars:
+            platform_data_volume_superseded_mount_paths: ["/mnt/main"]
+
+        - name: Record that the role completed without refusing the identical spelling
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_exact_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'succeeded',
+                  'failed_task_name': '',
+                  'failed_action': '',
+                  'failed_msg': ''
+                } | to_nice_json
+              }}
+      rescue:
+        - name: Record the failure the identical spelling produced
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_exact_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_action': ansible_failed_task.action | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}
+
+    - name: Converge with the fixed path in force declared superseded with a trailing separator
+      block:
+        - name: Run the platform_data_volume role with a near-miss self-defeating declaration
+          ansible.builtin.include_role:
+            name: platform_data_volume
+          vars:
+            platform_data_volume_superseded_mount_paths: ["/mnt/main/"]
+
+        - name: Record that the role completed without refusing the trailing-separator spelling
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_trailing_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'succeeded',
+                  'failed_task_name': '',
+                  'failed_action': '',
+                  'failed_msg': ''
+                } | to_nice_json
+              }}
+      rescue:
+        - name: Record the failure the trailing-separator spelling produced
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_trailing_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_action': ansible_failed_task.action | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}

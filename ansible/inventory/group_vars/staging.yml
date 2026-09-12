@@ -67,14 +67,9 @@ ops_user_accounts:
 # Subdirectories platform_data_volume creates on the mounted `main` volume for
 # platform/docker-compose.yml's Prometheus and Grafana services to bind-mount.
 # Identical to the production group's, and identical on purpose: both stacks
-# mount at the same path, so /mnt/main-data/prometheus and
-# /mnt/main-data/grafana are correct here as written and
-# platform/docker-compose.yml stays unparameterised across stacks.
-#
-# The path is NOT the volume's name and no longer resembles it. The volume is
-# `main` in both projects; the mount stays /mnt/main-data until
-# `docs/change-queue.md` entry 64 moves it, and the on-host device is keyed on
-# the volume's id rather than on either.
+# mount at the same path, so /mnt/main/prometheus and /mnt/main/grafana are
+# correct here as written and platform/docker-compose.yml stays
+# unparameterised across stacks.
 #
 # Owner/group match each image's own upstream default user, so no `user:`
 # override is needed in the Compose service definitions: 65534/65534 is
@@ -89,6 +84,16 @@ platform_data_volume_subdirs:
     owner: "472"
     group: "472"
     mode: "0755"
+
+# The path this volume used to be mounted at, removed from /etc/fstab so the
+# device is not persisted at two paths across a reboot. Identical to the other
+# environment's for the same reason platform_data_volume_subdirs is: both
+# stacks mounted at the same path, so both have the same entry to retire.
+#
+# Inline flow form on one line deliberately -- `.github/tests` exempts the
+# retired path from its sweep only where it sits on a line beginning with this
+# key, and a block sequence would put the value on a line of its own.
+platform_data_volume_superseded_mount_paths: ["/mnt/main-data"]
 
 # ghcr_pull_username is not secret (it's the GitHub account the token belongs
 # to) and is committed in plain text. The same account production uses: the

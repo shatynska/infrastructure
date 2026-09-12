@@ -48,8 +48,8 @@ volume_enabled = true
 # using the same one in both keeps the on-host mount path identical across
 # stacks, which is what lets platform/docker-compose.yml stay unparameterised.
 #
-# The mount path is NOT renamed with the volume, and the two differ on purpose
-# until `docs/change-queue.md` entry 64: the on-host device is
+# The mount path is not derived from the volume's name, though the two now
+# agree at `/mnt/main`: the on-host device is
 # `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on the volume's id rather than
 # its name, so a volume rename costs no migration and no remount.
 volume_name = "main"

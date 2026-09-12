@@ -8,8 +8,12 @@
 # has a safe *discovery* fallback, so this is not left unset.
 platform_data_volume_device: ""
 
-# design.md's own example path for the platform's dedicated data volume.
-platform_data_volume_mount_path: /mnt/main-data
+# Fixed host path the platform's dedicated data volume is mounted at. It
+# matches the volume's name, and that agreement is a convenience rather than a
+# derivation: the on-host device is /dev/disk/by-id/scsi-0HC_Volume_<id>, keyed
+# on the volume's id, so neither value determines the other and a volume rename
+# costs no remount. See docs/naming-conventions.md.
+platform_data_volume_mount_path: /mnt/main
 
 # ext4 is Ubuntu's own default filesystem choice and needs no extra package
 # beyond e2fsprogs (already present on the base image this host is
@@ -19,3 +23,18 @@ platform_data_volume_fs_type: ext4
 # Empty by default: no subdirectory is created unless the caller declares
 # one. Each entry is {path, owner, group, mode} — see README.md.
 platform_data_volume_subdirs: []
+
+# Host paths this volume was previously mounted at and is not any more. Each
+# one is removed from /etc/fstab, so that a device whose fixed path has moved
+# is not persisted at two paths and does not remount at both on the next
+# reboot — a state nothing that observes a running host can see.
+#
+# IT NEVER UNMOUNTS. At the moment a path moves, the services bind-mounting
+# subdirectories of the old path are running and holding it; they are retired
+# from it by their own redeployment, not by this role, whose scope stops at
+# the container runtime. So the live mount is left alone and the kernel drops
+# it at the next reboot, which finds no entry for it.
+#
+# Empty is the ordinary state — a host whose fixed path has never moved. A
+# path in force here is refused rather than applied: see tasks/main.yml.
+platform_data_volume_superseded_mount_paths: []

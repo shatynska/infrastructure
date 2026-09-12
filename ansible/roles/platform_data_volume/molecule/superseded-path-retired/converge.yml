@@ -1,0 +1,177 @@
+---
+# Converges `platform_data_volume` against the host state prepare.yml built:
+# the scenario's own loop device already mounted at the superseded path,
+# already persisted there in /etc/fstab, and held by a running process.
+#
+# Scenarios under test, from iac-host-configuration's MODIFIED "Platform Data
+# Volume Is Mounted at a Fixed Host Path" requirement
+# (openspec/specs/iac-host-configuration/spec.md), as the change
+# `move-the-platform-data-mount` revises it:
+#
+#   "A superseded mount path is declared"
+#     WHEN the host-baseline playbook runs against a host whose boot-time mount
+#     configuration names a path declared as superseded, alongside the fixed
+#     path in force
+#     THEN the device SHALL be mounted at the fixed path in force, AND the
+#     superseded path SHALL NOT remain in what the host mounts at boot
+#
+#   "No superseded mount path is declared"
+#     WHEN the host-baseline playbook runs against a host for which no
+#     superseded path is declared
+#     THEN the run SHALL change nothing about the host's boot-time mount
+#     configuration beyond the fixed path in force, and SHALL NOT fail for the
+#     absence
+#
+#   "A running service still holds the superseded path"
+#     WHEN the superseded path is retired on a host where a running service
+#     holds a bind mount into it
+#     THEN the run SHALL succeed, AND SHALL NOT unmount that path or otherwise
+#     interrupt that service's access to the data under it
+#
+# THE ROLE IS RUN TWICE, AND THE SECOND RUN IS AN ASSERTION, NOT A REPEAT.
+# The first supplies the superseded declaration; the second supplies an EMPTY
+# one, which is the "no superseded path is declared" scenario's first form (a
+# host newly built). Its obligation is negative -- change nothing about the
+# boot-time mount configuration -- so it is observed by recording /etc/fstab's
+# checksum either side of it and comparing them in verify.yml. Molecule runs
+# `converge` and `verify` as separate ansible-playbook invocations and this
+# project's ansible.cfg sets no fact_caching backend, so a file on the instance
+# is the channel, exactly as `no-device-discoverable/converge.yml` records.
+#
+# The second form of that same scenario -- "one whose superseded paths have
+# already been retired" -- is the `idempotence` action, which re-runs this file
+# against a host whose superseded entry the first converge removed. Nothing
+# below is written for it specially; what makes it work is that prepare.yml is
+# not re-run, so the retired state persists into the second converge.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    platform_data_volume_device: /dev/loop90
+    # The fixed path in force. Note that this is the path this change MOVES TO:
+    # a scenario written against the role's own default would be testing
+    # whatever the default happens to be, and the retirement obligation is
+    # about the relationship between the two paths, not about either literal.
+    platform_data_volume_mount_path: /mnt/main
+    platform_data_volume_fs_type: ext4
+    # Declared in the inline flow form the .github/tests sweep exempts, and
+    # referenced through the variable everywhere else in this scenario.
+    platform_data_volume_superseded_mount_paths: ["/mnt/main-data"]
+    platform_data_volume_subdirs:
+      - path: prometheus
+        owner: "65534"
+        group: "65534"
+        mode: "0755"
+      - path: grafana
+        owner: "472"
+        group: "472"
+        mode: "0755"
+    platform_data_volume_outcome_path: /var/tmp/molecule-superseded-path-retired-outcome.json
+    platform_data_volume_unmatchable_outcome_path: /var/tmp/molecule-superseded-path-unmatchable.json
+  tasks:
+    - name: Run the platform_data_volume role with the superseded path declared
+      ansible.builtin.include_role:
+        name: platform_data_volume
+
+    - name: Record /etc/fstab as the retiring run left it
+      ansible.builtin.stat:
+        path: /etc/fstab
+      register: platform_data_volume_fstab_before_empty
+
+    # The SAME role, on the SAME host, with the declaration emptied. Task vars
+    # on an include_role outrank the play vars above, so this run genuinely
+    # sees an empty list rather than the one declared at play level.
+    - name: Run the platform_data_volume role again with no superseded path declared
+      ansible.builtin.include_role:
+        name: platform_data_volume
+      vars:
+        platform_data_volume_superseded_mount_paths: []
+
+    - name: Record /etc/fstab as the empty-declaration run left it
+      ansible.builtin.stat:
+        path: /etc/fstab
+      register: platform_data_volume_fstab_after_empty
+
+    # A THIRD RUN, against an /etc/fstab entry the retirement CANNOT match.
+    #
+    # Everything above declares the superseded path in the one spelling the
+    # fstab entry carries, so the normalisation on the retirement loop is a
+    # no-op in every run and the read-back assert is only ever executed in its
+    # passing direction. Both were added to catch a silent miss, and neither
+    # had anything driving it red -- which is the same shape of hole as the
+    # miss itself.
+    #
+    # `absent_from_fstab` matches the fstab name byte for byte. An entry whose
+    # target carries a trailing separator is one no declaration can reach, so
+    # the correct outcome is that the role FAILS rather than converging with
+    # the entry still there. That is what this asserts.
+    - name: Append an fstab entry whose target the retirement cannot match
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: "{{ platform_data_volume_device }} {{ platform_data_volume_superseded_mount_paths[0] }}/ ext4 defaults 0 0"
+        state: present
+      changed_when: false
+      # FIXTURE SCAFFOLDING, reported as unchanged deliberately. The
+      # `idempotence` action re-runs this whole file and requires the second
+      # pass to change nothing; these two tasks set up and tear down the state
+      # the third run needs, so their `changed` is the fixture's and not the
+      # role's. The role's own idempotence is what that action is for, and it
+      # is unaffected -- on the second pass every one of its tasks still
+      # reports `ok`.
+
+    - name: Run the role once more, with an entry it cannot retire
+      block:
+        - name: Run the platform_data_volume role against the unmatchable entry
+          ansible.builtin.include_role:
+            name: platform_data_volume
+
+        - name: Record that the role converged despite the unmatchable entry
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_unmatchable_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{ {'outcome': 'succeeded', 'failed_task_name': ''} | to_nice_json }}
+      rescue:
+        - name: Record the failure the unmatchable entry produced
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_unmatchable_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}
+
+    - name: Remove the unmatchable entry so the idempotence run starts clean
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: "{{ platform_data_volume_device }} {{ platform_data_volume_superseded_mount_paths[0] }}/ ext4 defaults 0 0"
+        state: absent
+      changed_when: false
+      # The `idempotence` action re-runs THIS file against the same host, and
+      # it would otherwise meet the entry this run appended and fail -- which
+      # would read as the role being non-idempotent rather than as the fixture
+      # leaving something behind.
+
+    - name: Record both checksums for verify.yml to compare
+      ansible.builtin.copy:
+        dest: "{{ platform_data_volume_outcome_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {{
+            {
+              'fstab_before_empty_declaration':
+                platform_data_volume_fstab_before_empty.stat.checksum,
+              'fstab_after_empty_declaration':
+                platform_data_volume_fstab_after_empty.stat.checksum
+            } | to_nice_json
+          }}

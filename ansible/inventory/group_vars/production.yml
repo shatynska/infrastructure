@@ -82,6 +82,16 @@ platform_data_volume_subdirs:
     group: "472"
     mode: "0755"
 
+# The path this volume used to be mounted at, removed from /etc/fstab so the
+# device is not persisted at two paths across a reboot. Identical to the other
+# environment's for the same reason platform_data_volume_subdirs is: both
+# stacks mounted at the same path, so both have the same entry to retire.
+#
+# Inline flow form on one line deliberately -- `.github/tests` exempts the
+# retired path from its sweep only where it sits on a line beginning with this
+# key, and a block sequence would put the value on a line of its own.
+platform_data_volume_superseded_mount_paths: ["/mnt/main-data"]
+
 # ghcr_pull_username is not secret (it's the GitHub account the token
 # below belongs to) and is committed in plain text. ghcr_pull_token is a
 # genuine secret (a read:packages-scoped GHCR token, tasks.md 2.3:

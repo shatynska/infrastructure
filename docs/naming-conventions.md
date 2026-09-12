@@ -2,7 +2,7 @@
 
 How everything this repository creates is named, and the one rule the scheme follows.
 
-> **NOT YET IN EFFECT.** This document records a decision taken on 2026-09-11; the repository does not match it yet. What it describes was to arrive through `docs/change-queue.md` entries 61, 62, 63 and 64, in that order. Entries 61, 62 and 63 have archived; **64 and 75 remain**, and whoever archives the last of them deletes this banner. Until then, read this as the target and the tree as the present.
+> **NOT YET IN EFFECT.** This document records a decision taken on 2026-09-11; the repository does not match it yet. What it describes was to arrive through `docs/change-queue.md` entries 61, 62, 63 and 64, in that order. Entries 61, 62 and 63 have archived and 64 lands with `move-the-platform-data-mount`; **75 alone remains after it**, and whoever archives 75 deletes this banner. Until then, read this as the target and the tree as the present.
 >
 > **Entry 75 was not in the original four and is the one name this scheme cannot buy cheaply.** Entry 63 was scoped to rename the two GitHub Environments along with the workspaces, the repository secrets and the Hetzner projects, and found that GitHub offers no way to rename a deployment Environment at all — so moving one means re-creating it and re-entering every secret it holds, three of which are SSH private halves this repository's own bootstrap has the operator delete once stored. That was deferred rather than paid. **A new deployment pays nothing**, because it names its Environments correctly when it creates them; `docs/bootstrap-a-new-host.md` §3.2 says so at the moment of choosing.
 

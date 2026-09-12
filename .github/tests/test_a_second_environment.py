@@ -628,12 +628,12 @@ class TestIdenticalResourceNamesAcrossEnvironmentsAreKept(unittest.TestCase):
         RE-POINTED by the change rename-the-stacks-and-their-resources, and the
         re-pointing is the substance rather than a literal moving. This test
         used to derive the expected volume name FROM the single host path
-        `platform/docker-compose.yml` hardcodes -- `main-data` -- on the premise
-        that the mount path is the volume's name. That premise is now false and
-        deliberately so: the volume is `main` while the mount stays
-        `/mnt/main-data` until `docs/change-queue.md` entry 64 moves it, because
-        the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on
-        the volume's id rather than its name.
+        `platform/docker-compose.yml` hardcodes, on the premise that the mount
+        path is the volume's name. That premise is false, and stays false even
+        now that the two agree at `main` and `/mnt/main`: the on-host device is
+        `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on the volume's id rather
+        than its name, so neither value determines the other and a second stack
+        in one Hetzner project would part them again.
 
         So the two propositions are separated. That the stacks agree WITH EACH
         OTHER is what this test now asserts, and it is the half that matters:
@@ -1214,11 +1214,11 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         `test_every_environment_that_declares_a_volume_names_it_identically`
         compares against."""
         self.assertEqual(
-            {"main-data"},
+            {"main"},
             hardcoded_volume_mount_names(
                 "    volumes:\n"
-                "      - /mnt/main-data/prometheus:/prometheus\n"
-                "      - /mnt/main-data/grafana:/var/lib/grafana\n"
+                "      - /mnt/main/prometheus:/prometheus\n"
+                "      - /mnt/main/grafana:/var/lib/grafana\n"
             ),
         )
 
@@ -1231,12 +1231,12 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         (directory / "terraform.tfvars").write_text(
             '# volume_name = "decoy"\n'
             'name        = "main-server"\n'
-            'volume_name = "main-data"\n'
+            'volume_name = "main"\n'
             "volume_size = 10\n",
             encoding="utf-8",
         )
         self.assertEqual(
-            {"name": "main-server", "volume_name": "main-data"}, tfvars_strings(directory)
+            {"name": "main-server", "volume_name": "main"}, tfvars_strings(directory)
         )
 
     # ----------------------------------------------------------------------

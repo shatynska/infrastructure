@@ -26,8 +26,9 @@ volume_enabled = true
 # volume's name; a volume is project-local and is distinguished from a second
 # one by rank rather than by what uses it. Renaming it does not disturb the
 # mount: the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on
-# the volume's id and not on its name. The mount path stays `/mnt/main-data`
-# until `docs/change-queue.md` entry 64 moves it, so the two deliberately
-# differ in the meantime.
+# the volume's id and not on its name — which is also why the on-host mount
+# path at `/mnt/main` matching this name is a convenience rather than a
+# derivation, and why the two may differ whenever a second stack in one
+# project forces it.
 volume_name = "main"
 volume_size = 10
