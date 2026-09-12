@@ -20,7 +20,7 @@ It lives in `run-molecule`, exported as `INFRA_WORKTREE_LOOP_BASE`, for two reas
 
 Each scenario adds a fixed offset to the base. Decision 7 gives the map, and it is the authority: `default` 0, `multiple-devices-discoverable` 1 and 2, `superseded-path-retired` 3, `superseded-path-in-force-refused` 4, `multiple-devices-reverse-order` 5 and 6. Offsets 0 to 4 preserve the ordering the literals 87 to 91 had, so a reader comparing before and after is comparing one thing for those five; 5 and 6 are new, because Decision 7 stops the two `multiple-devices` arms sharing one pair.
 
-## Decision 3: the band is 1024 to 66544 in steps of 16
+## Decision 3: the bases run 1024 to 66544 in steps of 16
 
 `base = 1024 + (digest mod 4096) * 16`, over the same six hex digits of the absolute working-tree path that `namespace_for` hashes. Four thousand and ninety-six slots of sixteen minors, of which seven are used and nine are spare for a scenario added later.
 
@@ -32,7 +32,9 @@ Each scenario adds a fixed offset to the base. Decision 7 gives the map, and it 
 
 **Why a modulus at all rather than a registry.** A registry of allocated minors would make the collision impossible rather than unlikely, and it is a mechanism this repository would then have to keep correct — a file to write, to read under concurrency, and to reclaim from removed working trees, none of which the two existing namespaced handles need. The residual above does not earn that.
 
-**Why a sixteen-wide slot rather than a seven-wide one.** A scenario added to this role later takes the next offset and needs no thought about the band; a slot sized to what is used makes the next addition a change to the derivation, which is the kind of edit that gets made in one place and not the other. This started at eight, which Decision 7's split then spent down to seven used and one spare — nearly exhausting the headroom the decision exists to provide, which the code review pointed out. Sixteen restores it at no cost: the highest base becomes `1024 + 4095*16 = 66544` and the highest minor any offset reaches is `66544 + 15 = 66559` — that last is the number a later narrowing has to clear, and it is the one verified, along with 66544 itself and 66560 just past the band. All are four orders of magnitude below the twenty-bit limit on a device number's minor.
+**Why a sixteen-wide slot rather than a seven-wide one.** A scenario added to this role later takes the next offset and needs no thought about the band; a slot sized to what is used makes the next addition a change to the derivation, which is the kind of edit that gets made in one place and not the other. This started at eight, which Decision 7's split then spent down to seven used and one spare — nearly exhausting the headroom the decision exists to provide, which the code review pointed out. Sixteen restores it at no cost: the highest base becomes `1024 + 4095*16 = 66544` and the highest minor any offset reaches is `66544 + 15 = 66559` — that last is the number a later widening has to clear, and it is the one verified, along with 66544 itself and 66560 just past the band.
+
+**The headroom above it is a factor of fifteen, not a comfortable margin, and a reader widening this again needs the number rather than the reassurance.** A device number carries twenty bits of minor, so the limit is `2^20 = 1048576` and 66559 sits at 15.75 times below it. **One more widening on the same scale — sixteen to two hundred and fifty-six — reaches 1049599 and overflows.** A draft of this paragraph said "four orders of magnitude below", which is wrong by a factor of a thousand and would have told exactly that reader there was room for three more. Widening past sixteen means narrowing the slot count from 4096 in the same edit, or moving off a per-tree hash altogether.
 
 ## Decision 4: the detach refuses a minor it cannot attribute, rather than reclaiming it
 

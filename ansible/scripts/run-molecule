@@ -122,10 +122,15 @@ loop_base_for() {
 	# rather than only the ones `max_loop` pre-created. Verified inside the pinned
 	# scenario image, whose max_loop reads 8: `mknod -m 0660 /dev/loop<m> b 7 <m>`
 	# then `losetup` succeeded and detached cleanly at 1024, 1032, 5120, 33768,
-	# 33784, 33788, 66544, 66559 and 66560. The number a later narrowing has to
-	# clear is the highest MINOR, not the highest base: the base tops out at
+	# 33784, 33788, 66544, 66559 and 66560. The number a later change has to clear
+	# is the highest MINOR, not the highest base: the base tops out at
 	# 1024 + 4095*16 = 66544 and the sixteenth offset reaches 66559. 66560 is the
 	# first one outside the band.
+	#
+	# HEADROOM IS A FACTOR OF FIFTEEN, NOT A COMFORTABLE MARGIN. The twenty-bit
+	# limit is 1048576 and 66559 sits 15.75 times below it, so ONE more widening
+	# on this scale -- 16 to 256 -- reaches 1049599 and overflows. Widening the
+	# slot again means cutting the 4096 slot count in the same edit.
 	#
 	# 4096 SLOTS rather than a handful. Two trees hashing to one slot collide on
 	# every minor in it, and the collision is NOT loud: the attribution guard in
