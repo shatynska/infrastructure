@@ -211,6 +211,23 @@ Each addition carries a comment saying why it is there. **No assertion, no `run`
 
 ---
 
+## A defect in one test this pass wrote, and its repair
+
+Found by the implementing session on the first Molecule run and returned rather than edited there; repaired here, because a test author's defect is the test author's to fix and the repair had to be a **read** rather than an assertion.
+
+`ansible/roles/hostname/molecule/default/verify.yml`, the task *"Assert the loopback entry answers for the name the host was just given"*, selected `/etc/hosts` lines with the pattern `'^127\\.0\\.1\\.1\\s'` — double-escaped inside a **folded** YAML scalar. A folded scalar performs no escape processing, so Jinja received the pattern exactly as written and applied its own string-literal parsing, collapsing each `\\.` to `\.`: a regex asking for a literal backslash after `127`, matching nothing on any tree. **The assertion could not have passed against any implementation.**
+
+This is the third failure state — a defect in the test, establishing nothing about the code under test. It is recorded rather than quietly corrected because the distinction is what keeps *never weaken a test* honest: what was wrong was the read, not the expected value. The assertion's `that:`, its `fail_msg`, its `success_msg` and the `select('search', …)` line are **byte-identical** to what this pass first wrote; one line changed, and a comment now says why the escaping is what it is. The same shape was used by the earlier change `read-the-old-root-sweep-from-tracked-files` for the same class of defect.
+
+Measured against the pinned `ansible-core` 2.21.3, over a sample carrying `127.0.1.1\tacme-hn-tree`:
+
+- as written, double-escaped: `[]`
+- as repaired, single-escaped: the line matches
+
+The role was correct throughout: the converged container carries the loopback entry, and `hostname` returns the derived name.
+
+---
+
 ## Obsolete tests
 
 **Candidates for human confirmation, every one.** This pass never edits or deletes an existing test, so each entry below is the input to somebody else's destructive action and is marked as a candidate rather than a conclusion. The search was bounded to the dispatched test-path globs — `.github/tests/*.py`, `terraform/modules/<name>/tests/*.tftest.hcl`, `ansible/roles/<name>/molecule/<scenario>/` — and no earlier `test-plan.md` was supplied to this pass, so nothing outside those globs was searched and no requirement-to-test index was available. An assertion superseded by this change that lives outside those globs would not have been found.
@@ -248,7 +265,11 @@ No channel exists to ask on — this is a dispatched, non-interactive pass — s
 
 3. **The declaration field is assumed to be spelled `target_environment`.** design.md decision 2 fixes it and `tasks.md` 3.6 writes it, so this is a strong assumption rather than a guess — but it is a literal in `TARGET_ENVIRONMENT_FIELD` and every assertion reading the declaration depends on it. The matrix key the converge job reaches it through is **not** assumed: those tests assert only that the two handles are different fields of the row.
 
-4. **`ansible.builtin.hostname` in the pinned container image.** The `default` scenario assumes the module's systemd strategy reaches `hostnamectl` inside `geerlingguy/docker-ubuntu2204-ansible` running `/lib/systemd/systemd` privileged. This could not be established here, because the role that would exercise it does not exist. If it turns out not to work, the fix is the role's own (`hostname_use:`), not the scenario's — and the scenario is what will report it.
+4. **`ansible.builtin.hostname` in the pinned container image.** ~~The `default` scenario assumes the module's systemd strategy reaches `hostnamectl` inside `geerlingguy/docker-ubuntu2204-ansible` running `/lib/systemd/systemd` privileged. This could not be established here, because the role that would exercise it does not exist. If it turns out not to work, the fix is the role's own (`hostname_use:`), not the scenario's — and the scenario is what will report it.~~
+
+   **ANSWERED AT IMPLEMENTATION, AND THE ANSWER WAS NO — the scenario reported it exactly as this entry predicted.** The module failed at `converge` with *"Could not set static hostname: Failed to set static hostname: Device or resource busy"*. The cause is not the strategy: the module writes `/etc/hostname` **atomically** under every strategy, and in a container that file is a bind mount over which a rename fails with `EBUSY`. `hostname_use:` therefore would not have helped, and this entry's guess at the fix was wrong while its prediction about who would report it was right.
+
+   Measured directly against the pinned digest: an in-place write to `/etc/hostname` succeeds, a rename over it fails, `sethostname(2)` succeeds. The role was rewritten to do what the module's `debian` strategy does, split so each half uses the mechanism that works — `copy` with `unsafe_writes: true` for the file, `hostname <name>` for the running system. `unsafe_writes` is a fallback rather than a replacement, so a real host still takes the atomic path. `/etc/hosts` carries it for the same reason. **No assertion in either scenario was weakened to reach green**; the role changed and the scenarios did not.
 
 5. **The 64-byte host-name limit and this working tree's namespace.** Under Molecule, `inventory_hostname` is the instance name, which carries the per-working-tree namespace, and the role prefixes the company to it. The `default` scenario's instance name is deliberately short (`hn-`) and its `converge.yml` asserts the derived name's length **before** the role runs, so a working tree with a long enough name fails naming the working tree rather than failing inside `hostnamectl`. On the tree this pass ran on, the namespace is 44 bytes and the derived name is 52.
 

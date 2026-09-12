@@ -29,7 +29,26 @@ The divergence is the naming rule doing its job rather than an oversight. `inven
 
 ## Two things that move together
 
-**The name and the resolution.** `ansible.builtin.hostname` goes through `hostnamectl` and touches nothing else, so `/etc/hosts` keeps answering for the old name. Ubuntu's `sudo` then emits `unable to resolve host <name>` on every privileged task for the rest of the converge and on every login afterwards. It is a warning and not a failure, which is exactly why it would survive unnoticed: nothing goes red, the converge reports success, and the only person who ever sees it is the operator — every single time they log in. The role sets both.
+**The name and the resolution.** Setting a host's name does not make the host resolve it: `/etc/hosts` keeps answering for the old one, and Ubuntu's `sudo` then emits `unable to resolve host <name>` on every privileged task for the rest of the converge and on every login afterwards. It is a warning and not a failure, which is exactly why it would survive unnoticed: nothing goes red, the converge reports success, and the only person who ever sees it is the operator — every single time they log in. The role sets both.
+
+## Why not `ansible.builtin.hostname`
+
+That module writes `/etc/hostname` **atomically** — a temporary file, then a rename over the target — under every strategy, including the `systemd` one it selects on this host. In a container `/etc/hostname` is a bind mount, and a rename over a bind-mounted file fails with `EBUSY`:
+
+    Could not set static hostname: Failed to set static hostname: Device or resource busy
+
+Measured against the exact image `molecule/default/molecule.yml` pins: an in-place write to `/etc/hostname` succeeds, a rename over it fails, and `sethostname(2)` succeeds. So the module is not merely awkward to test here — it cannot run at all, and a role built on it would be verified by nothing.
+
+The role therefore does what that module's `debian` strategy does, split into the two halves so each can use the mechanism that works:
+
+| Half | Mechanism | Why |
+|---|---|---|
+| `/etc/hostname` | `copy` with `unsafe_writes: true` | What survives a reboot. `unsafe_writes` is a **fallback**, not a replacement: a real host still gets the atomic write, and only a bind-mounted target falls back. |
+| the running name | `hostname <name>` | What this boot answers to. `sethostname(2)`, which a privileged container may call inside its own UTS namespace. |
+
+`/etc/hosts` carries `unsafe_writes` for the same reason — it is a bind mount in a container too.
+
+A role doing only the first half leaves a host whose name changes silently at the next reboot, which is the longest-lived way to get this wrong.
 
 ## Where it runs in the play, and why the position is not arbitrary
 

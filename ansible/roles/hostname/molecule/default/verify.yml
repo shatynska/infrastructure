@@ -111,10 +111,17 @@
         var: hostname_etc_hosts.content | b64decode
 
     - name: Assert the loopback entry answers for the name the host was just given
+      # SINGLE backslashes, and the folded scalar below is why. A folded
+      # (unquoted) YAML scalar performs no escape processing, so Jinja receives
+      # this pattern exactly as written and applies its OWN string-literal
+      # parsing to it -- under which `\\.` collapses to `\.`, asking for a
+      # literal backslash after `127` and matching nothing on any tree. The
+      # read was written double-escaped and reported no loopback entry against
+      # a host that had one. Measured against the pinned ansible-core 2.21.3.
       vars:
         hostname_hosts_lines: >-
           {{ (hostname_etc_hosts.content | b64decode).splitlines()
-             | select('match', '^127\\.0\\.1\\.1\\s') | list }}
+             | select('match', '^127\.0\.1\.1\s') | list }}
       ansible.builtin.assert:
         that:
           - hostname_hosts_lines | length > 0

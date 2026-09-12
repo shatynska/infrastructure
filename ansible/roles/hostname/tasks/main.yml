@@ -50,9 +50,51 @@
       this repository operated by a different company changes.
     quiet: true
 
-- name: Set the host's own name
-  ansible.builtin.hostname:
-    name: "{{ company }}-{{ inventory_hostname }}"
+# TWO TASKS RATHER THAN `ansible.builtin.hostname`, AND THE REASON IS
+# MEASURED RATHER THAN STYLISTIC. That module — under every strategy, including
+# the `systemd` one it picks on this host — writes `/etc/hostname` ATOMICALLY:
+# a temporary file, then a rename over the target. In a container `/etc/hostname`
+# is a bind mount, and a rename over a bind-mounted file fails with EBUSY:
+#
+#   Could not set static hostname: Failed to set static hostname:
+#   Device or resource busy
+#
+# Measured against this role's own scenario image, `geerlingguy/docker-ubuntu2204-ansible`
+# at the digest `molecule/default/molecule.yml` pins: an in-place write to
+# `/etc/hostname` succeeds, a rename over it fails, and `sethostname(2)`
+# succeeds. So the module is not merely inconvenient to test here — it cannot
+# run at all, and a role written on it would be verified by nothing.
+#
+# The two tasks below are what that module's `debian` strategy does, split so
+# each half can use the mechanism that works: the file is written with
+# `unsafe_writes`, which FALLS BACK to a non-atomic write only where the atomic
+# one fails — so a real host still gets the atomic write and the container gets
+# the one it can take — and the running name is set through `sethostname(2)`,
+# which a privileged container may do inside its own UTS namespace.
+#
+# WHICH HALF DOES WHAT: the file is what survives a reboot; the `hostname` call
+# is what the current boot answers to. Both are needed, and a role doing only
+# the first leaves a host whose name changes silently at the next reboot --
+# which is the longest-lived way to get this wrong.
+- name: Record the host's own name so that it survives a reboot
+  ansible.builtin.copy:
+    dest: /etc/hostname
+    content: "{{ company }}-{{ inventory_hostname }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+    unsafe_writes: true
+
+- name: Read the name this boot currently answers to
+  ansible.builtin.command: hostname
+  register: hostname_current
+  changed_when: false
+  check_mode: false
+
+- name: Apply the host's own name to the running system
+  ansible.builtin.command: "hostname {{ company }}-{{ inventory_hostname }}"
+  when: hostname_current.stdout | default('') | trim != company ~ '-' ~ inventory_hostname
+  changed_when: true
 
 # SETTING THE NAME DOES NOT MAKE THE HOST RESOLVE IT, and the two are separate
 # files. `ansible.builtin.hostname` goes through `hostnamectl` and touches
@@ -79,3 +121,8 @@
     owner: root
     group: root
     mode: "0644"
+    # For the reason `/etc/hostname` above carries it: `/etc/hosts` is a bind
+    # mount in a container too, so the atomic rename this module ends with
+    # fails there with EBUSY. `unsafe_writes` is a FALLBACK rather than a
+    # replacement -- a real host still gets the atomic write.
+    unsafe_writes: true
