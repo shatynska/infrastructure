@@ -925,7 +925,15 @@ Do these once the first pull requests have run, since branch protection can only
 
    If that message does not arrive, the routing works for failures and not for silence, and every periodic job on this host is unwatched in the one way that matters most.
 6. **Confirm nothing reaches a host from your machine any more.** All three layers now go through the pipeline: Terraform through `apply.yml`, the platform stack through `platform-deploy.yml`, and the host configuration through `host-converge.yml`. What your workstation keeps is deliberate and is all of it — the read-only Hetzner tokens, the Vault passwords, the operator keys, and the *first* converge of a host, which cannot be the pipeline's because it is what puts the host on the tailnet the pipeline arrives over. Applying, deploying and converging are merges. If you find yourself running `ansible-playbook` against a host that is already configured, something in this stage was not finished.
-7. **Record what you built.** In the password manager, alongside each secret, note its expiry, the stage that created it, and what breaks when it expires. In the repository, update `README.md`'s Status section.
+7. **Know what a merge touching more than one layer does, because the stages above never show you.** Each stage here touches one layer at a time, so the first time several fire at once is the first ordinary change you ship — which is after you have stopped reading this document.
+
+   A merge raises **one run per workflow whose path filter it matches**, and they start together with nothing sequencing them. `apply.yml` and `host-converge.yml` each fan out per stack inside a single run, so `gh run list` shows one row per workflow and the per-stack jobs are inside it — a merge touching all three layers is three rows and three production approvals, not six rows. Read the **workflow** name on each prompt: all three gate on the same Environment and render the same text, which is what `docs/change-queue.md` entry 77 is about.
+
+   **One ordering among them is load-bearing: converge before deploy, always.** The host layer creates what the platform layer mounts, so a deploy approved first binds a path the converge has not made yet. Docker does not fail on a missing bind source — it creates it, as an empty root-owned directory on the **root disk** — so both containers come up healthy and empty, and the converge that follows mounts the volume *over* that directory, leaving them writing to the shadowed copies. Nothing about the symptom points at the cause. The repair is to re-run Platform Deploy once the converge is green; no data is lost, because the real filesystem was on the volume throughout.
+
+   The Terraform apply is not in that ordering and may be approved at any point — but never before reading its `plan` job's summary, which is published before the approval is requested precisely so you can. An approval prompt with nothing read behind it is the habit the plan/apply split exists to prevent.
+
+8. **Record what you built.** In the password manager, alongside each secret, note its expiry, the stage that created it, and what breaks when it expires. In the repository, update `README.md`'s Status section.
 
 ## Appendix A. Complete secret inventory
 
