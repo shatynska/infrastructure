@@ -133,22 +133,27 @@ PLATFORM_COMPOSE = ROOT / "platform" / "docker-compose.yml"
 # decommissioned by removing its directory -- which design.md's Rollback names
 # as a legitimate path -- this class fails, and the correct response is to
 # delete it as a change of its own, not to weaken it.
-# RE-POINTED twice. The change rename-the-stacks-and-their-resources moved the
-# stack DIRECTORY to `main-staging` and deliberately left the GitHub
-# Environment, the read-only secret and the workspace alone -- each lives in a
-# namespace of its own, renamed by its own interface. This change moved those
-# three, so the four constants now agree.
+# RE-POINTED twice, and the four constants below deliberately do NOT all agree.
+# rename-the-stacks-and-their-resources moved the stack DIRECTORY to
+# `main-staging` and left the GitHub Environment, the read-only secret and the
+# workspace alone -- each lives in a namespace of its own, renamed by its own
+# interface. rename-the-external-services then moved the workspace and the
+# secret, and could not move the Environment: GitHub offers no rename for one
+# (measured 2026-09-12), so moving it means re-creating it with every secret
+# re-entered. `docs/change-queue.md` entry 75 owns that.
 #
-# THAT AGREEMENT IS A CONVENTION AND NOT A DERIVATION, and it is worth saying
-# because four equal literals look like three redundant ones. Nothing computes
+# SO THREE OF THESE READ `main-staging` AND THE FOURTH READS `staging`, and the
+# difference is a fact about GitHub rather than an inconsistency here.
+#
+# WHERE THEY DO AGREE IT IS A CONVENTION AND NOT A DERIVATION. Nothing computes
 # any of them from any other: a directory is renamed by a commit, a workspace in
-# the HCP interface, an Environment and a secret in repository settings. A test
+# the HCP interface, a secret and an Environment in repository settings. A test
 # deriving one from another would be false for the interval between two of those
 # renames -- see *Remote State Backend* (openspec/specs/iac-state-management/
-# spec.md), which forbids exactly that and permits this agreement.
+# spec.md), which forbids exactly that and permits the agreement.
 SECOND_ENVIRONMENT = "main-staging"
 SECOND_ENVIRONMENT_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_STAGING"
-SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "main-staging"
+SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "staging"
 SECOND_ENVIRONMENT_DESTROY_GATE = False
 # The workspace this stack names. A LITERAL, per the note above: it equals the
 # directory name and is not read from it.
@@ -1038,9 +1043,11 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
 
     def test_the_second_environment_declares_its_own_secret_and_environment(self) -> None:
         """DERIVED -- add-a-staging-environment's tasks.md 2.4 established the
-        pair, and rename-the-external-services moved both to the stack's own
-        name: `github_environment: main-staging`,
-        `read_only_secret: HCLOUD_TOKEN_MAIN_STAGING`.
+        pair. rename-the-external-services moved one of them and not the
+        other: `github_environment: staging` stands, because GitHub cannot
+        rename an Environment, while `read_only_secret:
+        HCLOUD_TOKEN_MAIN_STAGING` moved because a repository secret can be
+        created under a new name.
 
         That the two must DIFFER from every other environment's is specified,
         and is asserted over the whole tree by

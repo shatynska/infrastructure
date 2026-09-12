@@ -1,5 +1,9 @@
 # Test plan — `rename-the-external-services`
 
+**READ THIS FIRST: the delta set this plan was written against is not the one that shipped.** When it was written the change carried nine `MODIFIED` requirements across three capabilities, eight of them moving the GitHub Environment's name. Those eight were withdrawn after the plan was committed: GitHub offers no way to rename a deployment Environment, so that rename was deferred to `docs/change-queue.md` entry 75 and the requirements naming `production` are true as they stand. One delta shipped — *Remote State Backend*'s corrected rationale — and it states no scenario a test can reach.
+
+**What that does and does not change below.** The scenario accounting is now a record of what was analysed rather than of what the change owes; read it as entry 75's inheritance. The two assertions this pass actually produced are unaffected and both still hold: the retired-name sweep, whose four needles are the workspace and secret names that did move, and the deploy-gate equality, which was written against no literal precisely so that a later rename cannot invalidate it.
+
 Written by an author other than whoever implements section 4, from the approved delta specs and before any implementation existed. This file is not an artifact the OpenSpec schema knows about: it does not appear among `openspec instructions apply`'s context files and must be read on purpose.
 
 **This pass is additive only.** It added one module. It edited, deleted and disabled nothing, and it wrote no implementation. Every test named below as *obsolete* is a candidate for the implementing author to re-point — none was touched here.

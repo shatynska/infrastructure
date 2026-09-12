@@ -1,7 +1,7 @@
 name: Platform Deploy
 
 # Diff-then-gated-deploy, mirroring apply.yml's plan/apply split so the
-# main-production Environment's approver sees the exact diff before approving
+# production Environment's approver sees the exact diff before approving
 # -- see the Reviewer Sees the Exact Diff Before Approving requirement in
 # iac-platform-deploy-pipeline. Not a required PR check; only the
 # validation step in pr-validation.yml is that.
@@ -59,8 +59,10 @@ jobs:
     # Environment to gate both, and `.github/tests` compares the pair. The two
     # moving in different commits is the hazard: GitHub CREATES an Environment
     # a workflow names, with no protection rules, so a mismatch deploys
-    # unreviewed rather than failing.
-    environment: main-production
+    # unreviewed rather than failing -- which is also why `docs/change-queue.md`
+    # entry 75, the change that would rename this Environment, is not a matter
+    # of editing this line.
+    environment: production
     permissions:
       contents: read
     steps:
@@ -70,7 +72,7 @@ jobs:
       # Joins this runner to the same tailnet the host is a member of
       # (connect-platform-deploy-via-tailscale) -- SSH is only reachable
       # this way, not over the public internet, per that change's
-      # design.md. The OAuth client is scoped to the `main-production`
+      # design.md. The OAuth client is scoped to the `production`
       # Environment like every other secret this job uses, and ephemeral
       # per-run nodes are created automatically (tailscale/github-action's
       # own behavior), not a long-lived credential. `ping` waits for the
@@ -151,7 +153,7 @@ jobs:
       # public half of (as this key's own `deploy_apps` entry) -- generated
       # out-of-band there (its tasks.md 2.2's sibling generation for
       # platform), not here. Both this key and the three secrets above
-      # SHALL be scoped to the `main-production` Environment specifically
+      # SHALL be scoped to the `production` Environment specifically
       # (GitHub resolves an Environment-scoped secret ahead of a
       # repository-scoped one of the same name, mirroring apply.yml's
       # HCLOUD_TOKEN pattern), since the accepted content-layer trust

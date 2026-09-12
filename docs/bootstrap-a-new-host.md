@@ -70,7 +70,7 @@ Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two **purpos
 |---|---|---|---|
 | Operator key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-root -C "<you>@<company> root"` | Yes | Your workstation only. This is `root` on **both** servers. |
 | Operator inspection key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ops -C "ops-<you>"` | Yes | Your workstation. Unprivileged login, used daily instead of root. Configured on **both** hosts, in stage 6. |
-| Platform deploy key — **production** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform -N "" -C "deploy@platform"` | **No** (CI cannot type one) | The `main-production` Environment secret `PLATFORM_DEPLOY_SSH_KEY` (stage 6.4); delete `~/.ssh/<company>-platform` once it is stored |
+| Platform deploy key — **production** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform -N "" -C "deploy@platform"` | **No** (CI cannot type one) | The `production` Environment secret `PLATFORM_DEPLOY_SSH_KEY` (stage 6.4); delete `~/.ssh/<company>-platform` once it is stored |
 | Platform deploy key — **staging** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform-staging -N "" -C "deploy@platform-staging"` | **No** | **Your password manager, and no GitHub secret yet** — so `~/.ssh/<company>-platform-staging` stays where it is. Do not delete it; see below |
 | One deploy key per application | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-deploy -N "" -C "<app>-deploy"` | **No** | That application's GitHub secret only; delete the local file once it is stored |
 | Converge key — **one per stack** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ansible-ci-<environment> -N "" -C "ansible-ci-<environment>"` | **No** (CI cannot type one) | That stack's GitHub Environment secret `ANSIBLE_SSH_PRIVATE_KEY` (stage 6.6); delete the local private half once it is stored. The public half is appended to `root`'s `authorized_keys` on that stack's host — see below |
@@ -81,7 +81,7 @@ Keep the `.pub` halves; they are committed to the repository in later stages and
 
 **Why it is not the operator key**, which already authorises `root` on both servers and would need no new keypair. Three reasons, and the first is the one that matters: a key held by continuous integration is held by whoever can reach the repository's Environment secrets, and the operator key is the human's own. Rotating CI's must not re-key the human, and a compromise of one must not be a compromise of the other. It is **one per stack** for the same reason the platform deploy keys are: one leaked private half must not converge both hosts.
 
-**Why the two platform deploy keys are stored differently**, since the difference reads like an inconsistency and is not. Production's private half goes straight into a GitHub secret because a workflow reads it: `platform-deploy.yml` deploys to production. Staging has no deploy workflow yet — that workflow declares `environment: main-production`, and giving staging one is a change of its own — so there is nothing to put staging's private half into, and "delete the local file after storing it" would mean deleting it outright. Keep it in the password manager until staging gets a deploy path.
+**Why the two platform deploy keys are stored differently**, since the difference reads like an inconsistency and is not. Production's private half goes straight into a GitHub secret because a workflow reads it: `platform-deploy.yml` deploys to production. Staging has no deploy workflow yet — that workflow declares `environment: production`, and giving staging one is a change of its own — so there is nothing to put staging's private half into, and "delete the local file after storing it" would mean deleting it outright. Keep it in the password manager until staging gets a deploy path.
 
 **Every private half above is generated into `~/.ssh/`, and none into the repository.** These are passphrase-less keys, `.gitignore` carries no private-key pattern, and stage 4.2 runs `git add -A` — so a key generated where you stand is one routine commit away from being published, and gitleaks is a hook you may not have installed yet. The window is worst for staging's, which is never deleted at all, but production's and each application's are also generated in stage 0 and not stored until stage 6 or 8: most of a working day apart, with that `git add -A` in between.
 
@@ -106,12 +106,12 @@ Covers stages 0 to 6. Three things sit outside it deliberately: stage 7's platfo
 | Hetzner project | **2** | §1.1, and *Each Environment Has a Dedicated Hetzner Cloud Project* (`openspec/specs/iac-state-management/spec.md`) |
 | Hetzner API token | **4** — read-only and read-write per project | §1.2. **Not six:** each read-only token is *also* exported under a second variable name for Ansible, and a second name is not a second token |
 | HCP workspace | **2** | The two `versions.tf` name `main-production` and `main-staging` |
-| `TF_API_TOKEN` | **1**, shared | *HCP Terraform Access via a Static Token, Unsplit by Privilege* (same spec file), cited for "one value, unsplit by privilege" and not for where it is stored — that requirement predates staging and names only `main-production`, while §3.3 now sets the token on both Environments |
+| `TF_API_TOKEN` | **1**, shared | *HCP Terraform Access via a Static Token, Unsplit by Privilege* (same spec file), cited for "one value, unsplit by privilege" and not for where it is stored — that requirement predates staging and names only `production`, while §3.3 now sets the token on both Environments |
 | Ansible Vault password | **2** | §6.1 requires it; the two `image_prune_heartbeat_ping_key` blocks carry vault ids `production` and `staging`, one per environment |
 | Tailscale auth key | **1 reusable key serves both joins**; two if single-use, or to revoke one host's join without the other — this repository used two | §5.3, and `ansible/roles/tailscale/tasks/main.yml`, which consumes it once per run and skips an already-joined host |
 | Tailscale OAuth client | **1** | §5.3 — one client serves every repository |
 | GHCR pull token | **1 value** unless you choose two, stored twice — encrypted separately into each stack's `group_vars` under that stack's own Vault password | `ansible/inventory/group_vars/staging.yml` records the shared *account* and the reasoning: read-only against the same packages, so a second "would be a second thing to rotate for no isolation gained". §6.1 permits reuse rather than requiring it, and the ciphertexts cannot be compared to tell which you chose |
-| GitHub Environment | **2** — `main-production` and `main-staging` | §3.2, and each stack's `pipeline.yml` names the one its apply job attaches to. **Named for the stack, not the environment** — unlike the Vault ids and the Ansible groups in the rows around it, which are `production` and `staging` |
+| GitHub Environment | **2** — `production` and `staging` | §3.2, and each stack's `pipeline.yml` names the one its apply job attaches to. **Named for the environment, unlike the repository secrets two rows up** — `docs/naming-conventions.md` calls for the stack's name here and GitHub offers no rename, so moving it means re-creating the Environment and every secret on it: `docs/change-queue.md` entry 75 |
 | Heartbeat project ping key | **1**, shared — it addresses the **four** periodic-job checks Appendix A lists | §7.1: "It addresses one check per periodic job, listed with its period and grace in Appendix A". §7.1's Alertmanager check is **not** one of them: it has a ping URL of its own, held as `PLATFORM_DEADMANSWITCH_URL`, which a ping-key rotation does not touch |
 
 Appendix A is this same set seen from the other end — where each secret lives and what breaks when it is wrong, for rotating rather than for assembling. The two move together; if you change one, change the other.
@@ -138,9 +138,9 @@ In **each** project: Security → API tokens → Generate API token. Check the p
 | Token | Permission | Where it goes | Never goes |
 |---|---|---|---|
 | Production Read Only | Read | Your workstation, **twice**: the repo-root `.envrc` as `HCLOUD_TOKEN` for Terraform (stage 4.1), and `ansible/.envrc` as `HCLOUD_TOKEN_MAIN_PRODUCTION` for Ansible (stage 6.0). Plus the repository secret `HCLOUD_TOKEN_MAIN_PRODUCTION` (stage 3) | Nowhere else |
-| Production Read & Write | Read & Write | The `main-production` Environment secret `HCLOUD_TOKEN` (stage 3) | Any local file, shell, or note. If you can run `terraform apply` from your laptop, this token is in the wrong place. |
+| Production Read & Write | Read & Write | The `production` Environment secret `HCLOUD_TOKEN` (stage 3) | Any local file, shell, or note. If you can run `terraform apply` from your laptop, this token is in the wrong place. |
 | Staging Read Only | Read | Your workstation, **twice**: `terraform/stacks/main-staging/.envrc` as `HCLOUD_TOKEN` for Terraform (stage 4.1), and `ansible/.envrc` as `HCLOUD_TOKEN_MAIN_STAGING` for Ansible (stage 6.0). Plus the repository secret `HCLOUD_TOKEN_MAIN_STAGING` (stage 3) | Nowhere else |
-| Staging Read & Write | Read & Write | The `main-staging` Environment secret `HCLOUD_TOKEN` (stage 3) | The same places. An ungated apply does not make its token less confined. |
+| Staging Read & Write | Read & Write | The `staging` Environment secret `HCLOUD_TOKEN` (stage 3) | The same places. An ungated apply does not make its token less confined. |
 
 Each token is shown once. Put all four in the password manager immediately, each labelled with its project **and** its permission level.
 
@@ -241,7 +241,7 @@ Terraform needs somewhere to keep its state file (the record of what it created)
 
 4. Edit **both** `terraform.tfvars` files — `terraform/stacks/main-production/` and `terraform/stacks/main-staging/` — with the stage 1.3 decisions for that stack, putting the **public** half of your operator key from stage 0 into each `ssh_public_key`. Everything in these files is non-secret and committed. Check `name` differs between them and `volume_name` does not; stage 1.3 says why each matters.
 
-5. Read `terraform/stacks/main-staging/pipeline.yml` and accept or change its four values: `github_environment: main-staging`, `read_only_secret: HCLOUD_TOKEN_MAIN_STAGING`, `target_environment: staging`, and `destroy_policy_gate: false`. These are what stage 3.2 and 3.3 must match — the Environment you create and the repository secret you set take their names from this file, not from any workflow. `terraform/stacks/main-production/pipeline.yml` is its counterpart, declaring `github_environment: main-production`, `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` and `target_environment: production`. **`target_environment` names the Ansible group, not the stack**, and it is the only one of the three that does: the other two carry the stack's name, and this one is `production` while the stack is `main-production`. It names the play's `hosts:`, the `--vault-id` label and the `group_vars` file, so all three move together. **Neither stack may declare `HCLOUD_TOKEN`**, and the reason is not style: every GitHub Environment defines that name as its *Read & Write* token, and an Environment secret shadows a repository secret of the same name — so a job attached to an Environment would resolve the write token from a field that says read-only. `.github/tests` fails the build on a declaration that names it.
+5. Read `terraform/stacks/main-staging/pipeline.yml` and accept or change its four values: `github_environment: staging`, `read_only_secret: HCLOUD_TOKEN_MAIN_STAGING`, `target_environment: staging`, and `destroy_policy_gate: false`. These are what stage 3.2 and 3.3 must match — the Environment you create and the repository secret you set take their names from this file, not from any workflow. `terraform/stacks/main-production/pipeline.yml` is its counterpart, declaring `github_environment: production`, `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` and `target_environment: production`. **Only `read_only_secret` carries the stack's name**, and the other two spell the environment for different reasons: `target_environment` names the Ansible group, which *is* the environment, while `github_environment` would be `main-production` under `docs/naming-conventions.md` and is not, because GitHub cannot rename an Environment (`docs/change-queue.md` entry 75). It names the play's `hosts:`, the `--vault-id` label and the `group_vars` file, so all three move together. **Neither stack may declare `HCLOUD_TOKEN`**, and the reason is not style: every GitHub Environment defines that name as its *Read & Write* token, and an Environment secret shadows a repository secret of the same name — so a job attached to an Environment would resolve the write token from a field that says read-only. `.github/tests` fails the build on a declaration that names it.
 
 6. Delete the `moved` block at the bottom of `terraform/stacks/main-production/ssh_key.tf`. It records a one-time relocation in the original repository and is meaningless in a fresh state. Staging's `ssh_key.tf` has no such block and needs no edit; its own comment says why.
 
@@ -255,12 +255,12 @@ All of these are in Settings on github.com, or via `gh`.
 
 1. **Environments, two of them.** Settings → Environments → New environment, twice:
 
-   - **`main-production`** — add the protection rule **Required reviewers** and name at least one person. For a company, this person should not be the only person who opens pull requests; the Environment approval is the human gate every production change passes through.
-   - **`main-staging`** — add **no** protection rules at all. Its apply runs on merge, without a human.
+   - **`production`** — add the protection rule **Required reviewers** and name at least one person. For a company, this person should not be the only person who opens pull requests; the Environment approval is the human gate every production change passes through.
+   - **`staging`** — add **no** protection rules at all. Its apply runs on merge, without a human.
 
    The names must match what each stack's `pipeline.yml` declares (step 5 of 3.1), and they must differ from each other: two stacks naming one GitHub Environment would share its write token and its protection rules, so the ungated one would hold the reviewed one's credential. Discovery fails the pipeline, naming both, if they ever collide.
 
-   **What makes an ungated apply safe is the project boundary from stage 1, and nothing else.** Staging's write token can destroy staging's Hetzner project and cannot touch production's. Whether an Environment requires a reviewer is a repository setting that no file in this repository can verify — which cuts both ways: nothing will tell you if `main-production` loses its reviewer either.
+   **What makes an ungated apply safe is the project boundary from stage 1, and nothing else.** Staging's write token can destroy staging's Hetzner project and cannot touch production's. Whether an Environment requires a reviewer is a repository setting that no file in this repository can verify — which cuts both ways: nothing will tell you if `production` loses its reviewer either.
 2. **Label.** Issues → Labels → New label: `destroy-override`. A merged pull request must carry this label for the apply workflow to accept a plan that deletes or replaces a resource. Without it, such plans fail on purpose.
 3. **Workflow token.** Settings → Actions → General → Workflow permissions: **Read repository contents and packages permissions**. Each workflow declares the little it needs on top.
 4. **Merge methods.** Leave merge commits enabled. The destroy gate reads the pull request number from the merge commit message; squash and rebase merges fall back to a slower API lookup.
@@ -273,10 +273,10 @@ Repository secrets: Settings → Secrets and variables → Actions → Repositor
 gh secret set HCLOUD_TOKEN_MAIN_PRODUCTION          # production Read Only
 gh secret set HCLOUD_TOKEN_MAIN_STAGING             # staging Read Only
 gh secret set TF_API_TOKEN                          # the HCP user token
-gh secret set HCLOUD_TOKEN --env main-production    # production Read & Write
-gh secret set TF_API_TOKEN --env main-production    # the same HCP user token
-gh secret set HCLOUD_TOKEN --env main-staging       # staging Read & Write
-gh secret set TF_API_TOKEN --env main-staging       # the same HCP user token
+gh secret set HCLOUD_TOKEN --env production         # production Read & Write
+gh secret set TF_API_TOKEN --env production         # the same HCP user token
+gh secret set HCLOUD_TOKEN --env staging            # staging Read & Write
+gh secret set TF_API_TOKEN --env staging            # the same HCP user token
 ```
 
 Do not pass `--body '<token>'`: that records the secret in your shell history, where it then lives until the file rotates out.
@@ -287,11 +287,11 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 |---|---|---|---|
 | `HCLOUD_TOKEN_MAIN_PRODUCTION` | Repository | Stage 1, production Read Only | Production's PR plans, drift detection, apply-workflow plan job — and its host converge, which exports this value under the same name production's inventory source reads locally (stage 6.0). The two names are one name on purpose: the converge job holds the credential under the name the declaration states and has to supply it under the name the source reads, and a workflow carrying that mapping would be naming a stack in workflow text |
 | `HCLOUD_TOKEN_MAIN_STAGING` | Repository | Stage 1, staging Read Only | Staging's PR plans, drift detection, apply-workflow plan job and host converge |
-| `HCLOUD_TOKEN` | `main-production` Environment | Stage 1, production Read & Write | Production's apply job only, after approval. GitHub resolves an Environment secret ahead of a repository secret of the same name, which is the whole mechanism. |
-| `HCLOUD_TOKEN` | `main-staging` Environment | Stage 1, staging Read & Write | Staging's apply job, immediately on merge |
+| `HCLOUD_TOKEN` | `production` Environment | Stage 1, production Read & Write | Production's apply job only, after approval. GitHub resolves an Environment secret ahead of a repository secret of the same name, which is the whole mechanism. |
+| `HCLOUD_TOKEN` | `staging` Environment | Stage 1, staging Read & Write | Staging's apply job, immediately on merge |
 | `TF_API_TOKEN` | Repository | Stage 2 | Every Terraform job |
-| `TF_API_TOKEN` | `main-production` Environment | Stage 2, same value | Production's apply job |
-| `TF_API_TOKEN` | `main-staging` Environment | Stage 2, same value | Staging's apply job |
+| `TF_API_TOKEN` | `production` Environment | Stage 2, same value | Production's apply job |
+| `TF_API_TOKEN` | `staging` Environment | Stage 2, same value | Staging's apply job |
 
 **`.github/dependabot.yml` already lists both stack directories**, and it must keep listing exactly the ones that exist. Dependabot's terraform ecosystem has no discovery mechanism, so a directory the list omits is not partially covered — it is uncovered, and its provider pins rot with no signal. The CI suite compares that list against the lockfiles in the tree and fails the build if a lockfile-bearing directory is missing. If you drop the second stack, drop its entry with it; if you add a third, add one.
 
@@ -301,7 +301,7 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 
 **Each Environment must define its own `HCLOUD_TOKEN`.** GitHub resolves an *absent* Environment secret to the repository secret of the same name rather than failing — so an Environment that omits it applies with whatever the repository holds under that name. **No repository secret carries that name here**, deliberately: production's read-only token is `HCLOUD_TOKEN_MAIN_PRODUCTION` and staging's is `HCLOUD_TOKEN_MAIN_STAGING`, precisely so that no job attached to an Environment can resolve a read-only field to a write token. The fallback therefore resolves to nothing, and the apply job's guard still refuses — it digests both sides and they match as the empty string. That is the guard working, not a hole: an Environment that omits its write token fails rather than applying with something else's. The fix is still here.
 
-**Check:** seven secrets set — three at repository scope, two on each Environment; `main-production` shows one required reviewer and `main-staging` shows none; the label exists; the repository is private and holds exactly one commit, the license.
+**Check:** seven secrets set — three at repository scope, two on each Environment; `production` shows one required reviewer and `staging` shows none; the label exists; the repository is private and holds exactly one commit, the license.
 
 ## Stage 4. First Terraform apply: both servers exist
 
@@ -354,12 +354,12 @@ git push -u origin main
 Open Actions on github.com. **Two** workflows start, and only one of them is the one you want. PR Validation and Ansible Verify do not run at all — both are triggered by pull requests only.
 
 - **Terraform Apply** — this is the one. Read on.
-- **Platform Deploy** — triggered because this push adds the whole `platform/` tree, which is its path filter. Its `deploy` job attaches to the `main-production` Environment, so **it raises a second approval request that looks exactly like the one below**. Do not approve it. There is nothing to deploy yet: the host is not converged until stage 6, and every secret that job needs is created in stages 5 to 7. Cancel the run, or leave it pending and let it expire. Stage 7.4 is where the platform stack is deployed for the first time, deliberately and with its prerequisites in place.
+- **Platform Deploy** — triggered because this push adds the whole `platform/` tree, which is its path filter. Its `deploy` job attaches to the `production` Environment, so **it raises a second approval request that looks exactly like the one below**. Do not approve it. There is nothing to deploy yet: the host is not converged until stage 6, and every secret that job needs is created in stages 5 to 7. Cancel the run, or leave it pending and let it expire. Stage 7.4 is where the platform stack is deployed for the first time, deliberately and with its prerequisites in place.
 
 The run covers **both** stacks, because this push changes files under both stack directories:
 
 - **staging's apply runs immediately**, with no approval, and creates its four resources;
-- **production's apply waits** on the `main-production` Environment. Read its plan job's summary. If it is the four resources from 4.1, approve; the `apply` job creates them.
+- **production's apply waits** on the `production` Environment. Read its plan job's summary. If it is the four resources from 4.1, approve; the `apply` job creates them.
 
 Neither stack's failure withholds the other's apply — that separation is deliberate, so a broken staging can never be the reason a correct production change cannot ship. This is the pipeline's specified behaviour; two applies in one run, one of them pausing, is a path this repository has specified and not yet observed, so read the run rather than assuming it.
 
@@ -399,7 +399,7 @@ You now have two servers, and **stage 6 configures both**. It is written once an
 
 **Stages 7 to 9 are still production's alone**, and one mechanism is why:
 
-- **`.github/workflows/platform-deploy.yml` declares `environment: main-production`** and deploys to a single `PLATFORM_DEPLOY_HOST`. The platform stack has no per-stack path at all. That is `docs/change-queue.md`'s platform-per-stack entry.
+- **`.github/workflows/platform-deploy.yml` declares `environment: production`** and deploys to a single `PLATFORM_DEPLOY_HOST`. The platform stack has no per-stack path at all. That is `docs/change-queue.md`'s platform-per-stack entry.
 
 So after stage 6 the staging server is a **configured** host — Docker, UFW and fail2ban, on the tailnet, data volume mounted, operator account, deploy account — with no application stack on it. Its cloud firewall still opens no web port (`web_allowed_cidrs = []`), and it has no hostname and no certificate; those come with the stack, in the queue entry for staging's web exposure.
 
@@ -410,7 +410,7 @@ Two things about staging in stage 6 that differ from production, both deliberate
 
 **Its weekly image prune will report failure until the stack arrives**, and that is expected rather than a fault to chase: with nothing deployed, no application contributes an image and no container holds one, so the keep set is empty and the unit abandons by its own documented contract. See stage 6.5.
 
-**If you decide you do not want it yet**, delete `terraform/stacks/main-staging/` and `ansible/inventory/main-staging.hcloud.yml` and `ansible/inventory/group_vars/staging.yml`, drop `HCLOUD_TOKEN_MAIN_STAGING` from `ansible/.envrc`, remove its `HCLOUD_TOKEN_MAIN_STAGING` repository secret and its `main-staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Then skip staging wherever stage 6 says "once per stack". Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
+**If you decide you do not want it yet**, delete `terraform/stacks/main-staging/` and `ansible/inventory/main-staging.hcloud.yml` and `ansible/inventory/group_vars/staging.yml`, drop `HCLOUD_TOKEN_MAIN_STAGING` from `ansible/.envrc`, remove its `HCLOUD_TOKEN_MAIN_STAGING` repository secret and its `staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Then skip staging wherever stage 6 says "once per stack". Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
 
 ## Stage 5. Tailscale
 
@@ -656,8 +656,8 @@ The usual causes, in rough order: the key was already consumed, because it was g
 | Vault password, one per stack | Password manager only | You chose it | Anyone running that stack's playbook |
 | `ghcr_pull_token` | One encrypted block per stack, of the same token value unless you chose two | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
 | `image_prune_heartbeat_ping_key` | One encrypted block per stack, of the same project ping key | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3, and addresses a different check per host because the check name comes from the host's name |
-| `PLATFORM_DEPLOY_SSH_KEY` | `main-production` Environment, infrastructure repository. **Production's key only** | The **private** half of the *production* platform deploy key from stage 0. Store it now, then delete the local file. **Staging's key is not stored here and must not be deleted** — it stays at `~/.ssh/<company>-platform-staging` and in your password manager until staging gets a deploy path (§0.3) | `platform-deploy.yml`'s deploy job |
-| `PLATFORM_DEPLOY_HOST` | `main-production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
+| `PLATFORM_DEPLOY_SSH_KEY` | `production` Environment, infrastructure repository. **Production's key only** | The **private** half of the *production* platform deploy key from stage 0. Store it now, then delete the local file. **Staging's key is not stored here and must not be deleted** — it stays at `~/.ssh/<company>-platform-staging` and in your password manager until staging gets a deploy path (§0.3) | `platform-deploy.yml`'s deploy job |
+| `PLATFORM_DEPLOY_HOST` | `production` Environment, infrastructure repository | The server's tailnet IPv4 (`100.x.y.z`). A MagicDNS name also works, but the literal IP avoids a resolution step. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
 **Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main-data` is mounted and holds `prometheus/` and `grafana/` (the path still carries `-data` while the volume is named `main`; they are independent, and `docs/change-queue.md` entry 64 brings them together); and `hostname` returns `<company>-<stack>`, e.g. `shatynska-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
 
@@ -706,11 +706,13 @@ The second line is the check, and it is not optional: a key that is installed bu
 **Then store the two secrets, on that stack's GitHub Environment**, not as repository secrets. Both are read only by a job that has passed that Environment's protection rules, which is the whole reason they live there:
 
 ```sh
-gh secret set ANSIBLE_SSH_PRIVATE_KEY --env <stack> <~/.ssh/<company>-ansible-ci-<environment>
-gh secret set ANSIBLE_VAULT_PASSWORD --env <stack>
+gh secret set ANSIBLE_SSH_PRIVATE_KEY --env <environment> <~/.ssh/<company>-ansible-ci-<environment>
+gh secret set ANSIBLE_VAULT_PASSWORD --env <environment>
 ```
 
-**`--env` takes the `<stack>`, and this is the one place in stage 6 where it does.** A GitHub Environment is named for the stack (`main-production`), while the group, the Vault id and the `group_vars` file are named for the environment (`production`) — so every other command in this stage takes `<environment>` and these two do not. **Getting it wrong fails loudly, and that is worth knowing rather than assuming**: to encrypt a secret `gh` first fetches that Environment's public key from GitHub's REST API, and that request returns `404 Not Found` for an Environment that does not exist — measured against this repository on 2026-09-12. So a mistyped `--env` leaves no secret anywhere and says so. **Do not read that reassurance across to a workflow's own `environment:` key**, which behaves the other way: GitHub's documented behaviour there is to create the Environment it names, with no protection rules, which is why `.github/workflows/platform-deploy.yml` carries a comment about it and why the two must not be confused.
+**`--env` takes the `<environment>` here because a GitHub Environment is still named for the environment**, unlike this stack's read-only secret, its HCP workspace and its inventory source, which all carry the stack's name. `docs/naming-conventions.md` would have this one carry it too, and `docs/change-queue.md` entry 75 is why it does not yet — so if you are reading this after that entry lands, these two commands take the `<stack>` and every other command in this stage still takes the `<environment>`.
+
+**A mistyped `--env` fails loudly rather than quietly**, which is worth knowing either way: to encrypt a secret `gh` first fetches that Environment's public key from GitHub's REST API, and that request returns `404 Not Found` for an Environment that does not exist — measured against this repository on 2026-09-12. **Do not read that reassurance across to a workflow's own `environment:` key**, which behaves the other way: GitHub's documented behaviour there is to create the Environment it names, with no protection rules.
 
 Then delete the local private half, exactly as you do for the platform deploy key. Keep the Vault password in the password manager — it is still the only thing that can decrypt that stack's `group_vars`, and it is now in two places rather than one, which is the point: a second operator no longer means handing over a password and a root key.
 
@@ -760,7 +762,7 @@ openssl rand -base64 32   # run three times
 
 ### 7.3 Secrets
 
-All in the `main-production` Environment of the infrastructure repository.
+All in the `production` Environment of the infrastructure repository.
 
 | Name | Value from |
 |---|---|
@@ -778,9 +780,9 @@ One more secret belongs to this stage and is **not** in the table above, because
 
 | Name | Where | Value from |
 |---|---|---|
-| `HEARTBEAT_PING_KEY` | **Repository** secret — Settings → Secrets and variables → Actions, *not* the `main-production` Environment | The project ping key stage 6.1 created and put into Ansible Vault, unchanged |
+| `HEARTBEAT_PING_KEY` | **Repository** secret — Settings → Secrets and variables → Actions, *not* the `production` Environment | The project ping key stage 6.1 created and put into Ansible Vault, unchanged |
 
-Scoping it to the `main-production` Environment would break it: a job reading an Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The scheduled workflows read it with no `environment:` declared, and they turn red naming it if it is absent.
+Scoping it to the `production` Environment would break it: a job reading an Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The scheduled workflows read it with no `environment:` declared, and they turn red naming it if it is absent.
 
 ### 7.4 Deploy
 
@@ -848,7 +850,7 @@ In the application repository:
 
 1. **Anything your Compose file persists — a volume, named or anonymous, or a writable bind mount — has to say why it needs no backup.** Name which reason in *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) the store satisfies, in the change that adds it; a store satisfying none owes a logical backup written off this host and a rehearsed, checked restore before it first holds data. This catches the store a bumped image newly declares as much as one you wrote.
 2. A `Dockerfile` and a `docker-compose.yml` whose web service joins the external network `platform_edge` and carries the Traefik labels shown in `platform/README.md`, "Joining the platform network", with its hostname and its container port. Use `env_file: .env` for runtime secrets and `image: ghcr.io/<org>/<app>:${IMAGE_TAG}`.
-2. A `production` Environment with a required reviewer, set up the way stage 3.2 sets one up. **The name is the application repository's own and is deliberately not this repository's**: the infrastructure repository's Environments are named for the stacks they gate (`main-production`), because a stack is what a GitHub Environment holds credentials for there. An application repository has one deploy target and no stacks, so `production` is the right name for it. Copying `main-production` across would name a stack that repository knows nothing about.
+2. A `production` Environment with a required reviewer, as in stage 3.2. The name is the application repository's own: it has one deploy target and no stacks, so `production` is right for it however this repository's Environments are eventually named.
 3. A deploy workflow on push to `main` with two jobs, copied from commerce-ops: a `build-and-push` job (`permissions: packages: write`, `docker/login-action` with `GITHUB_TOKEN`, `docker/build-push-action` tagging the image with `github.sha`), then a `deploy` job on the `production` Environment that joins the tailnet with `tailscale/github-action`, renders `.env` from secrets (including `IMAGE_TAG=${{ github.sha }}`), and runs:
 
    ```sh
@@ -907,18 +909,18 @@ Do these once the first pull requests have run, since branch protection can only
 
 Every credential the system uses, in one place. "Env" means a GitHub Environment; where a row names one, it says which.
 
-**A GitHub Environment, a repository secret and an HCP workspace are named for the stack** — `main-production`, `main-staging` — while the Ansible group, the `group_vars` file and the Vault id are named for the environment: `production`, `staging`. The two coincided while this repository had one tenant and do not now. `docs/naming-conventions.md` is the scheme.
+**A repository secret and an HCP workspace are named for the stack** — `main-production`, `main-staging` — while the Ansible group, the `group_vars` file and the Vault id are named for the environment: `production`, `staging`. The two coincided while this repository had one tenant and do not now. `docs/naming-conventions.md` is the scheme. **A GitHub Environment belongs on the first list and is on the second**, because GitHub offers no way to rename one: `docs/change-queue.md` entry 75 is what moves it, and its price is re-entering every secret the Environment holds.
 
 The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches exactly one project. The `TF_API_TOKEN` row does not: one HCP user token serves both workspaces.
 
 | Name | Where | Created in | Value from | Breaks when wrong |
 |---|---|---|---|---|
 | Production Hetzner Read Only | repo-root `.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_MAIN_PRODUCTION`**; repo secret `HCLOUD_TOKEN_MAIN_PRODUCTION` | 1 | The production Hetzner project → API tokens | Production's local plans, PR plans and drift detection; production's Ansible inventory source, locally and in the converge workflow. **Rotating it means editing two local files and one secret** — miss `ansible/.envrc` and the next local converge dies at inventory parse. The repository secret and the `ansible/.envrc` variable share a name on purpose: the converge job exports the declared secret under the name the inventory source reads |
-| Production Hetzner Read & Write | `main-production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
+| Production Hetzner Read & Write | `production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
 | Converge key, **per stack** | That stack's Env secret `ANSIBLE_SSH_PRIVATE_KEY`; public half in `root`'s `authorized_keys` on that host | 2 | You generate it (§0.3) | `host-converge.yml`'s converge job, as `root`. **Revoking it is an edit on the host** — no role owns that file |
 | Vault password, **per stack** | Password manager **and** that stack's Env secret `ANSIBLE_VAULT_PASSWORD` | 2 | You chose it (§6.1) | The play, locally and in the converge job. Two places rather than one deliberately: a lost workstation no longer means a host nobody can converge |
 | Staging Hetzner Read Only | `terraform/stacks/main-staging/.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_MAIN_STAGING`**; repo secret `HCLOUD_TOKEN_MAIN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection; staging's Ansible inventory source, locally and in the converge workflow. Two local files here too |
-| Staging Hetzner Read & Write | `main-staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
+| Staging Hetzner Read & Write | `staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
 | `TF_API_TOKEN` | Repo secret and **both** Env secrets; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |
 | Operator inspection key | Workstation | 0 | `ssh-keygen` | Daily unprivileged login |
@@ -926,8 +928,8 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | `TAILSCALE_OAUTH_CLIENT_ID` / `_SECRET` | Env secret, infrastructure and each app repo | 5 | Tailscale → OAuth clients | Every deploy job |
 | Vault password, one per stack | Password manager | 6 | Chosen | Running that stack's playbook |
 | `ghcr_pull_token` | One encrypted block per stack, in each `group_vars/<environment>.yml` — of the same token value, unless you chose two | 6 | GitHub classic PAT, `read:packages` | Pulling private images at deploy |
-| `PLATFORM_DEPLOY_SSH_KEY` | `main-production` Env secret. Staging's keypair exists but has no secret yet (§0.3) | 6 | `ssh-keygen`, production's platform key | Platform deploys |
-| `PLATFORM_DEPLOY_HOST` | `main-production` Env secret | 6 | Tailscale → Machines | Platform deploys, Grafana bind |
+| `PLATFORM_DEPLOY_SSH_KEY` | `production` Env secret. Staging's keypair exists but has no secret yet (§0.3) | 6 | `ssh-keygen`, production's platform key | Platform deploys |
+| `PLATFORM_DEPLOY_HOST` | `production` Env secret | 6 | Tailscale → Machines | Platform deploys, Grafana bind |
 | `PLATFORM_ACME_EMAIL` | Env secret | 7 | A mailbox | Certificate registration |
 | `PLATFORM_POSTGRES_USER` / `_PASSWORD` | Env secret | 7 | Chosen / generated | Postgres startup; every manual `psql` |
 | `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | Env secret and typed into Postgres | 7 | Generated | Postgres metrics |
@@ -937,7 +939,7 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in each `group_vars/<environment>.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
 | `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
 
-`HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `main-production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.
+`HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.
 
 The checks it addresses, and the settings each needs at the observer. A check comes into existence at its job's first ping and carries the vendor's default period until it is corrected here — so read these back once each check exists, and again after any rebuild:
 

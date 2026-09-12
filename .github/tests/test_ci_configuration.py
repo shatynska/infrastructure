@@ -6608,7 +6608,7 @@ COMPOSE_ECOSYSTEM = "docker-compose"
 REQUIRED_ECOSYSTEMS = ("terraform", "github-actions", COMPOSE_ECOSYSTEM)
 
 PLATFORM_DEPLOY = WORKFLOWS / "platform-deploy.yml"
-GATED_DEPLOY_ENVIRONMENT = "main-production"
+GATED_DEPLOY_ENVIRONMENT = "production"
 
 # Dependabot's Docker Compose file fetcher selects by filename, transcribed
 # from `dependabot-core`'s `docker/lib/dependabot/docker_compose/file_fetcher.rb`

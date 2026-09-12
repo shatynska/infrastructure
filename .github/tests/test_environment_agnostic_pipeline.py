@@ -189,7 +189,7 @@ TARGET_GROUP_KEY_HINT = "target"
 # Environment, and a declaration drifting from either still fails.
 PROD_DIRECTORY = "main-production"
 PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_PRODUCTION"
-PROD_GITHUB_ENVIRONMENT = "main-production"
+PROD_GITHUB_ENVIRONMENT = "production"
 
 TERRAFORM_PLAN = re.compile(r"terraform\s+plan\b")
 TERRAFORM_APPLY = re.compile(r"terraform\s+apply\b")
@@ -972,15 +972,19 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
         """Every name a workflow must not spell: the stack directories, the
         declared GitHub Environments, and the declared Ansible groups.
 
-        THE THIRD IS THERE BECAUSE THE FIRST TWO STOPPED COVERING IT. Until the
-        change rename-the-external-services the declared GitHub Environments
-        were `production` and `staging`, so the environment axis entered this
-        set through them; that change renamed them to the stack's own name and
-        the two sets collapsed into one. The requirement forbids naming an
-        environment in workflow text whichever axis the name is on, so a
-        hardcoded `production` or an `if: ... == 'staging'` in one of the
-        workflows this class sweeps would have been reported before that rename
-        and was briefly invisible after it. Read from the declarations rather
+        THE THIRD IS THERE BECAUSE THE FIRST TWO COVER IT ONLY BY COINCIDENCE.
+        The declared GitHub Environments are `production` and `staging`, so the
+        environment axis enters this set through them and the third source adds
+        nothing today. `docs/change-queue.md` entry 75 ends that: it renames the
+        Environments to their stacks' names, at which point the first two
+        sources collapse into one and the axis would drop out of this sweep with
+        nothing to say so. The requirement forbids naming an environment in
+        workflow text whichever axis the name is on, so a hardcoded `production`
+        or an `if: ... == 'staging'` in one of the workflows this class sweeps
+        would quietly stop being reported. The group is read explicitly here so
+        that entry 75 costs this assertion nothing -- added by
+        rename-the-external-services, which met exactly that collapse and
+        reverted it for an unrelated reason. Read from the declarations rather
         than written as a literal, for the reason every other name here is.
 
         WHAT THIS REACHES IS `TERRAFORM_WORKFLOWS`, WHICH IS THREE FILES --

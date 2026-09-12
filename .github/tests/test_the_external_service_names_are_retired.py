@@ -452,22 +452,28 @@ def gate_disagreements(gated, declared) -> list[str]:
 
 
 class TestTheDeployGateNamesTheEnvironmentAStackDeclares(unittest.TestCase):
-    """MODIFIED requirement: Gated Deploy Reuses the Terraform Production
-    Environment -- scenario "Same approvers gate both kinds of production
-    change".
-
-    SPECIFIED: "SHALL require manual approval via the **same** `main-production`
-    GitHub Environment protection rule already used by the Terraform apply
-    workflow", and the scenario's "both SHALL be gated by the same
-    `main-production` Environment's required reviewers, rather than each
+    """SPECIFIED -- Gated Deploy Reuses the Terraform Production Environment
+    (openspec/specs/iac-platform-deploy-pipeline/spec.md): "SHALL require manual
+    approval via the **same** `production` GitHub Environment protection rule
+    already used by the Terraform apply workflow", and its scenario "Same
+    approvers gate both kinds of production change": "both SHALL be gated by the
+    same `production` Environment's required reviewers, rather than each
     defining its own separate approval list".
 
-    Written as an EQUALITY between two committed files rather than against the
-    literal `main-production`, deliberately. Whether that Environment requires a
-    reviewer is a repository setting no static read can reach, so the literal
-    would assert only that a name was typed twice -- while this reports the
-    failure the rename actually risks: `platform-deploy.yml` and a stack's
-    `pipeline.yml` moved in different commits, or one of them not moved at all.
+    ASSERTED AGAINST THE STANDING REQUIREMENT, not against a delta. This class
+    arrived with rename-the-external-services, which drafted a delta moving that
+    literal to `main-production` and withdrew it: GitHub offers no way to rename
+    a deployment Environment, so `docs/change-queue.md` entry 75 owns the move.
+    The requirement is unchanged and this reads it as it stands.
+
+    Written as an EQUALITY between two committed files rather than against any
+    literal, deliberately, and that is what makes it survive entry 75 unedited.
+    Whether the Environment requires a reviewer is a repository setting no
+    static read can reach, so a literal would assert only that a name was typed
+    twice -- while this reports the failure a rename actually risks:
+    `platform-deploy.yml` and a stack's `pipeline.yml` moving in different
+    commits, or one of them not moving at all. Nothing read the two as the same
+    Environment before this.
 
     `test_ci_configuration.py`'s
     `TestAProposedImageUpdateIsNotExemptFromTheStacksObligations
