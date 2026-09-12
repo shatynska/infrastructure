@@ -110,6 +110,7 @@ from test_ci_configuration import (
     step_label,
     steps,
     triggers,
+    tracked_files,
     uncommented,
     walked_files,
 )
@@ -329,38 +330,70 @@ def old_root_occurrences(root: Path | None = None) -> list[str]:
     * The word immediately preceded by a letter, digit, underscore or hyphen.
       That is a longer identifier ending in it, not a reference to this
       directory.
-    * Anything under `openspec/`, per the pruning below.
+    * Anything under `openspec/`, which is filtered below. The delta specs are
+      what this suite is derived FROM, so reading them as offences would be
+      circular, and an archived record is history rather than a stale path;
+      `openspec validate` is what checks that tree.
 
-    Walks with `walked_files()`, which prunes `openspec/` wholesale. That is a
-    SUPERSET of the exclusion that change's tasks.md 8.4 states -- it names
-    `openspec/changes/archive/` and three artifacts of the change in flight --
-    and it errs in the permissive direction: a stale occurrence inside
-    `openspec/` is not reported here. The delta specs are what this suite is
-    derived FROM, so reading them as offences would be circular; `openspec
-    validate` is what checks that tree.
+    THE FILE SET IS TRACKED FILES, NOT A FILESYSTEM WALK, and the difference
+    is a defect this sweep shipped with. `walked_files()` prunes `.git`,
+    `.terraform`, `__pycache__` and `node_modules` and nothing else, so it
+    reads `.molecule-home/` -- which does not exist in continuous integration
+    and appears the moment a developer follows this repository's own Molecule
+    instructions, carrying vendored third-party collections. A single fixture
+    under `.molecule-home/collections/ansible_collections/community/docker/`
+    naming `environments/prod` made this function report two offences in code
+    nobody here wrote. The widening to a bare `<directory>/` reference is what
+    made it likely: that shape is common in third-party Ansible content where
+    the prefixed path never was. `AGENTS.md` scopes this suite to a static read
+    of a COMMITTED file, and vendored untracked content is not committed. See
+    `docs/change-queue.md` entry 68, which names this class and recommends this
+    helper.
 
-    Raises rather than reporting a clean tree when the walk reaches no file at
-    all: a sweep that read nothing would otherwise report success having
-    verified nothing.
+    A `root` argument means a scratch tree instead, which is NOT a repository
+    and has no tracked files, so those are walked. That path exists for the
+    discriminators below and is not a second way of reading the repository.
+
+    Raises rather than reporting a clean tree when it reads no file at all: a
+    sweep that read nothing would otherwise report success having verified
+    nothing. `tracked_files()` raises on its own account when the listing
+    cannot be taken, which is the same refusal one layer down.
     """
-    base = ROOT if root is None else root
-    files = walked_files(base)
-    if not files:
-        raise AssertionError(
-            f"the walk from {base} reached no file at all, so this sweep would "
-            "pass having read nothing"
-        )
     here = Path(__file__).resolve()
+    contents: dict[str, str] = {}
+    if root is None:
+        for name, raw in tracked_files().items():
+            if name.startswith("openspec/"):
+                continue
+            if (ROOT / name).resolve() == here:
+                continue
+            contents[name] = raw.decode("utf-8", errors="replace")
+        if not contents:
+            raise AssertionError(
+                "the tracked-file listing reached no file at all outside `openspec/`, "
+                "so this sweep would pass having read nothing"
+            )
+    else:
+        walked = walked_files(root)
+        if not walked:
+            raise AssertionError(
+                f"the walk from {root} reached no file at all, so this sweep would "
+                "pass having read nothing"
+            )
+        for path in walked:
+            if path.resolve() == here:
+                continue
+            contents[path.relative_to(root).as_posix()] = path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+
     offences: list[str] = []
-    for path in files:
-        if path.resolve() == here:
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+    for name, text in contents.items():
         if not OLD_ROOT_REFERENCE.search(text):
             continue
         for number, line in enumerate(text.splitlines(), start=1):
             if OLD_ROOT_REFERENCE.search(line):
-                offences.append(f"{path.relative_to(base).as_posix()}:{number}")
+                offences.append(f"{name}:{number}")
     return sorted(offences)
 
 
@@ -1723,6 +1756,70 @@ class TestNoCommittedFileStillNamesTheOldTerraformRoot(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
+class TestTheSweepReadsCommittedFilesOnly(unittest.TestCase):
+    """DERIVED -- `AGENTS.md` scopes this suite to a static read of a COMMITTED
+    file, and `docs/change-queue.md` entry 68 names the class this closes.
+
+    `old_root_occurrences()` selected its files with a filesystem walk until
+    this was written, and that walk prunes four directory names of which
+    `.molecule-home/` is not one. That directory does not exist in continuous
+    integration and appears the moment a developer follows this repository's
+    own Molecule instructions, carrying vendored third-party collections -- so
+    the sweep went red on a provisioned machine for code nobody here wrote,
+    while staying green on a runner. A check that disagrees with itself between
+    the two trains its readers to discount it.
+
+    THE CONVERSE IS NOT RESTATED HERE, deliberately. That the sweep still
+    REPORTS a bare old-root reference is established end to end by
+    `TestTheseReadsDiscriminate` below, which builds scratch trees carrying the
+    three real spellings and asserts each is found. Restating it in this class
+    would need a tracked fixture -- a `git add` from inside a test -- and a
+    weaker assertion that only proved the regular expression still compiles is
+    exactly the "achieved by reading less" outcome this class exists against.
+    """
+
+    @staticmethod
+    def _remove_empty(directories: list[Path]) -> None:
+        for directory in reversed(directories):
+            try:
+                directory.rmdir()
+            except OSError:
+                break  # not empty: something else put content here, leave it
+
+    def test_an_untracked_file_naming_the_old_root_is_not_an_offence(self) -> None:
+        """DERIVED -- see the class docstring. The fixture's path mirrors the
+        real one: a vendored collection under the Molecule home this
+        repository's own per-working-tree namespacing creates."""
+        relative = (
+            ".molecule-home/collections/ansible_collections/community/docker/fixture.yml"
+        )
+        path = ROOT / relative
+        if path.exists():  # a provisioned tree may hold the real thing
+            self.skipTest(f"{relative} already exists; refusing to overwrite it")
+        # Every directory this creates is removed again, deepest first. A test
+        # that leaves `.molecule-home/` behind has planted the very thing this
+        # class exists to tell a reader is not the suite's subject.
+        created = [
+            parent
+            for parent in reversed(path.parents)
+            if ROOT in parent.parents and not parent.exists()
+        ]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fixture\n- path: environments/prod\n", encoding="utf-8")
+        self.addCleanup(self._remove_empty, created)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+        reported = [entry for entry in old_root_occurrences() if ".molecule-home/" in entry]
+        self.assertEqual(
+            [],
+            reported,
+            "an UNTRACKED file naming the old root was reported as an offence: "
+            f"{reported}. This sweep's subject is the committed file; reading a "
+            "developer's provisioned content makes it red on a working machine and "
+            "green on a runner, which is `docs/change-queue.md` entry 68's class",
+        )
+
+
 class TestTheseReadsDiscriminate(unittest.TestCase):
     """DERIVED. The idiom is the suite's own -- `TestTheseReadsDiscriminate`
     in `test_a_second_environment.py`, `TestTheSuiteDiscriminates` and the
@@ -2582,18 +2679,23 @@ class TestNoKeeperWasSweptInsideTheStackDirectories(unittest.TestCase):
 
     def test_the_repository_wide_old_root_sweep_reaches_the_stack_directories(self) -> None:
         """DERIVED. The other half of the under-sweep answer, and it is a
-        question worth asking rather than assuming: `old_root_occurrences()`
-        walks with `walked_files()`, which prunes `openspec/` and several other
-        trees. It does NOT prune `terraform/stacks/`, so the widened old-root
-        sweep does already cover these files -- and this is what makes that
-        statement checkable rather than a claim in a docstring. It goes red if
-        a later pruning rule quietly removes them from that sweep's reach.
+        question worth asking rather than assuming: the widened old-root sweep
+        covers these files only if its own file set contains them, and this is
+        what makes that statement checkable rather than a claim in a docstring.
+        It goes red if a later rule quietly removes them from that sweep's
+        reach.
+
+        It asserts against the set `old_root_occurrences()` ACTUALLY reads,
+        which is the tracked files rather than a filesystem walk -- see that
+        function. Asserting against the walker instead would have kept passing
+        while the sweep read something else, which is the shape of check this
+        module exists to avoid.
         """
-        reached = {path.resolve() for path in walked_files(ROOT)}
+        reached = set(tracked_files())
         missing = sorted(
-            path.relative_to(ROOT).as_posix()
-            for path in self._files()
-            if path.resolve() not in reached
+            name
+            for name in (path.relative_to(ROOT).as_posix() for path in self._files())
+            if name not in reached
         )
         self.assertEqual(
             [],
