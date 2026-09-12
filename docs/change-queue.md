@@ -9,7 +9,7 @@ Three of the audit's findings were ready to act on and were **opened** instead o
 - `fix-volume-discovery-and-consistency` — an unreachable assert, pin drift. **Archived 2026-09-07** (PR #66). It opened entries 3a, 3b, 3c and 3d. Only 3b remains below: the other three were declined on their merits on 2026-09-09 and are now in `docs/deferred-work.md`.
 - `refresh-readme-accuracy` — README statements that are no longer true. **Archived 2026-09-08** (PR #76). It delivered the former entry 9, which is gone with it, and recorded entries 13 and 14 — both likewise declined on 2026-09-09 and moved to `docs/deferred-work.md`.
 
-`decide-archived-change-reference-policy` — the citation form live source uses for this repository's own change records, and a check that enforces it. **Archived 2026-09-07** (PR #70). It delivered the former entries 1 and 2, which are gone with it, and unblocked entry 3. It also opened entries 8 and 8a; 8 was delivered by `namespace-the-molecule-suite-per-working-tree` and is gone with it, and 8a remains below.
+`decide-archived-change-reference-policy` — the citation form live source uses for this repository's own change records, and a check that enforces it. **Archived 2026-09-07** (PR #70). It delivered the former entries 1 and 2, which are gone with it, and unblocked entry 3. It also opened entries 8 and 8a, and both are gone with what delivered them: 8 by `namespace-the-molecule-suite-per-working-tree`, and 8a by the `review-against-a-committed-diff` fix — `ai-toolkit` PR #23, which bumped the development-workflow fragment to v4, and this repository's own pull request adopting it.
 
 Most entries below are queued because they are **blocked on something that must happen first**, and they are listed in dependency order. Where an entry is not blocked, it says instead why it was recorded rather than folded into the change that found it — usually because it belongs to a different concern than the one that change was closing.
 
@@ -73,21 +73,6 @@ Both noticed during `close-ci-verification-gaps`, neither a verification gap:
 - **`.github/workflows/pre-commit-autoupdate.yml` installs `pre-commit` unpinned** (`pip install pre-commit`). That change created `.github/requirements-ci.txt`, which pins it; bringing this workflow onto the same file is a one-line fix in a workflow that change did not otherwise touch.
 - **The destroy-policy gate's inspection logic is inline workflow shell.** Moving it into a version-controlled script with executable fixtures would make the highest-consequence logic in this repository reviewable and testable as code — `design.md` Decision 5 of that change names this as considered and deferred on merit-vs-scope grounds, not as rejected. Four fixtures already exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are described in that change's `tasks.md` 1.1; the structural tests in `.github/tests/test_ci_configuration.py` currently assert the routes are closed, not that each is reached.
 - **`actionlint` is named as a verification means but nothing installs it.** Three tasks in `close-ci-verification-gaps` cite it, and it was run manually from a scratch install. Adding it to `.pre-commit-config.yaml` would close that permanently — but it exits non-zero on two pre-existing `SC2016:info` findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the job-summary step — both single-quoted literal markdown in an `echo`, and both intentional). So landing the hook means dispositioning those two first, by fixing or ignoring them. That is the same trap this change refused to lay for the next person when `ansible-lint` failed on pre-existing violations, and it wants its own decision rather than being folded in.
-
-## 8a. a review agent's mutation check writes to the tree it is reviewing
-
-**Not blocked. Recorded beside the Molecule shared-state entry, since deleted by `namespace-the-molecule-suite-per-working-tree`, because it is the same class of hazard — a shared handle nobody namespaced — and was found the same day. This one is untouched by that change: the shared handle here is the working tree itself, between a session and its own review agent.**
-
-The `code-review` skill performs mutation checks against the **live working tree**: it appends a violation to a real file, confirms the gate goes red, then reverts. Observed 2026-09-07 during `decide-archived-change-reference-policy`'s code-review gate, on `platform/README.md`.
-
-The revert restored the file to its **committed** content, not to the working-tree content it had displaced. The change under review was a 45-file sweep of uncommitted edits, so the revert silently undid the sweep in that file and restored six pre-archive citations. The stash list and the reflog showed nothing, because neither a stash nor a branch checkout was involved, which is why the cause took a while to find.
-
-Two things follow, and only the first is about this incident:
-
-- **A review agent that writes to the tree can destroy the work it is reviewing**, and does so in a way that looks like nothing happened. The working tree is a shared handle between a session and its own review agent, exactly as the container name is between two Molecule runs.
-- **The mutation check itself is sound and worth keeping.** Appending a violation and confirming the gate goes red is what distinguishes a check that reads the tree from a tautology. What is wrong is performing it in place. It belongs against a copy, or must restore the content it displaced rather than the committed content.
-
-Worth deciding whether this project constrains review agents to a read-only tree, or accepts in-place mutation checks and requires the dispatching session to verify the tree afterwards. In this instance the change's own new check caught the regression unprompted and named all six restored citations by file and line — which is evidence for that check, not a reason to assume one exists next time.
 
 ## 7. size-platform-container-resource-limits
 
