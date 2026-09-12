@@ -978,10 +978,20 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
         set through them; that change renamed them to the stack's own name and
         the two sets collapsed into one. The requirement forbids naming an
         environment in workflow text whichever axis the name is on, so a
-        hardcoded `production` or an `if: ... == 'staging'` in one of the four
-        Terraform workflows would have been reported before that rename and was
-        briefly invisible after it. Read from the declarations rather than
-        written as a literal, for the reason every other name here is.
+        hardcoded `production` or an `if: ... == 'staging'` in one of the
+        workflows this class sweeps would have been reported before that rename
+        and was briefly invisible after it. Read from the declarations rather
+        than written as a literal, for the reason every other name here is.
+
+        WHAT THIS REACHES IS `TERRAFORM_WORKFLOWS`, WHICH IS THREE FILES --
+        `pr-validation.yml`, `apply.yml` and `drift.yml`. `host-converge.yml` is
+        not among them, and it is the workflow that actually CONSUMES the
+        declared Ansible group -- so the place a group name is most plausibly
+        hardcoded is the place this sweep does not look. Stated rather than left
+        for a reader to infer coverage the tuple does not give: widening it is a
+        change of its own, because that workflow reads a fourth declared field
+        and its discovery body is deliberately not identical to the other
+        three.
         """
         names = {directory.name for directory in environment_directories()}
         for declaration in environment_declarations().values():

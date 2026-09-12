@@ -1006,11 +1006,15 @@ class TestEachStackNamesAWorkspaceOfItsOwn(unittest.TestCase):
     def test_no_two_stacks_name_the_same_workspace(self) -> None:
         """SPECIFIED -- scenario "Two environments do not share a workspace".
 
-        Follows from the derivation above at any set of distinct directory
-        names, and is asserted separately all the same: the scenario states the
-        uniqueness rather than the derivation, and a later change that
-        parameterised the workspace name would break this one without
-        necessarily breaking that one.
+        THERE IS NO DERIVATION ABOVE ANY MORE, and this docstring used to say
+        this followed from one. *Remote State Backend* retired
+        `infrastructure-<stack>` and now forbids computing a workspace name from
+        a directory name, so uniqueness is not implied by anything and is the
+        whole of what this asserts: two stacks naming one workspace would have
+        each apply read the other's resources as its own and plan them for
+        destruction. Corrected alongside its sibling above rather than left,
+        because a docstring quoting a retired rule is how the next reader comes
+        to believe the rule.
         """
         workspaces = self._workspaces()
         named = [workspace for workspace in workspaces.values() if workspace]

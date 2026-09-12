@@ -21,6 +21,8 @@ Every decision here is about **order**, **evidence**, or **what cannot be tested
 
 **Step 5 cannot move earlier, for the symmetric reason.** While `main` still declares `github_environment: production` and `platform-deploy.yml` still says `environment: production`, renaming that Environment makes any job reaching it **auto-create an empty one, with no protection rules**. A production apply, converge or platform deploy in that window would run without the reviewer that is the entire point of the gate. Step 5 is therefore as late as it can be while still preceding the merge.
 
+**That auto-creation is GitHub's documented behaviour for a workflow's `environment:` key and is not measured here**, which decision 2's own standard obliges saying. What *was* measured is the neighbouring case, and it goes the other way: `gh secret set --env <name>` encrypts through `GET /repos/{owner}/{repo}/environments/{name}/secrets/public-key`, which returns `404` for an Environment that does not exist (read against this repository on 2026-09-12). So the two halves of GitHub's Environment API behave oppositely on an unknown name — a workflow creates, a secret write refuses — and this ordering is conservative under either reading of the half that is unmeasured.
+
 **The standing instruction for both windows is the same and it is the operator's to hold: nothing else merges to `main` between step 4 and step 6.** A Dependabot pull request is safe — a pull request plans, it does not apply — but not free; see decision 2.
 
 ## Decision 2: What an absent HCP workspace actually costs — measured, because the received answer was wrong
@@ -74,6 +76,8 @@ Staging's apply requires no reviewer, so on the merge it runs unattended and rep
 Both plans must read `No changes`. Staging's is free, arrives first, and is produced by exactly the mechanism production's will use. If staging's plan proposes creates, production's will too, and the approval is simply not given — which leaves production untouched, because a plan that is never approved never applies.
 
 The merge also triggers `host-converge.yml`, because `ansible/inventory/*.hcloud.yml` changes. Unlike entry 62's merge there is **no race** with the apply: this change alters no Hetzner label, so the converge's inventory parse does not depend on the apply having landed. What it does depend on is steps 2 and 5 both having happened.
+
+**And a third pipeline, which this decision did not anticipate and which the change's own code review introduced.** `platform-deploy.yml` is path-filtered to `platform/**`, and a round-2 review fix corrected an Environment name in `platform/README.md` — bringing the change inside that filter and making its merge start a gated production deploy. The gate holds, so the cost is a second approval request indistinguishable from the apply's rather than an unattended deploy, and `tasks.md` 8.3a says not to grant it. Recorded here because it is the second time in this change that two correct fixes in one commit altered each other's preconditions — the first defeated decision 4's self-retiring exemption — and because decision 1's whole argument is that this window is bounded by an instruction rather than a mechanism. An instruction list that grows silently is the failure mode that argument is exposed to.
 
 ## Decision 7: The Hetzner project rename is the one claim with no evidence, so it gets an observation of its own
 
