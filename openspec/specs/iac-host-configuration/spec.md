@@ -187,6 +187,16 @@ Where the device path is not supplied by the caller, it SHALL be discovered on t
 
 A host in that state cannot be brought to the state this requirement describes, and the run SHALL fail rather than converge — the volume is a stated dependency of the `platform/` services that bind-mount it, so a host without one is not a host this requirement can be satisfied on.
 
+**Where the fixed path is changed, the path it supersedes SHALL NOT be left persisting across a reboot, and the converge SHALL establish that rather than assume it.** A mechanism that removes a boot-time entry reports no change both when there was nothing to remove and when there was something it could not match, so the two are indistinguishable from its result and the difference surfaces only at a reboot. Establishing a mount at a new fixed path does not by itself retire the old one: a host that has converged at both is a host whose reboot mounts one device at two paths, with two sets of the subdirectories above underneath it and nothing to say which a service reads. That state is not detected by anything that observes a running host, because it arrives only at the next boot — so the obligation is on the converge that moves the path, and it SHALL hold on a host that has never carried the superseded path as much as on one that has.
+
+**Which paths are superseded SHALL be declared to the converge rather than discovered by it.** A host cannot tell a path this repository has retired from one an operator mounted for a purpose of their own, so an obligation discharged by inspecting the host would reach beyond what this repository owns. The declaration SHALL admit being empty, which is the ordinary state of a host whose fixed path has never moved.
+
+**A declaration naming the fixed path in force SHALL fail the run, and SHALL fail it before this obligation's own role has changed anything on the host.** Such a declaration is self-defeating: retiring it would remove the very boot-time entry the same run establishes, leaving a host that mounts and serves correctly until it reboots and then comes up with no data volume at all — the failure this requirement's persistence obligation exists to prevent, reached from the opposite direction and equally invisible on a running host. It SHALL NOT be resolved by silently excluding the fixed path from what is retired: that converges a contradictory declaration cleanly and hides the inventory mistake that produced it.
+
+The scope of "before" here is the role, not the whole host-baseline run: earlier roles in that play have already changed the host by the time this one is reached, and closing that gap is the separate decision `docs/deferred-work.md` records under *Two gaps in required-input validation that only the play could close*. What this requirement obliges is that the refusal precede every change **this** role would make. The comparison SHALL be made on paths normalised for a trailing separator, so that a declaration differing from the path in force only in that respect is refused rather than passing the check and reaching the retirement.
+
+**Retiring the superseded path SHALL NOT require disturbing a service that currently holds it.** At the moment the path moves, the services that bind-mount subdirectories of the old path are running and holding it, and they are retired from it by their own redeployment rather than by the converge — whose scope stops at the container runtime. So this obligation is discharged by removing the superseded path from what the host mounts at boot, and a converge SHALL NOT satisfy it by unmounting a path a running service holds, nor fail because one does.
+
 #### Scenario: Volume is mounted at a known path
 - **WHEN** the host-baseline playbook runs with the data volume attached
 - **THEN** that volume SHALL be mounted at a fixed, documented host path
@@ -206,6 +216,22 @@ A host in that state cannot be brought to the state this requirement describes, 
 #### Scenario: More than one candidate device is attached
 - **WHEN** on-host discovery matches more than one attached volume device
 - **THEN** the device selected SHALL be the same on every run against that same set of attached devices, rather than depending on the order the discovery happened to return them in
+
+#### Scenario: A superseded mount path is declared
+- **WHEN** the host-baseline playbook runs against a host whose boot-time mount configuration names a path declared as superseded, alongside the fixed path in force
+- **THEN** the device SHALL be mounted at the fixed path in force, **AND** the superseded path SHALL NOT remain in what the host mounts at boot, so that a reboot mounts the device at exactly one path
+
+#### Scenario: No superseded mount path is declared
+- **WHEN** the host-baseline playbook runs against a host for which no superseded path is declared — a host newly built, or one whose superseded paths have already been retired
+- **THEN** the run SHALL change nothing about the host's boot-time mount configuration beyond the fixed path in force, and SHALL NOT fail for the absence
+
+#### Scenario: A path is declared superseded and is also the path in force
+- **WHEN** the host-baseline playbook runs with the fixed path in force also named among the superseded paths, whether spelled identically or differing only in a trailing separator
+- **THEN** the run SHALL fail with a diagnostic naming that path and both inputs it was read from — the fixed path's and the superseded declaration's — **AND** SHALL fail before this role has formatted the device, created the mount point, mounted anything or edited the host's boot-time mount configuration
+
+#### Scenario: A running service still holds the superseded path
+- **WHEN** the superseded path is retired on a host where a running service holds a bind mount into it
+- **THEN** the run SHALL succeed, **AND** SHALL NOT unmount that path or otherwise interrupt that service's access to the data under it
 
 ### Requirement: A Role's Absent Required Input Is Reported by Name
 Where a role takes an input that has no safe default, must therefore be supplied by its caller, and is consumed on every run of that role, the role SHALL detect that the input was not supplied and fail with a diagnostic naming the input and where it is expected to be set, before any task that acts on the host runs.

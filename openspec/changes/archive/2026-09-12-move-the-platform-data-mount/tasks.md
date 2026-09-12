@@ -42,16 +42,58 @@
 
 ## 6. Ship
 
-- [ ] 6.1 Open the pull request, its description carrying the migration plan's job table — three runs, three gated production jobs — and saying that the converge is approved before the deploy, that the apply's plan summary is read before its own approval, and what a wrong order costs
-- [ ] 6.2 After merge, read staging's unattended converge: the mount at `/mnt/main`, no `/mnt/main-data` in its `/etc/fstab`, `changed` non-zero on this run
-- [ ] 6.3 Approve **production's Host Converge** and wait for it to finish green — read the workflow name on the prompt, not the Environment, because the apply and the deploy render the same prompt
-- [ ] 6.4 Approve **production's Platform Deploy** and wait for it to finish green
-- [ ] 6.5 **Read the Terraform Apply run's plan summary for `main-production` and confirm it reports no resource changes — then approve that job.** The plan is published before the approval is requested, so there is no reason to approve it unread, and *Gated Production Apply Applies the Reviewed Plan* (`openspec/specs/iac-cicd-pipeline/spec.md`) names an approval granted with nothing read as the harm the two-job split exists to prevent. It may be granted before, between or after 6.3 and 6.4; expect the state serial to move even though nothing changes
-- [ ] 6.6 Confirm the effect on the production host: `/mnt/main` mounted and holding `prometheus/` and `grafana/`, `/etc/fstab` naming `/mnt/main` and not `/mnt/main-data`, Grafana serving its dashboards with a scrape gap covering the window; record the operator's confirmation in this change's artifacts
+- [x] 6.1 Open the pull request, its description carrying the migration plan's job table — three runs, three gated production jobs — and saying that the converge is approved before the deploy, that the apply's plan summary is read before its own approval, and what a wrong order costs
+- [x] 6.2 After merge, read staging's unattended converge: the mount at `/mnt/main`, no `/mnt/main-data` in its `/etc/fstab`, `changed` non-zero on this run
+- [x] 6.3 Approve **production's Host Converge** and wait for it to finish green — read the workflow name on the prompt, not the Environment, because the apply and the deploy render the same prompt
+- [x] 6.4 Approve **production's Platform Deploy** and wait for it to finish green
+- [x] 6.5 **Read the Terraform Apply run's plan summary for `main-production` and confirm it reports no resource changes — then approve that job.** The plan is published before the approval is requested, so there is no reason to approve it unread, and *Gated Production Apply Applies the Reviewed Plan* (`openspec/specs/iac-cicd-pipeline/spec.md`) names an approval granted with nothing read as the harm the two-job split exists to prevent. It may be granted before, between or after 6.3 and 6.4; expect the state serial to move even though nothing changes
+- [x] 6.6 Confirm the effect on the production host: `/mnt/main` mounted and holding `prometheus/` and `grafana/`, `/etc/fstab` naming `/mnt/main` and not `/mnt/main-data`, Grafana serving its dashboards with a scrape gap covering the window; record the operator's confirmation in this change's artifacts
+
+## Effect confirmed
+
+Merged as PR #158 on 2026-09-12. All three runs green; staging's converge ran
+unattended and moved its mount first, as the rehearsal.
+
+Observed on the production host after the platform deploy, and confirmed by the
+operator:
+
+- `/etc/fstab` names `/dev/disk/by-id/scsi-0HC_Volume_106651381 /mnt/main ext4`
+  and **no other `/mnt` path**. The two-paths-at-boot state entry 64 warned
+  about is closed, and the role's own read-back assert ran and passed against
+  the real host.
+- `findmnt` shows `/dev/sdb` at **both** `/mnt/main` and `/mnt/main-data`. That
+  is the expected steady state, not residue: the converge never unmounts a path
+  a running service holds, and the lingering mount has no `/etc/fstab` entry
+  behind it, so the next reboot ends it and does not restore it.
+- `/mnt/main` holds `prometheus/` (65534) and `grafana/` (472), and
+  `lost+found` — the volume's own filesystem, not a directory created on the
+  root disk.
+- Both containers bind the new path: `/mnt/main/prometheus -> /prometheus` and
+  `/mnt/main/grafana -> /var/lib/grafana`, each `Up (healthy)`. The other six
+  platform containers were not restarted.
+- **The data travelled rather than being recreated.** Prometheus's TSDB blocks
+  are the same ones (oldest `01M1V60EQSDKQNZQ0V9BGK0F63`) and `grafana.db` is
+  1.6 MB and being written to. An empty store here is what a deploy approved
+  before the converge would have produced, and it is what this confirms did not
+  happen.
+- The operator confirmed Grafana renders its dashboards, with the scrape gap
+  covering the restart window.
+
+**Terraform's plan was a no-op, as predicted**: `No changes. Your infrastructure
+matches the configuration.` for production, and `0 added, 0 changed, 0
+destroyed` for staging's unattended apply. That is the evidence task 5.4 could
+not produce locally, obtained where it actually governs.
+
+**No waiver is claimed.** The effect was observable, was observed, and is
+recorded above.
 
 ## 7. Archive
 
-- [ ] 7.1 Bring the branch back to the freshly fetched trunk and delete `docs/change-queue.md` entry 64
-- [ ] 7.2 In that same commit, delete the sweep's `docs/change-queue.md` exemption, which the deletion above expires; verify `python3 -m unittest discover --start-directory .github/tests` is green only after both edits
-- [ ] 7.3 Run `openspec archive` and read every `## Purpose` it touched by hand — it reports `→ 0` and leaves them untouched
-- [ ] 7.4 Open the record's own pull request; the branch and working tree are removed after it merges, which is recorded here in prose because no task in this file can be ticked after the commit that writes it
+- [x] 7.1 Bring the branch back to the freshly fetched trunk and delete `docs/change-queue.md` entry 64
+- [x] 7.2 In that same commit, delete the sweep's `docs/change-queue.md` exemption, which the deletion above expires; verify `python3 -m unittest discover --start-directory .github/tests` is green only after both edits
+- [x] 7.3 Run `openspec archive` and read every `## Purpose` it touched by hand — it reports `→ 0` and leaves them untouched
+- [x] 7.4 Open the record's own pull request
+
+**After that pull request merges**, and recorded in prose because no task in this file can be ticked after the commit that writes it: the branch and the working tree are removed, locally and on the remote, from the repository's main working tree rather than from inside the tree being removed. Nothing reclaims this tree's Molecule namespace — `.molecule-home/` goes with the tree, and any container it left is named `*-move-the-platform-data-mount-bb2c0c` and can be removed by name. Its two loop-device minors, 90 and 91, are kernel-global and outlive the tree; `docs/change-queue.md` entry 78 carries that.
+
+**Both `## Purpose` sections `openspec archive` touched were read by hand** — `iac-host-configuration` and `iac-safety-hardening`. It reported `→ 0` and changed neither, as it has in every change running now. Both are accurate as they stand and needed no edit.
