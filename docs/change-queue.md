@@ -684,3 +684,23 @@ On that merge the first of them failed against `galaxy.ansible.com`, resolving `
 **What it must not become.** A blind retry loop around an installer that is also this repository's version-pinning mechanism would hide a genuine pin failure — `ansible/requirements.yml` pins exact versions, per `AGENTS.md`, and a resolution error that means *the pinned version is gone* must stay loud. So the change owes a distinction between "could not reach the server" and "the server says this version does not exist", and only the first is retryable.
 
 **Options, in rough order of cost.** A bounded retry with backoff on the install step. `--no-cache` or `--clear-response-cache`, which the error message itself suggests and which costs a slower install. Caching the resolved collections between runs, which trades an upstream dependency for a cache-invalidation problem and interacts with the pinning rule. Or vendoring the collections into the repository, which removes the run-time dependency entirely and is the largest change of the four. Weigh the first against how often this actually happens — once, so far.
+
+## 77. make-a-waiting-approval-announce-itself
+
+**Not blocked. Recorded 2026-09-12 by `rename-the-external-services`, which lost three and a half hours to it and recorded the recognition advice without recording the gap.**
+
+**Nothing tells the operator that a gated run is waiting for them.** A production converge raised at 06:26 on 2026-09-12 sat unapproved until 09:56. It was not noticed by anyone watching for it; it was noticed because a *later* merge raised its own converge, which queued behind the first and reported `waiting on converge (main-production) … to complete`. That message reads like a hung job and is a concurrency queue, so the first thing it provokes is a diagnosis of the wrong run.
+
+**Three things compound it, and each is worth designing against separately.**
+
+- **A pending approval is invisible unless you go and look.** `gh run list --status waiting` is the query, and nothing in this repository or in the operator's routine runs it.
+- **Approval prompts are indistinguishable.** The Terraform apply, the host converge and the platform deploy all gate on the **same** GitHub Environment and render the same prompt, naming the Environment rather than the work. Three pending requests cannot be told apart without opening each one — which is also the failure mode `docs/bootstrap-a-new-host.md` §6.6 now warns about under "read which *workflow* and which *job* you are approving".
+- **A pending approval blocks the stack.** Converges are serialised per stack, so an approval nobody grants stalls every later converge behind it, and the symptom surfaces on the *newer* run.
+
+**Establish what GitHub already sends before building anything.** GitHub raises a *deployment review requested* notification to each required reviewer, and the cheapest possible outcome here is that the notification exists, is not being delivered where the operator reads, and the whole entry is a settings change plus a sentence in §6.6. Measure that first; only if it is genuinely absent or genuinely unreadable does anything get built.
+
+**What could be built, in rough order of cost.** A line in the operator's routine — `gh run list --status waiting` — which costs nothing and is forgotten by construction. A scheduled workflow that queries the same thing and pushes somewhere the operator actually reads. Or reusing the alerting path the platform stack already has, which is where the trap is: `SLACK_WEBHOOK_URL` reaches Alertmanager from `PLATFORM_SLACK_WEBHOOK_URL`, a **production Environment** secret, so a workflow that wants it gates on the very Environment whose pending approval it is trying to announce. A notifier must draw its credential from somewhere ungated, or it cannot fire on the case that matters.
+
+**What it must not become.** A notifier that fires on every run teaches the operator to ignore it, and the run that then goes unapproved is indistinguishable from the noise. The signal is specifically *waiting on a human*, and it is worth a reminder that repeats while the state persists rather than one announcement at the moment the request is raised — the 06:26 request was raised while nobody was reading.
+
+**A related gap, not this entry's to close.** Nothing in this repository bounds how long a request may wait. GitHub is understood to expire a pending deployment review after some weeks and cancel the run — unverified here, and worth measuring against the documentation rather than trusting this sentence. Either way, whether an unapproved converge *should* expire sooner is a separate decision from whether anyone is told about it.
