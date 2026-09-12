@@ -27,8 +27,8 @@ Source comments in this repository currently mix three kinds of text with no way
 
 Only the first kind survives archiving. Concrete instances of the other two (the `platform/docker-compose.yml` header, formerly listed first, was removed by `fix-volume-discovery-and-consistency`, which was editing that file anyway):
 
-- `terraform/environments/prod/ssh_key.tf:20-28` — a `moved` block that documents its own removal condition ("Safe to delete once the next apply has run") from a change archived 2026-08-18.
-- `terraform/environments/prod/main.tf:19-21` — explains a value the file no longer holds.
+- `terraform/stacks/prod/ssh_key.tf:20-28` — a `moved` block that documents its own removal condition ("Safe to delete once the next apply has run") from a change archived 2026-08-18.
+- `terraform/stacks/prod/main.tf:19-21` — explains a value the file no longer holds.
 
 The tailscale role is 48 comment lines against 90 non-blank; this is a style question with a real maintenance cost, not a cosmetic one.
 
@@ -254,7 +254,7 @@ Note the divergence this does **not** cover: `commerce-ops` runs its own Postgre
 
 **Not blocked; recorded because an archived change is where it would be lost.** Recovered 2026-09-08 by `make-openspec-validation-a-usable-gate` while settling the red archived records. `add-prod-data-volume`'s task 3.5 was left unticked with the note *"Still open; consider doing this as a follow-up plan-only check"* — real outstanding work, sitting in prose inside a change that had already been archived, which is precisely where nobody would look for it. That task is now disclosed under that change's `## Not performed`; the work it names is here.
 
-`environments/prod` couples the volume to the server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`, so the volume cannot outlive the server it derives its location from. **That coupling has never been exercised against live state.** `terraform/modules/volume/tests/*.tftest.hcl` cannot reach it — the coupling lives in the environment, not the module, and the module's tests do not evaluate the environment's `count` expression.
+`stacks/prod` couples the volume to the server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`, so the volume cannot outlive the server it derives its location from. **That coupling has never been exercised against live state.** `terraform/modules/volume/tests/*.tftest.hcl` cannot reach it — the coupling lives in the stack, not the module, and the module's tests do not evaluate the stack's `count` expression.
 
 Two plan-only reads, **never applied**:
 
@@ -378,7 +378,7 @@ Bounded in the meantime by how rotation actually happens here: it is a manual ac
 
 Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the gap by falling into it.
 
-That change shipped `terraform/environments/staging/terraform.tfvars` with `server_type` deliberately unassigned, and `variables.tf` declares it with no default. Nothing in this repository detects that. The consequence is not subtle once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run Terraform with `-input=false`, so the plan exits non-zero with `No value for required variable`, the conclusion step fails the required check, and a nightly drift sweep would fail for that environment every night and take the shared heartbeat with it — but it is detected by a *plan*, which needs a credential, a workspace and a network. The same fact is a pure static read: for each environment directory, every variable `variables.tf` declares without a `default` appears as an assignment in `terraform.tfvars`.
+That change shipped `terraform/stacks/staging/terraform.tfvars` with `server_type` deliberately unassigned, and `variables.tf` declares it with no default. Nothing in this repository detects that. The consequence is not subtle once it reaches CI — `pr-validation.yml`, `apply.yml` and `drift.yml` all run Terraform with `-input=false`, so the plan exits non-zero with `No value for required variable`, the conclusion step fails the required check, and a nightly drift sweep would fail for that environment every night and take the shared heartbeat with it — but it is detected by a *plan*, which needs a credential, a workspace and a network. The same fact is a pure static read: for each environment directory, every variable `variables.tf` declares without a `default` appears as an assignment in `terraform.tfvars`.
 
 That places it squarely in `.github/tests`, whose subject is any property that is a static read of a committed file, and which may make no network call and invoke no Terraform binary. The parser is the only real work: `terraform.tfvars` assignments and `variable` blocks with and without defaults, without importing HCL machinery the suite does not have. `test_a_second_environment.py` already reads `terraform.tfvars` for volume names and can lend its approach.
 
@@ -397,7 +397,7 @@ Recorded 2026-09-10 by `bootstrap-two-environments`, which needed to tell a comp
 
 What that change left here, so this entry does not re-derive it: staging's `deploy` account is already authorised for `platform` under a staging-only keypair, whose private half is in the operator's password manager and in no GitHub secret. `commerce-ops` is deliberately not authorised on staging — it has no staging deploy path in its own repository yet.
 
-The shape to copy is the one `make-the-pipeline-environment-agnostic` proved: the workflow reads what it needs from committed per-environment declarations and names no environment itself. `platform/` has no such declaration today, and whether it should reuse `terraform/environments/<name>/pipeline.yml` or grow one of its own is the first decision this change makes.
+The shape to copy is the one `make-the-pipeline-environment-agnostic` proved: the workflow reads what it needs from committed per-environment declarations and names no environment itself. `platform/` has no such declaration today, and whether it should reuse `terraform/stacks/<name>/pipeline.yml` or grow one of its own is the first decision this change makes.
 
 **Unblocked by a converged staging host, which `configure-the-staging-host` made reachable rather than made true.** That change landed the inventory, the play and staging's `group_vars` on 2026-09-10; the converge is operator work and happens after it. Check the host before starting here.
 
@@ -413,7 +413,7 @@ Once converged, staging's `deploy` account is authorised for `platform` under a 
 
 Staging is a configured host with no way in from the internet:
 
-- **`web_allowed_cidrs = []`** in `terraform/environments/staging/terraform.tfvars`, mirrored by `hardening_web_allowed_cidrs: []` in `ansible/inventory/group_vars/staging.yml`. Both layers must open together — for any given port exactly one layer is the documented access gate, and opening one while assuming the other is closed is the split this repository's firewall convention exists to prevent.
+- **`web_allowed_cidrs = []`** in `terraform/stacks/staging/terraform.tfvars`, mirrored by `hardening_web_allowed_cidrs: []` in `ansible/inventory/group_vars/staging.yml`. Both layers must open together — for any given port exactly one layer is the documented access gate, and opening one while assuming the other is closed is the split this repository's firewall convention exists to prevent.
 - **No hostnames and no DNS records.** Manual, because DNS is in no repository (`docs/deferred-work.md`, "Managing DNS in Terraform", whose revisit trigger now points here — this is the first time the manual edit would be made twice, which is the moment that entry says to weigh doing it in Terraform).
 - **No certificates**, which follow from the hostnames via Traefik's ACME path.
 
@@ -505,49 +505,42 @@ That is not a regression -- root's existing key is unmanaged in exactly the same
 
 **The chicken-and-egg is real either way and is not an argument against it**: the role that would install the key is a role CI runs, so the first installation is manual whichever shape this takes. What the change buys is every installation after the first.
 
-## 60. factor-the-four-environment-discovery-bodies
+## 60. factor-the-four-stack-discovery-bodies
 
 **Not blocked. Recorded when the fourth one was written.**
 
-`pr-validation.yml`, `apply.yml` and `drift.yml` share one ~160-line environment-discovery body, asserted identical across the three by `.github/tests` -- and that assertion is what makes running one copy evidence about all three. `host-converge.yml` now carries a fourth that is **deliberately not identical**: it enumerates `ansible/inventory/*.hcloud.yml` rather than `terraform/environments/*/`, and it cross-checks the two sets in both directions, which the Terraform body sees only one side of. So it sits outside that assertion, and the family is no longer covered as a whole.
+`pr-validation.yml`, `apply.yml` and `drift.yml` share one ~160-line stack-discovery body, asserted identical across the three by `.github/tests` -- and that assertion is what makes running one copy evidence about all three. `host-converge.yml` now carries a fourth that is **deliberately not identical**: it enumerates `ansible/inventory/*.hcloud.yml` rather than `terraform/stacks/*/`, and it cross-checks the two sets in both directions, which the Terraform body sees only one side of. So it sits outside that assertion, and the family is no longer covered as a whole.
 
 The existing comment in those three anticipated this: *"Copies are not the only available shape … Edit them together, or factor them out together."* It declined a composite action on two grounds, and one of them has since weakened -- it cost "a fourth file in a diff already restructuring three gated workflows", which is not what this change would be.
 
-**A script under `.github/scripts/` is likely simpler than a composite action**, and for a reason specific to this repository: `.github/tests` currently locates a discovery body by step name inside a workflow and executes it against a scratch tree. A script is executed directly, which removes that indirection rather than adding a second one. The shared parts are the flat `key: value` reader, the secret-name validation, the empty-result refusal and the JSON emission; the roots and the cross-checks differ and would stay parameters.
+**A script under `.github/scripts/` is likely simpler than a composite action**, and for a reason specific to this repository: `.github/tests` currently locates a discovery body **by the `terraform/stacks` path literal the body contains** — not by step name, and `test_environment_agnostic_pipeline.py`'s own docstring records that a name-based locator was tried and was wrong — then executes it against a scratch tree. A script is executed directly, which removes that indirection rather than adding a second one. The shared parts are the flat `key: value` reader, the secret-name validation, the empty-result refusal and the JSON emission; the roots and the cross-checks differ and would stay parameters.
 
 Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.
 
-## 61. rename-terraform-environments-to-stacks
-
-Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **First of four**, and the other three are blocked behind it in the order they appear.
-
-`terraform/environments/` names an axis that has stopped being the organising one. The unit the pipeline iterates over is a **stack** — one root module, one state, one Hetzner project, one blast radius — and a stack is a *(tenant, environment)* pair. Environment stays as a field inside the stack's name; it is no longer what the folder is divided by. The concrete case that breaks the present word is a tenant with no staging, which under `environments/` reads as a missing directory and under `stacks/` is simply a tenant with one stack.
-
-What moves with the folder is the **vocabulary**, and this is the part that makes the entry bigger than a `git mv`: `environments_root` in each discovery body, `matrix.environment.*`, and `ENVIRONMENT_NAME` all name the old axis. `pipeline.yml`'s `github_environment` field does **not** move — it names a GitHub Environment, which is a GitHub concept and still called that.
-
-**Renaming the folder without the vocabulary is worse than doing nothing.** A directory called `stacks/` iterated by a variable called `environment` is a scheme that contradicts itself in the same file, and a reader has no way to tell which word is load-bearing.
-
-The cost is spread rather than deep. `terraform/environments/` appears as **requirement text** in `openspec/specs/iac-repo-foundations/spec.md`, `openspec/specs/iac-state-management/spec.md`, `openspec/specs/iac-safety-hardening/spec.md` and `openspec/specs/iac-cicd-pipeline/spec.md` — the last carries roughly ten requirements naming it. Four discovery bodies name the root: the one `pr-validation.yml`, `apply.yml` and `drift.yml` share, which `.github/tests` asserts stays identical across the three, and `host-converge.yml`'s deliberately different fourth, which reads `environments_root` alongside `inventory_root` and `group_vars_root`.
-
-**Entry 60 is the neighbour to sequence against.** If those bodies are factored into a shared script first, this becomes one edit rather than four; if this lands first, entry 60 factors a body that has already moved. Either order works and neither blocks the other — but doing them in the same week and not deciding which is first is how the identity assertion gets broken twice.
-
-**No live effect.** Terraform state is keyed by the HCP workspace named in each `cloud` block, not by the directory's path, so the move is invisible to Hetzner and to HCP. It goes first so that entry 62 does not rewrite the same specification text a second time.
-
 ## 62. rename-the-stacks-and-their-resources
 
-Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **Blocked on entry 61** — it edits the same specification text, and doing it first means editing it twice.
+Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. Entry 61, which moved the Terraform root to `terraform/stacks/` and swept the vocabulary with it, has landed; this entry was blocked on it because the two edit the same specification text.
 
 The scheme is in `docs/naming-conventions.md` and is not restated here. What this entry carries: the stack directories become `main-production` and `main-staging`; the `environment` label is spelled in full and a `tenant` label joins it; the Hetzner server takes its stack's name, the firewall and volume become `main` and the SSH key becomes `operator`; the inventory sources and `group_vars` follow the new names; `.github/tests` literals and the documents that quote them follow. It deliberately leaves the HCP workspace names and the repository secret names alone — those are entry 63 — so that everything here is files plus Hetzner, and its correctness is established by a plan rather than by a repository setting nobody can verify.
 
 It also **adds an Ansible hostname task, which does not exist today**. Cloud-init sets a host's name once, at creation, from the Hetzner server name: the live production host answers to `main-server` and will keep answering to it after Terraform renames the server, because nothing re-sets it. Without the task this change produces a host with three names instead of one. The task templates `{{ company }}-{{ inventory_hostname }}`, and `company` is the single group variable the company's clone changes.
 
-**One name is now three filenames, and discovery enforces it.** `host-converge.yml` derives an environment's name from `ansible/inventory/<name>.hcloud.yml` and then requires `terraform/environments/<name>/pipeline.yml` and `ansible/inventory/group_vars/<name>.yml` to exist, cross-checking in both directions and failing the run naming the offender. That makes a half-finished rename loud rather than silent, which is a genuine safety net — and it widens the rename, because all three move together or none does.
+**One name is now three filenames, and discovery enforces it.** `host-converge.yml` derives a stack's name from `ansible/inventory/<name>.hcloud.yml` and then requires `terraform/stacks/<name>/pipeline.yml` and `ansible/inventory/group_vars/<name>.yml` to exist, cross-checking in both directions and failing the run naming the offender. That makes a half-finished rename loud rather than silent, which is a genuine safety net — and it widens the rename, because all three move together or none does.
+
+**Four renames entry 61 deferred to this entry, each with its reason.** Entry 61 renamed the directory and the vocabulary around it; these are the parts it could not take:
+
+- **The requirement titles carrying *Environment*** — *Each Environment Declares Its Own Pipeline Configuration*, *Each Environment Has a Dedicated Hetzner Cloud Project* and *Workspace Execution Mode Set to Local*'s siblings. Renaming a requirement is a `RENAMED` delta, and entry 61 deferred rather than took it.
+- **The scenario titles**, which are barred by the tool rather than by judgment: a `MODIFIED` requirement replaces its block whole, so `openspec validate` reads a renamed scenario as a *dropped* one and refuses the change. This entry therefore needs a mechanism — a `RENAMED` delta, or a rewrite that carries the scenarios across — and not merely an edit.
+- **The `.github/tests` module and method names.** `test_environment_agnostic_pipeline.py`, `test_a_second_environment.py`, `test_planned_environment_apply_stage.py` and `test_host_configuration_names_its_environment.py` assert nothing about the word in their own names, and renaming them churns several hundred identifiers while changing what no single one checks. Also recorded in `docs/deferred-work.md`.
+- **Re-deriving `target_environment`, `TARGET_ENVIRONMENT` and the `--vault-id` label.** These name the Ansible group a converge play targets and are governed by *Host Configuration Names the Environment It Targets* (`openspec/specs/iac-host-configuration/spec.md`). They equal the stack name today **only because the two coincide at one tenant**: after this entry the group is `production` while the stack is `main-production`. `host-converge.yml` carries `TARGET_ENVIRONMENT: ${{ matrix.stack.name }}` with a comment saying why the two names differ, and re-deriving it is this entry's work. The vault-id hazard below is the same fact reaching a second surface.
 
 Five hazards, each of which has a quiet failure mode:
 
 - **The pull-request plan is the proof, and nothing else is.** Hetzner supports renaming a server, firewall, volume and SSH key in place, but a plan that reports `must be replaced` for any of them stops this change rather than being worked around. Do not assert in advance which it will be.
 - **Renaming the server renames its heartbeat check.** The slug is `{{ inventory_hostname }}-prune-host-images`; after the rename the host pings a check that does not exist yet while the old one goes quiet, which is the alarm condition. Create the new check before the converge and delete the old one after.
-- **Renaming the `environment` label renames the Ansible group, and the mismatch is silent.** A play whose `hosts:` matches nothing prints `skipping: no hosts matched` and exits 0 — a converge that did nothing is indistinguishable from one that had nothing to do. The label, the `group_vars` filenames and the playbook's `hosts:` move in one commit.
+- **Renaming the `environment` label renames the Ansible group, and the label, the `group_vars` filenames and the playbook's `hosts:` move in one commit.** This hazard was recorded as *silent* and it is no longer quite that, which is worth stating precisely rather than leaving a reader to trust the stronger claim. A play whose `hosts:` matches nothing prints `skipping: no hosts matched` and exits 0, so the mismatch **would** be silent — except that `ansible/playbooks/host-baseline.yml` now opens with a guard play that refuses when the target group resolved to no host, added by `configure-the-staging-host` and required by *A Run Whose Target Group Resolves to No Host Refuses* (`openspec/specs/iac-host-configuration/spec.md`). A converge that lost its host set to a half-finished rename therefore fails loudly.
+
+  **Two conditions attach to that, and this change owns both.** First, `--limit` filters the guard play's `localhost` out and Ansible has no per-play exemption, so a run carrying one skips both plays and exits 0 — the original failure, restored. `host-converge.yml` passes no `--limit` today and `docs/bootstrap-a-new-host.md` warns manual runs off it; what this change must not do is introduce one, and the converge that follows the rename is exactly where someone would reach for it to try one host first. Second, the guard's own behaviour is verified by hand and by nothing else — `docs/change-queue.md` entry 54 owns the play-scope harness that would assert it fires — so a green pull request does not establish that the guard works, and the evidence for this change remains the converge's own play recap.
 - **The vault-id label is derived from the environment name, and the committed ciphertext carries the old one.** `image_prune_heartbeat_ping_key` in `ansible/inventory/group_vars/prod.yml` is a `$ANSIBLE_VAULT;1.2;AES256;prod` block, and the converge passes `--vault-id "<environment>@..."`. A rename desynchronises them, and it very likely keeps working anyway — `vault_id_match` is off by default, so Ansible tries every supplied secret regardless of label. Re-encrypt the labelled blocks under the new label rather than leave the tree depending on that default; the converge's own vault preflight proves the password, not the label.
 - **The live host's hostname is `main-server` until the new task runs**, so a converge that renames the server but skips or fails the hostname task leaves the divergence in place with nothing failing.
 
@@ -610,3 +603,21 @@ That change bounded how stale an index a converge will install from, which remov
 **What it would actually save is smaller than it looks**, and worth measuring before it is proposed. After the bound, `hardening`'s container fetches twice, and one of those two is the test fixture's deliberate back-date. Collapsing the tasks removes neither: the first fetch of a fresh container is owed either way. The gain is on a host where the bound is inert — one carrying a maintained `update-success-stamp`, where `cache.update()` never advances what `get_cache_mtime()` reads, so every bounded task fetches again. That is the case the bound does not reach and this would.
 
 So the honest framing is that this is the fix for the production half that `cache-the-apt-index-within-a-converge` explicitly did not deliver, rather than a further trim of the continuous-integration half it did.
+
+## 70. correct-the-read-only-secret-name-in-the-provider-comments
+
+**Not blocked. Recorded 2026-09-11 by `rename-terraform-environments-to-stacks`'s code review, which found it while reading the files that change swept.**
+
+Both `versions.tf` provider comments state prod's read-only secret name wrongly, and have since prod's secret was renamed:
+
+- `terraform/stacks/prod/versions.tf` says the name "for this stack is `HCLOUD_TOKEN`".
+- `terraform/stacks/staging/versions.tf` says "for this stack HCLOUD_TOKEN_STAGING, and for prod HCLOUD_TOKEN".
+
+Prod declares `read_only_secret: HCLOUD_TOKEN_PRODUCTION` in its own `pipeline.yml`, and that same file argues at length that the name must **not** be `HCLOUD_TOKEN` — a repository secret of that name is shadowed by the Read & Write token every GitHub Environment defines, so a gated job reading it resolves a write credential silently. `README.md` agrees: "neither is named `HCLOUD_TOKEN`". The comment contradicts the declaration sitting beside it.
+
+**Why it is its own entry rather than folded into the rename.** It predates that branch — `origin/main`'s copy carries the same claim, and the rename's diff touches those lines only to spell the unit `stack`. Correcting a factual error about credential names inside a vocabulary sweep is unrelated scope, and the sweep's own review is what found it.
+
+**Why it is worth doing rather than tolerating.** The next reader of that comment is someone debugging a credential — the one moment a wrong secret name costs the most. It is also the exact confusion the shadowing paragraph exists to prevent, restated incorrectly three lines away from itself.
+
+**Whether a check can hold it.** Probably: the declared `read_only_secret` and the names these comments assert are both static reads of committed files, which is `.github/tests`' own subject, and the suite already reads every `pipeline.yml`. Worth deciding when the change is proposed rather than now — a comment asserting a secret name is harder to locate reliably than a declaration stating one, and a check that locates it badly is worse than the prose.
+

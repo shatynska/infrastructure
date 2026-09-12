@@ -273,10 +273,10 @@ GENERIC_ENVIRONMENT_MARKERS = (
     "the environment",
 )
 
-# `terraform/environments/` with no name after it -- `terraform/environments/*/`
-# and the bare directory both read as generalising, `terraform/environments/prod/`
+# `terraform/stacks/` with no name after it -- `terraform/stacks/*/`
+# and the bare directory both read as generalising, `terraform/stacks/prod/`
 # does not.
-BARE_ENVIRONMENTS_PATH = re.compile(r"terraform/environments/(?![A-Za-z0-9_-])")
+BARE_ENVIRONMENTS_PATH = re.compile(r"terraform/stacks/(?![A-Za-z0-9_-])")
 
 # Words by which a record describes an environment as not existing yet. Kept
 # narrow on purpose: "anticipated" alone would flag a sentence anticipating
@@ -402,7 +402,7 @@ class TestEachEnvironmentHasAWorkspaceOfItsOwn(unittest.TestCase):
         set. A sweep of no directories reports no offence."""
         self.assertTrue(
             self.backends,
-            "no environment directory was discovered under terraform/environments/, so "
+            "no environment directory was discovered under terraform/stacks/, so "
             "every assertion in this class would pass having read nothing",
         )
 
@@ -679,7 +679,7 @@ class TestEveryEnvironmentConsumesTheSharedModules(unittest.TestCase):
         self.test_every_environment_calls_at_least_one_shared_module()
         offenders = []
         for name, calls in sorted(self.calls.items()):
-            directory = ROOT / "terraform" / "environments" / name
+            directory = ROOT / "terraform" / "stacks" / name
             for block, source, _ in calls:
                 if not source:
                     offenders.append(f"{name}.{block}: declares no `source`")
@@ -838,7 +838,7 @@ class TestTheWriteCredentialRecordCoversEveryEnvironment(unittest.TestCase):
     wrong by construction.
 
     Both assertions are red on the committed records today: AGENTS.md states
-    the prohibition "against `terraform/environments/prod/`", and the README
+    the prohibition "against `terraform/stacks/prod/`", and the README
     states that the write token "lives exclusively in the `production` GitHub
     Environment secret". Each names one environment and generalises over none.
 
@@ -934,7 +934,7 @@ class TestNoRecordDescribesAnExistingEnvironmentAsAnticipated(unittest.TestCase)
             [],
             offenders,
             "the README describes an environment that exists in "
-            "terraform/environments/ as not yet existing: " + "; ".join(offenders),
+            "terraform/stacks/ as not yet existing: " + "; ".join(offenders),
         )
 
 
@@ -963,13 +963,13 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
 
     def test_a_second_environment_directory_exists(self) -> None:
         """DERIVED -- proposal.md's What Changes: "A
-        `terraform/environments/staging/` directory calling the same
+        `terraform/stacks/staging/` directory calling the same
         `terraform/modules/server` and `terraform/modules/volume` as prod"."""
         names = sorted(directory.name for directory in environment_directories())
         self.assertIn(
             SECOND_ENVIRONMENT,
             names,
-            f"terraform/environments/ holds {names}, and no {SECOND_ENVIRONMENT!r} "
+            f"terraform/stacks/ holds {names}, and no {SECOND_ENVIRONMENT!r} "
             "directory -- so every collision assertion in this file compares a set of "
             "one against itself",
         )
@@ -1059,7 +1059,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
     def _tree(self, workspaces: dict[str, str], extra: str = "") -> Path:
         scratch = self._scratch()
         for name, workspace in workspaces.items():
-            directory = scratch / "terraform" / "environments" / name
+            directory = scratch / "terraform" / "stacks" / name
             directory.mkdir(parents=True)
             (directory / "versions.tf").write_text(
                 self.CLOUD_TEMPLATE.format(workspace=workspace) + extra, encoding="utf-8"
@@ -1071,7 +1071,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         would pass on a text match. Its point is the converse: a comment naming
         a DIFFERENT workspace must not be what the read returns."""
         scratch = self._tree({"prod": "infrastructure-prod"})
-        versions = scratch / "terraform" / "environments" / "prod" / "versions.tf"
+        versions = scratch / "terraform" / "stacks" / "prod" / "versions.tf"
         versions.write_text(
             "# set infrastructure-decoy's Execution Mode to Local\n"
             + self.CLOUD_TEMPLATE.format(workspace="infrastructure-prod"),
@@ -1113,7 +1113,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         workspace_as_its_backend` and `test_no_environment_configures_a_local_
         backend` refuse."""
         scratch = self._scratch()
-        directory = scratch / "terraform" / "environments" / "local"
+        directory = scratch / "terraform" / "stacks" / "local"
         directory.mkdir(parents=True)
         (directory / "versions.tf").write_text(
             'terraform {\n  backend "local" {\n    path = "terraform.tfstate"\n  }\n}\n',
@@ -1128,7 +1128,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         """DERIVED -- the defect `test_no_environment_pins_a_module_version_of_
         its_own` refuses, which no committed environment carries."""
         scratch = self._scratch()
-        directory = scratch / "terraform" / "environments" / "pinned"
+        directory = scratch / "terraform" / "stacks" / "pinned"
         directory.mkdir(parents=True)
         (directory / "main.tf").write_text(
             'module "server" {\n'
@@ -1195,7 +1195,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             {"prod"},
             narrowed_to_named_environments(
                 "`terraform apply` is never run locally against "
-                "`terraform/environments/prod/`.",
+                "`terraform/stacks/prod/`.",
                 self.IDENTIFIERS,
             ),
         )
@@ -1214,7 +1214,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         checking nothing."""
         for sentence in (
             "`terraform apply` is never run locally against any environment directory "
-            "under `terraform/environments/`.",
+            "under `terraform/stacks/`.",
             "Every environment's Read & Write token lives exclusively in that "
             "environment's own GitHub Environment secret, and prod's apply is "
             "additionally held behind a reviewer.",
@@ -1235,7 +1235,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         )
         self.assertEqual(
             {"prod"},
-            environments_named_in("terraform/environments/prod/main.tf", self.IDENTIFIERS),
+            environments_named_in("terraform/stacks/prod/main.tf", self.IDENTIFIERS),
         )
 
     def test_a_heading_is_not_glued_onto_the_sentence_beneath_it(self) -> None:

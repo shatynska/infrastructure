@@ -1,14 +1,14 @@
 name: Drift Detection
 
-# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE. Each environment's read-only
-# secret comes from that environment's own
-# `terraform/environments/<name>/pipeline.yml`, and the sweep runs over whatever
+# NO STACK IS NAMED ANYWHERE IN THIS FILE. Each stack's read-only
+# secret comes from that stack's own
+# `terraform/stacks/<name>/pipeline.yml`, and the sweep runs over whatever
 # `discover` finds. See the Each Environment Declares Its Own Pipeline
 # Configuration requirement.
 #
 # Unlike the two other Terraform workflows this one is NOT narrowed by changed
 # paths: drift is divergence from what was committed, which no diff predicts.
-# Every environment is planned on every run.
+# Every stack is planned on every run.
 on:
   schedule:
     - cron: "0 3 * * *" # nightly, 03:00 UTC
@@ -24,25 +24,25 @@ jobs:
     permissions:
       contents: read
     outputs:
-      environments: ${{ steps.discover.outputs.environments }}
+      stacks: ${{ steps.discover.outputs.stacks }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Discover the environments and their declarations
+      - name: Discover the stacks and their declarations
         id: discover
         run: |
           set -euo pipefail
 
-          # Enumerates every environment directory, reads each one's committed
+          # Enumerates every stack directory, reads each one's committed
           # pipeline declaration, and emits the matrix this workflow's jobs run
-          # over. Nothing here names an environment: adding one is adding a
+          # over. Nothing here names a stack: adding one is adding a
           # directory.
           #
           # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
           # message that names the directory: an absent declaration, one missing
-          # a field the workflows read, and two environments colliding on a
-          # secret or on a GitHub Environment. A silently skipped environment is
+          # a field the workflows read, and two stacks colliding on a
+          # secret or on a GitHub Environment. A silently skipped stack is
           # one that is planned by nothing, applied by nothing and drift-checked
           # by nothing, which is indistinguishable from it not existing.
           #
@@ -65,11 +65,11 @@ jobs:
           # naming the interpolation syntax in a comment, which is why this
           # sentence spells it out in words.
 
-          environments_root="terraform/environments"
+          stacks_root="terraform/stacks"
           declaration_name="pipeline.yml"
 
-          if [ ! -d "$environments_root" ]; then
-            echo "::error::Environment discovery found no ${environments_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+          if [ ! -d "$stacks_root" ]; then
+            echo "::error::Stack discovery found no ${stacks_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
             exit 1
           fi
 
@@ -95,13 +95,13 @@ jobs:
           records=$(mktemp)
           refused=0
 
-          for directory in "$environments_root"/*/; do
+          for directory in "$stacks_root"/*/; do
             [ -d "$directory" ] || continue
             name="$(basename "$directory")"
             declaration="${directory}${declaration_name}"
 
             if [ ! -f "$declaration" ]; then
-              echo "::error::${name}: ${directory} carries no ${declaration_name}. An environment with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. A stack with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
               refused=1
               continue
             fi
@@ -112,11 +112,11 @@ jobs:
 
             incomplete=0
             if [ -z "$github_environment" ]; then
-              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's apply job attaches to, and it has no safe default."
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this stack's apply job attaches to, and it has no safe default."
               incomplete=1
             fi
             if [ -z "$read_only_secret" ]; then
-              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this stack's read-only Hetzner token, and it has no safe default."
               incomplete=1
             fi
 
@@ -135,7 +135,7 @@ jobs:
 
             # A control character in either value would corrupt the
             # tab-separated record this loop builds, so it is refused here
-            # rather than silently splitting an environment into two.
+            # rather than silently splitting a stack into two.
             case "${github_environment}${read_only_secret}" in
               *[[:cntrl:]]*)
                 echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
@@ -169,30 +169,30 @@ jobs:
           done
 
           if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
-            echo "::error::Environment discovery found no environment under ${environments_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            echo "::error::Stack discovery found no stack under ${stacks_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
             exit 1
           fi
 
           # Two collisions no assertion about workflow text can reach, because
           # they live in committed data rather than in a workflow. Two
-          # environments sharing a read-only secret plan under one credential
+          # stacks sharing a read-only secret plan under one credential
           # against different Hetzner projects; two sharing a GitHub Environment
-          # share its WRITE token and its protection rules, so an environment
+          # share its WRITE token and its protection rules, so a stack
           # meant to be ungated would hold the reviewed one's write credential.
           for secret in $(cut -f3 "$records" | sort | uniq -d); do
             colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
-            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every environment but one would report a meaningless diff."
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every stack but one would report a meaningless diff."
             refused=1
           done
 
           for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
             colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
-            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so an environment intended to be ungated would hold the reviewed environment's write credential."
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so a stack intended to be ungated would hold the reviewed stack's write credential."
             refused=1
           done
 
           if [ "$refused" -ne 0 ]; then
-            echo "::error::Environment discovery refused the committed declarations, so no environment enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            echo "::error::Stack discovery refused the committed declarations, so no stack enters the matrix. Every reason is reported above, each naming the directory it belongs to."
             exit 1
           fi
 
@@ -209,27 +209,27 @@ jobs:
           ' <"$records")
           rm -f "$records"
 
-          echo "Discovered environments: ${discovered}"
-          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
+          echo "Discovered stacks: ${discovered}"
+          echo "stacks=${discovered}" >>"$GITHUB_OUTPUT"
   drift:
-    name: drift (${{ matrix.environment.name }})
+    name: drift (${{ matrix.stack.name }})
     needs: discover
     runs-on: ubuntu-latest
     # No `environment:` on this job, so TF_API_TOKEN resolves to its
     # repository-scoped secret. It's a single unsplit HCP Terraform
     # token (this org's free tier has no privilege split to apply) —
-    # this job never applies, so the environment's own Read Only Hetzner token
+    # this job never applies, so the stack's own Read Only Hetzner token
     # is what actually keeps it from mutating infrastructure.
     permissions:
       contents: read
       issues: write
     strategy:
-      # One environment's failure must not leave every other environment
+      # One stack's failure must not leave every other stack
       # unchecked and unreported: a sweep that stops at the first failure is
       # silence indistinguishable from no drift.
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+        stack: ${{ fromJSON(needs.discover.outputs.stacks) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -242,7 +242,7 @@ jobs:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: terraform init
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         run: terraform init
 
       # Runs with -lock=false: this plan writes nothing, and taking the
@@ -253,13 +253,13 @@ jobs:
       # Drift Detection requirement.
       #
       # The Hetzner token is `secrets[...]` indexed by the name this
-      # environment's own declaration states, so each row authenticates to its
+      # stack's own declaration states, so each row authenticates to its
       # own Hetzner project rather than to whichever one a literal named.
       - name: terraform plan
         id: plan
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         env:
-          HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
+          HCLOUD_TOKEN: ${{ secrets[matrix.stack.read_only_secret] }}
         run: |
           set +e
           terraform plan -lock=false -no-color -input=false -detailed-exitcode -out=tfplan >plan_output.txt 2>&1
@@ -267,28 +267,28 @@ jobs:
           set -e
           cat plan_output.txt
 
-      # The issue is identified PER ENVIRONMENT. With one title for every
-      # environment, a second environment's drift would overwrite the first's
-      # report and one environment's clean plan would close the other's.
+      # The issue is identified PER STACK. With one title for every
+      # stack, a second stack's drift would overwrite the first's
+      # report and one stack's clean plan would close the other's.
       - name: Report drift as a deduplicated issue
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
-          ENVIRONMENT_NAME: ${{ matrix.environment.name }}
+          STACK_NAME: ${{ matrix.stack.name }}
         run: |
           set -euo pipefail
-          issue_title="Terraform drift detected: terraform/environments/${ENVIRONMENT_NAME}"
+          issue_title="Terraform drift detected: terraform/stacks/${STACK_NAME}"
 
           # Matched on the WHOLE title, not by `--search ... in:title`. That
           # search is tokenised rather than exact and returns ranked results, so
           # taking `.[0]` of it picks whatever ranked first -- and once a second
-          # environment exists, one whose name extends another's token sequence
+          # stack exists, one whose name extends another's token sequence
           # (`prod` and `prod-eu`) can rank first for the other's title. One
-          # environment's drift would then be appended to the other's issue, and
-          # later its clean plan would close that other environment's still-real
+          # stack's drift would then be appended to the other's issue, and
+          # later its clean plan would close that other stack's still-real
           # report. This is the requirement's own scenario "Drift in one
-          # environment does not resolve another's report", inverted.
+          # stack does not resolve another's report", inverted.
           existing=$(gh issue list --state open --limit 200 --json number,title \
             | jq -r --arg title "$issue_title" '[.[] | select(.title == $title)] | .[0].number // empty')
 

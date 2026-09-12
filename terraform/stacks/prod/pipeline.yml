@@ -1,52 +1,52 @@
 ---
-# This environment's pipeline configuration, read by .github/workflows/'s
+# This stack's pipeline configuration, read by .github/workflows/'s
 # discovery step -- see "Each Environment Declares Its Own Pipeline
 # Configuration" (openspec/specs/iac-cicd-pipeline/spec.md).
 #
 # It lives here, beside the terraform.tfvars it belongs to, so the folder is
-# self-describing: adding an environment is adding a directory, and changes no
-# file under .github/workflows/. Workflows SHALL NOT name an environment, map
+# self-describing: adding a stack is adding a directory, and changes no
+# file under .github/workflows/. Workflows SHALL NOT name a stack, map
 # one to its secrets, or condition on one -- everything they need about this
-# environment is below.
+# stack is below.
 #
 # `.yml` rather than `.tf`/`.tfvars` deliberately: Terraform must not read this
 # file. `terraform fmt`, `terraform validate` and `tflint` all ignore it.
 
-# The GitHub Environment this environment's apply job attaches to. REQUIRED.
+# The GitHub Environment this stack's apply job attaches to. REQUIRED.
 #
 # Whether that pauses for a human is a property of the Environment's protection
 # rules -- repository settings, which no file here can verify -- and not of the
 # workflow. `production` requires a reviewer.
 #
-# SHALL be distinct from every other environment's: two environments naming the
-# same GitHub Environment share its WRITE token and its protection rules, so an
-# environment meant to be ungated would hold this one's write credential.
+# SHALL be distinct from every other stack's: two stacks naming the
+# same GitHub Environment share its WRITE token and its protection rules, so a
+# stack meant to be ungated would hold this one's write credential.
 github_environment: production
 
-# The repository secret holding this environment's read-only Hetzner token.
+# The repository secret holding this stack's read-only Hetzner token.
 # REQUIRED.
 #
 # Plan and drift jobs declare no `environment:` -- so they can reach repository
 # secrets only -- and read this name out of the matrix. A repository secret
 # holds one value, so this name SHALL be distinct from every other
-# environment's, or two environments plan under one token.
+# stack's, or two stacks plan under one token.
 #
 # NOT `HCLOUD_TOKEN`, AND THE REASON IS NOT STYLE. Credential Scoping by
-# Privilege obliges EVERY environment's GitHub Environment to define
-# `HCLOUD_TOKEN` as that environment's Read & Write token, and GitHub resolves
+# Privilege obliges EVERY stack's GitHub Environment to define
+# `HCLOUD_TOKEN` as that stack's Read & Write token, and GitHub resolves
 # an Environment-scoped secret ahead of a repository-scoped one of the same
 # name. While only the plan and drift jobs read this field the collision was
 # harmless -- neither declares an `environment:`. The host-converge job does,
 # so read from there `HCLOUD_TOKEN` yields the WRITE token, silently and with
 # no error, from a field that says read-only.
 #
-# So no environment's declared read-only secret may be a name its own
+# So no stack's declared read-only secret may be a name its own
 # Environment also defines. `.github/tests` asserts that for `HCLOUD_TOKEN`
 # specifically, which is the checkable half; the general form is repository
 # settings and is unverifiable from here.
 #
 # `PRODUCTION` rather than `PROD`, matching the GitHub Environment this
-# environment attaches to rather than its directory name. The directory stays
+# stack attaches to rather than its directory name. The directory stays
 # `prod`; this is the naming the repository is moving toward, and picking it
 # now costs nothing where renaming the secret again later would.
 #
@@ -56,13 +56,13 @@ github_environment: production
 # field, so the three move together or the build fails.
 read_only_secret: HCLOUD_TOKEN_PRODUCTION
 
-# Whether the Destroy Policy Gate applies to this environment. OPTIONAL;
+# Whether the Destroy Policy Gate applies to this stack. OPTIONAL;
 # absent means it applies, so a mistake in this file fails safe.
 #
 # POLARITY IS LOAD-BEARING AND LIVES IN THE NAME. This field names the GATE, so
 # `true` means the gate applies and a destructive plan needs the override label.
 # It is deliberately not named for the inverse: `disposable: true` and
 # `destroy_policy_gate: true` are the same value and opposite meanings, and
-# nothing in a value can tell a reader which was meant. An environment that
+# nothing in a value can tell a reader which was meant. A stack that
 # exists to be rebuilt may set this `false`; prod may not.
 destroy_policy_gate: true

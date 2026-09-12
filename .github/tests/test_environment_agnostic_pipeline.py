@@ -119,7 +119,7 @@ DRIFT = WORKFLOWS / "drift.yml"
 # authoring one; see the change's test-plan.md.
 TERRAFORM_WORKFLOWS = (PR_VALIDATION, APPLY, DRIFT)
 
-ENVIRONMENTS_DIR = ROOT / "terraform" / "environments"
+ENVIRONMENTS_DIR = ROOT / "terraform" / "stacks"
 
 # Suffixes an environment directory carries that are NOT its pipeline
 # declaration. `.tf` and `.tfvars` are read by Terraform itself -- tasks.md 2.2
@@ -208,7 +208,7 @@ class Declaration:
 
 
 def environment_directories(root: Path | None = None) -> list[Path]:
-    base = (ROOT if root is None else root) / "terraform" / "environments"
+    base = (ROOT if root is None else root) / "terraform" / "stacks"
     if not base.is_dir():
         return []
     return sorted(
@@ -501,7 +501,7 @@ class TestEveryEnvironmentCarriesAPipelineDeclaration(unittest.TestCase):
         )
 
     def test_every_environment_directory_carries_a_declaration(self) -> None:
-        """SPECIFIED -- "Every directory under `terraform/environments/` SHALL
+        """SPECIFIED -- "Every directory under `terraform/stacks/` SHALL
         carry a committed, machine-readable file declaring the pipeline
         configuration for that environment"."""
         self.test_the_repository_has_at_least_one_environment()
@@ -648,7 +648,7 @@ class TestEveryEnvironmentCarriesAPipelineDeclaration(unittest.TestCase):
 
 
 class DeclarationTreeFixtureMixin:
-    """Builds a synthetic `terraform/environments/` tree.
+    """Builds a synthetic `terraform/stacks/` tree.
 
     The declarations it writes are built from PROD'S OWN declaration -- same
     filename, same field names, different values -- rather than from a spelling
@@ -679,7 +679,7 @@ class DeclarationTreeFixtureMixin:
         """`environments` maps a directory name to the declaration mapping it
         gets, or to None for a directory carrying no declaration at all."""
         filename, _, _ = self._template()
-        base = directory / "terraform" / "environments"
+        base = directory / "terraform" / "stacks"
         base.mkdir(parents=True, exist_ok=True)
         for name, mapping in environments.items():
             environment_directory = base / name
@@ -1108,7 +1108,7 @@ class TestDiscoveryFailsClosed(DeclarationTreeFixtureMixin, unittest.TestCase):
     discovery step exists; only running it establishes that it refuses.
 
     The body is located by shape, not by name: the one `run:` step in the
-    workflow that names `terraform/environments` and carries no `${{ }}`. That
+    workflow that names `terraform/stacks` and carries no `${{ }}`. That
     it carries none is tasks.md 3.4's own obligation and the reason this class
     can exist at all -- an expression is interpolated before the step runs, so a
     body carrying one cannot be executed anywhere but on a runner.
@@ -1120,7 +1120,7 @@ class TestDiscoveryFailsClosed(DeclarationTreeFixtureMixin, unittest.TestCase):
             (job, index, step)
             for job, index, step in steps(workflow)
             if step.get("run")
-            and "terraform/environments" in str(step["run"])
+            and "terraform/stacks" in str(step["run"])
             and "terraform/modules" not in str(step["run"])
             and "GITHUB_OUTPUT" in str(step["run"])
             and not ACTIONS_EXPRESSION.search(str(step["run"]))
@@ -1129,7 +1129,7 @@ class TestDiscoveryFailsClosed(DeclarationTreeFixtureMixin, unittest.TestCase):
             1,
             len(candidates),
             f"expected exactly one `run:` step in {path.name} that enumerates "
-            "`terraform/environments` and carries no `${{ }}` -- the discovery step "
+            "`terraform/stacks` and carries no `${{ }}` -- the discovery step "
             f"this suite must be able to execute -- but found {len(candidates)}: "
             + repr([step_label(job, index, step) for job, index, step in candidates])
             + ". Writing to `$GITHUB_OUTPUT` is part of the locator because emitting "
@@ -1208,13 +1208,13 @@ class TestDiscoveryFailsClosed(DeclarationTreeFixtureMixin, unittest.TestCase):
         identifying discovery as the cause, and SHALL NOT allow a dependent job
         to be skipped and reported as successful"."""
         scratch = self._scratch()
-        (scratch / "terraform" / "environments").mkdir(parents=True)
+        (scratch / "terraform" / "stacks").mkdir(parents=True)
         result, _ = self._run_discovery(PR_VALIDATION, scratch)
         combined = (result.stdout + result.stderr).strip()
         self.assertNotEqual(
             0,
             result.returncode,
-            "discovery concluded successfully over an empty `terraform/environments/`, "
+            "discovery concluded successfully over an empty `terraform/stacks/`, "
             "so every dependent job is skipped on an empty matrix and the run reports "
             f"green having planned nothing: {combined[-800:]!r}",
         )
@@ -2080,7 +2080,7 @@ class TestTheAffectedEnvironmentSetIsResolvedFailClosed(unittest.TestCase):
       what an unresolvable comparison base, a skipped filter or a step that did
       not conclude leaves behind -- and the step must exit non-zero.
     - The MAPPING (`terraform/modules/` selects every environment,
-      `terraform/environments/<name>/` selects that one) is asserted as a read
+      `terraform/stacks/<name>/` selects that one) is asserted as a read
       of the body, because the shape in which the changed paths reach the step
       is not fixed by this change's plan. Its behavioural verification is
       tasks.md 3.3's, run by the implementing author against each case. This is
@@ -2094,7 +2094,7 @@ class TestTheAffectedEnvironmentSetIsResolvedFailClosed(unittest.TestCase):
         for name, job in jobs(workflow).items():
             for index, step in expression_free_run_steps(job):
                 body = str(step["run"])
-                if "terraform/environments" not in body or "terraform/modules" not in body:
+                if "terraform/stacks" not in body or "terraform/modules" not in body:
                     continue
                 # An input arriving through `env:` is what makes this the
                 # resolution step rather than the formatting-and-validation
@@ -2112,12 +2112,12 @@ class TestTheAffectedEnvironmentSetIsResolvedFailClosed(unittest.TestCase):
             1,
             len(candidates),
             f"expected exactly one `run:` step in {path.name} that carries no `${{{{ }}}}` "
-            "and names both `terraform/modules` and `terraform/environments` -- the "
+            "and names both `terraform/modules` and `terraform/stacks` -- the "
             "step resolving which environments a change affects -- but found "
             f"{len(candidates)}: "
             + repr([step_label(name, index, step) for name, index, step in candidates])
             + ". The mapping is 'a change under `terraform/modules/` affects every "
-            "environment, and a change under `terraform/environments/<name>/` affects "
+            "environment, and a change under `terraform/stacks/<name>/` affects "
             "only that environment'; a step naming only one of the two cannot express "
             "it, and a step carrying an Actions expression cannot be executed by this "
             "suite (tasks.md 3.3, 3.4)",
@@ -2168,7 +2168,7 @@ class TestTheAffectedEnvironmentSetIsResolvedFailClosed(unittest.TestCase):
                 )
                 scratch = Path(tempfile.mkdtemp(prefix="affected-environments-"))
                 self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
-                (scratch / "terraform" / "environments").mkdir(parents=True)
+                (scratch / "terraform" / "stacks").mkdir(parents=True)
                 outputs = scratch / "github_output"
                 summary = scratch / "step_summary"
                 outputs.touch()
@@ -2202,7 +2202,7 @@ class TestTheApplyWorkflowStillRaisesNoApprovalForNonInfrastructure(unittest.Tes
     `test_ci_configuration.TestApplyWorkflowTriggerIsPathFiltered` asserts the
     filter's patterns. What it does not assert, and what this change makes
     possible to get wrong, is that the filter names no environment: a filter
-    written as `terraform/environments/prod/**` would keep every existing
+    written as `terraform/stacks/prod/**` would keep every existing
     assertion green while silently making the apply workflow blind to a second
     environment.
     """
@@ -2730,7 +2730,7 @@ class TestTheDeclarationReaderIsARealReadOfTheFile(
         verdict depend on whether a `.tf` file happens to parse as YAML."""
         scratch = self._scratch()
         self._write_tree(scratch, {"staging": None})
-        directory = scratch / "terraform" / "environments" / "staging"
+        directory = scratch / "terraform" / "stacks" / "staging"
         (directory / "terraform.tfvars").write_text(
             'server_name: "web"\nlocation: "hel1"\n', encoding="utf-8"
         )
@@ -2769,7 +2769,7 @@ def _resolution_step_of(case: unittest.TestCase, path: Path):
         for _, _, step in steps(workflow)
         if step.get("run")
         and step.get("id")
-        and "terraform/environments" in str(step["run"])
+        and "terraform/stacks" in str(step["run"])
         and "terraform/modules" not in str(step["run"])
         and "GITHUB_OUTPUT" in str(step["run"])
         and not ACTIONS_EXPRESSION.search(str(step["run"]))
@@ -2787,7 +2787,7 @@ def _resolution_step_of(case: unittest.TestCase, path: Path):
         body = str(step.get("run") or "")
         if not body or ACTIONS_EXPRESSION.search(body):
             continue
-        if "terraform/environments" not in body or "terraform/modules" not in body:
+        if "terraform/stacks" not in body or "terraform/modules" not in body:
             continue
         if "GITHUB_OUTPUT" not in body:
             continue
@@ -2795,10 +2795,10 @@ def _resolution_step_of(case: unittest.TestCase, path: Path):
         for key, value in (step.get("env") or {}).items():
             expression = compact(value)
             if f"steps.{discovery_id}.outputs." in expression:
-                inputs["environments"] = key
+                inputs["stacks"] = key
             elif ACTIONS_EXPRESSION.search(str(value)):
                 inputs["paths"] = key
-        if {"environments", "paths"} <= set(inputs):
+        if {"stacks", "paths"} <= set(inputs):
             candidates.append((job_name, index, step, inputs))
     case.assertEqual(
         1,
@@ -2850,7 +2850,7 @@ class TestTheAffectedEnvironmentMappingIsRunRatherThanRead(unittest.TestCase):
     Apply Applies the Reviewed Plan.
 
     "a change under `terraform/modules/` affects every environment, and a change
-    under `terraform/environments/<name>/` affects only that environment."
+    under `terraform/stacks/<name>/` affects only that environment."
 
     `TestTheAffectedEnvironmentSetIsResolvedFailClosed` executes the REFUSAL and
     reads the mapping, and this change's `test-plan.md` records the unexecuted
@@ -2872,7 +2872,7 @@ class TestTheAffectedEnvironmentMappingIsRunRatherThanRead(unittest.TestCase):
         result, written = _run_with(
             self,
             str(step["run"]),
-            {inputs["environments"]: self.both, inputs["paths"]: changed},
+            {inputs["stacks"]: self.both, inputs["paths"]: changed},
         )
         detail = (result.stdout + result.stderr).strip()[-600:]
         self.assertEqual(
@@ -2914,7 +2914,7 @@ class TestTheAffectedEnvironmentMappingIsRunRatherThanRead(unittest.TestCase):
             with self.subTest(workflow=path.name):
                 self.assertEqual(
                     ["staging"],
-                    self._resolve(path, "terraform/environments/staging/main.tf\n"),
+                    self._resolve(path, "terraform/stacks/staging/main.tf\n"),
                     "a change confined to one environment selected another as well",
                 )
 
@@ -2927,8 +2927,8 @@ class TestTheAffectedEnvironmentMappingIsRunRatherThanRead(unittest.TestCase):
                     ["prod", "staging"],
                     self._resolve(
                         path,
-                        "terraform/environments/prod/terraform.tfvars\n"
-                        "terraform/environments/staging/main.tf\n",
+                        "terraform/stacks/prod/terraform.tfvars\n"
+                        "terraform/stacks/staging/main.tf\n",
                     ),
                 )
 
@@ -3149,7 +3149,7 @@ class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
         this body; a workflow that lost it would run over nothing."""
         bodies = self._bodies(
             "the environment discovery",
-            lambda body: "terraform/environments" in body
+            lambda body: "terraform/stacks" in body
             and "terraform/modules" not in body
             and "GITHUB_OUTPUT" in body
             and not ACTIONS_EXPRESSION.search(body),
@@ -3176,7 +3176,7 @@ class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
         diff predicts, so it plans every environment on every run."""
         bodies = self._bodies(
             "the changed-path resolution",
-            lambda body: "terraform/environments" in body
+            lambda body: "terraform/stacks" in body
             and "terraform/modules" in body
             and "GITHUB_OUTPUT" in body
             and not ACTIONS_EXPRESSION.search(body),
@@ -3239,7 +3239,7 @@ class TestTheTwoReadersOfADeclarationAgree(DeclarationTreeFixtureMixin, unittest
             str(step["run"])
             for _, _, step in steps(load_yaml(PR_VALIDATION))
             if step.get("run")
-            and "terraform/environments" in str(step["run"])
+            and "terraform/stacks" in str(step["run"])
             and "terraform/modules" not in str(step["run"])
             and "GITHUB_OUTPUT" in str(step["run"])
             and not ACTIONS_EXPRESSION.search(str(step["run"]))
@@ -3261,7 +3261,7 @@ class TestTheTwoReadersOfADeclarationAgree(DeclarationTreeFixtureMixin, unittest
             "the workflow's reader refused a declaration this module's reader "
             f"accepted: {(result.stdout + result.stderr)[-600:]!r}",
         )
-        emitted = github_output_pairs(outputs).get("environments", "")
+        emitted = github_output_pairs(outputs).get("stacks", "")
         self.assertTrue(emitted, "the discovery body emitted no environments")
         return {entry["name"]: entry for entry in json.loads(emitted)}
 
@@ -3272,7 +3272,7 @@ class TestTheTwoReadersOfADeclarationAgree(DeclarationTreeFixtureMixin, unittest
         tree = Path(tempfile.mkdtemp(prefix="reader-agreement-"))
         self.addCleanup(shutil.rmtree, tree, ignore_errors=True)
         source = ENVIRONMENTS_DIR
-        shutil.copytree(source, tree / "terraform" / "environments")
+        shutil.copytree(source, tree / "terraform" / "stacks")
 
         by_shell = self._shell_reading(tree)
         by_python = environment_declarations()
@@ -3316,7 +3316,7 @@ class TestTheTwoReadersOfADeclarationAgree(DeclarationTreeFixtureMixin, unittest
             "read_only_secret:   HCLOUD_TOKEN_STAGING\n"
             "destroy_policy_gate: false\n"
         )
-        directory = tree / "terraform" / "environments" / "staging"
+        directory = tree / "terraform" / "stacks" / "staging"
         directory.mkdir(parents=True)
         (directory / "pipeline.yml").write_text(awkward, encoding="utf-8")
 

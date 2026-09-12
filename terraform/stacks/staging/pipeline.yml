@@ -1,13 +1,13 @@
 ---
-# This environment's pipeline configuration, read by .github/workflows/'s
+# This stack's pipeline configuration, read by .github/workflows/'s
 # discovery step -- see "Each Environment Declares Its Own Pipeline
 # Configuration" (openspec/specs/iac-cicd-pipeline/spec.md).
 #
 # This file is what made adding staging a matter of adding a directory: no
-# file under .github/workflows/ changed to bring this environment into the
+# file under .github/workflows/ changed to bring this stack into the
 # validation, plan, apply and drift workflows.
 
-# The GitHub Environment this environment's apply job attaches to. REQUIRED.
+# The GitHub Environment this stack's apply job attaches to. REQUIRED.
 #
 # `staging` requires NO reviewer, which is the point of it: an approved
 # staging deploy is as slow as prod and stops being used. That is a property
@@ -20,21 +20,21 @@
 # Write token belongs to a Hetzner project holding staging alone.
 github_environment: staging
 
-# The repository secret holding this environment's read-only Hetzner token.
+# The repository secret holding this stack's read-only Hetzner token.
 # REQUIRED.
 #
 # Not `HCLOUD_TOKEN`: that name is prod's, a repository secret holds one
-# value, and two environments planning under one token is the defect this
+# value, and two stacks planning under one token is the defect this
 # field exists to prevent. Discovery fails the pipeline naming both offenders
-# if two environments ever declare the same name.
+# if two stacks ever declare the same name.
 read_only_secret: HCLOUD_TOKEN_STAGING
 
-# Whether the Destroy Policy Gate applies to this environment. OPTIONAL;
+# Whether the Destroy Policy Gate applies to this stack. OPTIONAL;
 # absent means it applies, so a mistake in this file fails safe.
 #
 # `false` here, and stated rather than omitted. Staging is rebuilt on purpose
 # -- rehearsing a destructive change is what it is for -- and requiring an
-# override label on every destructive plan against a disposable environment
+# override label on every destructive plan against a disposable stack
 # trains the operator to apply the label, which is the same failure mode as
 # an approval prompt with nothing to approve.
 #

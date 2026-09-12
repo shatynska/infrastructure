@@ -19,8 +19,8 @@ terraform {
   # remote execution `terraform plan -out=tfplan` yields no locally
   # applicable plan file, which is what the saved-plan approval flow applies.
   #
-  # The name is this environment's own: no two environments share a
-  # workspace, because a workspace holds one state and two environments
+  # The name is this stack's own: no two stacks share a
+  # workspace, because a workspace holds one state and two stacks
   # sharing it would each plan the other's resources for destruction.
   cloud {
     organization = "shatynska"
@@ -44,9 +44,9 @@ provider "hcloud" {
   #     Cloud Project requirement, openspec/specs/iac-state-management/spec.md);
   #   - every other CI job declares no `environment:` and resolves a
   #     repository-scoped Read Only token, read as
-  #     `secrets[<the name pipeline.yml declares>]` — for this environment
+  #     `secrets[<the name pipeline.yml declares>]` — for this stack
   #     HCLOUD_TOKEN_STAGING, and for prod HCLOUD_TOKEN. A repository secret
-  #     holds one value, which is why each environment needs a name of its own;
+  #     holds one value, which is why each stack needs a name of its own;
   #   - locally, whatever the operator exports for THIS directory, which is
   #     staging's Read Only token and is never the Read & Write one.
   #

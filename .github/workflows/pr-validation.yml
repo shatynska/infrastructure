@@ -6,9 +6,9 @@ name: PR Validation
 # steps are instead conditioned on changed paths inside the job. See the
 # Required Status Checks Report on Every Pull Request requirement.
 #
-# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE, and that is a requirement
-# rather than a style: adding an environment is adding a directory under
-# `terraform/environments/`, and SHALL change no file under `.github/workflows/`.
+# NO STACK IS NAMED ANYWHERE IN THIS FILE, and that is a requirement
+# rather than a style: adding a stack is adding a directory under
+# `terraform/stacks/`, and SHALL change no file under `.github/workflows/`.
 # The GitHub Environment each one attaches to, the repository secret holding
 # its read-only Hetzner token, and whether the destroy-policy gate applies to
 # it are declared by that directory's own `pipeline.yml`. See the Each
@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   # Runs on EVERY pull request, not only those touching Terraform: a repository
-  # state in which no environment carries a readable declaration has lost the
+  # state in which no stack carries a readable declaration has lost the
   # thing that makes the plan matrix cover anything, and the pull request that
   # produced it is not the only one that should stop.
   discover:
@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      environments: ${{ steps.affected.outputs.environments }}
+      stacks: ${{ steps.affected.outputs.stacks }}
       plan-expected: ${{ steps.affected.outputs.plan-expected }}
     steps:
       # `fetch-depth: 0` because the step below diffs the pull request's base
@@ -50,7 +50,7 @@ jobs:
           fetch-depth: 0
 
       # Deliberately names neither `terraform/modules` nor
-      # `terraform/environments`: it lists what changed, and the step after it
+      # `terraform/stacks`: it lists what changed, and the step after it
       # decides what that means. Keeping the two apart is what lets each be
       # pulled out of this file and run on its own.
       - name: List the paths this pull request changes
@@ -74,20 +74,20 @@ jobs:
             echo "CHANGED_PATHS_EOF"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Discover the environments and their declarations
+      - name: Discover the stacks and their declarations
         id: discover
         run: |
           set -euo pipefail
 
-          # Enumerates every environment directory, reads each one's committed
+          # Enumerates every stack directory, reads each one's committed
           # pipeline declaration, and emits the matrix this workflow's jobs run
-          # over. Nothing here names an environment: adding one is adding a
+          # over. Nothing here names a stack: adding one is adding a
           # directory.
           #
           # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
           # message that names the directory: an absent declaration, one missing
-          # a field the workflows read, and two environments colliding on a
-          # secret or on a GitHub Environment. A silently skipped environment is
+          # a field the workflows read, and two stacks colliding on a
+          # secret or on a GitHub Environment. A silently skipped stack is
           # one that is planned by nothing, applied by nothing and drift-checked
           # by nothing, which is indistinguishable from it not existing.
           #
@@ -110,11 +110,11 @@ jobs:
           # naming the interpolation syntax in a comment, which is why this
           # sentence spells it out in words.
 
-          environments_root="terraform/environments"
+          stacks_root="terraform/stacks"
           declaration_name="pipeline.yml"
 
-          if [ ! -d "$environments_root" ]; then
-            echo "::error::Environment discovery found no ${environments_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+          if [ ! -d "$stacks_root" ]; then
+            echo "::error::Stack discovery found no ${stacks_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
             exit 1
           fi
 
@@ -140,13 +140,13 @@ jobs:
           records=$(mktemp)
           refused=0
 
-          for directory in "$environments_root"/*/; do
+          for directory in "$stacks_root"/*/; do
             [ -d "$directory" ] || continue
             name="$(basename "$directory")"
             declaration="${directory}${declaration_name}"
 
             if [ ! -f "$declaration" ]; then
-              echo "::error::${name}: ${directory} carries no ${declaration_name}. An environment with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. A stack with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
               refused=1
               continue
             fi
@@ -157,11 +157,11 @@ jobs:
 
             incomplete=0
             if [ -z "$github_environment" ]; then
-              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's apply job attaches to, and it has no safe default."
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this stack's apply job attaches to, and it has no safe default."
               incomplete=1
             fi
             if [ -z "$read_only_secret" ]; then
-              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this stack's read-only Hetzner token, and it has no safe default."
               incomplete=1
             fi
 
@@ -180,7 +180,7 @@ jobs:
 
             # A control character in either value would corrupt the
             # tab-separated record this loop builds, so it is refused here
-            # rather than silently splitting an environment into two.
+            # rather than silently splitting a stack into two.
             case "${github_environment}${read_only_secret}" in
               *[[:cntrl:]]*)
                 echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
@@ -214,30 +214,30 @@ jobs:
           done
 
           if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
-            echo "::error::Environment discovery found no environment under ${environments_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            echo "::error::Stack discovery found no stack under ${stacks_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
             exit 1
           fi
 
           # Two collisions no assertion about workflow text can reach, because
           # they live in committed data rather than in a workflow. Two
-          # environments sharing a read-only secret plan under one credential
+          # stacks sharing a read-only secret plan under one credential
           # against different Hetzner projects; two sharing a GitHub Environment
-          # share its WRITE token and its protection rules, so an environment
+          # share its WRITE token and its protection rules, so a stack
           # meant to be ungated would hold the reviewed one's write credential.
           for secret in $(cut -f3 "$records" | sort | uniq -d); do
             colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
-            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every environment but one would report a meaningless diff."
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every stack but one would report a meaningless diff."
             refused=1
           done
 
           for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
             colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
-            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so an environment intended to be ungated would hold the reviewed environment's write credential."
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so a stack intended to be ungated would hold the reviewed stack's write credential."
             refused=1
           done
 
           if [ "$refused" -ne 0 ]; then
-            echo "::error::Environment discovery refused the committed declarations, so no environment enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            echo "::error::Stack discovery refused the committed declarations, so no stack enters the matrix. Every reason is reported above, each naming the directory it belongs to."
             exit 1
           fi
 
@@ -254,11 +254,11 @@ jobs:
           ' <"$records")
           rm -f "$records"
 
-          echo "Discovered environments: ${discovered}"
-          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
+          echo "Discovered stacks: ${discovered}"
+          echo "stacks=${discovered}" >>"$GITHUB_OUTPUT"
       # Narrows the discovered set to what this pull request can actually
-      # affect. Without it, a pull request touching one environment plans every
-      # environment -- and on `apply.yml`, where the same resolution runs,
+      # affect. Without it, a pull request touching one stack plans every
+      # stack -- and on `apply.yml`, where the same resolution runs,
       # raises an approval request with nothing to approve.
       #
       # FAILS CLOSED, and the polarity is the whole point: an unresolvable
@@ -268,10 +268,10 @@ jobs:
       #
       # Free of `${{ }}`, both inputs through `env:`, for the same reason the
       # discovery body above is.
-      - name: Resolve which environments this pull request affects
+      - name: Resolve which stacks this pull request affects
         id: affected
         env:
-          ENVIRONMENTS: ${{ steps.discover.outputs.environments }}
+          STACKS: ${{ steps.discover.outputs.stacks }}
           CHANGED_PATHS: ${{ steps.changed.outputs.paths }}
         run: |
           set -euo pipefail
@@ -279,27 +279,27 @@ jobs:
           # THIS BODY IS IDENTICAL IN BOTH WORKFLOWS THAT NARROW BY CHANGED
           # PATHS, and `.github/tests` asserts that it stays so. A pull request
           # and the merge of that same pull request must resolve the same
-          # environments, or the reviewer approves one plan and the pipeline
+          # stacks, or the reviewer approves one plan and the pipeline
           # applies another. What differs between the two is only where the
           # changed paths come from, which is the step before this one.
           #
           # Free of Actions expressions, both inputs through `env:`, so
           # `.github/tests` can pull this body out and run it.
 
-          if [ -z "${ENVIRONMENTS}" ]; then
-            echo "::error::Environment discovery produced no set of environments, so which of them this change affects cannot be resolved. Refusing to read that as 'no environment affected': that plans nothing, applies nothing and reports a green run."
+          if [ -z "${STACKS}" ]; then
+            echo "::error::Stack discovery produced no set of stacks, so which of them this change affects cannot be resolved. Refusing to read that as 'no stack affected': that plans nothing, applies nothing and reports a green run."
             exit 1
           fi
 
           if [ -z "${CHANGED_PATHS}" ]; then
-            echo "::error::The set of changed paths is empty, which means the step that resolves it did not conclude -- a change always changes at least one path. Refusing to read that as 'no environment affected'."
+            echo "::error::The set of changed paths is empty, which means the step that resolves it did not conclude -- a change always changes at least one path. Refusing to read that as 'no stack affected'."
             exit 1
           fi
 
           # The mapping the requirement states: a change under
-          # `terraform/modules/` affects every environment, because every
-          # environment consumes those modules; a change under
-          # `terraform/environments/<name>/` affects that environment alone.
+          # `terraform/modules/` affects every stack, because every
+          # stack consumes those modules; a change under
+          # `terraform/stacks/<name>/` affects that stack alone.
           selected=""
           every=0
           while IFS= read -r path; do
@@ -308,8 +308,8 @@ jobs:
               terraform/modules/*)
                 every=1
                 ;;
-              terraform/environments/*/*)
-                candidate="${path#terraform/environments/}"
+              terraform/stacks/*/*)
+                candidate="${path#terraform/stacks/}"
                 selected="${selected}${candidate%%/*}
           "
                 ;;
@@ -319,10 +319,10 @@ jobs:
           CHANGED_PATHS_EOF
 
           if [ "$every" -eq 1 ]; then
-            affected="$ENVIRONMENTS"
+            affected="$STACKS"
           else
             names=$(printf '%s' "$selected" | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
-            affected=$(printf '%s' "$ENVIRONMENTS" | jq -c --argjson names "$names" 'map(select(.name as $name | $names | index($name)))')
+            affected=$(printf '%s' "$STACKS" | jq -c --argjson names "$names" 'map(select(.name as $name | $names | index($name)))')
           fi
 
           count=$(printf '%s' "$affected" | jq 'length')
@@ -332,10 +332,10 @@ jobs:
             expected=false
           fi
 
-          echo "Affected environments (${count}): ${affected}"
-          echo "environments=${affected}" >>"$GITHUB_OUTPUT"
+          echo "Affected stacks (${count}): ${affected}"
+          echo "stacks=${affected}" >>"$GITHUB_OUTPUT"
           echo "plan-expected=${expected}" >>"$GITHUB_OUTPUT"
-  # The plan, one job per affected environment.
+  # The plan, one job per affected stack.
   #
   # THREE THINGS ABOUT THIS JOB'S SHAPE, each load-bearing:
   #
@@ -366,7 +366,7 @@ jobs:
   #    name per row, so there is no stable name for branch protection to point
   #    at; `validate` concludes on this job's behalf below.
   plan:
-    name: plan (${{ matrix.environment.name }})
+    name: plan (${{ matrix.stack.name }})
     needs: discover
     if: ${{ needs.discover.outputs.plan-expected == 'true' }}
     runs-on: ubuntu-latest
@@ -378,12 +378,12 @@ jobs:
       contents: read
       pull-requests: write # this job, and only this job, posts the plan comment
     strategy:
-      # One environment's plan failing must not abandon the others: a reviewer
+      # One stack's plan failing must not abandon the others: a reviewer
       # shown one failure and nothing about the rest cannot tell whether they
       # were clean or merely unexamined.
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+        stack: ${{ fromJSON(needs.discover.outputs.stacks) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -428,17 +428,17 @@ jobs:
           terraform_wrapper: false
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
-      # `secrets[...]` indexed by the name this environment's own declaration
+      # `secrets[...]` indexed by the name this stack's own declaration
       # states, which is the only construction that can resolve a DIFFERENT
       # token per row: `${{ }}` is evaluated before a step runs, so a literal
       # name binds one compile-time-known secret and a shell loop over N
-      # environments would hold one token for all of them.
+      # stacks would hold one token for all of them.
       - name: terraform plan
         id: plan
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         env:
-          HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
-          ENVIRONMENT_NAME: ${{ matrix.environment.name }}
+          HCLOUD_TOKEN: ${{ secrets[matrix.stack.read_only_secret] }}
+          STACK_NAME: ${{ matrix.stack.name }}
         run: |
           set -euo pipefail
 
@@ -459,7 +459,7 @@ jobs:
           # exist, so the last error in the log would be a missing-file failure
           # from the comment action rather than the failure that actually
           # stopped the plan.
-          heading="### Terraform Plan — \`terraform/environments/${ENVIRONMENT_NAME}\`"
+          heading="### Terraform Plan — \`terraform/stacks/${STACK_NAME}\`"
           printf '%s\n\nThis plan did not run to completion; see the job log.\n' \
             "$heading" >comment_body.md
 
@@ -476,7 +476,7 @@ jobs:
               cat init_output.txt
               echo '```'
             } >comment_body.md
-            echo "::error::terraform init exited ${init_exit}, so this environment was not planned."
+            echo "::error::terraform init exited ${init_exit}, so this stack was not planned."
             exit 1
           fi
 
@@ -498,13 +498,13 @@ jobs:
           # status this step let through would be reported as a plan that ran
           # and passed.
           if [ "$plan_exit" -ne 0 ]; then
-            echo "::error::terraform plan exited ${plan_exit}. Refusing to report this environment as planned."
+            echo "::error::terraform plan exited ${plan_exit}. Refusing to report this stack as planned."
             exit 1
           fi
 
-      # The marker carries the environment name. With a constant marker and
-      # `edit-mode: replace`, N environments would each find and overwrite the
-      # same comment, leaving one plan standing — and at one environment that
+      # The marker carries the stack name. With a constant marker and
+      # `edit-mode: replace`, N stacks would each find and overwrite the
+      # same comment, leaving one plan standing — and at one stack that
       # defect and the correct behaviour are indistinguishable, which is why
       # this is asserted statically rather than observed on a run.
       # Stated POSITIVELY -- the plan step ran and concluded one way or the
@@ -523,7 +523,7 @@ jobs:
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: "github-actions[bot]"
-          body-includes: "### Terraform Plan — `terraform/environments/${{ matrix.environment.name }}`"
+          body-includes: "### Terraform Plan — `terraform/stacks/${{ matrix.stack.name }}`"
 
       - name: Post plan as PR comment
         if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
@@ -532,7 +532,7 @@ jobs:
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
           edit-mode: replace
-          body-path: terraform/environments/${{ matrix.environment.name }}/comment_body.md
+          body-path: terraform/stacks/${{ matrix.stack.name }}/comment_body.md
 
   # THE REGISTERED REQUIRED STATUS CHECK. Its name is a literal, so branch
   # protection has something stable to point at; the plan matrix's name is not,
@@ -571,7 +571,7 @@ jobs:
         with:
           filters: |
             terraform:
-              - 'terraform/environments/**'
+              - 'terraform/stacks/**'
               - 'terraform/modules/**'
             platform:
               - 'platform/**'
@@ -668,7 +668,7 @@ jobs:
       # unconditional cannot be gated on a path filter -- a credential
       # committed under ansible/, platform/ or docs/ is exactly as exposed as
       # one under terraform/. This is also the scan that covers a pull request
-      # affecting no environment, where the plan matrix is empty and its own
+      # affecting no stack, where the plan matrix is empty and its own
       # copy of these two steps never runs. The version is read out of
       # .pre-commit-config.yaml at run time rather than hardcoded, so the local
       # hook and this scan cannot drift apart; a comment asking people to keep
@@ -721,7 +721,7 @@ jobs:
         if: steps.changes.outputs.terraform == 'true'
         run: terraform fmt -check -recursive
 
-      # validate/tflint/test discover terraform/modules/*/ and terraform/environments/* directories
+      # validate/tflint/test discover terraform/modules/*/ and terraform/stacks/* directories
       # rather than naming them, so a directory added under either one is
       # covered without a workflow edit — see the change
       # fix-ci-module-coverage.
@@ -729,7 +729,7 @@ jobs:
         if: steps.changes.outputs.terraform == 'true'
         run: |
           set -euo pipefail
-          for dir in terraform/modules/*/ terraform/environments/*/; do
+          for dir in terraform/modules/*/ terraform/stacks/*/; do
             if compgen -G "${dir}*.tf" >/dev/null; then
               echo "::group::terraform validate ${dir}"
               (cd "$dir" && terraform init -backend=false && terraform validate)
@@ -748,7 +748,7 @@ jobs:
         run: |
           set -euo pipefail
           tflint --init --config="${{ github.workspace }}/.tflint.hcl"
-          for dir in terraform/modules/*/ terraform/environments/*/; do
+          for dir in terraform/modules/*/ terraform/stacks/*/; do
             if compgen -G "${dir}*.tf" >/dev/null; then
               tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir="${dir%/}"
             fi
@@ -867,23 +867,23 @@ jobs:
           set -euo pipefail
 
           if [ "$DISCOVER_RESULT" != "success" ]; then
-            echo "::error::Environment discovery concluded '${DISCOVER_RESULT}', not 'success'. Its outputs are empty, so whether a plan was owed cannot be read from them. Refusing to conclude success on a run whose own precondition did not hold."
+            echo "::error::Stack discovery concluded '${DISCOVER_RESULT}', not 'success'. Its outputs are empty, so whether a plan was owed cannot be read from them. Refusing to conclude success on a run whose own precondition did not hold."
             exit 1
           fi
 
           case "$PLAN_RESULT" in
             success)
-              echo "Every affected environment was planned and reported (plan-expected=${PLAN_EXPECTED})."
+              echo "Every affected stack was planned and reported (plan-expected=${PLAN_EXPECTED})."
               ;;
             skipped)
               if [ "$PLAN_EXPECTED" = "true" ]; then
-                echo "::error::The plan matrix was skipped on a run that resolved at least one affected environment (plan-expected=true). A skipped job is not a passing one: concluding success here would report a green required status check for a pull request nothing planned."
+                echo "::error::The plan matrix was skipped on a run that resolved at least one affected stack (plan-expected=true). A skipped job is not a passing one: concluding success here would report a green required status check for a pull request nothing planned."
                 exit 1
               fi
-              echo "This pull request affects no environment, so no plan was owed and none ran. Concluding success having correctly done no work."
+              echo "This pull request affects no stack, so no plan was owed and none ran. Concluding success having correctly done no work."
               ;;
             *)
-              echo "::error::The plan matrix concluded '${PLAN_RESULT}' (plan-expected=${PLAN_EXPECTED}). Only 'success', or a skip on a pull request that affects no environment, may conclude success."
+              echo "::error::The plan matrix concluded '${PLAN_RESULT}' (plan-expected=${PLAN_EXPECTED}). Only 'success', or a skip on a pull request that affects no stack, may conclude success."
               exit 1
               ;;
           esac

@@ -1706,7 +1706,7 @@ class TestApplyWorkflowTriggerIsPathFiltered(unittest.TestCase):
         patterns = self.push.get("paths") or []
         self.assertTrue(patterns, "apply.yml's push trigger declares no `paths:` filter")
         for path in (
-            "terraform/environments/prod/main.tf",
+            "terraform/stacks/prod/main.tf",
             "terraform/modules/server/main.tf",
             "terraform/modules/volume/variables.tf",
         ):
@@ -3146,7 +3146,7 @@ WRAPPED_CITATION = re.compile(
 )
 
 # Pruned wherever they occur, at any depth: `.terraform` in particular exists
-# under each of `terraform/environments/*/`, and a root-anchored reading would
+# under each of `terraform/stacks/*/`, and a root-anchored reading would
 # leave the walk reading provider binaries.
 #
 # `__pycache__` is here because the requirement is scoped to committed files and
@@ -3544,7 +3544,7 @@ class TestThePreArchiveCitationCheckIsARealReadOfTheTree(
                 CHANGE_PATH_PREFIX + "some-change/design.md": citation,
                 ".claude/worktrees/other/README.md": citation,
                 ".worktrees/other/README.md": citation,
-                "terraform/environments/prod/.terraform/providers/notes.md": citation,
+                "terraform/stacks/prod/.terraform/providers/notes.md": citation,
                 "ansible/roles/geerlingguy.docker/README.md": citation,
                 "node_modules/package/readme.md": citation,
                 "README.md": "# see openspec/specs/iac-repo-foundations/spec.md\n",
@@ -4857,7 +4857,7 @@ class TestChangeDetectionResolvesTheGatesInput(
     )
     NON_CONFIGURATION_PATHS = (
         "README.md",
-        "terraform/environments/prod/main.tf",
+        "terraform/stacks/prod/main.tf",
         "platform/docker-compose.yml",
         ".github/workflows/ansible-verify.yml",
     )
@@ -9397,11 +9397,11 @@ class TestLockfileDiscoveryPrunesWorkingTrees(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="worktree-prune-fixture-"))
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         for relative in (
-            "terraform/environments/prod",
+            "terraform/stacks/prod",
             "terraform/modules/server",
-            ".claude/worktrees/some-change/terraform/environments/prod",
+            ".claude/worktrees/some-change/terraform/stacks/prod",
             ".claude/worktrees/some-change/terraform/modules/server",
-            ".worktrees/another-change/terraform/environments/prod",
+            ".worktrees/another-change/terraform/stacks/prod",
         ):
             directory = root / relative
             directory.mkdir(parents=True)
@@ -9411,7 +9411,7 @@ class TestLockfileDiscoveryPrunesWorkingTrees(unittest.TestCase):
     def test_discovery_ignores_lockfiles_inside_working_trees(self) -> None:
         root = self.tree_with_worktrees()
         self.assertEqual(
-            {"/terraform/environments/prod", "/terraform/modules/server"},
+            {"/terraform/stacks/prod", "/terraform/modules/server"},
             terraform_lockfile_directories(root),
             "lockfile discovery reached inside a working tree, so every change in "
             "progress adds a phantom directory that no Dependabot entry can ever "
@@ -9426,7 +9426,7 @@ class TestLockfileDiscoveryPrunesWorkingTrees(unittest.TestCase):
         tree, where the answer is known."""
         found = terraform_lockfile_directories()
         self.assertIn(
-            "/terraform/environments/prod",
+            "/terraform/stacks/prod",
             found,
             "lockfile discovery no longer finds the prod environment's own "
             f"lockfile, so the Dependabot coverage check reads less than the "

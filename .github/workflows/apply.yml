@@ -1,10 +1,10 @@
 name: Terraform Apply
 
-# Runs on merge to main. Split into two jobs per environment in one run so the
+# Runs on merge to main. Split into two jobs per stack in one run so the
 # approving reviewer sees the exact diff before approving, rather than approving
 # a not-yet-computed run. This is the workflow the Gated Production Apply
 # Applies the Reviewed Plan requirement governs; that requirement now governs
-# EVERY environment's apply, and its name reads narrower than its content --
+# EVERY stack's apply, and its name reads narrower than its content --
 # recorded in docs/deferred-work.md rather than renamed here.
 #
 # Path-filtered so a merge that cannot change infrastructure does not raise an
@@ -12,8 +12,8 @@ name: Terraform Apply
 # nothing to approve trains the approver to grant it without reading, which
 # defeats the gate. `drift.yml` still detects out-of-band divergence nightly.
 #
-# The filter is coarse — every environment lives under `terraform/` — and the
-# `discover` job below narrows it to the environments this merge can actually
+# The filter is coarse — every stack lives under `terraform/` — and the
+# `discover` job below narrows it to the stacks this merge can actually
 # affect. Both halves are needed: the filter decides whether the workflow runs
 # at all, the resolution decides whose Environment approval is requested.
 #
@@ -23,9 +23,9 @@ name: Terraform Apply
 # permanently pending and unmergeable. See the Required Status Checks Report on
 # Every Pull Request requirement, and do not copy this block into it.
 #
-# NO ENVIRONMENT IS NAMED ANYWHERE IN THIS FILE. Each environment's GitHub
+# NO STACK IS NAMED ANYWHERE IN THIS FILE. Each stack's GitHub
 # Environment, its read-only secret and whether the destroy-policy gate applies
-# to it come from that environment's own `terraform/environments/<name>/pipeline.yml`.
+# to it come from that stack's own `terraform/stacks/<name>/pipeline.yml`.
 # See the Each Environment Declares Its Own Pipeline Configuration requirement.
 on:
   push:
@@ -38,7 +38,7 @@ permissions:
 
 env:
   # PR label that permits a plan containing a delete/replace action to
-  # proceed, where the environment's declaration says the gate applies.
+  # proceed, where the stack's declaration says the gate applies.
   DESTROY_OVERRIDE_LABEL: destroy-override
 
 jobs:
@@ -50,7 +50,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      environments: ${{ steps.affected.outputs.environments }}
+      stacks: ${{ steps.affected.outputs.stacks }}
     steps:
       # `fetch-depth: 0` because the step below diffs the push's own commit
       # range. On a shallow clone the base commit is absent and the diff fails
@@ -62,7 +62,7 @@ jobs:
           fetch-depth: 0
 
       # Deliberately names neither `terraform/modules` nor
-      # `terraform/environments`: it lists what changed, and the step after it
+      # `terraform/stacks`: it lists what changed, and the step after it
       # decides what that means.
       #
       # FAILS CLOSED, and this workflow is where that matters most. It runs on
@@ -97,20 +97,20 @@ jobs:
             echo "CHANGED_PATHS_EOF"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Discover the environments and their declarations
+      - name: Discover the stacks and their declarations
         id: discover
         run: |
           set -euo pipefail
 
-          # Enumerates every environment directory, reads each one's committed
+          # Enumerates every stack directory, reads each one's committed
           # pipeline declaration, and emits the matrix this workflow's jobs run
-          # over. Nothing here names an environment: adding one is adding a
+          # over. Nothing here names a stack: adding one is adding a
           # directory.
           #
           # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
           # message that names the directory: an absent declaration, one missing
-          # a field the workflows read, and two environments colliding on a
-          # secret or on a GitHub Environment. A silently skipped environment is
+          # a field the workflows read, and two stacks colliding on a
+          # secret or on a GitHub Environment. A silently skipped stack is
           # one that is planned by nothing, applied by nothing and drift-checked
           # by nothing, which is indistinguishable from it not existing.
           #
@@ -133,11 +133,11 @@ jobs:
           # naming the interpolation syntax in a comment, which is why this
           # sentence spells it out in words.
 
-          environments_root="terraform/environments"
+          stacks_root="terraform/stacks"
           declaration_name="pipeline.yml"
 
-          if [ ! -d "$environments_root" ]; then
-            echo "::error::Environment discovery found no ${environments_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+          if [ ! -d "$stacks_root" ]; then
+            echo "::error::Stack discovery found no ${stacks_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
             exit 1
           fi
 
@@ -163,13 +163,13 @@ jobs:
           records=$(mktemp)
           refused=0
 
-          for directory in "$environments_root"/*/; do
+          for directory in "$stacks_root"/*/; do
             [ -d "$directory" ] || continue
             name="$(basename "$directory")"
             declaration="${directory}${declaration_name}"
 
             if [ ! -f "$declaration" ]; then
-              echo "::error::${name}: ${directory} carries no ${declaration_name}. An environment with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. A stack with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
               refused=1
               continue
             fi
@@ -180,11 +180,11 @@ jobs:
 
             incomplete=0
             if [ -z "$github_environment" ]; then
-              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this environment's apply job attaches to, and it has no safe default."
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this stack's apply job attaches to, and it has no safe default."
               incomplete=1
             fi
             if [ -z "$read_only_secret" ]; then
-              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this environment's read-only Hetzner token, and it has no safe default."
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this stack's read-only Hetzner token, and it has no safe default."
               incomplete=1
             fi
 
@@ -203,7 +203,7 @@ jobs:
 
             # A control character in either value would corrupt the
             # tab-separated record this loop builds, so it is refused here
-            # rather than silently splitting an environment into two.
+            # rather than silently splitting a stack into two.
             case "${github_environment}${read_only_secret}" in
               *[[:cntrl:]]*)
                 echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
@@ -237,30 +237,30 @@ jobs:
           done
 
           if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
-            echo "::error::Environment discovery found no environment under ${environments_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            echo "::error::Stack discovery found no stack under ${stacks_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
             exit 1
           fi
 
           # Two collisions no assertion about workflow text can reach, because
           # they live in committed data rather than in a workflow. Two
-          # environments sharing a read-only secret plan under one credential
+          # stacks sharing a read-only secret plan under one credential
           # against different Hetzner projects; two sharing a GitHub Environment
-          # share its WRITE token and its protection rules, so an environment
+          # share its WRITE token and its protection rules, so a stack
           # meant to be ungated would hold the reviewed one's write credential.
           for secret in $(cut -f3 "$records" | sort | uniq -d); do
             colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
-            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every environment but one would report a meaningless diff."
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every stack but one would report a meaningless diff."
             refused=1
           done
 
           for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
             colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
-            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so an environment intended to be ungated would hold the reviewed environment's write credential."
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so a stack intended to be ungated would hold the reviewed stack's write credential."
             refused=1
           done
 
           if [ "$refused" -ne 0 ]; then
-            echo "::error::Environment discovery refused the committed declarations, so no environment enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            echo "::error::Stack discovery refused the committed declarations, so no stack enters the matrix. Every reason is reported above, each naming the directory it belongs to."
             exit 1
           fi
 
@@ -277,11 +277,11 @@ jobs:
           ' <"$records")
           rm -f "$records"
 
-          echo "Discovered environments: ${discovered}"
-          echo "environments=${discovered}" >>"$GITHUB_OUTPUT"
-      # An environment enters this run ONLY where the merge could affect it.
-      # Without this narrowing, a merge touching one environment raises every
-      # other environment's approval request — an approval prompt with nothing
+          echo "Discovered stacks: ${discovered}"
+          echo "stacks=${discovered}" >>"$GITHUB_OUTPUT"
+      # A stack enters this run ONLY where the merge could affect it.
+      # Without this narrowing, a merge touching one stack raises every
+      # other stack's approval request — an approval prompt with nothing
       # to approve, which trains the approver to grant it without reading and
       # defeats the gate it exists to enforce.
       #
@@ -292,10 +292,10 @@ jobs:
       #
       # Free of Actions expressions, both inputs through `env:`, so
       # `.github/tests` can pull this body out and run it.
-      - name: Resolve which environments this merge affects
+      - name: Resolve which stacks this merge affects
         id: affected
         env:
-          ENVIRONMENTS: ${{ steps.discover.outputs.environments }}
+          STACKS: ${{ steps.discover.outputs.stacks }}
           CHANGED_PATHS: ${{ steps.changed.outputs.paths }}
         run: |
           set -euo pipefail
@@ -303,27 +303,27 @@ jobs:
           # THIS BODY IS IDENTICAL IN BOTH WORKFLOWS THAT NARROW BY CHANGED
           # PATHS, and `.github/tests` asserts that it stays so. A pull request
           # and the merge of that same pull request must resolve the same
-          # environments, or the reviewer approves one plan and the pipeline
+          # stacks, or the reviewer approves one plan and the pipeline
           # applies another. What differs between the two is only where the
           # changed paths come from, which is the step before this one.
           #
           # Free of Actions expressions, both inputs through `env:`, so
           # `.github/tests` can pull this body out and run it.
 
-          if [ -z "${ENVIRONMENTS}" ]; then
-            echo "::error::Environment discovery produced no set of environments, so which of them this change affects cannot be resolved. Refusing to read that as 'no environment affected': that plans nothing, applies nothing and reports a green run."
+          if [ -z "${STACKS}" ]; then
+            echo "::error::Stack discovery produced no set of stacks, so which of them this change affects cannot be resolved. Refusing to read that as 'no stack affected': that plans nothing, applies nothing and reports a green run."
             exit 1
           fi
 
           if [ -z "${CHANGED_PATHS}" ]; then
-            echo "::error::The set of changed paths is empty, which means the step that resolves it did not conclude -- a change always changes at least one path. Refusing to read that as 'no environment affected'."
+            echo "::error::The set of changed paths is empty, which means the step that resolves it did not conclude -- a change always changes at least one path. Refusing to read that as 'no stack affected'."
             exit 1
           fi
 
           # The mapping the requirement states: a change under
-          # `terraform/modules/` affects every environment, because every
-          # environment consumes those modules; a change under
-          # `terraform/environments/<name>/` affects that environment alone.
+          # `terraform/modules/` affects every stack, because every
+          # stack consumes those modules; a change under
+          # `terraform/stacks/<name>/` affects that stack alone.
           selected=""
           every=0
           while IFS= read -r path; do
@@ -332,8 +332,8 @@ jobs:
               terraform/modules/*)
                 every=1
                 ;;
-              terraform/environments/*/*)
-                candidate="${path#terraform/environments/}"
+              terraform/stacks/*/*)
+                candidate="${path#terraform/stacks/}"
                 selected="${selected}${candidate%%/*}
           "
                 ;;
@@ -343,10 +343,10 @@ jobs:
           CHANGED_PATHS_EOF
 
           if [ "$every" -eq 1 ]; then
-            affected="$ENVIRONMENTS"
+            affected="$STACKS"
           else
             names=$(printf '%s' "$selected" | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
-            affected=$(printf '%s' "$ENVIRONMENTS" | jq -c --argjson names "$names" 'map(select(.name as $name | $names | index($name)))')
+            affected=$(printf '%s' "$STACKS" | jq -c --argjson names "$names" 'map(select(.name as $name | $names | index($name)))')
           fi
 
           count=$(printf '%s' "$affected" | jq 'length')
@@ -356,11 +356,11 @@ jobs:
             expected=false
           fi
 
-          echo "Affected environments (${count}): ${affected}"
-          echo "environments=${affected}" >>"$GITHUB_OUTPUT"
+          echo "Affected stacks (${count}): ${affected}"
+          echo "stacks=${affected}" >>"$GITHUB_OUTPUT"
           echo "plan-expected=${expected}" >>"$GITHUB_OUTPUT"
   plan:
-    name: plan (${{ matrix.environment.name }})
+    name: plan (${{ matrix.stack.name }})
     needs: discover
     runs-on: ubuntu-latest
     # No `environment:` here — this job must start immediately with the
@@ -382,8 +382,8 @@ jobs:
       # runs before the real cause was found.
       pull-requests: read
     # State locking alone doesn't prevent runs applying out of order; queue
-    # them instead of allowing overlap or cancellation. PER ENVIRONMENT, and at
-    # JOB level: state is per environment, so a run against one contends with
+    # them instead of allowing overlap or cancellation. PER STACK, and at
+    # JOB level: state is per stack, so a run against one contends with
     # nothing in another, and a workflow-level declaration cannot read a matrix
     # value at all. See the Serialized Terraform Runs requirement.
     #
@@ -393,12 +393,12 @@ jobs:
     # job in a group when a new one queues — and a cancellation is not a
     # failure, so nothing here would report an approved change that never ran.
     concurrency:
-      group: terraform-plan-${{ matrix.environment.name }}
+      group: terraform-plan-${{ matrix.stack.name }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(needs.discover.outputs.environments) }}
+        stack: ${{ fromJSON(needs.discover.outputs.stacks) }}
     outputs:
       # Consumed by the apply job's omitted-write-token guard. Every matrix row
       # writes the same value — the digest is of the repository-scoped secret
@@ -411,7 +411,7 @@ jobs:
       # GitHub resolves an ABSENT Environment secret to the repository secret of
       # the same name rather than failing, so an Environment created without it
       # silently supplies whatever the repository holds — at more than one
-      # environment, a different environment's token and therefore a different
+      # stack, a different stack's token and therefore a different
       # Hetzner project.
       #
       # THIS JOB IS WHERE THE REPOSITORY VALUE IS VISIBLE. It declares no
@@ -422,13 +422,13 @@ jobs:
       # alone.
       #
       # THE OPERAND IS `HCLOUD_TOKEN` SPECIFICALLY, not whatever this
-      # environment declares as its read-only secret. GitHub falls back to the
-      # repository secret OF THAT NAME, and the two coincide for NO environment
+      # stack declares as its read-only secret. GitHub falls back to the
+      # repository secret OF THAT NAME, and the two coincide for NO stack
       # now — digesting the declared name would compare against a value the
       # apply job could never have fallen back to, leaving the guard passing in
       # exactly the cases it exists to catch.
       #
-      # NO ENVIRONMENT DECLARES THAT NAME ANY MORE, AND THE GUARD IS UNCHANGED
+      # NO STACK DECLARES THAT NAME ANY MORE, AND THE GUARD IS UNCHANGED
       # BY IT. `apply-host-configuration-through-a-gated-workflow` renamed
       # prod's read-only secret, because a job declaring an `environment:` --
       # the host converge -- resolved the old name to the Read & Write token.
@@ -454,7 +454,7 @@ jobs:
       # failed at either would leave an empty contribution able to overwrite a
       # good one from a row that passed, and every apply row would then refuse
       # at the guard's empty-digest branch — including cleanly planned
-      # environments, which is the coupling the `planned` job below exists to
+      # stacks, which is the coupling the `planned` job below exists to
       # remove, returning through the output graph instead of through `needs:`.
       # Intermittently, too, since which row finishes last is a race. First,
       # this step depends on nothing but two values that do not vary by row,
@@ -487,29 +487,29 @@ jobs:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: terraform init
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         run: terraform init
 
-      # `secrets[...]` indexed by the name this environment's own declaration
+      # `secrets[...]` indexed by the name this stack's own declaration
       # states. A literal name binds one compile-time-known secret, so at more
-      # than one environment every plan would run under one environment's token
+      # than one stack every plan would run under one stack's token
       # and see none of the other's resources.
       - name: terraform plan
         id: plan
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         env:
-          HCLOUD_TOKEN: ${{ secrets[matrix.environment.read_only_secret] }}
+          HCLOUD_TOKEN: ${{ secrets[matrix.stack.read_only_secret] }}
         run: terraform plan -no-color -input=false -out=tfplan
 
       # The reviewer approving an Environment reads this summary and nothing
-      # else, so it names the environment it belongs to.
+      # else, so it names the stack it belongs to.
       - name: Write plan to job summary
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         env:
-          ENVIRONMENT_NAME: ${{ matrix.environment.name }}
+          STACK_NAME: ${{ matrix.stack.name }}
         run: |
           {
-            echo "### Terraform Plan — \`terraform/environments/${ENVIRONMENT_NAME}\`"
+            echo "### Terraform Plan — \`terraform/stacks/${STACK_NAME}\`"
             echo
             echo '```'
             terraform show -no-color tfplan
@@ -519,12 +519,12 @@ jobs:
       # Fails the workflow if the plan shows any resource being deleted or
       # replaced, unless the merged PR carries the override label.
       #
-      # WHETHER THIS GATE APPLIES IS A PER-ENVIRONMENT POLICY, read out of the
-      # environment's own declaration rather than fixed here. An environment
+      # WHETHER THIS GATE APPLIES IS A PER-STACK POLICY, read out of the
+      # stack's own declaration rather than fixed here. A stack
       # that exists to be rebuilt may declare it inapplicable; requiring a label
-      # to tear down a disposable environment is friction on the operation that
-      # environment exists to make cheap, and friction on a routine operation is
-      # routed around rather than heeded. An environment declaring nothing is
+      # to tear down a disposable stack is friction on the operation that
+      # stack exists to make cheap, and friction on a routine operation is
+      # routed around rather than heeded. A stack declaring nothing is
       # gated, so a mistake in a declaration fails safe.
       #
       # This gate applies only to this apply-workflow plan — not to the PR-time
@@ -532,11 +532,11 @@ jobs:
       # Gate requirement.
       - name: Destroy-policy gate
         id: destroy_gate
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-          DESTROY_POLICY_GATE: ${{ matrix.environment.destroy_policy_gate }}
+          DESTROY_POLICY_GATE: ${{ matrix.stack.destroy_policy_gate }}
         run: |
           set -euo pipefail
 
@@ -546,12 +546,12 @@ jobs:
           # strongest guard on an apply.
           case "$DESTROY_POLICY_GATE" in
             false)
-              echo "This environment's declaration states the destroy-policy gate does not apply to it, so a destructive plan proceeds to its Environment's protection rules without an override label."
+              echo "This stack's declaration states the destroy-policy gate does not apply to it, so a destructive plan proceeds to its Environment's protection rules without an override label."
               exit 0
               ;;
             true) ;;
             *)
-              echo "::warning::This environment's declaration states 'destroy_policy_gate: ${DESTROY_POLICY_GATE}', which is neither true nor false. Treating the gate as applicable."
+              echo "::warning::This stack's declaration states 'destroy_policy_gate: ${DESTROY_POLICY_GATE}', which is neither true nor false. Treating the gate as applicable."
               ;;
           esac
 
@@ -668,7 +668,7 @@ jobs:
             exit 1
           fi
 
-      # Named per environment, so one environment's plan cannot be applied to
+      # Named per stack, so one stack's plan cannot be applied to
       # another.
       - name: Upload plan artifact
         uses: actions/upload-artifact@v7
@@ -679,19 +679,19 @@ jobs:
           # attempt's saved plan from one a previous attempt left behind, and
           # it is also why re-running every job of a run does not collide with
           # a name the run already holds.
-          name: tfplan-${{ matrix.environment.name }}-attempt-${{ github.run_attempt }}
-          path: terraform/environments/${{ matrix.environment.name }}/tfplan
+          name: tfplan-${{ matrix.stack.name }}-attempt-${{ github.run_attempt }}
+          path: terraform/stacks/${{ matrix.stack.name }}/tfplan
           retention-days: 1 # tfplan holds sensitive values in cleartext
 
-  # Resolves which environments actually produced a saved plan — which is the
+  # Resolves which stacks actually produced a saved plan — which is the
   # set the apply stage runs over, and NOT the set the merge affects. That
   # difference is the whole reason this job exists.
   #
   # `needs:` is scoped to a JOB, not to a matrix row. An apply matrix depending
   # on the plan matrix is therefore skipped in full the moment any single
-  # environment's plan row fails: `fail-fast: false` lets the other rows run,
+  # stack's plan row fails: `fail-fast: false` lets the other rows run,
   # but it cannot stop their collective result being `failure`. One broken
-  # environment would stop every other environment's correct change reaching
+  # stack would stop every other stack's correct change reaching
   # production. The opposite repair is worse — a condition letting the apply
   # rows start regardless would request an Environment's approval for a row with
   # no saved plan, which is the empty approval prompt this workflow's path
@@ -700,7 +700,7 @@ jobs:
   # A matrix job cannot publish a per-row result: its `outputs:` are written by
   # every row into one namespace, last writer wins. So the fact is read from
   # this run's artifacts instead. The saved plan is already named per
-  # environment, and the plan job publishes it as its LAST step, carrying no
+  # stack, and the plan job publishes it as its LAST step, carrying no
   # condition — so a row that failed for any reason, its own destroy-policy gate
   # included, never reached the upload and is absent here. That ordering is what
   # makes "an artifact exists" mean "every check in that plan job passed"; the
@@ -723,16 +723,16 @@ jobs:
       # Permissions.
       actions: read
     outputs:
-      environments: ${{ steps.planned.outputs.environments }}
+      stacks: ${{ steps.planned.outputs.stacks }}
     steps:
-      - name: Resolve which environments produced a saved plan
+      - name: Resolve which stacks produced a saved plan
         id: planned
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-          CANDIDATES: ${{ needs.discover.outputs.environments }}
+          CANDIDATES: ${{ needs.discover.outputs.stacks }}
         run: |
           set -euo pipefail
 
@@ -741,7 +741,7 @@ jobs:
           # pull it out and run it across the inputs it must tell apart.
 
           if [ -z "${CANDIDATES}" ] || [ -z "${REPOSITORY}" ] || [ -z "${RUN_ID}" ] || [ -z "${RUN_ATTEMPT}" ]; then
-            echo "::error::The planned-environment resolution has no candidate set, repository or run id to work from, which means a step it depends on did not conclude. Refusing to read that as 'no environment was planned': that applies nothing for a merge that did change infrastructure and reports a green run."
+            echo "::error::The planned-stack resolution has no candidate set, repository or run id to work from, which means a step it depends on did not conclude. Refusing to read that as 'no stack was planned': that applies nothing for a merge that did change infrastructure and reports a green run."
             exit 1
           fi
 
@@ -756,12 +756,12 @@ jobs:
           # under a name carrying the attempt, and this step reconstructs that
           # name below.
           #
-          # It matters on a re-run: attempt 1 plans an environment cleanly and
+          # It matters on a re-run: attempt 1 plans a stack cleanly and
           # uploads its saved plan; the operator re-runs; in attempt 2 that
-          # environment's destroy-policy gate refuses -- a delete appeared, or
+          # stack's destroy-policy gate refuses -- a delete appeared, or
           # the override label was removed -- so it uploads nothing. Attempt 1's
           # artifact is still in the run's listing, and matched on a name
-          # carrying no attempt it would put that environment into the planned
+          # carrying no attempt it would put that stack into the planned
           # set, raise its approval, and apply a plan this attempt's gate
           # refused. The requirement's "only where every check its plan job
           # performs has passed" would then hold within an attempt and fail
@@ -774,7 +774,7 @@ jobs:
           # its first page alone. One page is asserted to be the whole listing
           # instead, a few lines down.
           if ! listing=$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" 2>&1); then
-            echo "::error::Could not read this run's artifacts, so which environments produced a saved plan cannot be determined: ${listing}. Refusing to conclude that none did."
+            echo "::error::Could not read this run's artifacts, so which stacks produced a saved plan cannot be determined: ${listing}. Refusing to conclude that none did."
             exit 1
           fi
 
@@ -785,21 +785,21 @@ jobs:
           # separately, exactly as the destroy-policy gate asserts
           # `format_version` on a plan.
           if ! printf '%s' "$listing" | jq -e 'has("artifacts")' >/dev/null 2>&1; then
-            echo "::error::This run's artifact listing carries no 'artifacts' key, so it is not a listing. Refusing to conclude that no environment produced a saved plan."
+            echo "::error::This run's artifact listing carries no 'artifacts' key, so it is not a listing. Refusing to conclude that no stack produced a saved plan."
             exit 1
           fi
 
           if ! published=$(printf '%s' "$listing" | jq -c '[.artifacts[].name]' 2>&1); then
-            echo "::error::Could not read the artifact names out of this run's listing: ${published}. Refusing to conclude that no environment produced a saved plan."
+            echo "::error::Could not read the artifact names out of this run's listing: ${published}. Refusing to conclude that no stack produced a saved plan."
             exit 1
           fi
 
           # A TRUNCATED listing is the third face of the same failure, and the
           # only one of the three that is silent: a page holding fewer artifacts
-          # than the run has drops environments from the planned set, and a
-          # dropped environment is a reviewed change that never reaches its
+          # than the run has drops stacks from the planned set, and a
+          # dropped stack is a reviewed change that never reaches its
           # cloud with nothing said about it. Refused rather than paginated,
-          # because a run uploading one saved plan per environment cannot
+          # because a run uploading one saved plan per stack cannot
           # plausibly fill a page -- so reaching this branch means something is
           # wrong rather than large.
           # `total_count` is REQUIRED rather than defaulted. Defaulting it to the
@@ -808,19 +808,19 @@ jobs:
           # it exists to catch -- which is the same "could not tell, therefore
           # fine" the destroy-policy gate refuses one requirement over.
           if ! total=$(printf '%s' "$listing" | jq -e '.total_count | numbers' 2>&1); then
-            echo "::error::This run's artifact listing carries no numeric 'total_count', so whether it is complete cannot be established: ${total}. Refusing to resolve the planned environments from a listing that may be partial."
+            echo "::error::This run's artifact listing carries no numeric 'total_count', so whether it is complete cannot be established: ${total}. Refusing to resolve the planned stacks from a listing that may be partial."
             exit 1
           fi
           if ! returned=$(printf '%s' "$published" | jq 'length' 2>&1); then
-            echo "::error::Could not count the artifact names read from this run's listing: ${returned}. Refusing to resolve the planned environments."
+            echo "::error::Could not count the artifact names read from this run's listing: ${returned}. Refusing to resolve the planned stacks."
             exit 1
           fi
           if [ "$returned" -ne "$total" ]; then
-            echo "::error::This run's artifact listing reports ${total} artifacts and returned ${returned}, so it is truncated. Refusing to resolve the planned environments from a partial listing: an environment missing from it is a reviewed change that would never be applied."
+            echo "::error::This run's artifact listing reports ${total} artifacts and returned ${returned}, so it is truncated. Refusing to resolve the planned stacks from a partial listing: a stack missing from it is a reviewed change that would never be applied."
             exit 1
           fi
 
-          # `tfplan-<environment>-attempt-<n>` is the name the plan job uploads
+          # `tfplan-<stack>-attempt-<n>` is the name the plan job uploads
           # under. The literal parts are spelled out here because this body may
           # carry no Actions expression, while the upload builds the name from a
           # template -- so the two are stated in two places and could drift. A drift makes this
@@ -839,27 +839,27 @@ jobs:
           if ! planned=$(printf '%s' "$CANDIDATES" \
             | jq -c --argjson published "$published" --arg attempt "$RUN_ATTEMPT" \
               'map(select(("tfplan-" + .name + "-attempt-" + $attempt) as $artifact | $published | index($artifact) != null))' 2>&1); then
-            echo "::error::Could not match this run's saved plans against the discovered environments: ${planned}. Refusing to conclude which environments produced a plan."
+            echo "::error::Could not match this run's saved plans against the discovered stacks: ${planned}. Refusing to conclude which stacks produced a plan."
             exit 1
           fi
 
           if ! count=$(printf '%s' "$planned" | jq 'length' 2>&1); then
-            echo "::error::Could not count the resolved planned environments: ${count}. Refusing to conclude which environments produced a plan."
+            echo "::error::Could not count the resolved planned stacks: ${count}. Refusing to conclude which stacks produced a plan."
             exit 1
           fi
 
           # An EXPLICITLY empty set is accepted, and that is a different
           # judgement from the refusals above rather than an inconsistency with
           # them. A merge matching this workflow's path filter while affecting
-          # no environment reaches this stage with nothing to apply, and so does
+          # no stack reaches this stage with nothing to apply, and so does
           # one whose every plan failed — where the run is already red for that
           # reason. Failing here would turn a benign merge into a red apply
           # workflow.
-          echo "Environments that produced a saved plan (${count}): ${planned}"
-          echo "environments=${planned}" >>"$GITHUB_OUTPUT"
+          echo "Stacks that produced a saved plan (${count}): ${planned}"
+          echo "stacks=${planned}" >>"$GITHUB_OUTPUT"
 
   apply:
-    name: apply (${{ matrix.environment.name }})
+    name: apply (${{ matrix.stack.name }})
     # `plan` stays in `needs:` alongside `planned`, and it is not decorative:
     # the omitted-write-token guard below reads `needs.plan.outputs`, which
     # leaves scope the moment that edge is dropped. The guard would then compare
@@ -877,25 +877,25 @@ jobs:
     # stage's own result, which is where the coupling would return.
     if: ${{ !cancelled() && needs.planned.result == 'success' }}
     runs-on: ubuntu-latest
-    # Every apply job declares an `environment:`, taken from the environment's
+    # Every apply job declares an `environment:`, taken from the stack's
     # own declaration. Whether that PAUSES for a human is a property of that
     # GitHub Environment's protection rules — repository settings, which no file
-    # here can verify — and not of this workflow. An environment whose
+    # here can verify — and not of this workflow. A stack whose
     # Environment requires no reviewer is still gated in the sense that matters
     # here: its write credential is confined to this job.
-    environment: ${{ matrix.environment.github_environment }}
+    environment: ${{ matrix.stack.github_environment }}
     permissions:
       contents: read
-    # A DIFFERENT group from the plan job's, per environment. See the comment on
+    # A DIFFERENT group from the plan job's, per stack. See the comment on
     # that job: sharing one would let a later merge's queued plan cancel an
     # apply awaiting its reviewer, silently.
     concurrency:
-      group: terraform-apply-${{ matrix.environment.name }}
+      group: terraform-apply-${{ matrix.stack.name }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(needs.planned.outputs.environments) }}
+        stack: ${{ fromJSON(needs.planned.outputs.stacks) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -947,7 +947,7 @@ jobs:
           echo "This Environment supplied its own HCLOUD_TOKEN; it is not the repository-scoped value."
 
       - name: terraform init
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         run: terraform init
 
       # Fails cleanly (rather than applying a stale or missing plan) if
@@ -958,8 +958,8 @@ jobs:
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          name: tfplan-${{ matrix.environment.name }}-attempt-${{ github.run_attempt }}
-          path: terraform/environments/${{ matrix.environment.name }}
+          name: tfplan-${{ matrix.stack.name }}-attempt-${{ github.run_attempt }}
+          path: terraform/stacks/${{ matrix.stack.name }}
 
       - name: Fail cleanly if the plan artifact is unavailable
         if: steps.download.outcome == 'failure'
@@ -968,7 +968,7 @@ jobs:
           exit 1
 
       - name: terraform apply
-        working-directory: terraform/environments/${{ matrix.environment.name }}
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: terraform apply -input=false tfplan

@@ -30,7 +30,7 @@ No consumer does. Splitting them adds a variable, a validation and a test for a 
 
 ## Generating Ansible's CIDR variables from Terraform
 
-`ansible/inventory/group_vars/prod.yml:17-20` hand-mirrors `terraform/environments/prod/terraform.tfvars`'s `ssh_allowed_cidrs` and `web_allowed_cidrs`. These have drifted once already, and the file's own comment records what that cost: UFW rules assumed `web_allowed_cidrs` was unset when it was in fact `["0.0.0.0/0"]`, which would have left the host firewall blocking traffic the cloud firewall already permitted.
+`ansible/inventory/group_vars/prod.yml:17-20` hand-mirrors `terraform/stacks/prod/terraform.tfvars`'s `ssh_allowed_cidrs` and `web_allowed_cidrs`. These have drifted once already, and the file's own comment records what that cost: UFW rules assumed `web_allowed_cidrs` was unset when it was in fact `["0.0.0.0/0"]`, which would have left the host firewall blocking traffic the cloud firewall already permitted.
 
 Deriving them from Terraform output would remove the drift class entirely, and is deliberately not done: it would make an Ansible run depend on Terraform state and an HCP Terraform token, coupling the two layers that this repository's structure exists to keep separate. The reasoning is recorded in `ansible/roles/hardening/README.md`; it is repeated here because the audit re-surfaced the drift risk as live rather than settled.
 
@@ -164,7 +164,7 @@ One thing did change in the exposure. Staging's `group_vars` deliberately leaves
 
 Was `docs/change-queue.md` entry 13, deleted from there and recorded here on 2026-09-09.
 
-`refresh-readme-accuracy` found two README statements that had gone stale against committed files and that nothing noticed for weeks: the region, stated as `fsn1` while `terraform/environments/prod/terraform.tfvars` said `hel1`, and the Molecule scenario count, stated as eight against twelve in the tree. Both are inside what `.github/tests` can assert — a static read of two committed files, no network, no credential, no container runtime — and this repository already enforces a documentation convention that way.
+`refresh-readme-accuracy` found two README statements that had gone stale against committed files and that nothing noticed for weeks: the region, stated as `fsn1` while `terraform/stacks/prod/terraform.tfvars` said `hel1`, and the Molecule scenario count, stated as eight against twelve in the tree. Both are inside what `.github/tests` can assert — a static read of two committed files, no network, no credential, no container runtime — and this repository already enforces a documentation convention that way.
 
 It is not done, because **the better fix has already been applied and generalises where an assertion does not.** That same change replaced the answer with the command that produces it wherever the useful content was a count or a list; the Repository layout section is now a `git ls-files` pipeline rather than an enumeration. A fact derived on read cannot go stale, so it needs no assertion. A fact that is asserted still has to be edited in the same commit as whatever it mirrors, or the build goes red — so an assertion converts a silent staleness into a standing editing obligation, which is a trade rather than a win. Rewriting the next stale fact as its own command is cheaper and leaves nothing behind.
 
@@ -174,13 +174,15 @@ What remains genuinely duplicated after that pass is two facts. Buying a check f
 
 ## The `terraform.tfvars` parenthetical that names labels
 
-Was `docs/change-queue.md` entry 14, deleted from there and recorded here on 2026-09-09. It was recorded as a correction to batch into whatever change next touched `iac-repo-foundations`. No such change arrived, and a correction waiting for a carrier that may never come is a deferral rather than a queue entry.
+Was `docs/change-queue.md` entry 14, deleted from there and recorded here on 2026-09-09. It was recorded as a correction to batch into whatever change next touched `iac-repo-foundations`. No such change arrived for three months, and a correction waiting for a carrier that may never come is a deferral rather than a queue entry.
 
-*Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/environments/<env>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/environments/prod/` is in `ssh_key.tf`.
+*Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/stacks/prod/` is in `ssh_key.tf`.
 
 The disagreement is **factual, not normative**. The parenthetical is illustrative, the requirement's normative content is that the file is committed and non-secret, and labels genuinely are non-secret environment configuration — simply set on the resource rather than passed through this file. Nothing is permitted or forbidden differently because of it, and no reader is misled about what the requirement demands.
 
 Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the requirement's parenthetical agrees with `terraform.tfvars`" — precisely the cross-file assertion the entry above declines, and on the same reasoning. Paying for that machinery to fix an illustration that misleads nobody inverts the cost.
+
+**A carrier did arrive, and it declined.** `rename-terraform-environments-to-stacks` rewrote this very row on 2026-09-11, moving the `terraform.tfvars` path onto the new Terraform root and leaving `labels` where it stands. That was the right call and is recorded so that the next reader does not take the entry's "no such change arrived" at face value and conclude nobody has looked: a vocabulary sweep is not a substantive modification of this requirement, folding a factual correction into it would have been unrelated scope, and the derived test that correction owes is the cross-file assertion the entry below still declines. What the carrier changed is the path in the row, which had to move with the tree.
 
 **Revisit when** a change modifies *Version Control Excludes State and Secrets* for a substantive reason and can carry the correction — or if the parenthetical is ever read as an inventory rather than an illustration, which is the point at which the disagreement stops being factual and becomes normative.
 
@@ -274,7 +276,7 @@ Recorded by `add-a-staging-environment`, whose `design.md` Decision 7 settles it
 
 Recorded by `add-a-staging-environment`. Its `design.md` Decision 9 lists what that change's own runs confirmed and what they could not, and this is the second half, kept where it outlives the change.
 
-Adding staging is what exercises: discovery emitting two entries, the affected-environment narrowing actually excluding an environment, `secrets[matrix.environment.read_only_secret]` resolving a second name, an ungated apply, and — in the nightly sweep — two environments planned in one run under two credentials against one heartbeat. Written before those runs happened, and deliberately in that tense: what they actually did is recorded in that change's own task list, and this entry is about the paths they do *not* reach.
+Adding staging is what exercises: discovery emitting two entries, the affected-stack narrowing actually excluding a stack, `secrets[matrix.stack.read_only_secret]` resolving a second name, an ungated apply, and — in the nightly sweep — two stacks planned in one run under two credentials against one heartbeat. Written before those runs happened, and deliberately in that tense: what they actually did is recorded in that change's own task list, and this entry is about the paths they do *not* reach.
 
 Three paths remain unexercised at two environments:
 
@@ -308,3 +310,16 @@ The first two describe a mechanism both environments now use: staging declares `
 **Revisit when** staging acquires a persistent store — `docs/change-queue.md` entry 52, which puts the platform stack and a database on it. That is the moment "this host" becomes genuinely ambiguous and the durability requirements have to say which host they mean.
 
 This trigger named entry 50 until 2026-09-10. `configure-the-staging-host` took that entry's host half and deleted it on archiving, and the trigger followed the *subject* rather than the number: a persistent store arrives with the platform stack, which is entry 52's, not with staging's ports opening, which is the web-exposure entry's.
+
+## The stack rename left the word in test identifiers and in specification titles
+
+Recorded by `rename-terraform-environments-to-stacks`, which moved the Terraform root to `terraform/stacks/` and swept the vocabulary that names the unit the pipeline discovers, plans, applies, drift-checks and converges. Three surfaces were deliberately left in the old vocabulary, so that a reader of the tree does not take them for an oversight:
+
+- **`.github/tests` module and method names.** `test_environment_agnostic_pipeline.py`, `test_a_second_environment.py`, `test_planned_environment_apply_stage.py` and `test_host_configuration_names_its_environment.py`, and method names such as `test_a_run_can_also_be_requested_by_hand_for_one_environment`. None of them asserts anything about the word in its own name; renaming them churns several hundred identifiers and changes what no single one checks. Their **literals** were swept — the constants, the path segments and the scratch trees — so the modules assert the new vocabulary under old names.
+- **Requirement titles carrying *Environment*.** Renaming a requirement is a `RENAMED` delta, and that change deferred rather than took it.
+- **Scenario titles.** Barred by the tool rather than chosen: a `MODIFIED` requirement replaces its block whole, so `openspec validate` reads a renamed scenario as a *dropped* one and refuses the change. A change wanting to rename one needs a mechanism, not an edit.
+
+The visible cost is a requirement and a scenario whose titles say *Environment* while the prose under them says *stack*, and a test module named for an axis it no longer asserts. That is self-correcting rather than silent: the mismatch is in one line and the entry that fixes it names it.
+
+**Owner:** `docs/change-queue.md` entry 62, which rewrites this text anyway.
+

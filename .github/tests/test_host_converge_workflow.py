@@ -192,14 +192,17 @@ VAULT_ARGUMENT = re.compile(r"--vault-(?:id|password-file)\b")
 REQUIREMENT_ARGUMENT = re.compile(r"-r\s+(\S+)")
 PIN = re.compile(r"^\s*([A-Za-z0-9_.\-]+)\s*==\s*([^\s#;]+)")
 DEFAULT_FILTER = re.compile(r"""default\(\s*['"]([A-Za-z0-9_]+)['"]""")
-DISPATCH_INPUT = re.compile(r"(?:inputs|event\.inputs)\.environment\b")
+DISPATCH_INPUT = re.compile(r"(?:inputs|event\.inputs)\.stack\b")
 # A Jinja expression sitting in a plain inventory-option value.
 ACTIONS_TEMPLATE = re.compile(r"\{\{")
 
 # The dispatch input's own name. DERIVED -- tasks.md 3.1 gives the workflow "a
-# free-text `environment` input"; no scenario names it. Used only to locate the
-# input, never asserted as a spelling on its own.
-DISPATCH_INPUT_NAME = "environment"
+# free-text `stack` input"; no scenario names it. Used only to locate the
+# input, never asserted as a spelling on its own. Re-pointed from "environment"
+# by `rename-terraform-environments-to-stacks`, whose tasks.md 3.4 renames the
+# input: the constant located an input that no longer exists under that name,
+# and the surrounding method names are deliberately left alone (tasks.md 4.4).
+DISPATCH_INPUT_NAME = "stack"
 
 
 # --------------------------------------------------------------------------
@@ -494,7 +497,7 @@ class TestNoDeclarationNamesTheWriteTokensOwnName(unittest.TestCase):
         self.declarations = environment_declarations()
         self.assertTrue(
             self.declarations,
-            "no environment declaration was discovered under terraform/environments/, "
+            "no environment declaration was discovered under terraform/stacks/, "
             "so every assertion in this class would pass having read nothing",
         )
 
@@ -536,7 +539,7 @@ class TestNoDeclarationNamesTheWriteTokensOwnName(unittest.TestCase):
             where = (
                 declaration.path.relative_to(ROOT).as_posix()
                 if declaration.path
-                else f"terraform/environments/{name}"
+                else f"terraform/stacks/{name}"
             )
             offenders.append(
                 f"{name} ({where}) declares {SHADOWED_WRITE_TOKEN!r} as its read-only "
@@ -1682,7 +1685,7 @@ class TestHostConvergeDiscoveryFailsClosed(
         to be skipped and reported as successful"."""
         scratch = self._scratch()
         (scratch / "ansible" / "inventory" / "group_vars").mkdir(parents=True)
-        (scratch / "terraform" / "environments").mkdir(parents=True)
+        (scratch / "terraform" / "stacks").mkdir(parents=True)
         result, _ = self._run_discovery(scratch)
         combined = self._combined(result)
         self.assertNotEqual(

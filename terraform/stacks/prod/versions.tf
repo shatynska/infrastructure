@@ -32,9 +32,9 @@ provider "hcloud" {
   #   - every other CI job declares no `environment:` and resolves a
   #     repository-scoped Read Only token — but not by this name. It is
   #     read as `secrets[<the name pipeline.yml declares>]`, which for
-  #     this environment is `HCLOUD_TOKEN` and for a second environment
+  #     this stack is `HCLOUD_TOKEN` and for a second stack
   #     will not be. A repository secret holds one value, so each
-  #     environment needs a read-only secret of its own;
+  #     stack needs a read-only secret of its own;
   #   - locally, whatever the operator exports, which is the Read Only
   #     token and is never the Read & Write one.
   #

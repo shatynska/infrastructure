@@ -10,7 +10,7 @@
 # projects, and would share a single `<inventory_hostname>-prune-host-images`
 # heartbeat check -- where the live host's weekly success keeps the check green
 # while the other's timer is dead. docs/bootstrap-a-new-host.md, Appendix C,
-# names that masking failure; this is the first environment able to cause it.
+# names that masking failure; this is the first stack able to cause it.
 name = "staging-server"
 
 # Roughly half prod's `cx33` (4 vCPU / 8 GB). Read off the Hetzner console for
@@ -42,7 +42,7 @@ volume_enabled = true
 # Deliberately the same name prod's volume carries. Volume names are unique
 # per Hetzner project, not globally, and staging has a project of its own —
 # so the name is free, and reusing it keeps the on-host mount path identical
-# across environments, which is what lets platform/docker-compose.yml keep
+# across stacks, which is what lets platform/docker-compose.yml keep
 # its hardcoded /mnt/main-data/prometheus and /mnt/main-data/grafana.
 volume_name = "main-data"
 volume_size = 10
