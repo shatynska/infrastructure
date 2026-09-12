@@ -517,20 +517,6 @@ The existing comment in those three anticipated this: *"Copies are not the only 
 
 Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.
 
-## 63. rename-the-external-services
-
-Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **No longer blocked**: `rename-the-stacks-and-their-resources` has landed, and the stack directories, the Hetzner resources and the labels now carry the scheme's names.
-
-Four renames that live outside the repository, none of which Terraform performs: the HCP workspaces to `main-production` and `main-staging`, the GitHub Environments to the same, the repository read-only secrets from `HCLOUD_TOKEN_PRODUCTION` and `HCLOUD_TOKEN_STAGING` to `HCLOUD_TOKEN_MAIN_PRODUCTION` and `HCLOUD_TOKEN_MAIN_STAGING`, and the two Hetzner projects. The only code it touches is each `versions.tf`'s `cloud` block and each `pipeline.yml`'s two declared names — **not its third**: `target_environment` names the Ansible group, which is the environment axis and is already spelled in full.
-
-**Entry 62 left two things pointing here, and both are commitments rather than notes.** Each `versions.tf` now carries a comment saying its workspace name and its directory name are deliberately out of step until this entry, and *Remote State Backend* (`openspec/specs/iac-state-management/spec.md`) was rewritten to forbid **computing** a workspace name from a directory name while explicitly permitting the two to agree — which is what this entry makes them do. A requirement that had forbidden the agreement would have made this entry unperformable.
-
-**One name `rename-the-stacks-and-their-resources` did not change and this one does not either**: `PLATFORM_DEPLOY_HOST`, the `production` Environment secret holding the host's tailnet machine name. Its **name** is correct as it stands and is not this entry's work. Its *value* was updated to `main-production` by the operator on 2026-09-12, as one of that change's out-of-band steps — after its merge rather than before it, which cost nothing because `platform-deploy.yml` runs only on a merge touching `platform/` and none occurred in the window. That timing is worth knowing rather than repeating: a stale value there fails nothing until the next platform change, and then fails looking like a network problem.
-
-**Order is load-bearing and the window between steps is broken CI.** The HCP workspace is renamed in the HCP interface *first*, which preserves its state; pushing `versions.tf` ahead of that points at a workspace that does not exist, and the next plan proposes creating every resource from scratch. GitHub cannot rename a secret at all — the new name is created, `pipeline.yml` is flipped, and the old one is deleted afterwards. Renaming a GitHub Environment does keep its secrets and its protection rules, which matters more than it did: since `apply-host-configuration-through-a-gated-workflow` those Environments hold the converge credentials as well as the Hetzner write token. The Hetzner project rename is cosmetic and its tokens survive it.
-
-It is separated from `rename-the-stacks-and-their-resources` precisely because none of it is provable by a plan: every step is a click whose effect no file in this repository can verify. Mixing it with a Terraform change would produce one pull request whose green result means less than it appears to.
-
 ## 64. move-the-platform-data-mount
 
 Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **No longer blocked**: `rename-the-stacks-and-their-resources` renamed the volume. Independent of entry 63 and may go before or after it.
@@ -689,3 +675,27 @@ Four stale names, none of them entry 63's work, all of them rot left by entries 
 **Whether it is worth paying is the open question, and it was left open deliberately.** What it buys is that `production` stops being a name a second tenant collides with — and a second tenant's Environment would be *created* under the right name rather than renamed, so the collision is not one that arrives by surprise. What it costs is rotating three credentials whose failure mode is that continuous integration silently cannot reach a host. The alternative disposition is to decide the Environments keep the environment axis permanently and amend `docs/naming-conventions.md` to say so with this reason; that was considered and not chosen, because it weakens the scheme rather than postponing it.
 
 **What is already done and must not be undone.** Entry 63 renamed the HCP workspaces, the repository read-only secrets and the Hetzner projects, and left every `github_environment` declaration, `platform-deploy.yml`'s `environment:` key and the `.github/tests` literals that assert them on the environment axis. `terraform/stacks/*/pipeline.yml`, `.github/workflows/platform-deploy.yml`, `.github/tests/test_a_second_environment.py` and `docs/bootstrap-a-new-host.md` each carry a comment pointing here; those comments are a commitment, and deleting them is part of this entry's work.
+
+## 76. make-the-converge-survive-a-galaxy-outage
+
+**Not blocked. Recorded 2026-09-12, from the merge of `rename-the-external-services` (PR #155), whose gated production converge failed on it.**
+
+`host-converge.yml`'s *Install Galaxy content* step runs two commands with no retry, no vendoring and no fallback:
+
+    ansible-galaxy collection install -r requirements.yml
+    ansible-galaxy role install -r requirements.yml -p roles
+
+On that merge the first of them failed against `galaxy.ansible.com`, resolving `community.library_inventory_filtering_v1`:
+
+    [WARNING]: Skipping Galaxy server https://galaxy.ansible.com/api/. Got an unexpected
+    error when getting available versions of collection
+    community.library_inventory_filtering_v1: Missing expected 'results' in
+    ansible-galaxy cache ...
+
+**It is transient and upstream, and the evidence is that its neighbours passed.** Three converges performed the identical install within twenty minutes: staging's at 10:00:02 and the previous run's production converge at 10:08:43 both succeeded; only the 10:17:54 one failed. The error's own suggestion — concurrent `ansible-galaxy` runs — does not apply here: the concurrency group had serialised the two production converges (10:08:43–10:16:00, then 10:17:54), each job runs on a fresh ephemeral runner, and the workflow carries no `actions/cache` step, so the cache it complained about was written seconds earlier in that same job.
+
+**Why it is worth fixing rather than re-running.** The failure lands on the **gated production** path, so the cost is not a red run but an approval spent on nothing: the operator grants the production Environment, the job dies before Ansible reads the inventory, and the whole approval has to be requested and granted again. A converge is also the one workflow whose failure can leave a host unconverged while everything else reports green.
+
+**What it must not become.** A blind retry loop around an installer that is also this repository's version-pinning mechanism would hide a genuine pin failure — `ansible/requirements.yml` pins exact versions, per `AGENTS.md`, and a resolution error that means *the pinned version is gone* must stay loud. So the change owes a distinction between "could not reach the server" and "the server says this version does not exist", and only the first is retryable.
+
+**Options, in rough order of cost.** A bounded retry with backoff on the install step. `--no-cache` or `--clear-response-cache`, which the error message itself suggests and which costs a slower install. Caching the resolved collections between runs, which trades an upstream dependency for a cache-invalidation problem and interacts with the pinning rule. Or vendoring the collections into the repository, which removes the run-time dependency entirely and is the largest change of the four. Weigh the first against how often this actually happens — once, so far.

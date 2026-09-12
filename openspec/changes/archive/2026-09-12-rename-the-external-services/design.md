@@ -95,6 +95,8 @@ So the rename is placed **after** the merge and **before** the confirmation, and
 
 Without that observation the change would archive on a confirmation covering three of its four deliverables, and a token failure would surface afterwards as apparent drift.
 
+**Measured 2026-09-12, and the claim holds.** Both projects were renamed in the Hetzner console, and a local `terraform plan` under each stack's read-only token then reported `No changes` — so a Hetzner API token is unaffected by its project's name, as the queue entry asserted and as nothing had previously shown. Recorded here so the next change inherits a measurement rather than an assertion.
+
 ## Decision 8: The specification deltas — eight drafted, eight withdrawn, one shipped
 
 Eight requirements state the GitHub Environment `production` by name, and **all eight deltas were withdrawn when the Environment rename was deferred** (decision 4). They are not wrong: they are unnecessary, because the Environment those requirements name still exists and the requirements are true as written. `docs/change-queue.md` entry 75 owes them again, and the analysis below is what it inherits rather than dead reasoning — it is recorded here so that entry does not redo it.
