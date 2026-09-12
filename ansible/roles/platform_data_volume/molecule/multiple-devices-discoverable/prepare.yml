@@ -8,15 +8,17 @@
 #
 # Built the same way ansible/roles/platform_data_volume/molecule/default/
 # prepare.yml builds its single device -- the same package prerequisites, the
-# same truncate/mknod/losetup steps, and fixed minor numbers for the same
-# reason that file gives (prepare and converge are separate ansible-playbook
-# invocations and this project's ansible.cfg configures no fact caching, so a
-# dynamically chosen path would have no channel between them). 88 and 89 are
-# used rather than `default`'s 87 so the two scenarios cannot collide on a
-# loop association, which is kernel-global and outlives the container. The
-# same small, known flakiness `default` records applies here: if a CI host's
-# kernel already has /dev/loop88 or /dev/loop89 claimed by something else,
-# this FIXTURE is what needs a different number, not the role under test.
+# same truncate/mknod/losetup steps, and fixed OFFSETS from the same
+# per-working-tree base for the same reason that file gives (prepare and
+# converge are separate ansible-playbook invocations and this project's
+# ansible.cfg configures no fact caching, so a dynamically chosen path would
+# have no channel between them). Offsets 1 and 2 are used rather than
+# `default`'s 0 so the two scenarios cannot collide on a loop association,
+# which is kernel-global and outlives the container.
+#
+# A minor this working tree's base does not reach may still be held by the
+# host or by another project, so the fixture reads what holds each one and
+# REFUSES rather than reclaiming it -- see the block above the release below.
 #
 # THE NAMES AND THE CREATION ORDER ARE THE WHOLE POINT
 # ----------------------------------------------------
@@ -62,18 +64,26 @@
   vars:
     platform_data_volume_fixture_reverse_order: >-
       {{ lookup('env', 'MOLECULE_MULTI_DEVICE_REVERSE_ORDER') | lower in ['1', 'true', 'yes', 'on'] }}
+    # This scenario takes offsets 1 and 2 of the eight minors this working tree
+    # claims -- and `multiple-devices-reverse-order`, which imports this very
+    # file rather than copying it, takes the same two. That is safe because the
+    # release below is unconditional and Molecule runs a role's scenarios
+    # sequentially; giving each arm its own offsets would mean reading
+    # MOLECULE_SCENARIO_NAME here, which spends the property the import exists
+    # to protect. See ansible/scripts/run-molecule's loop_base_for().
+    platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
     # The lexicographic winner, and therefore the device a deterministic
     # selection must mount whatever order the links were created in.
     platform_data_volume_fixture_first:
       link: scsi-0HC_Volume_100000001
-      device: /dev/loop88
+      device: /dev/loop{{ platform_data_volume_fixture_loop_base | int + 1 }}
       backing: /root/platform-data-volume-multi-a.img
-      minor: 88
+      minor: "{{ platform_data_volume_fixture_loop_base | int + 1 }}"
     platform_data_volume_fixture_second:
       link: scsi-0HC_Volume_200000002
-      device: /dev/loop89
+      device: /dev/loop{{ platform_data_volume_fixture_loop_base | int + 2 }}
       backing: /root/platform-data-volume-multi-b.img
-      minor: 89
+      minor: "{{ platform_data_volume_fixture_loop_base | int + 2 }}"
     platform_data_volume_fixture_devices:
       - "{{ platform_data_volume_fixture_first }}"
       - "{{ platform_data_volume_fixture_second }}"
@@ -100,6 +110,23 @@
         else platform_data_volume_fixture_second.link
       }}
   tasks:
+    # FIRST, before anything has touched the host, and this play is the one
+    # where it matters most: it claims TWO devices, so an unset base resolves
+    # them to /dev/loop0 and /dev/loop1 together through `| int` -- both real
+    # devices on the workstation this was written on. That the file is a loop
+    # over a list is not a reason to skip the guard; it is a reason to have it.
+    - name: Refuse to run without this working tree's loop-minor base
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_fixture_loop_base is match('^[0-9]+$')
+          - platform_data_volume_fixture_loop_base | int >= 1024
+        fail_msg: >-
+          INFRA_WORKTREE_LOOP_BASE is unset or is not a loop-minor base
+          (read as '{{ platform_data_volume_fixture_loop_base }}'). Run the
+          suite through ansible/scripts/run-molecule, which derives it from
+          this working tree's own path -- see AGENTS.md, "Namespacing Molecule
+          per working tree".
+
     - name: Refresh the apt cache and install fixture-only loop/filesystem tooling
       ansible.builtin.apt:
         name:
@@ -125,7 +152,7 @@
         label: "{{ item.device }}"
       register: platform_data_volume_fixture_nodes
 
-    - name: Create each fixed loop device node (major 7 = loop) if it does not already exist
+    - name: Create each loop device node (major 7 = loop) if it does not already exist
       ansible.builtin.command: mknod -m 0660 {{ item.item.device }} b 7 {{ item.item.minor }}
       when: not item.stat.exists
       changed_when: true
@@ -133,20 +160,56 @@
       loop_control:
         label: "{{ item.item.device }}"
 
-    # Detach before associating, unconditionally. A loop association is
+    # Release before associating, unconditionally. A loop association is
     # kernel-global and outlives the container, so "associate only if not
     # already associated" silently inherits whatever a previous run -- or,
     # worse, the SIBLING ARM running earlier in the same `molecule test --all`
     # -- left attached to this minor. That device already carries a
     # filesystem, which quietly falsifies this fixture's "both devices are
     # deliberately left UNFORMATTED" invariant for the second arm to run.
-    # Observed on 2026-09-07: after a full run, `losetup -a` still showed
-    # /dev/loop88 and /dev/loop89 attached to the previous run's images.
+    # Observed on 2026-09-07, when these minors were the hardcoded 88 and 89:
+    # after a full run, `losetup -a` still showed both attached to the previous
+    # run's images. Namespacing the minors per working tree does not retire
+    # this release -- the namespace is the same value on every run in one tree,
+    # so a tree still inherits from itself.
     #
     # Detaching first also fixes a subtler staleness: the backing file path is
     # reused across runs, so an association held from a previous run points at
     # the OLD inode while this container's file is a freshly truncated one.
-    - name: Detach each fixed loop device from anything a previous run or sibling arm left attached
+    # The minors are now DERIVED from this working tree's own base rather than
+    # hardcoded, which is what the read and the refusal below are for: a
+    # derived number is one nothing outside this repository has agreed to leave
+    # alone, and `losetup -d` inside a privileged container reaches the HOST's
+    # device. So each minor is released only where its backing file is one this
+    # fixture family creates; anything else fails the play naming what holds it.
+    - name: Read what each of this working tree's loop devices is currently associated with
+      ansible.builtin.command: losetup --noheadings --output BACK-FILE {{ item.device }}
+      register: platform_data_volume_fixture_holders
+      changed_when: false
+      failed_when: false
+      loop: "{{ platform_data_volume_fixture_devices }}"
+      loop_control:
+        label: "{{ item.device }}"
+
+    # An unassociated minor returns rc 0 with EMPTY stdout rather than a
+    # non-zero rc -- see `molecule/default/prepare.yml` for the three states and
+    # how they were measured. Reading the return code alone refuses every free
+    # minor and renders the message as "held by ''".
+    - name: Refuse a loop minor this fixture family cannot attribute to itself
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0 or
+            item.stdout | trim | length == 0 or
+            item.stdout | trim is match('^/root/platform-data-volume-')
+        fail_msg: >-
+          {{ item.item.device }} is held by '{{ item.stdout | trim }}', which no
+          fixture of this role creates. Detaching it could break whatever the
+          host is using it for, so this play refuses rather than reclaiming it.
+      loop: "{{ platform_data_volume_fixture_holders.results }}"
+      loop_control:
+        label: "{{ item.item.device }}"
+
+    - name: Detach each loop device from anything a previous run or sibling arm left attached
       ansible.builtin.command: losetup -d {{ item.device }}
       loop: "{{ platform_data_volume_fixture_devices }}"
       loop_control:
@@ -158,22 +221,28 @@
       failed_when: false
       changed_when: platform_data_volume_fixture_detach.rc == 0
 
-    - name: Check whether each fixed loop device is already associated with a backing file
-      ansible.builtin.command: losetup {{ item.device }}
-      register: platform_data_volume_fixture_associations
-      changed_when: false
-      failed_when: false
+    # Unconditionally, with no "is it already associated" check in front: after
+    # the release above that check can only ever report free, and a conditional
+    # that cannot take its other branch reads as a live decision.
+    - name: Associate each backing file with its loop device
+      ansible.builtin.command: losetup {{ item.device }} {{ item.backing }}
+      changed_when: true
       loop: "{{ platform_data_volume_fixture_devices }}"
       loop_control:
         label: "{{ item.device }}"
 
-    - name: Associate each backing file with its fixed loop device
-      ansible.builtin.command: losetup {{ item.item.device }} {{ item.item.backing }}
-      when: item.rc != 0
-      changed_when: true
-      loop: "{{ platform_data_volume_fixture_associations.results }}"
+    - name: Assert each fixture device starts with no filesystem on it
+      ansible.builtin.command: blkid {{ item.device }}
+      register: platform_data_volume_fixture_blkid
+      changed_when: false
+      failed_when: platform_data_volume_fixture_blkid.rc == 0
+      loop: "{{ platform_data_volume_fixture_devices }}"
       loop_control:
-        label: "{{ item.item.device }}"
+        label: "{{ item.device }}"
+      # The premise this fixture's "both devices are deliberately left
+      # UNFORMATTED" invariant rests on, checked rather than assumed. The way
+      # it fails -- an inherited association carrying a previous converge's
+      # filesystem -- is invisible from inside the container.
 
     # The base image carries no /dev/disk at all (confirmed against the
     # pinned image on 2026-09-07), which is why the empty-discovery case

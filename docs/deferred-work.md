@@ -329,3 +329,15 @@ The visible cost is a requirement and a scenario whose titles say *Environment* 
 
 **Owner:** `docs/change-queue.md` entry 62, which rewrites this text anyway.
 
+
+## Loop associations still accumulate, one set per working tree
+
+Recorded by `namespace-the-molecule-loop-devices`, which namespaced the loop device minors `platform_data_volume`'s fixtures claim. It stopped a run inheriting the previous run's device and stopped two working trees sharing one; it did not stop the associations existing after the run that made them.
+
+Nothing detaches a minor at the end of a scenario, so after any suite run this tree's five associations stand until something removes them by hand, each pinning the inode of a sparse file inside a container that no longer exists. `losetup -a` on a workstation that has run this role shows them, and they are what made the original defect legible in the first place.
+
+**Why not closed.** The obvious remedy is a detach in Molecule's own `cleanup`, and `docs/change-queue.md` entry 78 ruled out only the *global* sweep — a per-scenario detach of your own minor is not that. It was still declined, for two reasons. A run that fails between `prepare` and `cleanup` never reaches it, and while a change is being built a failing run is the common case, so the mechanism would not hold in the condition it exists for. And what it would buy is small: the leak is **bounded** at five associations per working tree, because the minors are fixed offsets that every run reuses, rather than growing with the number of runs. That boundedness is the same property that argued against allocating minors with `losetup -f --show`, which would have leaked one set per run instead.
+
+This is what `AGENTS.md` already says of namespaces generally — they accumulate, they are named after the tree, and nothing reclaims them. The loop minor is now one more of those.
+
+**Revisit when** a workstation is actually inconvenienced by the accumulation, or when a scenario is added whose `prepare` cannot release its own minor for some reason the current fixtures do not have.
