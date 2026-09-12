@@ -1,4 +1,4 @@
-<!-- ai-toolkit:development-workflow v3 -->
+<!-- ai-toolkit:development-workflow v4 -->
 <!-- Generated. Do not edit inside this block — it is replaced on update.
      Project-specific conventions belong below the closing marker. -->
 
@@ -78,9 +78,11 @@ _Claude Code binding:_ dispatch `ai-toolkit:change-test-writer` after the verdic
 
 **review → fix** — have an independent reviewer read the diff against the change's own specification: each requirement implemented, the implementation matching what the specification describes, the derived tests covering what changed, no unrelated scope, this project's conventions followed. This review reads code; the review in `plan` reads artifacts.
 
+**Commit the implementation before dispatching, and review the committed diff rather than the working tree's uncommitted state.** A reviewer establishing that a check really catches what it claims to has to make that check fail, which means writing to the tree it is reviewing — sound review, not misbehaviour — and it undoes such a write with version control's own restore, which reinstates the *committed* content rather than the content the write displaced. Over uncommitted work those two are different, and the difference is discarded in the one way nothing notices: no stash, no reflog, and a working tree that afterwards looks cleaner rather than dirtier. Committing first makes the baseline true, so the same restore is exact. Instructing the reviewer not to write is not the guard it appears to be — it dispatches tooling of its own, which its instructions do not reach.
+
 Dispatch against a diff that already passes verification. Re-review only where the fixes were substantial enough to warrant it, bounded at three rounds; past three, report where the loop stands and ask rather than dispatching a fourth. A review judging the implemented change unsound rather than defective exits immediately and is raised.
 
-_Claude Code binding:_ run `ai-toolkit:change-code-reviewer` over the change's diff.
+_Claude Code binding:_ run `ai-toolkit:change-code-reviewer` over the change's committed diff.
 
 ### ship
 
