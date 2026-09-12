@@ -182,12 +182,18 @@
 # skipping is the dangerous direction, so the task always runs and a genuinely
 # broken daemon fails loudly on `tailscale set` rather than passing green.
 #
-# `changed_when` carries the parseability guard instead, and its limbs are in
-# the same short-circuiting order the `when:` above uses and for the same
-# reason: `from_json` is reached only once emptiness and shape have been ruled
-# out. It reports NO change only where the prefs read positively established
-# the name was already correct, so a converge that could not read the prefs
-# reports a change rather than silently claiming none.
+# `changed_when` carries the guard instead, and its limbs are in the same
+# short-circuiting order the `when:` above uses and for the same reason:
+# `from_json` is reached only once emptiness and shape have been ruled out. It
+# reports NO change only where the prefs read positively established the name
+# was already correct, so a converge that could not read the prefs reports a
+# change rather than silently claiming none.
+#
+# `is match('^\{')` is a SHAPE guard and not a parseability one -- it reads the
+# first character, so stdout that opens with `{` and is then truncated still
+# reaches `from_json` and raises. That is deliberate here where it would not
+# have been under the old `when:`: failing is now the correct direction, and a
+# daemon answering with half a document is one this task should not report on.
 - name: Pin the name this host reports to the tailnet
   ansible.builtin.command: "tailscale set --hostname={{ inventory_hostname }}"
   changed_when: >

@@ -211,6 +211,28 @@ Each addition carries a comment saying why it is there. **No assertion, no `run`
 
 ---
 
+## One assertion added after the code review, tracing to no scenario
+
+`test_the_hosts_own_name_is_set_by_the_converge.TestTheUnsafeWriteFallbackStaysOffOutsideTheScenariosThatNeedIt`, four tests, added after the change's code review asked for it and **after** the implementation existed. It is recorded separately from everything above because its provenance is different in kind: **it traces to no scenario in any delta.** It is a guard on an implementation decision, and its own docstring says so first, so that a reader does not take it for a requirement-derived assertion.
+
+The decision it guards is `hostname_unsafe_writes`, which the role acquired because `/etc/hostname` and `/etc/hosts` are bind mounts inside a container and the rename an atomic write ends with fails over one with `EBUSY` — so without a fallback the role could not be exercised by a scenario at all. The setting is load-bearing in **both** directions, which is what makes a single check insufficient and four of them warranted:
+
+- **Off, on a real host.** The atomic write succeeds and the fallback is never consulted, *except* where something is already wrong — a read-only `/etc`, a full filesystem. There, falling back means an interrupted in-place write can truncate `/etc/hosts` and leave a host that cannot resolve its own name: the exact condition the task writing that file exists to prevent, reached through the mechanism meant to prevent it.
+- **On, in this role's own scenarios.** It is what makes the role runnable, and therefore verified by anything at all.
+
+| Test | What it holds |
+|---|---|
+| `test_the_role_defaults_the_fallback_off` | `ansible/roles/hostname/defaults/main.yml` declares the variable and defaults it to the literal `false`. |
+| `test_only_this_roles_own_scenarios_turn_the_fallback_on` | No file anywhere under `ansible/` turns it on outside `ansible/roles/hostname/molecule/`. Stated over the whole tree, not over `group_vars` alone: a play, a second role's defaults or a task's own `vars:` reaches a real converge by the same route. |
+| `test_no_inventory_variable_sets_the_fallback_at_all` | Under `ansible/inventory/` the **assignment** is the offence, whatever its value — a setting of `false` there is redundant with the role's own default and is one character from the setting that is not, in the one place whose variables reach every play a host runs. This is the case the review most wanted caught, because it would apply to a real converge and nothing else in the tree would notice. |
+| `test_the_permitted_override_is_actually_present` | The positive control, and what makes the three negative reads above non-vacuous: over a repository where the setting had been removed entirely, all three would pass having found nothing. |
+
+Because these were written **after** the implementation, they are in the second situation rather than the first: a pass reports that the tree currently carries the property, which is the expected result and not an alarm. What makes that green mean anything is four fixture-driven discriminators in `TestTheseReadsDiscriminate`, which point the reader and both guards at trees this repository does not contain — a `group_vars` file arming the fallback, a second role arming it, an inventory file setting it `false`, a commented-out assignment, and a variable whose name merely starts the same way.
+
+One defect was found and fixed in the course of writing them, and it is the kind this suite exists to catch in itself: the file reader skipped any path with a dot-prefixed component, computed over the **absolute** path — and this repository's own working trees live under `.claude/worktrees/`, so it excluded every file in the tree and reported a repository that set the variable nowhere. It now computes that over the repository-relative path, with a comment saying why. The guard was red at that moment for a reason that had nothing to do with the tree, which is the third failure state, and it is named here for the same reason the other one is.
+
+---
+
 ## A defect in one test this pass wrote, and its repair
 
 Found by the implementing session on the first Molecule run and returned rather than edited there; repaired here, because a test author's defect is the test author's to fix and the repair had to be a **read** rather than an assertion.
@@ -282,7 +304,7 @@ No channel exists to ask on — this is a dispatched, non-interactive pass — s
 Tests, all inside the dispatched globs:
 
 - `.github/tests/test_a_stack_and_its_environment_are_named_separately.py` — 34 tests, 25 red.
-- `.github/tests/test_the_hosts_own_name_is_set_by_the_converge.py` — 20 tests, 10 red.
+- `.github/tests/test_the_hosts_own_name_is_set_by_the_converge.py` — 20 tests at the end of the derivation pass, 10 red; 28 after the post-review guard above was added, all green against the implementation.
 - `terraform/modules/server/tests/tenant_label.tftest.hcl`
 - `terraform/modules/server/tests/firewall_name.tftest.hcl`
 - `terraform/modules/volume/tests/tenant.tftest.hcl`

@@ -120,6 +120,27 @@ HOSTNAME_FLAG = re.compile(r"--hostname[= ]")
 LOOPBACK_ENTRY = "127.0.1.1"
 HOSTS_FILE = "/etc/hosts"
 
+# The role's own fallback switch, and the two paths permitted to carry it.
+# NOT DERIVED FROM ANY DELTA -- see `TestTheUnsafeWriteFallbackStaysOffOutsideTheScenariosThatNeedIt`,
+# which says what it traces to instead.
+UNSAFE_WRITES_VARIABLE = "hostname_unsafe_writes"
+UNSAFE_WRITES_DEFAULTS = f"ansible/roles/{HOSTNAME_ROLE}/defaults/main.yml"
+UNSAFE_WRITES_SCENARIO_ROOT = f"ansible/roles/{HOSTNAME_ROLE}/molecule/"
+
+# An assignment of a variable at the head of a mapping entry, read as text.
+# Text rather than a parsed document because the setting may sit in a role's
+# defaults, a play's `vars:`, an inventory file or a task's own `vars:`, and a
+# reader that understood only one of those shapes would report a tree clean
+# because it had not looked at the place the value was set.
+VARIABLE_ASSIGNMENT = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?P<value>.+?)\s*$"
+)
+
+# Values Ansible reads as true. Narrow on purpose: what is being looked for is
+# a committed literal, not an expression, and an expression assigning this
+# variable is itself something a reader should be made to look at.
+TRUTHY = frozenset({"true", "yes", "on", "1"})
+
 
 # --------------------------------------------------------------------------
 # Reading the tree
@@ -194,6 +215,74 @@ def role_default_variables(role: str, root: Path | None = None) -> set[str]:
         return set()
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     return set(document) if isinstance(document, dict) else set()
+
+
+def yaml_files_under(directory: str, root: Path | None = None) -> list[Path]:
+    """Every committed YAML file under a directory of the repository.
+
+    Directories whose name begins with a dot are skipped: `.molecule-home/`
+    inside a working tree holds Molecule's own ephemeral copies of the very
+    scenarios being read, and reporting one of those as a second place the
+    variable is set would be reporting the reader's own footprints.
+    """
+    base = _base(root) / directory
+    if not base.is_dir():
+        return []
+    return sorted(
+        path
+        for path in base.rglob("*.y*ml")
+        if path.is_file()
+        # Relative to the repository, never absolute: this repository's own
+        # working trees live under `.claude/worktrees/`, so a dot-check over the
+        # absolute path excludes every file in the tree and the reader reports a
+        # repository that sets nothing anywhere.
+        and not any(part.startswith(".") for part in path.relative_to(_base(root)).parts)
+    )
+
+
+def variable_assignments(variable: str, root: Path | None = None) -> list[tuple[str, str]]:
+    """Every place under `ansible/` that assigns a variable, as
+    (repository-relative path, value as written).
+
+    Comment lines are skipped; a line whose assignment sits inside a comment is
+    prose about the variable rather than a setting of it, and this role's files
+    carry several.
+    """
+    found: list[tuple[str, str]] = []
+    for path in yaml_files_under("ansible", root):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            match = VARIABLE_ASSIGNMENT.match(line)
+            if match and match.group("name") == variable:
+                value = match.group("value").split("#", 1)[0].strip().strip("\"'")
+                found.append((path.relative_to(_base(root)).as_posix(), value))
+    return found
+
+
+def unsafe_write_offences(root: Path | None = None) -> list[str]:
+    """Every place that turns the role's fallback on outside the role's own
+    Molecule scenarios."""
+    return sorted(
+        f"{path} -> {value}"
+        for path, value in variable_assignments(UNSAFE_WRITES_VARIABLE, root)
+        if value.lower() in TRUTHY and not path.startswith(UNSAFE_WRITES_SCENARIO_ROOT)
+    )
+
+
+def inventory_unsafe_write_offences(root: Path | None = None) -> list[str]:
+    """Every inventory assignment of the fallback, at any value.
+
+    Stricter than the reader above, and deliberately: under `ansible/inventory/`
+    the value is not the point, because a setting of `false` there is one
+    character from the setting that is not, in the one place whose variables
+    reach every play a host runs.
+    """
+    return sorted(
+        f"{path} -> {value}"
+        for path, value in variable_assignments(UNSAFE_WRITES_VARIABLE, root)
+        if path.startswith("ansible/inventory/")
+    )
 
 
 def group_vars_defining(variable: str, root: Path | None = None) -> list[str]:
@@ -609,6 +698,116 @@ class TestTheNewRoleIsCoveredByTheSuiteThatRunsRoles(unittest.TestCase):
         )
 
 
+class TestTheUnsafeWriteFallbackStaysOffOutsideTheScenariosThatNeedIt(unittest.TestCase):
+    """NOT DERIVED FROM ANY DELTA SCENARIO, and stated first so that nothing
+    here is read as a requirement-derived assertion.
+
+    This is a guard on an implementation decision. No requirement in this
+    change mentions `unsafe_writes`; the role acquired it because
+    `/etc/hostname` and `/etc/hosts` are bind mounts inside a container and the
+    rename an atomic write ends with fails over one with `EBUSY`, so without a
+    fallback the role could not be exercised by a scenario at all. It is
+    asserted because the change's own code review found that a prose comment in
+    `defaults/main.yml` was the only thing holding it, and this repository's
+    conventions say a check replaces a comment wherever a check is possible.
+
+    WHAT IS AT STAKE IN EACH DIRECTION, since the setting is load-bearing in
+    both. Off, on a real host, the atomic write succeeds and the fallback is
+    never consulted -- except where something is already wrong, a read-only
+    `/etc` or a full filesystem being the cases. There, falling back means an
+    interrupted in-place write can truncate `/etc/hosts` and leave a host that
+    cannot resolve its own name: the exact condition the task writing that file
+    exists to prevent, reached through the mechanism meant to prevent it. On,
+    in this role's own scenarios, it is what makes the role runnable and
+    therefore verified by anything at all.
+
+    THE CASE THIS IS MOST FOR is not the default being flipped, which a diff
+    shows plainly. It is a `group_vars` file, or a second role, setting the
+    variable for a host: that reaches a real converge, and nothing else in this
+    repository would notice.
+    """
+
+    def test_the_role_defaults_the_fallback_off(self) -> None:
+        """DERIVED -- the role's own `defaults/main.yml` and the code review
+        that asked for this check. The value is read as a literal `false`
+        rather than as anything Ansible would treat as false, because what a
+        reviewer has to be able to see at a glance is the word."""
+        assignments = dict(variable_assignments(UNSAFE_WRITES_VARIABLE))
+        self.assertIn(
+            UNSAFE_WRITES_DEFAULTS,
+            assignments,
+            f"{UNSAFE_WRITES_DEFAULTS} does not declare `{UNSAFE_WRITES_VARIABLE}`. "
+            "Undeclared, the role's tasks reference an undefined variable and the "
+            "setting's value becomes whatever a caller last happened to leave in scope",
+        )
+        self.assertEqual(
+            "false",
+            assignments[UNSAFE_WRITES_DEFAULTS].lower(),
+            f"{UNSAFE_WRITES_DEFAULTS} defaults `{UNSAFE_WRITES_VARIABLE}` to "
+            f"{assignments[UNSAFE_WRITES_DEFAULTS]!r}. On a real host the atomic write "
+            "succeeds and this fallback is consulted only where something is already "
+            "wrong -- and there, an interrupted in-place write can truncate /etc/hosts "
+            "and leave a host that cannot resolve its own name",
+        )
+
+    def test_only_this_roles_own_scenarios_turn_the_fallback_on(self) -> None:
+        """DERIVED -- the same. The offence is stated over the whole of
+        `ansible/`, not over `group_vars` alone: a play, a second role's
+        defaults or a task's own `vars:` would reach a real converge by exactly
+        the same route."""
+        offenders = unsafe_write_offences()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these files turn `{UNSAFE_WRITES_VARIABLE}` on outside this role's own "
+            f"Molecule scenarios: {offenders}. A setting that reaches a real converge "
+            "arms the non-atomic write on a host whose atomic write would have "
+            "succeeded, and the failure it enables -- a truncated /etc/hosts -- is the "
+            "one the task writing that file exists to prevent",
+        )
+
+    def test_no_inventory_variable_sets_the_fallback_at_all(self) -> None:
+        """DERIVED -- the case the code review most wanted caught, asserted
+        separately and more strictly than the one above: under `ansible/
+        inventory/` the offence is the assignment, whatever its value.
+
+        Stricter because the value there is not the point. An inventory setting
+        it `false` is redundant with the role's own default and is the edit one
+        character away from the setting that is not, in the one place in this
+        repository whose variables reach every play a host runs.
+        """
+        offenders = inventory_unsafe_write_offences()
+        self.assertEqual(
+            [],
+            offenders,
+            f"these inventory files assign `{UNSAFE_WRITES_VARIABLE}`: {offenders}. "
+            "The setting belongs to the role that consumes it and to the scenarios that "
+            "need it overridden -- not to a host's variables, where it would apply to "
+            "every converge that host ever runs",
+        )
+
+    def test_the_permitted_override_is_actually_present(self) -> None:
+        """DERIVED, and it is what makes the three assertions above
+        non-vacuous. Each of them is a negative read: over a repository where
+        the variable existed nowhere, or where no scenario overrode it, all
+        three would pass having found nothing. This is the positive control --
+        the override exists, in this role's own scenario, which is the only
+        place it is permitted."""
+        permitted = sorted(
+            path
+            for path, value in variable_assignments(UNSAFE_WRITES_VARIABLE)
+            if value.lower() in TRUTHY and path.startswith(UNSAFE_WRITES_SCENARIO_ROOT)
+        )
+        self.assertTrue(
+            permitted,
+            f"no scenario under {UNSAFE_WRITES_SCENARIO_ROOT} turns "
+            f"`{UNSAFE_WRITES_VARIABLE}` on, so the assertions above would pass over a "
+            "repository in which the setting had been removed entirely -- and the role "
+            "would then be exercisable by no scenario at all, because neither "
+            "/etc/hostname nor /etc/hosts can be written atomically in a container",
+        )
+
+
 # --------------------------------------------------------------------------
 # The reads above are reads
 # --------------------------------------------------------------------------
@@ -742,6 +941,113 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             "the reader did not report a second file defining the variable, so the "
             "assertion reading it could not fail on the value disagreeing with itself",
         )
+
+    def test_the_assignment_reader_reports_where_and_what_is_set(self) -> None:
+        """The reader behind the `unsafe_writes` guard, pointed at a tree that
+        sets the variable in three places and at three values -- including the
+        `group_vars` setting that guard exists for, which no committed file in
+        this repository carries."""
+        tree = self._tree()
+        defaults = tree / "ansible" / "roles" / HOSTNAME_ROLE / "defaults"
+        scenario = tree / "ansible" / "roles" / HOSTNAME_ROLE / "molecule" / "default"
+        group_vars = tree / "ansible" / "inventory" / "group_vars"
+        for directory in (defaults, scenario, group_vars):
+            directory.mkdir(parents=True)
+        (defaults / "main.yml").write_text(
+            f"# {UNSAFE_WRITES_VARIABLE}: true   <- prose, not a setting\n"
+            f"{UNSAFE_WRITES_VARIABLE}: false\n",
+            encoding="utf-8",
+        )
+        (scenario / "converge.yml").write_text(
+            f"    {UNSAFE_WRITES_VARIABLE}: true\n", encoding="utf-8"
+        )
+        (group_vars / "production.yml").write_text(
+            f"{UNSAFE_WRITES_VARIABLE}: yes\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            [
+                (f"ansible/inventory/group_vars/production.yml", "yes"),
+                (f"ansible/roles/{HOSTNAME_ROLE}/defaults/main.yml", "false"),
+                (f"ansible/roles/{HOSTNAME_ROLE}/molecule/default/converge.yml", "true"),
+            ],
+            sorted(variable_assignments(UNSAFE_WRITES_VARIABLE, tree)),
+            "the assignment reader either missed a place the variable is set -- the "
+            "`group_vars` one being what the guard exists for -- or read the commented "
+            "line as a setting, which would report an offence the tree does not commit",
+        )
+
+    def test_the_fallback_guard_reports_a_tree_that_arms_it(self) -> None:
+        """The guard itself, over a tree carrying each offence it exists for:
+        a `group_vars` file arming the fallback for every play a host runs, and
+        a second role arming it for its own. Neither shape exists in this
+        repository, which is why the guard's green run over the real tree
+        establishes nothing without this.
+        """
+        tree = self._tree()
+        group_vars = tree / "ansible" / "inventory" / "group_vars"
+        other_role = tree / "ansible" / "roles" / "somewhere_else" / "defaults"
+        scenario = tree / "ansible" / "roles" / HOSTNAME_ROLE / "molecule" / "default"
+        for directory in (group_vars, other_role, scenario):
+            directory.mkdir(parents=True)
+        (scenario / "converge.yml").write_text(
+            f"    {UNSAFE_WRITES_VARIABLE}: true\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            [],
+            unsafe_write_offences(tree),
+            "the guard reported the role's own scenario, which is the one place the "
+            "override is permitted -- a guard that refused it would make the role "
+            "exercisable by nothing",
+        )
+
+        (group_vars / "production.yml").write_text(
+            f"{UNSAFE_WRITES_VARIABLE}: true\n", encoding="utf-8"
+        )
+        (other_role / "main.yml").write_text(
+            f"{UNSAFE_WRITES_VARIABLE}: yes\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            [
+                "ansible/inventory/group_vars/production.yml -> true",
+                "ansible/roles/somewhere_else/defaults/main.yml -> yes",
+            ],
+            unsafe_write_offences(tree),
+            "the guard did not report a tree that arms the non-atomic write for a real "
+            "converge, so its green run over this repository says nothing",
+        )
+
+    def test_the_inventory_guard_reports_an_assignment_at_any_value(self) -> None:
+        """The stricter of the two, over the value that would otherwise read as
+        harmless: an inventory setting the fallback OFF is redundant with the
+        role's own default and is the edit one character away from the setting
+        that is not."""
+        tree = self._tree()
+        group_vars = tree / "ansible" / "inventory" / "group_vars"
+        group_vars.mkdir(parents=True)
+        self.assertEqual([], inventory_unsafe_write_offences(tree))
+        (group_vars / "production.yml").write_text(
+            f"{UNSAFE_WRITES_VARIABLE}: false\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            ["ansible/inventory/group_vars/production.yml -> false"],
+            inventory_unsafe_write_offences(tree),
+            "the inventory guard read the value rather than the assignment, so it would "
+            "admit the setting whose only defect is where it is",
+        )
+
+    def test_the_assignment_reader_ignores_a_similarly_named_variable(self) -> None:
+        """A prefix match would report `hostname_unsafe_writes_reason` as the
+        setting itself, and a substring match would report any line mentioning
+        it."""
+        tree = self._tree()
+        defaults = tree / "ansible" / "roles" / HOSTNAME_ROLE / "defaults"
+        defaults.mkdir(parents=True)
+        (defaults / "main.yml").write_text(
+            f"{UNSAFE_WRITES_VARIABLE}_reason: bind mounts\n"
+            f"other: \"{UNSAFE_WRITES_VARIABLE}: true\"\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], variable_assignments(UNSAFE_WRITES_VARIABLE, tree))
 
     def test_the_defaults_reader_reports_a_default_the_role_gives(self) -> None:
         tree = self._tree()
