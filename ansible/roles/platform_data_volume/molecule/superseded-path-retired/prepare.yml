@@ -68,17 +68,39 @@
       when: not platform_data_volume_loop_node.stat.exists
       changed_when: true
 
-    - name: Check whether the fixed loop device is already associated with a backing file
-      ansible.builtin.command: losetup {{ platform_data_volume_device }}
-      register: platform_data_volume_loop_check
-      changed_when: false
+    # DETACH FIRST, UNCONDITIONALLY. A loop device minor is a kernel-global
+    # handle: it is NOT namespaced by the container, so an association made
+    # inside a Molecule container outlives that container and is still there
+    # on the next run -- `losetup -a` on the host shows it, naming a backing
+    # file inside a container that no longer exists.
+    #
+    # Associating only "if not already associated" therefore inherits whatever
+    # a previous run left on this minor, including a filesystem a previous
+    # run's converge created. That is not hypothetical: it is what this
+    # scenario met, and it made "no filesystem was created on the device"
+    # fail against contamination rather than against the role. `docs/change-
+    # queue.md` carries the entry for the wider problem -- every scenario of
+    # this role leaks its minor the same way.
+    - name: Detach the fixed loop device, whatever a previous run left on it
+      ansible.builtin.command: losetup -d {{ platform_data_volume_device }}
+      register: platform_data_volume_loop_detach
+      changed_when: platform_data_volume_loop_detach.rc == 0
       failed_when: false
 
-    - name: Associate the backing file with the fixed loop device
+    - name: Associate this run's own backing file with the fixed loop device
       ansible.builtin.command: >-
         losetup {{ platform_data_volume_device }} {{ platform_data_volume_backing_file }}
-      when: platform_data_volume_loop_check.rc != 0
       changed_when: true
+
+    - name: Assert the fixture's device starts with no filesystem on it
+      ansible.builtin.command: blkid {{ platform_data_volume_device }}
+      register: platform_data_volume_loop_blkid
+      changed_when: false
+      failed_when: platform_data_volume_loop_blkid.rc == 0
+      # The premise this scenario's own assertions rest on. Checked here rather
+      # than assumed, because the way it fails -- a stale kernel association --
+      # is invisible from inside the container and makes a later assertion read
+      # as an implementation defect.
 
     # Unlike `molecule/default`, this fixture DOES format the device: it mounts
     # it itself, before the role runs, and an unformatted device cannot be

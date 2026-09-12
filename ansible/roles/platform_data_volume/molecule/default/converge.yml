@@ -23,9 +23,9 @@
 #                                         none (ansible/roles/hardening/
 #                                         defaults/main.yml): there is no
 #                                         safe default device path.
-#   platform_data_volume_mount_path   -- fixed host mount point. design.md
-#                                         names /mnt/main-data as its own
-#                                         example.
+#   platform_data_volume_mount_path   -- fixed host mount point. This
+#                                         repository mounts the volume at
+#                                         /mnt/main.
 #   platform_data_volume_fs_type      -- filesystem to create if the device
 #                                         is unformatted (tasks.md 1.1:
 #                                         "formats (if needed)").
@@ -51,7 +51,7 @@
   become: true
   vars:
     platform_data_volume_device: /dev/loop87
-    platform_data_volume_mount_path: /mnt/main-data
+    platform_data_volume_mount_path: /mnt/main
     platform_data_volume_fs_type: ext4
     platform_data_volume_subdirs:
       - path: prometheus

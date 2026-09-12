@@ -47,7 +47,7 @@ variable "volume_enabled" {
 }
 
 variable "volume_name" {
-  description = "Name of the staging stack's volume. Named on the rank axis (`main`), and deliberately the same name the production stack's volume carries: Hetzner volume names are unique per project, not globally, so a dedicated project frees the name. What keeps platform/docker-compose.yml's hardcoded /mnt/main-data/... paths correct for both stacks is that both mount at the same path — which this name no longer determines, since the on-host device is keyed on the volume's id."
+  description = "Name of the staging stack's volume. Named on the rank axis (`main`), and deliberately the same name the production stack's volume carries: Hetzner volume names are unique per project, not globally, so a dedicated project frees the name. What keeps platform/docker-compose.yml's hardcoded /mnt/main/... paths correct for both stacks is that both mount at the same path — which this name does not determine, since the on-host device is keyed on the volume's id."
   type        = string
 }
 

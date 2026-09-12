@@ -45,8 +45,8 @@
     swap_capture_path: /var/tmp/molecule-swap-prepare-capture.json
     # DERIVED (design.md Decision 6): the requirement forbids the host's
     # dedicated data volume; this repository mounts that volume at
-    # /mnt/main-data (ansible/roles/platform_data_volume/defaults/main.yml).
-    swap_forbidden_prefix: /mnt/main-data
+    # /mnt/main (ansible/roles/platform_data_volume/defaults/main.yml).
+    swap_forbidden_prefix: /mnt/main
   tasks:
     # ------------------------------------------------------------------
     # THE ROLE'S SHIPPED DEFAULTS, read from the committed file rather than

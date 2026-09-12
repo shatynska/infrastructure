@@ -10,6 +10,25 @@
 # templates or starts a platform/ service, consistent with the existing
 # "Configuration Scope Stops at the Container Runtime" requirement.
 
+- name: Refuse a superseded mount path that is also the path in force
+  ansible.builtin.assert:
+    that:
+      - platform_data_volume_mount_path | regex_replace('/$', '')
+        not in (platform_data_volume_superseded_mount_paths
+                | map('regex_replace', '/$', '') | list)
+    fail_msg: >-
+      platform_data_volume_mount_path ({{ platform_data_volume_mount_path }}) is
+      also named in platform_data_volume_superseded_mount_paths
+      ({{ platform_data_volume_superseded_mount_paths | join(', ') }}). Retiring
+      it would delete the /etc/fstab entry this same run establishes, leaving a
+      host that mounts and serves correctly until it reboots and then comes up
+      with no data volume at all. Correct whichever of the two is wrong; the
+      role will not resolve it by ignoring one of them.
+  # FIRST, and before any task that changes this host -- not merely before the
+  # retirement loop. The two values are compared with a trailing slash stripped
+  # from each, so `/mnt/main/` cannot slip past a guard whose one bypass leads
+  # to precisely the outcome it exists to prevent.
+
 - name: Discover the attached data volume's device path, if not explicitly set
   ansible.builtin.find:
     paths: /dev/disk/by-id
@@ -79,6 +98,24 @@
     src: "{{ platform_data_volume_device }}"
     fstype: "{{ platform_data_volume_fs_type }}"
     state: mounted
+
+- name: Retire any superseded mount path from /etc/fstab, without unmounting it
+  ansible.posix.mount:
+    path: "{{ item }}"
+    state: absent_from_fstab
+  loop: "{{ platform_data_volume_superseded_mount_paths }}"
+  # `absent_from_fstab` rather than `absent` or `unmounted`, and the difference
+  # is the whole point: both of those unmount, and at the moment a path moves a
+  # running Prometheus or Grafana holds a bind into the old one -- so an
+  # unmount either fails on a busy target or succeeds and pulls the filesystem
+  # out from under a running service. This edits /etc/fstab and nothing else.
+  #
+  # AFTER the mount task above, so a run that fails earlier has not half-retired
+  # anything: the new path is established before the old one stops being.
+  #
+  # No `when:` guard -- an empty loop runs no iterations, and a declared path
+  # already absent from /etc/fstab reports no change, which is the state every
+  # converge after the first is in.
 
 - name: Create the dependent subdirectories on the mounted volume, with per-service ownership
   ansible.builtin.file:

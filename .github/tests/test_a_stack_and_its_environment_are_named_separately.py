@@ -1163,9 +1163,12 @@ class TestTheMountIsNotKeyedOnTheVolumesName(unittest.TestCase):
     volume's name are allowed to differ."
 
     This is the clause that makes the rename safe to perform at all, and it is
-    the one a reader is most likely to assume rather than check: the mount path
-    stays `/mnt/main-data` while the volume becomes `main`, and the two
-    deliberately disagree until a later change moves the path.
+    the one a reader is most likely to assume rather than check. The mount path
+    and the volume's name now agree, at `/mnt/main` and `main` -- which is a
+    convenience rather than a derivation, and is exactly why this assertion
+    reads the discovery rather than the two values: a discovery keyed on the
+    name would be indistinguishable from a correct one for as long as they
+    happen to coincide.
     """
 
     ROLE_TASKS = ROOT / "ansible" / "roles" / "platform_data_volume" / "tasks"

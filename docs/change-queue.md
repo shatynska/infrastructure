@@ -633,11 +633,12 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 
 **Not blocked. Recorded 2026-09-12, by `rename-the-external-services`'s code review, which found these in files that change edited without being reached by any of its tasks.**
 
-Four stale names, none of them entry 63's work, all of them rot left by entries 61 and 62 and invisible to every check this repository has:
+Five stale names, none of them entry 63's work, all of them rot left by entries 61 and 62 and invisible to every check this repository has:
 
 - `README.md:25` names the stack folders as "`prod` and `staging`". They are `main-production` and `main-staging`, and have been since entry 62.
 - `docs/bootstrap-a-new-host.md:106`, `terraform/stacks/main-staging/versions.tf` and `.github/tests/test_a_second_environment.py` cite *Each Environment Has a Dedicated Hetzner Cloud Project*. Entry 62 renamed that requirement to *Each Stack Has a Dedicated Hetzner Cloud Project*.
 - `docs/bootstrap-a-new-host.md` cites a change named `add-a-staging-stack` twice. No such change exists; the archived records are `add-a-staging-environment` and `configure-the-staging-host`.
+- `ansible/roles/swap/defaults/main.yml:14` and `ansible/roles/swap/README.md:28` both call the data volume `main-data`. That is the volume's retired *name* — entry 62 renamed it to `main` — and not the mount path, which `move-the-platform-data-mount` moved separately. Neither file is reached by that change's path sweep, and nothing else owns them.
 - `docs/bootstrap-a-new-host.md` §7.1 has the operator create a heartbeat check named `<company>-prod alertmanager`. Stale on both axes against Appendix A's own table a few paragraphs away, which uses `main-production-prune-host-images`: `prod` is a spelling this repository retired, and a heartbeat slug carries no company segment because the account holds one company. It is a name an operator types into the observer, so it is the costliest of these four to leave — and unlike the others it needs a step at the observer as well as an edit here, since the check already exists under the old name.
 
 **The check-shaped half is worth deciding on.** `.github/tests/test_ci_configuration.py` enforces the *path* form of a citation to this repository's own records, and that mechanism exists because a citation is correct when written and wrong only once the change it names succeeds — the same argument applies word for word to a citation naming a **requirement** that a later change renames, and to one naming a **change** that never existed. Both are static reads of committed files against `openspec/specs/` and `openspec/changes/archive/`, which is that suite's own subject. Whether the second is worth the false-positive risk — a requirement name appearing in prose that is not a citation — is the judgment this change owes.
@@ -704,3 +705,22 @@ On that merge the first of them failed against `galaxy.ansible.com`, resolving `
 **What it must not become.** A notifier that fires on every run teaches the operator to ignore it, and the run that then goes unapproved is indistinguishable from the noise. The signal is specifically *waiting on a human*, and it is worth a reminder that repeats while the state persists rather than one announcement at the moment the request is raised — the 06:26 request was raised while nobody was reading.
 
 **A related gap, not this entry's to close.** Nothing in this repository bounds how long a request may wait. GitHub is understood to expire a pending deployment review after some weeks and cancel the run — unverified here, and worth measuring against the documentation rather than trusting this sentence. Either way, whether an unapproved converge *should* expire sooner is a separate decision from whether anyone is told about it.
+
+## 78. namespace-the-molecule-loop-devices
+
+**Not blocked. Recorded 2026-09-12 by `move-the-platform-data-mount`, whose own new scenario failed against a device a previous run had formatted.**
+
+**A loop device minor is a kernel-global handle and is not namespaced by the container that creates it.** `platform_data_volume`'s Molecule scenarios each `mknod` a fixed minor and associate a backing file inside the container — `default` takes 87, `multiple-devices-*` take 88 and 89, and the two scenarios `move-the-platform-data-mount` added take 90 and 91. The association outlives the container. On the workstation this was found on, `losetup -a` listed all five, every one naming a backing file inside a container that had been destroyed:
+
+    /dev/loop87: []: (/root/platform-data-volume-backing.img)
+    /dev/loop90: []: (/root/platform-data-volume-retire-backing.img)
+
+Each fixture then asks *"is this minor already associated?"* and skips associating when it is — so a run inherits whatever the last one left on that minor, **including a filesystem a previous converge created**.
+
+**The danger is the green run, not the red one.** The red one is how this was found: an assertion that the role had not formatted the device failed against contamination rather than against the role, and read as an implementation defect for as long as it took to run `losetup -a` on the host. The silent case is worse and is already live. `default`'s subject is that the role formats an *unformatted* device; inheriting a formatted minor makes its format task a no-op and the scenario passes without exercising what it exists to exercise. Nothing reports that, and nothing distinguishes it from a genuine pass.
+
+**This is a third shared handle, alongside the two `AGENTS.md` names.** *Namespacing Molecule per working tree* covers the instance name and the ephemeral directory, both stable per role and both now namespaced by `ansible/scripts/run-molecule`. The loop minor is not — and it is worse in one respect than either: it is shared across **machines' kernels rather than working trees**, so two working trees are not the boundary, and a single tree's consecutive runs collide with themselves.
+
+**`move-the-platform-data-mount` fixed only its own two scenarios**, by detaching the minor unconditionally before associating and then asserting the device starts with no filesystem — the premise its later assertions rest on, checked rather than assumed. What remains is the other three scenarios, which still carry the conditional-associate pattern, and the question of whether the minors should be namespaced per working tree the way the instance name is, or simply always torn down. A minor is one byte of space and the fixture picks it by hand today, so a derivation from the tree's namespace is available; whether it is worth more than an unconditional detach is this entry's judgment to make.
+
+**One thing it must not do.** The `cleanup` and `destroy` actions run inside Molecule's own lifecycle, and a teardown that detaches a minor another scenario is mid-run on would break a suite that Molecule runs sequentially today but may not always. Detaching *your own* minor at the start of `prepare` is safe for that reason and a global sweep is not.

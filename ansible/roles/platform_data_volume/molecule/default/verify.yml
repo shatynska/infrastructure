@@ -13,7 +13,7 @@
   hosts: all
   become: true
   vars:
-    platform_data_volume_mount_path: /mnt/main-data
+    platform_data_volume_mount_path: /mnt/main
     platform_data_volume_device: /dev/loop87
     platform_data_volume_fs_type: ext4
     # Redeclared here because a verify playbook does not inherit converge's

@@ -40,7 +40,7 @@
   hosts: all
   become: true
   vars:
-    platform_data_volume_mount_path: /mnt/main-data
+    platform_data_volume_mount_path: /mnt/main
     # Redeclared here because a verify playbook inherits nothing from
     # prepare or converge -- same reasoning as `default`'s verify.yml
     # redeclaring its device and mount path.

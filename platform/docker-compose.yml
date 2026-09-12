@@ -196,7 +196,7 @@ services:
       # Compose decides whether to replace a container by comparing a digest of
       # the service definition, and that digest does NOT cover the content of
       # inline `configs:` blocks. The content is copied INTO the container when
-      # it is created -- prometheus's only bind mount is /mnt/main-data -- so
+      # it is created -- prometheus's only bind mount is /mnt/main -- so
       # there is no reload path either. Without a property that moves when the
       # content moves, editing a scrape target or an alert rule produced a
       # deploy that replaced nothing, reported every container Running and
@@ -233,7 +233,7 @@ services:
       # 65534:65534 (prom/prometheus's own default "nobody" user), before
       # this service can rely on it -- iac-host-configuration's "Platform
       # Data Volume Is Mounted at a Fixed Host Path".
-      - /mnt/main-data/prometheus:/prometheus
+      - /mnt/main/prometheus:/prometheus
     networks:
       - platform_monitoring
     healthcheck:
@@ -308,7 +308,7 @@ services:
     volumes:
       # platform_data_volume (Ansible) creates this subdirectory, owned by
       # 472:472 (grafana/grafana's own default user).
-      - /mnt/main-data/grafana:/var/lib/grafana
+      - /mnt/main/grafana:/var/lib/grafana
     ports:
       # GRAFANA_BIND_ADDRESS is rendered into .env by platform-deploy.yml
       # as a literal tailnet IP, never 0.0.0.0 -- see design.md's "Grafana

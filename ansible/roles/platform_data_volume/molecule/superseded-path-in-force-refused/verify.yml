@@ -182,6 +182,33 @@
         src: /etc/fstab
       register: platform_data_volume_fstab_raw
 
+    - name: Assert the fstab reduction can find a path that is present
+      vars:
+        fstab_control: >-
+          {{ ['# a comment',
+              '',
+              platform_data_volume_device ~ ' ' ~ platform_data_volume_mount_path
+              ~ ' ext4 defaults 0 0']
+             | map('trim')
+             | select()
+             | select('match', '^[^#]')
+             | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2')
+             | list }}
+      ansible.builtin.assert:
+        that:
+          - platform_data_volume_mount_path in fstab_control
+        fail_msg: >-
+          The reduction that reads /etc/fstab did not find {{
+          platform_data_volume_mount_path }} in a synthetic fstab that names it
+          ({{ fstab_control }}). This says nothing about the host: it says the
+          reduction below would report an absence having examined nothing.
+      # ITS OWN TASK, not a clause of the assertion below, so that a broken
+      # reduction cannot be read as a host that refused correctly. Counting the
+      # real /etc/fstab's entries was the first attempt at this guard and was
+      # wrong twice over: this image's /etc/fstab is genuinely empty, so the
+      # premise failed on a correct result, and the count would not have caught
+      # a reduction that returned the wrong field anyway.
+
     - name: Assert neither run mounted the device or persisted it in /etc/fstab
       vars:
         # `splitlines()`, not `split('\n')`: inside a FOLDED scalar YAML
@@ -198,10 +225,7 @@
              | list }}
       ansible.builtin.assert:
         that:
-          # The premise: an empty reduction would satisfy both absences below
-          # having read nothing. A container's /etc/fstab always carries
-          # entries.
-          - fstab_targets | length > 0
+          - platform_data_volume_mount_path not in fstab_targets
           - platform_data_volume_findmnt.rc != 0
           - platform_data_volume_mount_path not in fstab_targets
           # The trailing-separator spelling, checked separately: a role
