@@ -464,6 +464,18 @@ The run-time obligation the first of these serves belongs to `iac-repo-foundatio
 
 Those obligations SHALL be checked statically over the same scenario definitions this repository authors, by the same checks that read their platform images, and SHALL derive its exclusion of installed Galaxy content from `ansible/requirements.yml` in the same way. A scenario added later SHALL be covered without an edit to the check.
 
+**A scenario's fixtures reach handles the scenario definition does not declare, and those SHALL be held to the same obligation.** A fixture play that claims a handle the machine's kernel holds — a loop device minor is the instance in this repository — SHALL derive it from a value the entry point supplies rather than name it as a literal, and the entry point SHALL supply that value **resolved to one unique to the working tree the run was started from**, on the same terms as the instance name above and not merely as a value that exists. An entry point supplying a constant satisfies the plumbing and reinstates the shared literal the obligation exists to remove, so that it derives from the working tree SHALL be checked and not left to reading. The first of these SHALL be checked statically over the fixture plays beside each authored scenario definition, on the same terms and with the same Galaxy exclusion as the definitions themselves; the second and third SHALL be checked over the entry point itself. Checking one alone establishes nothing: the entry point and the fixtures are written in different languages with nothing but a variable name between them, so a rename on either side resolves to an unset value rather than to an error.
+
+**The fixture plays are a second enumeration, and it SHALL refuse to pass over nothing.** Where the checks over them find no fixture play *deriving* such a handle from the value the entry point supplies, they SHALL fail naming the enumeration as the cause rather than reporting success for a property nothing examined. The set counted is that subset and not the wider one of plays claiming such a handle by any means: the wider set is non-empty wherever a play names a literal, which is the very state these obligations forbid, so counting it would report the enumeration healthy in exactly the condition that withdraws every other check over it. This is the obligation the discovery, image-pin and tracked-file refusals in this requirement each place on their own enumerations, and it is owed here for the same reason: every check over this set reports green on an empty one, so a path change, a rename or an edit to the helper that builds it withdraws the whole static half of these obligations with nothing failing.
+
+**A kernel-held handle is not covered by the instance-name obligation above, and the difference is why this is stated separately.** An instance name is shared between working trees and a container is destroyed when its scenario ends; a loop association is made by the machine's kernel, survives the container that made it, and is therefore shared between a single working tree's *consecutive* runs as well as between trees. A fixture inheriting one silently inherits whatever state the previous run left on it, which for a scenario whose subject is what the role does to an unformatted device is a pass that exercised nothing.
+
+**Where such a handle is derived rather than chosen, the fixture SHALL establish that the handle is free before claiming it, and SHALL refuse a handle it cannot attribute to its own fixtures rather than reclaiming it.** A derived handle is a number nothing outside this repository has agreed to leave alone, and a privileged fixture reclaiming one the host is using damages the machine the verification runs on. Refusing is the recoverable direction and reclaiming is not.
+
+**That the fixture acts on what it reads SHALL be checked, and not only that it reads.** A play that reads what holds the handle, registers the result and then releases the handle regardless satisfies every check a read-only assertion can make while doing the exact thing this obligation forbids, so the check SHALL establish that a refusal stands between the read and the release. What is checked is the committed file's shape. The run-time refusal it produces is not reachable without a fixture whose purpose is to contaminate another scenario's handle — which would leak an association of its own, and would require the guard to be restructured out of the first task of the first play into a unit something could catch failing. Neither is owed for a guard whose static shape is checked.
+
+**The workflow that runs the suite SHALL invoke it through the entry point that supplies these values**, and that SHALL be asserted statically rather than left to the workflow's author. A workflow invoking the tool directly supplies neither, which makes the fixture plays that derive a handle refuse and every other scenario fail at `create` on the instance-name default above — a required check failing for a reason no assertion names.
+
 Neither tier SHALL declare a deployment `environment:` or receive any production credential; the Molecule suite runs offline against local containers.
 
 #### Scenario: Ansible-only pull request is linted and syntax-checked
@@ -581,6 +593,30 @@ Neither tier SHALL declare a deployment `environment:` or receive any production
 #### Scenario: Every authored scenario's instance name carries the namespace
 - **WHEN** the pipeline's own configuration checks read every scenario definition this repository authors under `ansible/roles/*/molecule/`
 - **THEN** every declared instance name SHALL carry the working-tree namespace, and its default SHALL be one that cannot name a container at all rather than one that merely looks wrong; a scenario declaring a bare literal name, or a default that would successfully create a shared instance, SHALL fail those checks
+
+#### Scenario: A fixture naming a kernel-held handle as a literal fails the checks
+- **WHEN** the pipeline's own configuration checks read the fixture plays beside every scenario definition this repository authors under `ansible/roles/*/molecule/`
+- **THEN** a fixture naming a loop device minor as a literal SHALL fail those checks, and one deriving it from the value the entry point supplies SHALL pass
+
+#### Scenario: The entry point and the fixtures are checked against each other
+- **WHEN** the name of the value the entry point supplies is changed on one side alone — renamed in the entry point, or renamed in the fixtures
+- **THEN** those checks SHALL fail identifying the mismatch, rather than the fixtures resolving it to an unset value at run time
+
+#### Scenario: The supplied value is derived from the working tree rather than fixed
+- **WHEN** those checks read how the entry point produces the value it supplies
+- **THEN** it SHALL be found to derive that value from the working tree's own path, and an entry point supplying a constant SHALL fail those checks even though every fixture reading it still resolves to a usable handle
+
+#### Scenario: A fixture claiming a kernel-held handle establishes it is free first
+- **WHEN** those checks read a fixture play that associates a loop device
+- **THEN** that play SHALL be found to release the handle earlier in the same file, to read what holds it before releasing it, and to refuse on that read, and a play that associates without a release, or that reads what holds the handle without acting on the result, SHALL fail those checks
+
+#### Scenario: Checks over the fixture plays fail rather than passing over an empty set
+- **WHEN** those checks find no fixture play beside any authored scenario definition deriving a handle the machine's kernel holds from the value the entry point supplies
+- **THEN** they SHALL fail naming the enumeration as the cause, rather than reporting success for a property nothing examined — and a tree in which every such play names its handle by literal instead SHALL therefore fail these checks twice over, once for the literal and once for the empty set
+
+#### Scenario: The workflow reaches the suite through the entry point
+- **WHEN** those checks read the workflow that runs the Molecule suite
+- **THEN** it SHALL be found to invoke the entry point that supplies the namespace and the derived handles, and a workflow invoking the tool directly SHALL fail those checks
 
 ### Requirement: The Molecule Matrix Runs the Roles a Pull Request Owes
 The Molecule suite SHALL run the roles a pull request's changed files owe, rather than every discovered role, and what a set of changed files owes SHALL be the reverse closure of a role-dependency graph derived from the scenario definitions in the checkout being tested. Nothing SHALL commit that graph: a graph recorded in a file is a list, and a list that falls behind the scenarios it describes under-selects silently — the aggregating gate sees a matrix that passed over the rows it was handed and has no way to learn which rows it should have been handed.
