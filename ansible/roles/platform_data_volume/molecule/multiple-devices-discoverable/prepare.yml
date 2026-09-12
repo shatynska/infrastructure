@@ -80,7 +80,7 @@
     # with nothing inside either container hinting at the cause.
     #
     # See ansible/scripts/run-molecule's loop_base_for() for the band and the
-    # full offset map; offset 7 is spare.
+    # full offset map; offsets 7 to 15 are spare.
     platform_data_volume_fixture_loop_base: "{{ lookup('env', 'INFRA_WORKTREE_LOOP_BASE') }}"
     platform_data_volume_fixture_loop_first: "{{ platform_data_volume_fixture_loop_base | int + (5 if platform_data_volume_fixture_reverse_order else 1) }}"
     platform_data_volume_fixture_loop_second: "{{ platform_data_volume_fixture_loop_base | int + (6 if platform_data_volume_fixture_reverse_order else 2) }}"
@@ -250,7 +250,13 @@
       ansible.builtin.command: blkid {{ item.device }}
       register: platform_data_volume_fixture_blkid
       changed_when: false
-      failed_when: platform_data_volume_fixture_blkid.rc == 0
+      failed_when: platform_data_volume_fixture_blkid.rc != 2
+      # `rc != 2`, NOT `rc == 0`: reading "anything non-zero" as clean accepts a
+      # blkid that did not probe at all. Measured in the pinned image -- an
+      # unformatted device gives 2, a formatted one 0, a usage error 1 -- so
+      # only 2 means "looked, found nothing". See `molecule/default/prepare.yml`
+      # for the full note, including why rc 2's other meaning (absent device)
+      # cannot arise here.
       loop: "{{ platform_data_volume_fixture_devices }}"
       loop_control:
         label: "{{ item.device }}"

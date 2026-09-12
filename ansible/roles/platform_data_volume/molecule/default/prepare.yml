@@ -171,11 +171,22 @@
     # would test the role against a case production never actually presents
     # on first attach (an already-formatted volume) and would silently mask
     # a role that cannot format a raw device at all.
+    # `rc != 2`, NOT `rc == 0`, and for the same reason the attribution guard
+    # above fails closed. Reading "anything non-zero" as clean accepts a blkid
+    # that did not probe at all, which reports this premise satisfied having
+    # established nothing. Measured in the pinned image: an unformatted device
+    # gives 2, a formatted one 0, a usage error 1. Only 2 means "looked, found
+    # nothing", so only 2 passes.
+    #
+    # rc 2 also covers an ABSENT device. What rules that out here is not this
+    # task but the two above it: the node is created, and the association is
+    # unconditional and carries no `failed_when`, so a device that is not there
+    # fails the play before this runs.
     - name: Assert the fixture's device starts with no filesystem on it
       ansible.builtin.command: blkid {{ platform_data_volume_device }}
       register: platform_data_volume_loop_blkid
       changed_when: false
-      failed_when: platform_data_volume_loop_blkid.rc == 0
+      failed_when: platform_data_volume_loop_blkid.rc != 2
       # The premise every assertion in this scenario rests on, checked rather
       # than assumed. The way it fails -- an inherited association carrying a
       # previous converge's filesystem -- is invisible from inside the

@@ -150,7 +150,13 @@
       ansible.builtin.command: blkid {{ platform_data_volume_device }}
       register: platform_data_volume_loop_blkid
       changed_when: false
-      failed_when: platform_data_volume_loop_blkid.rc == 0
+      failed_when: platform_data_volume_loop_blkid.rc != 2
+      # `rc != 2`, NOT `rc == 0`: reading "anything non-zero" as clean accepts a
+      # blkid that did not probe at all. Measured in the pinned image -- an
+      # unformatted device gives 2, a formatted one 0, a usage error 1 -- so
+      # only 2 means "looked, found nothing". See `molecule/default/prepare.yml`
+      # for the full note, including why rc 2's other meaning (absent device)
+      # cannot arise here.
       # The premise this scenario's own assertions rest on. Checked here rather
       # than assumed, because the way it fails -- a stale kernel association --
       # is invisible from inside the container and makes a later assertion read

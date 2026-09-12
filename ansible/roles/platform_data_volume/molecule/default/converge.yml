@@ -50,7 +50,7 @@
   hosts: all
   become: true
   vars:
-    # Derived exactly as prepare.yml derives it -- offset 0 of the eight minors
+    # Derived exactly as prepare.yml derives it -- offset 0 of the sixteen minors
     # this working tree claims. The two plays are separate `ansible-playbook`
     # invocations with no fact cache between them, so each computes the path
     # from the one value in the environment rather than one passing it on.
