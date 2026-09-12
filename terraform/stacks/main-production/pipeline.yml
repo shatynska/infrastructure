@@ -21,6 +21,15 @@
 # SHALL be distinct from every other stack's: two stacks naming the
 # same GitHub Environment share its WRITE token and its protection rules, so a
 # stack meant to be ungated would hold this one's write credential.
+#
+# IT IS NOT THIS STACK'S NAME, AND THAT IS NOW A PERMANENT STATE RATHER THAN AN
+# INTERVAL. `docs/naming-conventions.md` calls for `main-production` here.
+# GitHub offers no way to rename a deployment Environment -- no UI control, and
+# the REST API exposes only GET, PUT and DELETE with the name in the URL path
+# (measured 2026-09-12). Moving it therefore means creating a new Environment
+# and re-entering all fifteen of this one's secrets, three of which are SSH
+# private halves this repository's own bootstrap has you delete once stored. See
+# `docs/change-queue.md` entry 75, which owns that work and its price.
 github_environment: production
 
 # The repository secret holding this stack's read-only Hetzner token.
@@ -45,18 +54,20 @@ github_environment: production
 # specifically, which is the checkable half; the general form is repository
 # settings and is unverifiable from here.
 #
-# `PRODUCTION` rather than `PROD`, chosen ahead of the rename that made it the
-# environment's own spelling. It is the environment axis in full, and it is not
-# this stack's directory name either -- the directory is `main-production`,
-# because a stack is a (tenant, environment) pair and a repository secret is
-# one flat namespace. `docs/change-queue.md` entry 63 renames this to
-# `HCLOUD_TOKEN_MAIN_PRODUCTION`, which is why it is still spelled this way.
+# `MAIN_PRODUCTION` rather than `PRODUCTION`, AND THE EXTRA WORD IS THE POINT.
+# A repository secret is one flat namespace, and a stack is a (tenant,
+# environment) pair -- so `PRODUCTION` alone is unique only while this
+# repository has one tenant, and `analytics-production` would collide with it.
+# This is knowingly the SECOND rename of this secret: it was `HCLOUD_TOKEN_PROD`
+# until the environment axis was spelled in full, and GitHub cannot rename a
+# secret, so each spelling cost a create-flip-delete. Shortening it back would
+# buy nine characters and a third one.
 #
 # It is also the name this stack's inventory source reads and the one
 # `ansible/.envrc.example` names for the same token locally -- which the
 # Dynamic Inventory requirement now obliges to match this field, so the three
 # move together or the build fails.
-read_only_secret: HCLOUD_TOKEN_PRODUCTION
+read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION
 
 # The Ansible group this stack's converge targets. REQUIRED, and read only by
 # the host-configuration workflow -- the validation, plan, apply and drift
@@ -72,6 +83,14 @@ read_only_secret: HCLOUD_TOKEN_PRODUCTION
 # the name on `-` would work on these two names and fail silently on the next
 # -- as a group that does not exist, reported several steps after the run
 # began.
+#
+# IT AND `github_environment` ABOVE NOW SPELL THE SAME WORD FOR DIFFERENT
+# REASONS, which is the confusing part and is why both say so. This one is
+# `production` because an Ansible group IS the environment; that one is
+# `production` because GitHub cannot rename an Environment and entry 75 has not
+# been paid for yet. `read_only_secret` is the field that did move. A future
+# `analytics-production` declares `production` here too, and reads the same
+# `group_vars/production.yml`.
 #
 # IT NAMES THREE THINGS, WHICH MOVE TOGETHER: the play's `hosts:`, the
 # `--vault-id` label that environment's secrets are labelled under, and the

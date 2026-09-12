@@ -133,29 +133,37 @@ PLATFORM_COMPOSE = ROOT / "platform" / "docker-compose.yml"
 # decommissioned by removing its directory -- which design.md's Rollback names
 # as a legitimate path -- this class fails, and the correct response is to
 # delete it as a change of its own, not to weaken it.
-# RE-POINTED by the change rename-the-stacks-and-their-resources. This is a
-# stack DIRECTORY name, which became `main-staging`; the GitHub Environment
-# below stayed `staging`, because that is a different namespace and entry 63
-# owns it. The two constants carrying different values is the rename's whole
-# point rather than an inconsistency.
+# RE-POINTED twice, and the four constants below deliberately do NOT all agree.
+# rename-the-stacks-and-their-resources moved the stack DIRECTORY to
+# `main-staging` and left the GitHub Environment, the read-only secret and the
+# workspace alone -- each lives in a namespace of its own, renamed by its own
+# interface. rename-the-external-services then moved the workspace and the
+# secret, and could not move the Environment: GitHub offers no rename for one
+# (measured 2026-09-12), so moving it means re-creating it with every secret
+# re-entered. `docs/change-queue.md` entry 75 owns that.
+#
+# SO THREE OF THESE READ `main-staging` AND THE FOURTH READS `staging`, and the
+# difference is a fact about GitHub rather than an inconsistency here.
+#
+# WHERE THEY DO AGREE IT IS A CONVENTION AND NOT A DERIVATION. Nothing computes
+# any of them from any other: a directory is renamed by a commit, a workspace in
+# the HCP interface, a secret and an Environment in repository settings. A test
+# deriving one from another would be false for the interval between two of those
+# renames -- see *Remote State Backend* (openspec/specs/iac-state-management/
+# spec.md), which forbids exactly that and permits the agreement.
 SECOND_ENVIRONMENT = "main-staging"
-SECOND_ENVIRONMENT_READ_ONLY_SECRET = "HCLOUD_TOKEN_STAGING"
+SECOND_ENVIRONMENT_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_STAGING"
 SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "staging"
 SECOND_ENVIRONMENT_DESTROY_GATE = False
-# The workspace this stack has named since it was created. A LITERAL and not a
-# derivation from the directory name: the two stopped agreeing when the change
-# rename-the-stacks-and-their-resources renamed the directory, and they are
-# brought back into agreement by `docs/change-queue.md` entry 63, in the HCP
-# interface first and in `versions.tf` second.
-SECOND_ENVIRONMENT_WORKSPACE = "infrastructure-staging"
-
-# The workspace name form. This one IS specified: "Each environment SHALL have a
-# workspace of its own, named `infrastructure-<environment>`" (Remote State
-# Backend). `<environment>` is resolved to the environment directory's own name,
-# which is the only identifier this repository gives an environment that a
-# static read can reach -- prod's committed `infrastructure-prod` is what fixes
-# that reading.
-WORKSPACE_FORM = "infrastructure-{environment}"
+# The workspace this stack names. A LITERAL, per the note above: it equals the
+# directory name and is not read from it.
+#
+# `WORKSPACE_FORM` stood here and is gone. It encoded the
+# `infrastructure-<environment>` derivation *Remote State Backend* used to
+# oblige and now forbids, nothing referenced it, and a dead constant asserting a
+# retired rule is worse than no constant at all -- the next reader takes it for
+# the rule.
+SECOND_ENVIRONMENT_WORKSPACE = "main-staging"
 
 # --------------------------------------------------------------------------
 # Reading an environment's Terraform configuration
@@ -510,9 +518,10 @@ class TestEachEnvironmentHasAWorkspaceOfItsOwn(unittest.TestCase):
         used to assert. The requirement now forbids COMPUTING a workspace name
         from a stack's directory name: the two are renamed by different
         mechanisms in an order that cannot be reversed, so a derivation is false
-        for the interval between them -- and this repository is inside such an
-        interval until `docs/change-queue.md` entry 63 renames the workspaces.
-        The names may agree; nothing may derive one from the other.
+        for the interval between them -- and this repository was inside such an
+        interval until rename-the-external-services renamed the workspaces and
+        moved the `cloud` blocks after them. The names now agree; nothing may
+        derive one from the other, and nothing here does.
 
         What survives is the obligation itself, asserted here and by the
         collision test below: every stack names a workspace, and no two name the
@@ -1011,17 +1020,18 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
 
     def test_the_second_environment_names_its_own_workspace(self) -> None:
         """SPECIFIED -- "Each stack SHALL have a workspace of its own", and "no
-        two stacks SHALL share one". DERIVED as to the value: the workspace
-        `infrastructure-staging` is what this stack's `versions.tf` has named
-        since it was created.
+        two stacks SHALL share one". DERIVED as to the value: `main-staging` is
+        what this stack's `versions.tf` names.
 
-        RE-POINTED by the change rename-the-stacks-and-their-resources, which
-        renamed the DIRECTORY to `main-staging` and deliberately left the
-        workspace alone -- an HCP workspace is renamed in that interface before
-        any `versions.tf` naming it is pushed, so the two cannot move in one
-        commit, and `docs/change-queue.md` entry 63 is where this one moves. The
-        expected value is therefore a literal rather than a derivation from the
-        directory's name, which is what that change's requirement now forbids.
+        RE-POINTED TWICE. rename-the-stacks-and-their-resources renamed the
+        DIRECTORY to `main-staging` and deliberately left the workspace
+        `infrastructure-staging`, because an HCP workspace is renamed in that
+        interface before any `versions.tf` naming it is pushed and the two
+        cannot move in one commit. rename-the-external-services performed that
+        interface rename and moved the `cloud` block after it, so the two names
+        agree again. The expected value stays a LITERAL rather than a derivation
+        from the directory's name: the requirement permits the agreement and
+        forbids computing either name from the other.
         """
         self.test_a_second_environment_directory_exists()
         backend = environment_backends()[SECOND_ENVIRONMENT]
@@ -1032,8 +1042,12 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
         )
 
     def test_the_second_environment_declares_its_own_secret_and_environment(self) -> None:
-        """DERIVED -- tasks.md 2.4: `github_environment: staging`,
-        `read_only_secret: HCLOUD_TOKEN_STAGING`.
+        """DERIVED -- add-a-staging-environment's tasks.md 2.4 established the
+        pair. rename-the-external-services moved one of them and not the
+        other: `github_environment: staging` stands, because GitHub cannot
+        rename an Environment, while `read_only_secret:
+        HCLOUD_TOKEN_MAIN_STAGING` moved because a repository secret can be
+        created under a new name.
 
         That the two must DIFFER from every other environment's is specified,
         and is asserted over the whole tree by

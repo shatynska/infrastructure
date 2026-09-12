@@ -1,0 +1,16 @@
+schema: spec-driven
+created: 2026-09-12
+
+# `skip_specs: true` stood here while this change was an OPENED one — a branch
+# and a handoff with no proposal — because `openspec validate --all` runs on
+# every pull request and fails a change carrying no specification deltas
+# ("Change must have at least one delta").
+#
+# It is gone because this change turned out to owe deltas after all: three
+# capabilities state the GitHub Environment `production` by name, and renaming
+# that Environment would leave eight requirements naming one that does not
+# exist. See proposal.md, "Capabilities", and design.md decision 8.
+#
+# `schema:` and `created:` stay. Dropping either makes the change fail to
+# resolve with the same "at least one delta" error, which reads as though the
+# deltas were not found.

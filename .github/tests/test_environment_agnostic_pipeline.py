@@ -188,7 +188,7 @@ TARGET_GROUP_KEY_HINT = "target"
 # it, not relaxed: prod still declares one specific secret and one specific
 # Environment, and a declaration drifting from either still fails.
 PROD_DIRECTORY = "main-production"
-PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_PRODUCTION"
+PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_PRODUCTION"
 PROD_GITHUB_ENVIRONMENT = "production"
 
 TERRAFORM_PLAN = re.compile(r"terraform\s+plan\b")
@@ -969,20 +969,69 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
     """
 
     def _names(self) -> list[str]:
+        """Every name a workflow must not spell: the stack directories, the
+        declared GitHub Environments, and the declared Ansible groups.
+
+        THE THIRD IS THERE BECAUSE THE FIRST TWO COVER IT ONLY BY COINCIDENCE.
+        The declared GitHub Environments are `production` and `staging`, so the
+        environment axis enters this set through them and the third source adds
+        nothing today. `docs/change-queue.md` entry 75 ends that: it renames the
+        Environments to their stacks' names, at which point the first two
+        sources collapse into one and the axis would drop out of this sweep with
+        nothing to say so. The requirement forbids naming an environment in
+        workflow text whichever axis the name is on, so a hardcoded `production`
+        or an `if: ... == 'staging'` in one of the workflows this class sweeps
+        would quietly stop being reported. The group is read explicitly here so
+        that entry 75 costs this assertion nothing -- added by
+        rename-the-external-services, which met exactly that collapse and
+        reverted it for an unrelated reason. Read from the declarations rather
+        than written as a literal, for the reason every other name here is.
+
+        WHAT THIS REACHES IS `TERRAFORM_WORKFLOWS`, WHICH IS THREE FILES --
+        `pr-validation.yml`, `apply.yml` and `drift.yml`. `host-converge.yml` is
+        not among them, and it is the workflow that actually CONSUMES the
+        declared Ansible group -- so the place a group name is most plausibly
+        hardcoded is the place this sweep does not look. Stated rather than left
+        for a reader to infer coverage the tuple does not give: widening it is a
+        change of its own, because that workflow reads a fourth declared field
+        and its discovery body is deliberately not identical to the other
+        three.
+        """
         names = {directory.name for directory in environment_directories()}
         for declaration in environment_declarations().values():
             if declaration.github_environment:
                 names.add(declaration.github_environment)
+            if declaration.target_group:
+                names.add(declaration.target_group)
         return sorted(names)
 
     def test_there_is_a_name_to_look_for(self) -> None:
         """SPECIFIED -- guards the two assertions below from passing over an
         empty set of names, which is what an unimplemented declaration or an
-        emptied environments directory would produce."""
+        emptied environments directory would produce.
+
+        NON-EMPTINESS IS NOT ENOUGH, and that is the second assertion here. The
+        stack directory names satisfy it on their own, so a `_names()` that
+        silently stopped reading the declarations would keep this green while
+        sweeping for two needles instead of four -- which is exactly the
+        narrowing rename-the-external-services was found to have introduced and
+        then repaired. So the set must also carry a name that is NOT a stack
+        directory: today the Ansible groups, which are the axis the GitHub
+        Environments stopped supplying when they took the stack's own name.
+        """
         self.assertTrue(
             self._names(),
-            "no environment directory and no declared GitHub Environment name was "
-            "found, so a sweep for environment literals would read nothing",
+            "no environment directory, no declared GitHub Environment and no declared "
+            "Ansible group was found, so a sweep for environment literals would read "
+            "nothing",
+        )
+        directories = {directory.name for directory in environment_directories()}
+        beyond = sorted(set(self._names()) - directories)
+        self.assertTrue(
+            beyond,
+            "every name this sweep looks for is a stack directory name, so the "
+            "declarations contributed nothing -- the environment axis is unswept and "
+            "a workflow hardcoding an Ansible group would not be reported",
         )
 
     def test_no_terraform_workflow_names_an_environment_directory(self) -> None:
