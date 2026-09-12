@@ -76,6 +76,7 @@ at all.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -444,6 +445,7 @@ class TestTheContainmentCheckDiscriminates(unittest.TestCase):
         """A scratch tree carrying a role default and a stack definition, each
         saying what this test needs it to say."""
         directory = Path(tempfile.mkdtemp(prefix="platform-data-mount-fixture-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         defaults = directory / ROLE_DEFAULTS
         defaults.parent.mkdir(parents=True, exist_ok=True)
         defaults.write_text(
@@ -527,6 +529,7 @@ class TestTheContainmentCheckDiscriminates(unittest.TestCase):
         """DERIVED -- the read refuses rather than returning a value that would
         make every containment comparison pass."""
         directory = Path(tempfile.mkdtemp(prefix="platform-data-mount-empty-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         with self.assertRaises(AssertionError):
             role_default_mount_path(directory)
 
@@ -624,6 +627,7 @@ class TestTheSweepDiscriminates(unittest.TestCase):
 
     def tree(self, files: dict) -> Path:
         directory = Path(tempfile.mkdtemp(prefix="platform-data-mount-sweep-"))
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         for name, text in files.items():
             path = directory / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -815,6 +819,7 @@ class TestTheSweepDiscriminates(unittest.TestCase):
         """DERIVED -- a sweep that read nothing would otherwise report success
         having verified nothing."""
         empty = Path(tempfile.mkdtemp(prefix="platform-data-mount-empty-tree-"))
+        self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
         with self.assertRaises(AssertionError):
             superseded_path_occurrences(empty)
 

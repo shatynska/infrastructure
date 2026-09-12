@@ -67,6 +67,7 @@
         group: "472"
         mode: "0755"
     platform_data_volume_outcome_path: /var/tmp/molecule-superseded-path-retired-outcome.json
+    platform_data_volume_unmatchable_outcome_path: /var/tmp/molecule-superseded-path-unmatchable.json
   tasks:
     - name: Run the platform_data_volume role with the superseded path declared
       ansible.builtin.include_role:
@@ -90,6 +91,74 @@
       ansible.builtin.stat:
         path: /etc/fstab
       register: platform_data_volume_fstab_after_empty
+
+    # A THIRD RUN, against an /etc/fstab entry the retirement CANNOT match.
+    #
+    # Everything above declares the superseded path in the one spelling the
+    # fstab entry carries, so the normalisation on the retirement loop is a
+    # no-op in every run and the read-back assert is only ever executed in its
+    # passing direction. Both were added to catch a silent miss, and neither
+    # had anything driving it red -- which is the same shape of hole as the
+    # miss itself.
+    #
+    # `absent_from_fstab` matches the fstab name byte for byte. An entry whose
+    # target carries a trailing separator is one no declaration can reach, so
+    # the correct outcome is that the role FAILS rather than converging with
+    # the entry still there. That is what this asserts.
+    - name: Append an fstab entry whose target the retirement cannot match
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: "{{ platform_data_volume_device }} {{ platform_data_volume_superseded_mount_paths[0] }}/ ext4 defaults 0 0"
+        state: present
+      changed_when: false
+      # FIXTURE SCAFFOLDING, reported as unchanged deliberately. The
+      # `idempotence` action re-runs this whole file and requires the second
+      # pass to change nothing; these two tasks set up and tear down the state
+      # the third run needs, so their `changed` is the fixture's and not the
+      # role's. The role's own idempotence is what that action is for, and it
+      # is unaffected -- on the second pass every one of its tasks still
+      # reports `ok`.
+
+    - name: Run the role once more, with an entry it cannot retire
+      block:
+        - name: Run the platform_data_volume role against the unmatchable entry
+          ansible.builtin.include_role:
+            name: platform_data_volume
+
+        - name: Record that the role converged despite the unmatchable entry
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_unmatchable_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{ {'outcome': 'succeeded', 'failed_task_name': ''} | to_nice_json }}
+      rescue:
+        - name: Record the failure the unmatchable entry produced
+          ansible.builtin.copy:
+            dest: "{{ platform_data_volume_unmatchable_outcome_path }}"
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}
+
+    - name: Remove the unmatchable entry so the idempotence run starts clean
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: "{{ platform_data_volume_device }} {{ platform_data_volume_superseded_mount_paths[0] }}/ ext4 defaults 0 0"
+        state: absent
+      changed_when: false
+      # The `idempotence` action re-runs THIS file against the same host, and
+      # it would otherwise meet the entry this run appended and fail -- which
+      # would read as the role being non-idempotent rather than as the fixture
+      # leaving something behind.
 
     - name: Record both checksums for verify.yml to compare
       ansible.builtin.copy:

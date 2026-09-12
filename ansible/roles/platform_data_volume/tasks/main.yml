@@ -24,10 +24,20 @@
       host that mounts and serves correctly until it reboots and then comes up
       with no data volume at all. Correct whichever of the two is wrong; the
       role will not resolve it by ignoring one of them.
-  # FIRST, and before any task that changes this host -- not merely before the
-  # retirement loop. The two values are compared with a trailing slash stripped
-  # from each, so `/mnt/main/` cannot slip past a guard whose one bypass leads
-  # to precisely the outcome it exists to prevent.
+  # FIRST IN THIS ROLE, and ahead of every task in it that changes the host --
+  # not merely ahead of the retirement loop.
+  #
+  # It is NOT ahead of everything the PLAY changes: host-baseline.yml runs six
+  # roles before this one, so a refusal here meets a host `hardening`, `docker`
+  # and the rest have already converged. `docs/deferred-work.md` records that
+  # under "Two gaps in required-input validation that only the play could
+  # close", and this role's own README says the same. Do not let the two drift:
+  # an operator who reads "before anything changes" believes a refused converge
+  # left the host untouched.
+  #
+  # The two values are compared with a trailing slash stripped from each, so a
+  # near-miss spelling cannot slip past a guard whose one bypass leads to
+  # precisely the outcome it exists to prevent.
 
 - name: Discover the attached data volume's device path, if not explicitly set
   ansible.builtin.find:
@@ -108,10 +118,11 @@
   # matches the fstab name EXACTLY -- it expands `~` and `$VAR` and nothing
   # else -- so a declared path carrying a trailing separator, against an fstab
   # naming it without one, reports `changed=False` and removes nothing. A
-  # declaration one character off would
-  # converge green, `ok`, with both paths still persisted: the two-paths-at-boot
-  # state this task exists to prevent, reached through the task meant to prevent
-  # it.
+  # declaration one character off would otherwise converge green, `ok`, with
+  # both paths still persisted: the two-paths-at-boot state this task exists to
+  # prevent, reached through the task meant to prevent it. The assert below is
+  # what catches the mirror case, an fstab entry spelled with the separator.
+  #
   # `absent_from_fstab` rather than `absent` or `unmounted`, and the difference
   # is the whole point: both of those unmount, and at the moment a path moves a
   # running Prometheus or Grafana holds a bind into the old one -- so an
@@ -129,26 +140,56 @@
   ansible.builtin.slurp:
     src: /etc/fstab
   register: platform_data_volume_fstab_after
-  when: platform_data_volume_superseded_mount_paths | length > 0
+  when:
+    - platform_data_volume_superseded_mount_paths | length > 0
+    - not ansible_check_mode
 
 - name: Assert no superseded path is still persisted in /etc/fstab
   vars:
+    # BOTH SIDES NORMALISED, and the fstab side is the one that is easy to
+    # forget. Stripping only the declared paths compares `/mnt/x` against a
+    # file that may name `/mnt/x/`, so an entry the retirement could not match
+    # is also an entry this check cannot see -- the same miss twice, and the
+    # second is the one that was supposed to catch the first.
     platform_data_volume_fstab_active: >-
-      {{ (platform_data_volume_fstab_after.content | b64decode).splitlines()
+      {{ (platform_data_volume_fstab_after.content | default('') | b64decode).splitlines()
          | map('trim') | select() | select('match', '^[^#]')
-         | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2') | list }}
+         | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2')
+         | map('regex_replace', '/$', '') | list }}
     platform_data_volume_still_persisted: >-
       {{ platform_data_volume_superseded_mount_paths
          | map('regex_replace', '/$', '')
          | select('in', platform_data_volume_fstab_active) | list }}
   ansible.builtin.assert:
     that:
+      # THE PREMISE FIRST. `still_persisted` is a membership test, and an empty
+      # `fstab_active` satisfies it exactly as a correct retirement does -- so
+      # a broken slurp or a broken reduction would report success having read
+      # nothing. By this point the role has written its own entry, so the file
+      # cannot legitimately be empty. The sibling Molecule scenario learned
+      # this against its own copy of the same reduction, after it had already
+      # reported an unearned pass.
+      - platform_data_volume_fstab_active | length > 0
       - platform_data_volume_still_persisted | length == 0
     fail_msg: >-
       These superseded mount paths are still named in /etc/fstab after the
       retirement task ran: {{ platform_data_volume_still_persisted | join(', ') }}.
-      The device would mount at more than one path on the next reboot.
-  when: platform_data_volume_superseded_mount_paths | length > 0
+      Read /etc/fstab ({{ platform_data_volume_fstab_active | join(', ') }}) --
+      an empty list there means this check read nothing rather than that the
+      host is clean. The device would otherwise mount at more than one path on
+      the next reboot.
+  when:
+    - platform_data_volume_superseded_mount_paths | length > 0
+    # NOT UNDER `--check`. `slurp` runs in check mode but `absent_from_fstab`
+    # correctly does not write, so a check run against any host still carrying
+    # the superseded entry reads the unmodified file and fails with "still
+    # named in /etc/fstab after the retirement task ran" -- a wrong diagnosis
+    # of a correct host, and every host is in that state until this change's
+    # converge lands. `tailscale` sets `check_mode: false` on three tasks for
+    # the same reason and `swap` records the same concern, so a `--check` run
+    # of host-baseline.yml is a property sibling roles deliberately keep;
+    # `docs/change-queue.md` entry 23 would build drift detection on it.
+    - not ansible_check_mode
   # THE ROLE CHECKS ITS OWN WORK, because the retirement above cannot report
   # having failed. `absent_from_fstab` is a no-op on anything it does not match
   # -- a spelling it does not normalise, or a malformed line it skips for not

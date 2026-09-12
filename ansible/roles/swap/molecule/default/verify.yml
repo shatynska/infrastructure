@@ -134,7 +134,17 @@
       ansible.builtin.assert:
         that:
           - swap_recorded_paths | length > 0
-          - swap_recorded_paths | select('search', '^' ~ (swap_forbidden_prefix | regex_escape)) | list | length == 0
+          # `(/|$)` anchors the prefix to a path component. A bare string
+          # prefix was harmless while the forbidden path carried a longer
+          # suffix, and became over-broad when it shortened to `/mnt/main`,
+          # which is a prefix of `/mnt/mainframe` and `/mnt/maintenance`
+          # too. The error
+          # direction is a false failure rather than a false pass, so nothing
+          # was let through -- but it is the same prefix-versus-components
+          # hazard this change's own static check solves with `_under`.
+          - swap_recorded_paths
+            | select('search', '^' ~ (swap_forbidden_prefix | regex_escape) ~ '(/|$)')
+            | list | length == 0
         fail_msg: >-
           The swap path(s) the role recorded for boot are
           {{ swap_recorded_paths }}; at least one is under

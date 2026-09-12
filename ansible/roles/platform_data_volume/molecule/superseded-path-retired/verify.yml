@@ -40,6 +40,12 @@
     platform_data_volume_holder_pid_file: /var/tmp/molecule-superseded-path-holder.pid
     platform_data_volume_holder_marker: prometheus/holder-marker.txt
     platform_data_volume_outcome_path: /var/tmp/molecule-superseded-path-retired-outcome.json
+    # Restated rather than inherited: Molecule runs `converge` and `verify` as
+    # separate ansible-playbook invocations, so converge.yml's play vars do not
+    # reach here. Both files must name the same path or the channel between
+    # them is broken -- which presents as an undefined variable in verify,
+    # several steps from the file that actually chose the name.
+    platform_data_volume_unmatchable_outcome_path: /var/tmp/molecule-superseded-path-unmatchable.json
   tasks:
     - name: Read /etc/fstab
       ansible.builtin.slurp:
@@ -76,9 +82,15 @@
     # scenario report a pass it had not earned. Both assertions that follow are
     # membership tests over the reduction above, and an EMPTY reduction
     # satisfies "the superseded path is not among these" exactly as a correct
-    # retirement does. A container's own /etc/fstab always carries entries, so
-    # an empty list means the read or the reduction is broken, never that the
-    # host has no boot-time mounts.
+    # retirement does.
+    #
+    # WHAT MAKES THE LIST NON-EMPTY HERE IS THIS SCENARIO'S OWN WORK, not a
+    # property of the image: its prepare writes an entry and the role writes
+    # another. The image's /etc/fstab is EMPTY -- the sibling
+    # `superseded-path-in-force-refused` scenario met that directly, where a
+    # premise counting entries failed against a correct result. So read a
+    # failure here as "the role stopped writing its own entry" before reaching
+    # for the slurp or the reduction.
     - name: Assert /etc/fstab was read and reduced to something at all
       ansible.builtin.assert:
         that:
@@ -367,4 +379,45 @@
         success_msg: >-
           The superseded path was busy throughout, so the converge succeeded
           against a target an unmount would have failed on.
+        quiet: true
+
+    # ------------------------------------------------------------------
+    # THE ROLE'S OWN READ-BACK, DRIVEN RED.
+    #
+    # Every other run in this scenario declares the superseded path in the one
+    # spelling /etc/fstab carries, so the retirement loop's normalisation is a
+    # no-op and the role's read-back assert only ever executes in its passing
+    # direction. Both exist to catch a silent miss; without this, neither has
+    # anything driving it red, and a check that cannot fail establishes nothing.
+    #
+    # converge.yml's third run appends an entry whose target carries a trailing
+    # separator -- one `absent_from_fstab` cannot match, since it compares the
+    # fstab name byte for byte. The role must FAIL there rather than converge
+    # with the entry still present, because converging would leave the device
+    # persisted at two paths and say nothing.
+    # ------------------------------------------------------------------
+    - name: Read the outcome recorded for the unmatchable /etc/fstab entry
+      ansible.builtin.slurp:
+        src: "{{ platform_data_volume_unmatchable_outcome_path }}"
+      register: platform_data_volume_unmatchable_raw
+
+    - name: Assert the role refused to converge past an entry it could not retire
+      vars:
+        unmatchable: >-
+          {{ platform_data_volume_unmatchable_raw.content | b64decode | from_json }}
+      ansible.builtin.assert:
+        that:
+          - unmatchable.outcome == 'failed'
+          - "'still named in /etc/fstab' in unmatchable.failed_msg"
+        fail_msg: >-
+          The role reported '{{ unmatchable.outcome }}' against an /etc/fstab
+          entry the retirement cannot match (failed at
+          '{{ unmatchable.failed_task_name }}'). A converge here leaves the
+          device persisted at two paths with nothing said, which is the state
+          the read-back assert exists to prevent -- so either that assert is
+          not running, or it is comparing paths without normalising the fstab
+          side, which is the miss it was itself written to catch.
+        success_msg: >-
+          The role failed on an entry it could not retire, rather than
+          converging with the superseded path still persisted.
         quiet: true
