@@ -5,27 +5,27 @@ Lets the prod server be decommissioned and later recreated by toggling a single 
 ## Requirements
 
 ### Requirement: Conditional Prod Server Creation
-The prod environment SHALL expose a boolean variable that controls whether the server module creates any resources, independent of the rest of that server's configuration (sizing, image, location, network CIDRs).
+The prod stack SHALL expose a boolean variable that controls whether the server module creates any resources, independent of the rest of that server's configuration (sizing, image, location, network CIDRs).
 
-Configuration values SHALL remain declared in the environment's variables and non-secret tfvars regardless of the toggle's current value, so re-enabling the server requires changing only the toggle, not restoring deleted configuration.
+Configuration values SHALL remain declared in the stack's variables and non-secret tfvars regardless of the toggle's current value, so re-enabling the server requires changing only the toggle, not restoring deleted configuration.
 
 Other resources MAY be coupled to this toggle where their own configuration makes them unable to exist without the server — see the `iac-data-volumes` capability's `main-data` volume, which has no location of its own and therefore exists only while the server does.
 
 #### Scenario: Toggle enabled creates the server
-- **WHEN** the prod environment's server-enabled variable is `true`
+- **WHEN** the prod stack's server-enabled variable is `true`
 - **THEN** `terraform plan` SHALL show the server, its firewall, and their configuration exactly as declared
 
 #### Scenario: Toggle disabled creates nothing
-- **WHEN** the prod environment's server-enabled variable is `false`
+- **WHEN** the prod stack's server-enabled variable is `false`
 - **THEN** `terraform plan` SHALL show no server or firewall resources, and any previously-created ones SHALL be planned for destruction
 
 #### Scenario: Toggle disabled also removes resources coupled to the server
-- **WHEN** the prod environment's server-enabled variable is `false`
+- **WHEN** the prod stack's server-enabled variable is `false`
 - **THEN** `terraform plan` SHALL also show any resource that has no independent location or existence apart from the server (such as the `main-data` volume) planned for destruction, not left dangling or erroring for want of the server it depends on
 
 #### Scenario: Re-enabling requires no lost configuration
 - **WHEN** the server-enabled variable is changed back from `false` to `true`
-- **THEN** the server SHALL be planned for creation using the same sizing, image, location, network configuration, and SSH key already present in the environment, with no additional values needing to be reconstructed and no additional resources needing to be re-imported
+- **THEN** the server SHALL be planned for creation using the same sizing, image, location, network configuration, and SSH key already present in the stack, with no additional values needing to be reconstructed and no additional resources needing to be re-imported
 
 ### Requirement: Infrastructure Predating Terraform Stays Under Continuous Management, Decoupled From Ephemeral Resources
 Infrastructure that was adopted into Terraform management via `import` after already existing outside Terraform, and whose real-world lifecycle is independent of any single conditionally-created resource, SHALL remain under continuous Terraform management at a stable address — not destroyed, and not repeatedly detached and re-imported — regardless of how many times the conditionally-created resource that references it is toggled on or off.
