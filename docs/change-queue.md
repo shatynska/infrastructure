@@ -672,7 +672,17 @@ On that merge the first of them failed against `galaxy.ansible.com`, resolving `
 
 **What it must not become.** A blind retry loop around an installer that is also this repository's version-pinning mechanism would hide a genuine pin failure — `ansible/requirements.yml` pins exact versions, per `AGENTS.md`, and a resolution error that means *the pinned version is gone* must stay loud. So the change owes a distinction between "could not reach the server" and "the server says this version does not exist", and only the first is retryable.
 
-**Options, in rough order of cost.** A bounded retry with backoff on the install step. `--no-cache` or `--clear-response-cache`, which the error message itself suggests and which costs a slower install. Caching the resolved collections between runs, which trades an upstream dependency for a cache-invalidation problem and interacts with the pinning rule. Or vendoring the collections into the repository, which removes the run-time dependency entirely and is the largest change of the four. Weigh the first against how often this actually happens — once, so far.
+**Options, in rough order of cost.** A bounded retry with backoff on the install step. `--no-cache` or `--clear-response-cache`, which the error message itself suggests and which costs a slower install. Caching the resolved collections between runs, which trades an upstream dependency for a cache-invalidation problem and interacts with the pinning rule. Or vendoring the collections into the repository, which removes the run-time dependency entirely and is the largest change of the four.
+
+**Twice now, and the second instance widens the entry beyond the converge.** On 2026-09-12 the same step failed on a **pull request**, in `ansible-verify.yml`'s Molecule matrix rather than in `host-converge.yml` — PR #161, run 34715212029, job 103611145944, 45 seconds in:
+
+    [ERROR]: Unknown error when attempting to call Galaxy at
+    'https://galaxy.ansible.com/api/v3/collections/hetzner/hcloud/versions/7.0.0/':
+    <urlopen error [Errno 104] Connection reset by peer>
+
+A different collection, a different error and a different workflow, so a fix aimed only at the cache-shaped message above would not have caught it. The install is verbatim the same two commands, and both workflows run them unguarded. **The neighbours passed again**: seven other Molecule roles in that same matrix ran the identical install and every one succeeded, which is the same evidence of transience the production instance gave. Re-running the failed job alone turned it green with no other change.
+
+The cost here is lower than on the converge — a red check and a re-run, not a spent production approval — but it broadens the subject: whatever the fix is, it belongs to **every** workflow that installs Galaxy content, not to `host-converge.yml` alone. Weigh the options above against how often this happens: twice in one day, on two different workflows, against two different collections.
 
 ## 77. make-a-waiting-approval-announce-itself
 
