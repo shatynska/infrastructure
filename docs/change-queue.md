@@ -689,3 +689,27 @@ Four stale names, none of them entry 63's work, all of them rot left by entries 
 **Whether it is worth paying is the open question, and it was left open deliberately.** What it buys is that `production` stops being a name a second tenant collides with — and a second tenant's Environment would be *created* under the right name rather than renamed, so the collision is not one that arrives by surprise. What it costs is rotating three credentials whose failure mode is that continuous integration silently cannot reach a host. The alternative disposition is to decide the Environments keep the environment axis permanently and amend `docs/naming-conventions.md` to say so with this reason; that was considered and not chosen, because it weakens the scheme rather than postponing it.
 
 **What is already done and must not be undone.** Entry 63 renamed the HCP workspaces, the repository read-only secrets and the Hetzner projects, and left every `github_environment` declaration, `platform-deploy.yml`'s `environment:` key and the `.github/tests` literals that assert them on the environment axis. `terraform/stacks/*/pipeline.yml`, `.github/workflows/platform-deploy.yml`, `.github/tests/test_a_second_environment.py` and `docs/bootstrap-a-new-host.md` each carry a comment pointing here; those comments are a commitment, and deleting them is part of this entry's work.
+
+## 76. make-the-converge-survive-a-galaxy-outage
+
+**Not blocked. Recorded 2026-09-12, from the merge of `rename-the-external-services` (PR #155), whose gated production converge failed on it.**
+
+`host-converge.yml`'s *Install Galaxy content* step runs two commands with no retry, no vendoring and no fallback:
+
+    ansible-galaxy collection install -r requirements.yml
+    ansible-galaxy role install -r requirements.yml -p roles
+
+On that merge the first of them failed against `galaxy.ansible.com`, resolving `community.library_inventory_filtering_v1`:
+
+    [WARNING]: Skipping Galaxy server https://galaxy.ansible.com/api/. Got an unexpected
+    error when getting available versions of collection
+    community.library_inventory_filtering_v1: Missing expected 'results' in
+    ansible-galaxy cache ...
+
+**It is transient and upstream, and the evidence is that its neighbours passed.** Three converges performed the identical install within twenty minutes: staging's at 10:00:02 and the previous run's production converge at 10:08:43 both succeeded; only the 10:17:54 one failed. The error's own suggestion — concurrent `ansible-galaxy` runs — does not apply here: the concurrency group had serialised the two production converges (10:08:43–10:16:00, then 10:17:54), each job runs on a fresh ephemeral runner, and the workflow carries no `actions/cache` step, so the cache it complained about was written seconds earlier in that same job.
+
+**Why it is worth fixing rather than re-running.** The failure lands on the **gated production** path, so the cost is not a red run but an approval spent on nothing: the operator grants the production Environment, the job dies before Ansible reads the inventory, and the whole approval has to be requested and granted again. A converge is also the one workflow whose failure can leave a host unconverged while everything else reports green.
+
+**What it must not become.** A blind retry loop around an installer that is also this repository's version-pinning mechanism would hide a genuine pin failure — `ansible/requirements.yml` pins exact versions, per `AGENTS.md`, and a resolution error that means *the pinned version is gone* must stay loud. So the change owes a distinction between "could not reach the server" and "the server says this version does not exist", and only the first is retryable.
+
+**Options, in rough order of cost.** A bounded retry with backoff on the install step. `--no-cache` or `--clear-response-cache`, which the error message itself suggests and which costs a slower install. Caching the resolved collections between runs, which trades an upstream dependency for a cache-invalidation problem and interacts with the pinning rule. Or vendoring the collections into the repository, which removes the run-time dependency entirely and is the largest change of the four. Weigh the first against how often this actually happens — once, so far.
