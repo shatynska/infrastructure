@@ -1,27 +1,27 @@
 ## Purpose
 
-Lets the prod server be decommissioned and later recreated by toggling a single variable, without losing its configuration or destroying infrastructure that predates Terraform's management of it.
+Lets a stack's server be decommissioned and later recreated by toggling a single variable, without losing its configuration or destroying infrastructure that predates Terraform's management of it. A server carries its stack's own name, because that name leaves its Hetzner project: it reaches the tailnet and the external observer a scheduled host unit reports to, neither of which is scoped to one project.
 
 ## Requirements
 
 ### Requirement: Conditional Prod Server Creation
-The prod stack SHALL expose a boolean variable that controls whether the server module creates any resources, independent of the rest of that server's configuration (sizing, image, location, network CIDRs).
+The `main-production` stack SHALL expose a boolean variable that controls whether the server module creates any resources, independent of the rest of that server's configuration (sizing, image, location, network CIDRs).
 
 Configuration values SHALL remain declared in the stack's variables and non-secret tfvars regardless of the toggle's current value, so re-enabling the server requires changing only the toggle, not restoring deleted configuration.
 
-Other resources MAY be coupled to this toggle where their own configuration makes them unable to exist without the server — see the `iac-data-volumes` capability's `main-data` volume, which has no location of its own and therefore exists only while the server does.
+Other resources MAY be coupled to this toggle where their own configuration makes them unable to exist without the server — see the `iac-data-volumes` capability's `main` volume, which has no location of its own and therefore exists only while the server does.
 
 #### Scenario: Toggle enabled creates the server
-- **WHEN** the prod stack's server-enabled variable is `true`
+- **WHEN** the `main-production` stack's server-enabled variable is `true`
 - **THEN** `terraform plan` SHALL show the server, its firewall, and their configuration exactly as declared
 
 #### Scenario: Toggle disabled creates nothing
-- **WHEN** the prod stack's server-enabled variable is `false`
+- **WHEN** the `main-production` stack's server-enabled variable is `false`
 - **THEN** `terraform plan` SHALL show no server or firewall resources, and any previously-created ones SHALL be planned for destruction
 
 #### Scenario: Toggle disabled also removes resources coupled to the server
-- **WHEN** the prod stack's server-enabled variable is `false`
-- **THEN** `terraform plan` SHALL also show any resource that has no independent location or existence apart from the server (such as the `main-data` volume) planned for destruction, not left dangling or erroring for want of the server it depends on
+- **WHEN** the `main-production` stack's server-enabled variable is `false`
+- **THEN** `terraform plan` SHALL also show any resource that has no independent location or existence apart from the server (such as the `main` volume) planned for destruction, not left dangling or erroring for want of the server it depends on
 
 #### Scenario: Re-enabling requires no lost configuration
 - **WHEN** the server-enabled variable is changed back from `false` to `true`

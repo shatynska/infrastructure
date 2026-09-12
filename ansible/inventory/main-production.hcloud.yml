@@ -114,18 +114,39 @@ compose:
 # A group exists only where some host carries the label, so under this source
 # `groups['staging']` is a missing key rather than an empty list. The guard
 # play at the top of playbooks/host-baseline.yml is what turns that into a
-# refusal; without it a play matching no host exits 0. That also covers the
-# interval between this file merging and the apply that adds the `tenant`
-# label: until then no host carries it, `groups['main']` is absent, and nothing
-# reads it.
+# refusal; without it a play matching no host exits 0.
 #
-# `strict: true` above reaches `keyed_groups` as well as `compose`, and both
-# keys are left exactly as they are because that costs nothing. MEASURED rather
-# than assumed, against the live API: with a label absent, a strict parse does
-# not fail -- the host is simply not grouped, and is dropped from the plugin's
-# own `hcloud` group too. Either way it is not in the group a play targets,
-# which is what it was before, and the play's own guard refuses on an empty
-# group with a diagnostic naming it.
+# That guard does NOT cover the interval between this file merging and the
+# apply that adds the `tenant` label -- an earlier version of this comment said
+# it did. In that interval the parse fails outright and no play is reached at
+# all, which the block below explains.
+#
+# `strict: true` above reaches `keyed_groups` as well as `compose`, and a
+# MISSING LABEL FAILS THE WHOLE PARSE rather than leaving the host ungrouped.
+# This corrects what this file said before 2026-09-12, and the correction was
+# bought by a real run: the staging converge of the change
+# rename-the-stacks-and-their-resources lost a three-second race with its own
+# Terraform apply, read a host that still carried `environment` and not yet
+# `tenant`, and failed with
+#
+#   Could not generate group for host staging-server from hcloud_labels.tenant
+#   entry: object of type 'dict' has no attribute 'tenant'
+#
+# `Constructable._add_host_to_keyed_groups` raises `AnsibleParserError` when
+# `strict` is set and the key does not template, and `ansible.cfg`'s
+# `any_unparsed_is_failed` turns that into a failed run. The earlier claim --
+# that the host is simply not grouped -- was measured with the `constructed`
+# plugin over a static host var, which does NOT reproduce this plugin's
+# templating path. A probe that reaches the wrong code path is worse than no
+# probe, because it is reported as a measurement.
+#
+# THIS IS FAIL-CLOSED AND IS KEPT. A host carrying one axis label and not the
+# other is a half-provisioned host, and an inventory that quietly resolved it
+# into a group set nobody declared is how a converge reaches the wrong host
+# set. What it costs is that every window between a merge adding a label and
+# the apply that applies it is a window where a converge cannot resolve --
+# which is why the apply is approved before the converge, stated in that
+# change's design.md decision 10 for a weaker reason than this one.
 keyed_groups:
   - key: hcloud_labels.environment
     separator: ""
