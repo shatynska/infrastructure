@@ -9,7 +9,7 @@ created: 2026-09-12
 # It is gone because this change turned out to owe deltas after all: three
 # capabilities state the GitHub Environment `production` by name, and renaming
 # that Environment would leave eight requirements naming one that does not
-# exist. See proposal.md, "Capabilities", and design.md decision 6.
+# exist. See proposal.md, "Capabilities", and design.md decision 8.
 #
 # `schema:` and `created:` stay. Dropping either makes the change fail to
 # resolve with the same "at least one delta" error, which reads as though the

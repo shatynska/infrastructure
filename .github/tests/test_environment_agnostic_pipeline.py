@@ -969,10 +969,26 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
     """
 
     def _names(self) -> list[str]:
+        """Every name a workflow must not spell: the stack directories, the
+        declared GitHub Environments, and the declared Ansible groups.
+
+        THE THIRD IS THERE BECAUSE THE FIRST TWO STOPPED COVERING IT. Until the
+        change rename-the-external-services the declared GitHub Environments
+        were `production` and `staging`, so the environment axis entered this
+        set through them; that change renamed them to the stack's own name and
+        the two sets collapsed into one. The requirement forbids naming an
+        environment in workflow text whichever axis the name is on, so a
+        hardcoded `production` or an `if: ... == 'staging'` in one of the four
+        Terraform workflows would have been reported before that rename and was
+        briefly invisible after it. Read from the declarations rather than
+        written as a literal, for the reason every other name here is.
+        """
         names = {directory.name for directory in environment_directories()}
         for declaration in environment_declarations().values():
             if declaration.github_environment:
                 names.add(declaration.github_environment)
+            if declaration.target_group:
+                names.add(declaration.target_group)
         return sorted(names)
 
     def test_there_is_a_name_to_look_for(self) -> None:

@@ -23,7 +23,7 @@ Test-path glob: `.github/tests/*.py`. Nothing here is owed under `terraform test
 
 846 matches tasks.md 1.4's recorded baseline exactly. PyYAML resolved at 6.0.1, the version `.github/requirements-ci.txt` pins, so no module failed to import and the count is comparable.
 
-The one failure after is `test_the_external_service_names_are_retired.TestNoCommittedFileNamesARetiredExternalService.test_no_swept_file_names_a_retired_external_name`, red by design: it reports 38 occurrences of a retired name across 9 committed files, every one of them a file tasks.md sections 4 and 5 names. That list is reproduced under *What the implementation must make pass*.
+The one failure after is `test_the_external_service_names_are_retired.TestNoCommittedFileNamesARetiredExternalService.test_no_swept_file_names_a_retired_external_name`, red by design: it reports 38 occurrences of a retired name across 10 committed files, every one of them a file tasks.md sections 4 and 5 names. That list is reproduced under *What the implementation must make pass*.
 
 ## What was added
 

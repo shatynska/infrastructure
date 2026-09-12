@@ -284,7 +284,7 @@ Three paths remain unexercised at two environments:
 - two apply jobs in one run;
 - one of two applies pausing for its reviewer while the other proceeds.
 
-All three need a merge that affects **both** environments, which means a change under `terraform/modules/`. Manufacturing one — a whitespace edit to a module — was refused deliberately: it would raise a `production` approval with nothing to approve, which *Gated Production Apply Applies the Reviewed Plan* names as the thing that trains an approver to grant without reading. Paying that to test the pipeline would spend the property the pipeline exists to protect.
+All three need a merge that affects **both** environments, which means a change under `terraform/modules/`. Manufacturing one — a whitespace edit to a module — was refused deliberately: it would raise a `main-production` approval with nothing to approve, which *Gated Production Apply Applies the Reviewed Plan* names as the thing that trains an approver to grant without reading. Paying that to test the pipeline would spend the property the pipeline exists to protect.
 
 **Revisit when** the next change under `terraform/modules/` merges, which supplies all three for free. Read its run rather than assuming it: these paths have never run, and the two-environment behaviour of this pipeline is inference until one of them does.
 

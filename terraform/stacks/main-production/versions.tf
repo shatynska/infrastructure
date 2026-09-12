@@ -51,7 +51,12 @@ provider "hcloud" {
   #     read as `secrets[<the name pipeline.yml declares>]`, which for
   #     this stack is `HCLOUD_TOKEN` and for a second stack
   #     will not be. A repository secret holds one value, so each
-  #     stack needs a read-only secret of its own;
+  #     stack needs a read-only secret of its own. (What it says about
+  #     THIS stack is wrong and is knowingly left so: this stack's
+  #     pipeline.yml declares HCLOUD_TOKEN_MAIN_PRODUCTION, and
+  #     declaring `HCLOUD_TOKEN` is exactly what that file argues at
+  #     length against. Correcting it is `docs/change-queue.md` entry
+  #     70's work rather than a rename's.);
   #   - locally, whatever the operator exports, which is the Read Only
   #     token and is never the Read & Write one.
   #

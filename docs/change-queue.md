@@ -594,7 +594,7 @@ Both `versions.tf` provider comments state prod's read-only secret name wrongly,
 
 Prod declares `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` in its own `pipeline.yml`, and that same file argues at length that the name must **not** be `HCLOUD_TOKEN` — a repository secret of that name is shadowed by the Read & Write token every GitHub Environment defines, so a gated job reading it resolves a write credential silently. `README.md` agrees: "neither is named `HCLOUD_TOKEN`". The comment contradicts the declaration sitting beside it.
 
-**Why it is its own entry rather than folded into the rename.** It predates that branch — `origin/main`'s copy carries the same claim, and the rename's diff touches those lines only to spell the unit `stack`. Correcting a factual error about credential names inside a vocabulary sweep is unrelated scope, and the sweep's own review is what found it.
+**Why it is its own entry rather than folded into either rename, and two have now gone past it.** It predates `rename-terraform-environments-to-stacks`, whose review found it: `origin/main`'s copy carried the same claim, and that change's diff touched those lines only to spell the unit `stack`. `rename-the-external-services` then edited the same two comment blocks again — moving `HCLOUD_TOKEN_STAGING` and correcting what they said about pushing ahead of a workspace rename — and left this claim standing, adding a parenthesis to each saying so. Correcting a factual error about credential names inside a rename is unrelated scope both times, and being walked past twice is not an argument for a third.
 
 **Why it is worth doing rather than tolerating.** The next reader of that comment is someone debugging a credential — the one moment a wrong secret name costs the most. It is also the exact confusion the shadowing paragraph exists to prevent, restated incorrectly three lines away from itself.
 
@@ -647,3 +647,25 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 
 **Not in scope here:** auto-replanning on staleness. That would apply a plan no human reviewed, which is the requirement this entry exists to respect.
 
+
+## 73. name-the-converge-keypair-for-its-stack
+
+**Not blocked. Recorded 2026-09-12, by `rename-the-external-services`'s code review, which found it while checking that change's own placeholders.**
+
+`docs/bootstrap-a-new-host.md` §0.3, §6.6 and Appendix A all name the converge keypair `~/.ssh/<company>-ansible-ci-<environment>` — and §0.3 itself calls that key **one per stack**. After entry 63 it is the last per-stack artefact in this repository still named for the environment axis: the GitHub Environment, the repository secret, the HCP workspace, the inventory source, the Hetzner project and the server all carry the stack's name, and this one does not.
+
+**It works today by coincidence and fails at the next tenant.** Two stacks, two environments, so `<company>-ansible-ci-production` and `<company>-ansible-ci-staging` are distinct. Add `analytics-production` and it collides with `main-production`'s — which is the exact collision `HCLOUD_TOKEN_MAIN_PRODUCTION` carries four extra characters to avoid, one namespace over.
+
+**It is a workstation filename and nothing reads it.** The key's private half goes into a GitHub Environment secret and its public half into the host's `authorized_keys`; neither carries the filename. So this is a documentation change plus whatever an operator chooses to rename locally, and no check can hold it — which is also why it was recorded rather than folded into entry 63, whose scope was the four names that live outside this repository.
+
+## 74. correct-the-names-two-renames-left-behind
+
+**Not blocked. Recorded 2026-09-12, by `rename-the-external-services`'s code review, which found these in files that change edited without being reached by any of its tasks.**
+
+Four stale names, none of them entry 63's work, all of them rot left by entries 61 and 62 and invisible to every check this repository has:
+
+- `README.md:25` names the stack folders as "`prod` and `staging`". They are `main-production` and `main-staging`, and have been since entry 62.
+- `docs/bootstrap-a-new-host.md:106`, `terraform/stacks/main-staging/versions.tf` and `.github/tests/test_a_second_environment.py` cite *Each Environment Has a Dedicated Hetzner Cloud Project*. Entry 62 renamed that requirement to *Each Stack Has a Dedicated Hetzner Cloud Project*.
+- `docs/bootstrap-a-new-host.md` cites a change named `add-a-staging-stack` twice. No such change exists; the archived records are `add-a-staging-environment` and `configure-the-staging-host`.
+
+**The check-shaped half is worth deciding on.** `.github/tests/test_ci_configuration.py` enforces the *path* form of a citation to this repository's own records, and that mechanism exists because a citation is correct when written and wrong only once the change it names succeeds — the same argument applies word for word to a citation naming a **requirement** that a later change renames, and to one naming a **change** that never existed. Both are static reads of committed files against `openspec/specs/` and `openspec/changes/archive/`, which is that suite's own subject. Whether the second is worth the false-positive risk — a requirement name appearing in prose that is not a citation — is the judgment this change owes.

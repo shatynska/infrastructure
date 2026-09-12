@@ -235,12 +235,18 @@ WORKSPACE_NAME = re.compile(r"workspaces\s*\{[^}]*name\s*=\s*\"([^\"]+)\"", re.D
 LABEL_ASSIGNMENT = re.compile(r'^\s*(environment|managed_by)\s*=\s*"([^"]*)"', re.MULTILINE)
 TERRAFORM_APPLY = re.compile(r"terraform\s+apply\b")
 
-# The workspace name each stack's `cloud` block derives. SPECIFIED by
-# iac-state-management / Remote State Backend: "Each stack SHALL have a
-# workspace of its own, named `infrastructure-<stack>`". The stack's name is
-# its directory name, which this change does not rename -- the values `prod`
-# and `staging` are explicitly kept, and renaming them is `docs/change-queue.md`
-# entry 62's work.
+# A prefix used to build workspace names in the SYNTHETIC trees below, and
+# nothing more. It asserts nothing about this repository and no requirement
+# obliges it.
+#
+# IT USED TO BE A DERIVATION AND IS NOT ONE NOW. This constant was introduced
+# quoting Remote State Backend's "named `infrastructure-<stack>`", a clause that
+# requirement no longer carries: it now forbids COMPUTING a workspace name from
+# a stack's directory name and permits only that the two agree. Kept because the
+# fixture builder needs some name and any name will do; the comment is corrected
+# because a constant quoting a retired rule is how the next reader comes to
+# believe the rule. Its sibling `WORKSPACE_FORM`, which had no use at all, was
+# deleted by the change rename-the-external-services for the same reason.
 WORKSPACE_PREFIX = "infrastructure-"
 
 # The two required fields of a stack's pipeline declaration, by the names the
@@ -944,15 +950,17 @@ class TestEveryStackDeclaresItsPipelineConfiguration(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-class TestEachStackNamesAWorkspaceDerivedFromItsOwnName(unittest.TestCase):
+class TestEachStackNamesAWorkspaceOfItsOwn(unittest.TestCase):
     """MODIFIED requirement: Remote State Backend (iac-state-management).
 
-    The delta moves the derivation from `infrastructure-<environment>` to
-    `infrastructure-<stack>`. The two coincide today and diverge at
-    `docs/change-queue.md` entry 62, and entry 63 is what changes the workspace
-    names themselves -- so what is asserted here is the DERIVATION, which this
-    change makes true, and never that any HCP workspace was renamed, which it
-    does not do and which this suite could not observe anyway.
+    RENAMED from `TestEachStackNamesAWorkspaceDerivedFromItsOwnName` by the
+    change rename-the-external-services: there is no derivation left to name.
+    The requirement retired `infrastructure-<stack>` and now forbids computing a
+    workspace name from a directory name, permitting only that the two agree --
+    which, since that change, they do. What is asserted here is what survived:
+    every stack names a workspace in its own `versions.tf`, and no two name the
+    same one. Never that any HCP workspace was renamed, which this suite makes
+    no network call to observe and could not establish if it tried.
     """
 
     def _workspaces(self) -> dict:

@@ -1014,17 +1014,18 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
 
     def test_the_second_environment_names_its_own_workspace(self) -> None:
         """SPECIFIED -- "Each stack SHALL have a workspace of its own", and "no
-        two stacks SHALL share one". DERIVED as to the value: the workspace
-        `infrastructure-staging` is what this stack's `versions.tf` has named
-        since it was created.
+        two stacks SHALL share one". DERIVED as to the value: `main-staging` is
+        what this stack's `versions.tf` names.
 
-        RE-POINTED by the change rename-the-stacks-and-their-resources, which
-        renamed the DIRECTORY to `main-staging` and deliberately left the
-        workspace alone -- an HCP workspace is renamed in that interface before
-        any `versions.tf` naming it is pushed, so the two cannot move in one
-        commit, and `docs/change-queue.md` entry 63 is where this one moves. The
-        expected value is therefore a literal rather than a derivation from the
-        directory's name, which is what that change's requirement now forbids.
+        RE-POINTED TWICE. rename-the-stacks-and-their-resources renamed the
+        DIRECTORY to `main-staging` and deliberately left the workspace
+        `infrastructure-staging`, because an HCP workspace is renamed in that
+        interface before any `versions.tf` naming it is pushed and the two
+        cannot move in one commit. rename-the-external-services performed that
+        interface rename and moved the `cloud` block after it, so the two names
+        agree again. The expected value stays a LITERAL rather than a derivation
+        from the directory's name: the requirement permits the agreement and
+        forbids computing either name from the other.
         """
         self.test_a_second_environment_directory_exists()
         backend = environment_backends()[SECOND_ENVIRONMENT]
@@ -1035,8 +1036,10 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
         )
 
     def test_the_second_environment_declares_its_own_secret_and_environment(self) -> None:
-        """DERIVED -- tasks.md 2.4: `github_environment: staging`,
-        `read_only_secret: HCLOUD_TOKEN_STAGING`.
+        """DERIVED -- add-a-staging-environment's tasks.md 2.4 established the
+        pair, and rename-the-external-services moved both to the stack's own
+        name: `github_environment: main-staging`,
+        `read_only_secret: HCLOUD_TOKEN_MAIN_STAGING`.
 
         That the two must DIFFER from every other environment's is specified,
         and is asserted over the whole tree by

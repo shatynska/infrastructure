@@ -313,6 +313,27 @@ class TestNoCommittedFileNamesARetiredExternalService(unittest.TestCase):
                     f"{path!r} is exempt from the sweep and is not tracked, so this "
                     "exemption covers nothing",
                 )
+                # A WHOLE-PATH EXEMPTION MUST STILL BE EARNING ITS KEEP, which a
+                # prefix exemption cannot be held to: `openspec/changes/` and
+                # `.github/tests/` cover many files and will always hold one,
+                # while `docs/change-queue.md` is exempt for a single entry that
+                # is deleted when its change archives. Requiring the file to
+                # still CONTAIN a retired name makes the exemption self-
+                # retiring: the archive commit that deletes the entry turns this
+                # red, and the repair is to delete the exemption with it rather
+                # than to leave a hole with nothing behind it.
+                # Scanned directly rather than through `retired_name_offences`,
+                # which drops an exempt path by construction and would therefore
+                # return nothing here whatever the file said -- an assertion
+                # that cannot fail, which is the shape this class exists against.
+                text = self.files[path]
+                still_named = sorted(name for name in RETIRED_NAMES if name in text)
+                self.assertTrue(
+                    still_named,
+                    f"{path!r} is exempt from the sweep and no longer names any "
+                    "retired external service, so the exemption has outlived what it "
+                    "was for -- delete it rather than keeping the hole open",
+                )
 
     def test_no_swept_file_names_a_retired_external_name(self) -> None:
         """DERIVED -- this change's tasks.md 3.2. The four names are the two
@@ -348,18 +369,30 @@ class TestNoCommittedFileNamesARetiredExternalService(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-def platform_deploy_gated_environments() -> list[str]:
-    """Every GitHub Environment `platform-deploy.yml`'s jobs declare, in
-    workflow order, read in both the scalar and the mapping form the schema
-    permits."""
+def gated_environments(workflow: dict) -> list[str]:
+    """Every GitHub Environment a workflow's jobs declare, in workflow order,
+    read in both the scalar and the mapping form the schema permits.
+
+    Takes the parsed workflow rather than reading the committed one, so the
+    class at the end of this file can hand it the mapping form. The committed
+    workflow uses the scalar, so a reader that read only its own file would
+    leave the mapping branch unexecuted -- and that branch's failure mode is the
+    one this read exists to distinguish: it returns nothing, and nothing is also
+    what a genuinely removed gate returns.
+    """
     found = []
-    for job in jobs(load_yaml(PLATFORM_DEPLOY)).values():
+    for job in jobs(workflow).values():
         declared = job.get("environment")
         if isinstance(declared, dict):
             declared = declared.get("name")
         if declared:
             found.append(str(declared))
     return found
+
+
+def platform_deploy_gated_environments() -> list[str]:
+    """`gated_environments` over the committed `platform-deploy.yml`."""
+    return gated_environments(load_yaml(PLATFORM_DEPLOY))
 
 
 def declared_github_environments() -> dict[str, str]:
@@ -621,7 +654,15 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
     def test_the_workflow_read_finds_the_environment_in_either_form(self) -> None:
         """GitHub accepts `environment: name` and `environment: {name: ...}`,
         and a read that saw only the first would report the second as ungated --
-        which is the same message as a gate genuinely removed."""
+        which is the same message as a gate genuinely removed.
+
+        BOTH FORMS ARE EXERCISED HERE, and only one of them by the committed
+        workflow. An earlier version of this test called the committed read
+        alone; the mapping branch was then never executed, so the test
+        established the scalar form and claimed both. A `url:` on the deploy job
+        -- which requires the mapping form -- would have been the first thing to
+        find out.
+        """
         gated = platform_deploy_gated_environments()
         self.assertEqual(
             1,
@@ -629,6 +670,28 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             f"platform-deploy.yml declares {gated} deployment environment(s); the read "
             "above is what the comparison is given, and a read returning nothing "
             "would report the deploy ungated whatever the workflow said",
+        )
+        self.assertEqual(
+            ["main-production"],
+            gated_environments({"jobs": {"deploy": {"environment": "main-production"}}}),
+            "the scalar form is not read",
+        )
+        self.assertEqual(
+            ["main-production"],
+            gated_environments(
+                {
+                    "jobs": {
+                        "deploy": {
+                            "environment": {
+                                "name": "main-production",
+                                "url": "https://example.invalid",
+                            }
+                        }
+                    }
+                }
+            ),
+            "the mapping form is not read, so a gate declared with a `url:` would "
+            "report as no gate at all",
         )
 
     def test_the_reader_refuses_rather_than_reporting_an_empty_tree_clean(self) -> None:
