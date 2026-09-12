@@ -502,18 +502,6 @@ The existing comment in those three anticipated this: *"Copies are not the only 
 
 Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.
 
-## 64. move-the-platform-data-mount
-
-Recorded 2026-09-11 by the naming exploration that produced `docs/naming-conventions.md`. **No longer blocked**: `rename-the-stacks-and-their-resources` renamed the volume. Independent of entry 63 and may go before or after it.
-
-`/mnt/main-data` becomes `/mnt/main`, so that the mount path matches the volume's name. **The volume is already `main`** — `rename-the-stacks-and-their-resources` renamed it and deliberately left the path alone, because the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on the volume's id, so the two are independent and the rename cost no migration. What remains is the path itself: `platform_data_volume_mount_path`, the two bind mounts in `platform/docker-compose.yml`, the `.github/tests` literals that assert them, and the several comments that change left saying the two differ **until this entry** — those are a commitment to perform it, and deleting them is part of the work.
-
-**`.github/tests` asserts that the two stacks agree with each other on the volume's name, and no longer that either agrees with the mount path.** Entry 62 separated those two propositions; this entry is where the second becomes true again.
-
-**There is no data migration.** The filesystem lives on the volume and the subdirectories travel with it; only the mountpoint moves, which is an `/etc/fstab` entry and a remount. What it does cost is a stack restart, so Prometheus and Grafana are down for the window and their scrape gap is visible afterwards.
-
-**One trap does the damage if missed.** `ansible.posix.mount` with `state: mounted` adds the new entry and does **not** remove the old one, so the converge leaves `/mnt/main-data` in `/etc/fstab` and the device remounts at two paths on the next reboot. A one-shot task with `state: absent` for the old path is required, and it is the kind of cleanup that is easy to write, easy to verify on the day, and invisible until a reboot months later.
-
 ## 66. bound-the-molecule-matrix-with-a-timeout
 
 Recorded 2026-09-11 by the same investigation, and independent of `cache-the-apt-index-within-a-converge`.

@@ -157,7 +157,6 @@ EXEMPT_PREFIXES = ("openspec/", ".github/tests/")
 # surprise.
 EXEMPT_WHOLE_PATHS = {
     "docs/review-2026-09-08-host-readiness.md": "records what was observed on one date",
-    "docs/change-queue.md": "entry 64 is this change; expires when that entry is deleted",
 }
 
 # The exemption scoped to a LINE rather than to a file, which this change

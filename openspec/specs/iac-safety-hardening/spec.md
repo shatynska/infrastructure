@@ -205,8 +205,8 @@ The platform stack's stores as at 2026-09-08, and the reason each satisfies this
 | Store | Reason |
 |---|---|
 | The shared PostgreSQL instance's data — `postgres_data`, on the host `platform_postgres_data` | Non-durable by policy — *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) limits it to technical or temporary records whose loss is tolerable to the application that wrote them |
-| Prometheus's time-series database (`/mnt/main-data/prometheus`) | Rolling retention it enforces on itself, bounded by both time and size |
-| Grafana's data directory (`/mnt/main-data/grafana`) | Split, and both halves are covered: the datasource and the dashboards this repository provisions are reproduced by a redeploy, and the rest is non-durable under the dashboard-state policy stated below |
+| Prometheus's time-series database (`/mnt/main/prometheus`) | Rolling retention it enforces on itself, bounded by both time and size |
+| Grafana's data directory (`/mnt/main/grafana`) | Split, and both halves are covered: the datasource and the dashboards this repository provisions are reproduced by a redeploy, and the rest is non-durable under the dashboard-state policy stated below |
 | Traefik's ACME storage — `traefik_letsencrypt`, on the host `platform_traefik_letsencrypt` | Certificates are re-issued on demand by the certificate authority |
 | Alertmanager's state, in the anonymous volume its image declares at `/alertmanager` | Non-durable under the alerting-state policy stated below. This store is declared by the image rather than by the stack definition, which is why the scope above reaches an anonymous volume and why the table was built from the host rather than from `platform/docker-compose.yml` |
 
