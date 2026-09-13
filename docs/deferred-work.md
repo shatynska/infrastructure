@@ -341,3 +341,15 @@ Nothing detaches a minor at the end of a scenario, so after any suite run this t
 This is what `AGENTS.md` already says of namespaces generally — they accumulate, they are named after the tree, and nothing reclaims them. The loop minor is now one more of those.
 
 **Revisit when** a workstation is actually inconvenienced by the accumulation, or when a scenario is added whose `prepare` cannot release its own minor for some reason the current fixtures do not have.
+
+## A check over citations naming a change
+
+Declined 2026-09-13 by `correct-the-documents-against-the-tree`, which built the sibling check over citations naming a **requirement** and measured this one rather than assuming it would work the same way.
+
+`docs/change-queue.md` entry 74 raised it: `docs/bootstrap-a-new-host.md` twice cited a change named `add-a-staging-stack`, which never existed, and no check in this repository could see it. That is the same shape as the requirement-name defect — a citation correct when written and wrong once something it names moves — so the same remedy suggests itself.
+
+**It was declined on a measurement, not on a feeling about false positives.** Sweeping every `entry <N>` and every backticked kebab-case token that resolves like a change name finds forty-odd occurrences, and the overwhelming majority are **historical statements that are correct**: "the former entry 50", "Was `docs/change-queue.md` entry 26, deleted from there and recorded here", "8 by `namespace-the-molecule-suite-per-working-tree`". This file and the change queue are *built* out of such statements — saying what became of a deleted entry is their job. A check reporting them would have to exempt both files entirely, which leaves it reading almost nothing, or carry a per-occurrence exemption list longer than the defect it finds.
+
+**The asymmetry with requirement names is what makes one checkable and the other not.** A retired requirement name has no legitimate use outside a record of its own retirement, and that set was one file and one line when the sibling check was written. A retired change name has many legitimate uses, and they are concentrated in exactly the two files that would have to be exempt.
+
+**Revisit when** a mechanism exists to distinguish a citation from a historical mention — an explicit marker at the citation, or a citation form that a record of a deletion would not match. Without one, the check cannot be written without either blinding itself to the two files where change names are densest or reporting correct prose.
