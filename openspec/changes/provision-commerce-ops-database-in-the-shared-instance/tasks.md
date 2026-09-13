@@ -1,7 +1,9 @@
 ## 1. Tests
 
-- [ ] 1.1 Record the baseline: `python3 -m unittest discover --start-directory .github/tests` from this working tree's root, with `.github/requirements-ci.txt`'s pins installed. Verify it is green and note the count.
-- [ ] 1.2 Dispatch the independent test author once the plan review permits proceeding and the plan is committed, before any file below is edited, with **all three rows** of `AGENTS.md`'s test table, no verdict about which apply, and design.md decision 9's statement of what is and is not verifiable. Verify by the author's report: new tests and a `test-plan.md`, or a stated gap with its reason.
+- [x] 1.1 Record the baseline: `python3 -m unittest discover --start-directory .github/tests` from this working tree's root, with `.github/requirements-ci.txt`'s pins installed. Verify it is green and note the count.
+  - 1125 tests, OK, on 2026-09-13, PyYAML 6.0.1 and pre-commit 4.6.2 installed.
+- [x] 1.2 Dispatch the independent test author once the plan review permits proceeding and the plan is committed, before any file below is edited, with **all three rows** of `AGENTS.md`'s test table, no verdict about which apply, and design.md decision 9's statement of what is and is not verifiable. Verify by the author's report: new tests and a `test-plan.md`, or a stated gap with its reason.
+  - Plan review: FIX REQUIRED in rounds 1 and 2, CONDITIONALLY APPROVED in round 3 with two `[MINOR]` conditions, both applied; plan committed as `2315199`. The author placed 60 tests in `.github/tests/test_the_shared_instance_has_its_first_database.py` and wrote `test-plan.md`: neither Terraform nor Molecule has a subject here. Suite after: 1185 tests, 9 failures, all in the new module and each red on the implementation tasks 2.1 and 3.1 owe; the 1125 existing tests pass. Two scenarios are reported uncovered and three partly, with reasons, in `test-plan.md`.
 
 ## 2. The recipe — `docs/bootstrap-a-new-host.md`
 
