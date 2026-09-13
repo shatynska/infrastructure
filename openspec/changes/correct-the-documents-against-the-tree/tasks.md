@@ -46,7 +46,7 @@ Measured 2026-09-13 at trunk `80a8ec5`: **47 occurrences across 13 files**, of w
 - [x] 4.1 `docs/bootstrap-a-new-host.md:1001` (Appendix C) — "log rotation (21), swap and container limits (22, 7)" names two entries that no longer exist: 21 and 22 were delivered by `bound-host-log-growth-and-add-swap`. Only 7 is outstanding. "DNS as code (26)" likewise: entry 26 was declined and is now a `docs/deferred-work.md` section, which §4.4 already cites correctly.
 - [x] 4.2 `docs/deferred-work.md:330` — `**Owner:** docs/change-queue.md entry 62`, in *The stack rename left the word in test identifiers and in specification titles*. Entry 62 is archived as `rename-the-stacks-and-their-resources`; say what it did to each of that section's three bullets rather than pointing at it as a future owner. Its "Requirement titles carrying *Environment*" bullet in particular is no longer true as written. Write its *Scenario titles* bullet knowing task 6.2's new queue entry exists, and point the two at each other (task 6.2b).
 - [x] 4.3 `ansible/roles/platform_data_volume/tasks/main.yml:191` and `ansible/roles/swap/tasks/main.yml:126` — both cite entry 23 as the change that *would* move the host converge into a workflow. It did, as `apply-host-configuration-through-a-gated-workflow`.
-- [x] 4.4 `docs/change-queue.md` entries 25 and 30 — both cite entry 23 in the same forward tense.
+- [x] 4.4 `docs/change-queue.md` entries **27** and 30 — both cite entry 23 in the same forward tense. (The task said 25 when it was written; entry 25 carries no such pointer, having already said "the wait is over". The edits landed in 27 and 30.)
 
 ## 5. The GitHub App, and the naming banner
 

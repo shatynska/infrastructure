@@ -113,6 +113,26 @@ EMPHASISED = re.compile(r"\*([^*\n]+)\*")
 QUOTED = re.compile(r"\"([^\"\n]+)\"")
 
 
+def _is_archived_delta_spec(path: str) -> bool:
+    """Whether `path` is an archived change's delta specification.
+
+    `openspec/changes/archive/<date>-<name>/specs/<capability>/spec.md`, and
+    nothing else under the archive. The narrowing is not decoration: an archived
+    `design.md`, `proposal.md` or `test-plan.md` routinely reproduces fragments
+    of a specification to explain a decision, and two archived `test-plan.md`
+    files in this repository already carry `### Requirement:` headings. The first
+    one to quote a `## REMOVED Requirements` block at column 0 would inject that
+    name into the retired set, after which this sweep reports every CORRECT
+    citation of it repo-wide -- a false positive indistinguishable from a real
+    offence, arriving in a change that has nothing to do with renames.
+    """
+    return (
+        path.startswith(ARCHIVE_PREFIX)
+        and "/specs/" in path
+        and path.endswith("/spec.md")
+    )
+
+
 def _named_spans(text: str) -> list[str]:
     """Every span of `text` that could be naming a requirement.
 
@@ -156,6 +176,16 @@ def _named_spans(text: str) -> list[str]:
 #       the file, and a reader following this reason should find it there.
 #       Unlike the one below it, this exemption does not expire: the record
 #       stays true.
+#
+#       WHAT THAT COSTS, measured rather than waved at: this file cites 17 live
+#       requirement names, against 13 in `docs/change-queue.md`, so the exemption
+#       leaves a citation surface of the same order as the one the module
+#       refuses to exempt in `.github/tests/`. The next rename lands here unread.
+#       The requirement admits only whole-path exemptions, so nothing narrower is
+#       available; a change wanting to close it would have to move the one
+#       historical sentence somewhere the sweep reads, or give the requirement a
+#       per-occurrence form. Stated here because a change arguing that unchecked
+#       surfaces re-accumulate owes the measurement of the one it leaves.
 #
 #   `docs/change-queue.md` -- EXPIRES. Entry 74 names *Each Environment Has a
 #       Dedicated Hetzner Cloud Project*, because naming the stale citation is
@@ -285,7 +315,7 @@ def retirements(files: Mapping[str, str]) -> dict[str, str | None]:
     labelled: dict[str, list[str]] = {}
     candidates: dict[str, list[str]] = {}
     for path, text in files.items():
-        if not path.startswith(ARCHIVE_PREFIX):
+        if not _is_archived_delta_spec(path):
             continue
         section = None
         current = None

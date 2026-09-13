@@ -189,7 +189,9 @@
     # the same reason and `swap` records the same concern, so a `--check` run
     # of host-baseline.yml is a property sibling roles deliberately keep;
     # the converge that `apply-host-configuration-through-a-gated-workflow`
-    # moved into the pipeline does not read it as drift.
+    # moved into the pipeline does not read it as drift. `docs/change-queue.md`
+    # entry 58 would build host drift detection on that property, so this
+    # guard is a precondition of that entry rather than dead weight.
     - not ansible_check_mode
   # THE ROLE CHECKS ITS OWN WORK, because the retirement above cannot report
   # having failed. `absent_from_fstab` is a no-op on anything it does not match
