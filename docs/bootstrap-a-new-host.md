@@ -957,37 +957,39 @@ This is settled, and the answer depends on one question about the data: would lo
 - **Durable data** — anything whose loss would not be tolerable — goes to an **external managed service that owns its own backups**, not onto this host. Never into the shared instance: that is absolute, and no backup lifts it, because holding only non-durable data is what makes that instance classifiable as needing none. Not into a PostgreSQL container of the application's own either, unless a logical backup written off the host and a restore rehearsed and checked are both in place before the data lands — *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) is where that is written, and no application has cleared that bar.
 - **Non-durable relational data** — a job table, bookkeeping, state whose loss its writer can shrug at, and anything an application keeps in its database on a **staging** host, where the operator is the only party writing it and its loss is tolerable to the operator — goes in the **shared instance**, never a container of the application's own. That part is unconditional: no backup licenses a private PostgreSQL. Where an application's tables divide, only the non-durable ones go here, and the change in this repository that records the database states which are which; a table that division does not name stays out until one does. Never copy production data into a staging instance.
 
-  Provision one role and one database, named after the application, **once per deploy target**. The application's repository needs that target's Environment first (8.4, the Environments item): the recipe stores the password there, and stops before changing anything if the Environment does not exist. Fill in the first line — `<SECRET>` is the name the application's deploy reads the password from, and must be a name that Environment does not already hold — then paste the whole block, as it stands, into one shell on your workstation:
+  Provision one role and one database, named after the application, **once per deploy target**. The application's repository needs that target's Environment first (8.4, the Environments item): the recipe stores the password there, and stops before changing anything if the Environment does not exist. Fill in the first line — `<SECRET>` is the name the application's deploy reads the password from, and must be a name that Environment does not already hold. `host` is anything `ssh` accepts, so if the key for that host is not your default one, give it an alias with an `IdentityFile` in `~/.ssh/config`. Then paste the whole block, as it stands, into one bash shell on your workstation — copied from the rendered page or from the raw file alike, since it starts at column 0 and the closing `SQL` has to:
 
-  ```sh
-  (
-  set -eu
-  app=<app> secret=<SECRET> repo=<org>/<app> env=<environment> host=<operator>@<host> rotate=no
-  names=$(gh secret list --repo "$repo" --env "$env" --json name --jq '.[].name')
-  if printf '%s\n' "$names" | grep -qx "$secret" && [ "$rotate" != yes ]; then
-    echo "refusing: $secret is already set in $env; set rotate=yes in this block only to rotate it" >&2; exit 1
-  fi
-  pw=$(openssl rand -hex 32)
-  printf '%s' "$pw" | gh secret set "$secret" --repo "$repo" --env "$env"
-  ssh "$host" 'docker exec -i platform-postgres-1 sh -c '\''psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'\' <<SQL
-  SET log_statement = 'none';
-  SET log_min_error_statement = 'panic';
-  SET log_min_duration_statement = -1;
-  SET log_min_duration_sample = -1;
-  SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$app') AS create_role,
-         NOT EXISTS (SELECT FROM pg_database WHERE datname = '$app') AS create_database \gset
-  \if :create_role
-  CREATE ROLE "$app" WITH LOGIN PASSWORD '$pw';
-  \else
-  ALTER ROLE "$app" WITH LOGIN PASSWORD '$pw';
-  \endif
-  \if :create_database
-  CREATE DATABASE "$app" OWNER "$app";
-  \endif
-  REVOKE CONNECT, TEMPORARY ON DATABASE "$app" FROM PUBLIC;
-  SQL
-  )
-  ```
+```sh
+(
+set -eu
+app=<app> secret=<SECRET> repo=<org>/<app> env=<environment> host=<operator>@<host> rotate=no
+names=$(gh secret list --repo "$repo" --env "$env" --json name --jq '.[].name')
+if printf '%s\n' "$names" | grep -qx "$secret" && [ "$rotate" != yes ]; then
+  echo "refusing: $secret is already set in $env; set rotate=yes in this block only to rotate it" >&2; exit 1
+fi
+pw=$(openssl rand -hex 32)
+printf '%s' "$pw" | gh secret set "$secret" --repo "$repo" --env "$env"
+ssh "$host" 'docker exec -i platform-postgres-1 sh -c '\''psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'\' <<SQL
+SET log_statement = 'none';
+SET log_min_error_statement = 'panic';
+SET log_min_duration_statement = -1;
+SET log_min_duration_sample = -1;
+SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$app') AS create_role,
+       NOT EXISTS (SELECT FROM pg_database WHERE datname = '$app') AS create_database \gset
+\if :create_role
+CREATE ROLE "$app" WITH LOGIN PASSWORD '$pw';
+\else
+ALTER ROLE "$app" WITH LOGIN PASSWORD '$pw';
+\endif
+\if :create_database
+CREATE DATABASE "$app" OWNER "$app";
+\endif
+REVOKE CONNECT, TEMPORARY ON DATABASE "$app" FROM PUBLIC;
+SQL
+)
+```
+
+Expected output: `gh`'s confirmation that the secret was set, then `SET` four times, then `CREATE ROLE` (or `ALTER ROLE`), `CREATE DATABASE` (absent on a re-run), `REVOKE`.
 
   What each part is for:
 
