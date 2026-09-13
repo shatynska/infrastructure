@@ -44,9 +44,10 @@ hardening_ssh_allowed_cidrs:
 # PUBLISHES those ports, and a container-published port is DNAT'd and
 # traversed in FORWARD, never offered to UFW's INPUT chain -- so a tailnet
 # peer reaches them today and the cloud firewall is the whole of what refuses
-# from the internet. See docs/backlog.md entry 53. What stands here is the
-# mirror of terraform.tfvars, and opening staging to the public web is still
-# entry 17, which needs a DNS record too.
+# from the internet. See docs/backlog.md's say-what-the-host-firewall-
+# actually-gates. What stands here is the mirror of terraform.tfvars, and
+# opening staging to the public web is still expose-staging-on-the-web in
+# that same file, which needs a DNS record too.
 hardening_web_allowed_cidrs: []
 
 # Operator identities allowed an unprivileged, interactive login on this
