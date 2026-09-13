@@ -178,10 +178,10 @@ You will write these into each stack's `terraform.tfvars` in stage 3. Decide the
 
 Terraform needs somewhere to keep its state file (the record of what it created) that both your workstation and CI can reach, with a lock so two runs cannot overlap. HCP Terraform provides exactly that, and this setup uses nothing else from it.
 
-1. Register at app.terraform.io and create an organisation named `<company>`.
-2. Create **two** workspaces, both **CLI-driven workflow**, no VCS connection, named for their stacks: `main-production` and `main-staging`. The names are read from each stack's `versions.tf` in stage 3, so a typo there creates a second, empty workspace under whatever you typed. **No two stacks may share a workspace** — a workspace holds one state, so sharing one would have each apply read the other's resources as its own and plan them for destruction.
+1. Register at app.terraform.io. The sign-up page offers **Create HCP account** and **Create Terraform account**; choose **Create HCP account**, which is the one HashiCorp recommends — a standalone Terraform account works for this setup too, but it keeps its own password and multi-factor settings apart from every other HashiCorp product. Then create an organisation named `<company>`.
+2. Create **two** workspaces, both **CLI-driven workflow**, no VCS connection, named for their stacks: `main-production` and `main-staging`. The form asks for a **Project** and offers **Default Project**. Nothing in this repository reads the project — the `cloud` block in each `versions.tf` names only the organisation and the workspace — so either choice works. The suggestion is to rename Default Project to `main` first (organisation Settings → Projects; it can be renamed but not deleted) and put both workspaces in it: `main` is the tenant both stack names begin with, so a later tenant's workspaces get a project of their own. The names are read from each stack's `versions.tf` in stage 3, so a typo there creates a second, empty workspace under whatever you typed. **No two stacks may share a workspace** — a workspace holds one state, so sharing one would have each apply read the other's resources as its own and plan them for destruction.
 3. In **each** workspace's Settings → General, set **Execution Mode** to **Local**, and save. This is essential and it is per workspace: the default is Remote, so a workspace created and not adjusted is misconfigured even when its sibling is correct. Remote execution runs plans on HCP's machines, and `terraform plan -out=tfplan` then yields no plan file the apply job can apply — which breaks the saved-plan approval flow with no error naming execution mode.
-4. Create an API token, and it **must be a USER token**: your avatar (top right) → **Account settings → Tokens → Create an API token**. One token; this tier has no way to split it by privilege, and the Hetzner token split in stage 1 is the real security boundary.
+4. Create an API token, and it **must be a USER token**: your avatar (top right) → **Account settings → Tokens → Create an API token**. The **Description** is required; name what uses the token, for example `infrastructure: GitHub Actions and terraform login`, so whoever finds it later knows what revoking it breaks. For the expiration, choose no expiry if offered, otherwise the longest available with its date in the password-manager entry: an expired token stops every plan, apply and nightly drift check on that date without warning. One token; this tier has no way to split it by privilege, and the Hetzner token split in stage 1 is the real security boundary.
 
    **Not an organisation token, and not a team token.** HCP issues three kinds and they are not interchangeable. An organisation token (Organisation settings → API token) administers organisation objects — workspaces, teams, variables — and **cannot perform state operations**. A team token is limited to that team's workspace permissions. Only a user token can lock a workspace and write state, which is what every job in this pipeline does.
 
@@ -262,16 +262,16 @@ All of these are in Settings on github.com, or via `gh`.
 
 1. **Environments, two of them.** Settings → Environments → New environment, twice:
 
-   - **`production`** — add the protection rule **Required reviewers** and name at least one person. For a company, this person should not be the only person who opens pull requests; the Environment approval is the human gate every production change passes through.
-   - **`staging`** — add **no** protection rules at all. Its apply runs on merge, without a human.
+   - **`main-production`** — add the protection rule **Required reviewers** and name at least one person. For a company, this person should not be the only person who opens pull requests; the Environment approval is the human gate every production change passes through.
+   - **`main-staging`** — add **no** protection rules at all. Its apply runs on merge, without a human.
 
    The names must match what each stack's `pipeline.yml` declares (step 5 of 3.1), and they must differ from each other: two stacks naming one GitHub Environment would share its write token and its protection rules, so the ungated one would hold the reviewed one's credential. Discovery fails the pipeline, naming both, if they ever collide.
 
-   **What makes an ungated apply safe is the project boundary from stage 1, and nothing else.** Staging's write token can destroy staging's Hetzner project and cannot touch production's. Whether an Environment requires a reviewer is a repository setting that no file in this repository can verify — which cuts both ways: nothing will tell you if `production` loses its reviewer either.
+   **What makes an ungated apply safe is the project boundary from stage 1, and nothing else.** Staging's write token can destroy staging's Hetzner project and cannot touch production's. Whether an Environment requires a reviewer is a repository setting that no file in this repository can verify — which cuts both ways: nothing will tell you if `main-production` loses its reviewer either.
 
    **AN ENVIRONMENT'S NAME CANNOT BE CHANGED AFTER YOU CREATE IT, SO CHOOSE IT HERE RATHER THAN LATER.** GitHub offers no rename: not in the interface, and not in the REST API, which exposes only create-or-update, read and delete with the name in the path (measured 2026-09-12 by `rename-the-external-services`). Moving an Environment therefore means creating a second one, re-entering **every** secret it holds — a value GitHub will not read back to you — re-adding its protection rules, and deleting the first. On this repository that is twenty-one secrets across the two, three of which are SSH private halves §0.3 has you delete once stored, so each needs a key rotation with a step on the host.
 
-   **NAME THESE FOR THEIR STACKS: `main-production` and `main-staging`**, matching the stack directories, the HCP workspaces, the read-only secrets and the inventory sources. `docs/naming-conventions.md` asks for exactly that and this repository's own Environments now carry those names. **For you they cost nothing**, because you are creating them for the first time — this repository paid for them, since GitHub offers no way to rename a deployment Environment and moving one means re-creating it and re-entering every secret it holds. Set each stack's `github_environment` to match in step 5 of §3.1.
+   **Name them for their stacks, `main-production` and `main-staging`**, matching the stack directories, the HCP workspaces, the read-only secrets and the inventory sources (`docs/naming-conventions.md`). Set each stack's `github_environment` to match in step 5 of §3.1.
 2. **Label.** Issues → Labels → New label: `destroy-override`. A merged pull request must carry this label for the apply workflow to accept a plan that deletes or replaces a resource. Without it, such plans fail on purpose.
 3. **Workflow token.** Settings → Actions → General → Workflow permissions: **Read repository contents and packages permissions**. Each workflow declares the little it needs on top.
 4. **Merge methods.** Leave merge commits enabled. The destroy gate reads the pull request number from the merge commit message; squash and rebase merges fall back to a slower API lookup.
@@ -325,7 +325,7 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 
 **Each Environment must define its own `HCLOUD_TOKEN`.** GitHub resolves an *absent* Environment secret to the repository secret of the same name rather than failing — so an Environment that omits it applies with whatever the repository holds under that name. **No repository secret carries that name here**, deliberately: production's read-only token is `HCLOUD_TOKEN_MAIN_PRODUCTION` and staging's is `HCLOUD_TOKEN_MAIN_STAGING`, precisely so that no job attached to an Environment can resolve a read-only field to a write token. The fallback therefore resolves to nothing, and the apply job's guard still refuses — it digests both sides and they match as the empty string. That is the guard working, not a hole: an Environment that omits its write token fails rather than applying with something else's. The fix is still here.
 
-**Check:** nine secrets set — five at repository scope, two on each Environment; `production` shows one required reviewer and `staging` shows none; the label exists; the App is installed on this repository and on no other; the repository is private and holds exactly one commit, the license.
+**Check:** nine secrets set — five at repository scope, two on each Environment; `main-production` shows one required reviewer and `main-staging` shows none; the label exists; the App is installed on this repository and on no other; the repository is private and holds exactly one commit, the license.
 
 ## Stage 4. First Terraform apply: both servers exist
 
@@ -461,12 +461,14 @@ The private network. CI runners join it for the length of one job to reach a hos
 
 ### 5.1 Create the tailnet
 
-1. Sign up at tailscale.com with the company's identity provider. The tailnet is created with the first login.
-2. Install the Tailscale client on your workstation and log in. Your machine is now on the tailnet.
+1. Sign up at login.tailscale.com. It offers identity providers (Google, Microsoft, GitHub and others) rather than a password; sign in with the **company's** account on that provider, not a personal one. The tailnet is created on that first login and belongs to that identity, and colleagues join it by logging in with an account from the same organisation.
+2. Install the Tailscale client on your workstation and log in with the same account. Your machine is now on the tailnet. The sign-up wizard asks you to add a device; this is that device.
 
 ### 5.2 Access control: allow the CI tag
 
-Access controls → edit the policy file. Add the CI tag so an OAuth client can mint nodes carrying it:
+**`tag:ci` is not attached to anything by hand.** It is the label each CI job's runner carries while it is on the tailnet: `host-converge.yml` and `platform-deploy.yml` join through `tailscale/github-action` with `tags: tag:ci`, authenticated by the OAuth client from §5.3, so every runner joins as a short-lived node tagged `tag:ci` and is removed when the job ends. The servers and your workstation carry no tag. A tag cannot be given to an OAuth client until the policy file says who owns it, and that is all this step does.
+
+Admin console → **Access controls** → edit the policy file. Add `tagOwners` as a top-level key, or add the line to the `tagOwners` block if the file already has one:
 
 ```json
 "tagOwners": {
@@ -481,7 +483,7 @@ Both hosts run with no further restriction, so any tailnet member can reach eith
 | Credential | Where | Settings |
 |---|---|---|
 | Auth key for the servers | Settings → Keys → Generate auth key | **Reusable**, **not** ephemeral, no tags, expiry as long as allowed (90 days). **One reusable key serves both hosts** — Ansible consumes it once per run and skips the join on a host already on the tailnet — so generate a second only if you make it single-use, or if you want to revoke one host's join without touching the other. A single-use key is also burnt by the *first* join, so a host that has to be rebuilt needs a fresh one. **Then, per machine:** Machines → that server → **Disable key expiry**, or that host silently drops off the tailnet in 180 days. It is a per-node setting; doing it for one host does nothing for the other. |
-| OAuth client for CI | Settings → OAuth clients → Generate OAuth client | Scope **Auth Keys: Write**, with tag `tag:ci`. Produces a client ID and a client secret. |
+| OAuth client for CI | **Trust credentials** (called OAuth clients in older consoles) → Credential → OAuth | Scope **Auth Keys: Write**, with tag `tag:ci`, which is offered only once §5.2's `tagOwners` entry is saved. Produces a client ID and a client secret. |
 
 **Secrets created in this stage**
 
@@ -498,9 +500,6 @@ Each application repository will need the same two OAuth values in stage 8; one 
 **Check:** your workstation appears in Machines; `tag:ci` appears in the policy file without a syntax error; and each server's **machine name is the server's own name** — `main-production` and `main-staging`. That last is what the converge job looks the host up by: it asks `tailscaled` for the peer of that name and maps the answer, rather than trusting DNS. A name that does not match is a converge that cannot find its host.
 
 **The machine name is not the same field as the name the host reports, and only one of them is this repository's to set.** The `tailscale` role pins what the host reports, to `{{ inventory_hostname }}`, so that the host's own name — which carries the company, `shatynska-main-production` — never drives it. The *machine* name is assigned when the host first joins and is changed in the Tailscale interface and nowhere else. A rename of either therefore has two halves: a commit for the first, and a click for the second.
-
-**After a rebuild, delete the old machine**: Tailscale suffixes a rejoining host (`main-production-1`) and the old node keeps the bare name, so the name would resolve to a peer that no longer exists — see Appendix B.
-
 ## Stage 6. Ansible: configure the host
 
 This stage is run from your workstation — **once per host, and only once.** Every converge after this one is a merge: `host-converge.yml` runs the same play, against the same inventory, on a merge to `main` touching `ansible/`, with production's waiting for the same Environment approval a Terraform apply waits for. §6.6 is where you hand that workflow what it needs.
@@ -1048,11 +1047,11 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | Name | Where | Created in | Value from | Breaks when wrong |
 |---|---|---|---|---|
 | Production Hetzner Read Only | repo-root `.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_MAIN_PRODUCTION`**; repo secret `HCLOUD_TOKEN_MAIN_PRODUCTION` | 1 | The production Hetzner project → API tokens | Production's local plans, PR plans and drift detection; production's Ansible inventory source, locally and in the converge workflow. **Rotating it means editing two local files and one secret** — miss `ansible/.envrc` and the next local converge dies at inventory parse. The repository secret and the `ansible/.envrc` variable share a name on purpose: the converge job exports the declared secret under the name the inventory source reads |
-| Production Hetzner Read & Write | `production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
+| Production Hetzner Read & Write | `main-production` Env secret `HCLOUD_TOKEN` | 1 | Same project | Production's apply job |
 | Converge key, **per stack** | That stack's Env secret `ANSIBLE_SSH_PRIVATE_KEY`; public half in `root`'s `authorized_keys` on that host | 2 | You generate it (§0.3) | `host-converge.yml`'s converge job, as `root`. **Revoking it is an edit on the host** — no role owns that file |
 | Vault password, **per stack** | Password manager **and** that stack's Env secret `ANSIBLE_VAULT_PASSWORD` | 2 | You chose it (§6.1) | The play, locally and in the converge job. Two places rather than one deliberately: a lost workstation no longer means a host nobody can converge |
 | Staging Hetzner Read Only | `terraform/stacks/main-staging/.envrc` as `HCLOUD_TOKEN`; **`ansible/.envrc` as `HCLOUD_TOKEN_MAIN_STAGING`**; repo secret `HCLOUD_TOKEN_MAIN_STAGING` | 1 | The **staging** Hetzner project → API tokens | Staging's local plans, PR plans and drift detection; staging's Ansible inventory source, locally and in the converge workflow. Two local files here too |
-| Staging Hetzner Read & Write | `staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
+| Staging Hetzner Read & Write | `main-staging` Env secret `HCLOUD_TOKEN` | 1 | Same project | Staging's apply job |
 | `TF_API_TOKEN` | Repo secret and **both** Env secrets; `terraform login` locally | 2 | HCP Terraform → **Account settings** → Tokens (a USER token; an organisation token cannot write state) | Every Terraform job, and `terraform init` locally |
 | Operator SSH key | Workstation | 0 | `ssh-keygen` | Root access; Ansible |
 | Operator inspection key | Workstation | 0 | `ssh-keygen` | Daily unprivileged login |
