@@ -6,10 +6,11 @@
 # repository that a stack's name and its group's name are independent.
 #
 # Written from scratch rather than copied from the production group's file and
-# edited: `docs/deferred-work.md`'s "Two gaps in required-input
-# validation that only the play could close" names this file as the first
-# moment a group_vars is written from scratch, and so the first moment either
-# gap has a real case rather than a constructed one.
+# edited: the two gaps in required-input validation that only the play could
+# close -- recorded in `ansible/playbooks/host-baseline.yml`, above its `swap`
+# role -- name this file as the first moment a group_vars is written from
+# scratch, and so the first moment either gap has a real case rather than a
+# constructed one.
 #
 # The staging server was created with only a single SSH key and no root
 # password (terraform/modules/server/main.tf's own comment: providing a key
@@ -37,8 +38,8 @@ hardening_ssh_allowed_cidrs:
 # Stated rather than omitted. The role defaults it to [] anyway, but the
 # mirror obligation above is between this file and terraform.tfvars, and an
 # absent value mirrors nothing. The change that puts the platform stack on
-# staging opens 80/443 in both places together -- see docs/change-queue.md's
-# staging web-exposure entry.
+# staging opens 80/443 in both places together -- see docs/backlog.md entry
+# 17, expose-staging-on-the-web.
 hardening_web_allowed_cidrs: []
 
 # Operator identities allowed an unprivileged, interactive login on this
@@ -140,9 +141,9 @@ ghcr_pull_username: shatynska
 # first and all change the host, so an incomplete file here produces a
 # partially-converged host -- Docker installed, UFW enabled, tailnet joined --
 # and not an untouched one. That is recoverable by completing this file and
-# re-running, every role being idempotent, and it is the exposure
-# docs/deferred-work.md's "Two gaps in required-input validation that only the
-# play could close" describes.
+# re-running, every role being idempotent, and it is the exposure the two
+# play-scope gaps describe -- recorded in ansible/playbooks/host-baseline.yml,
+# above its `swap` role.
 #
 # So this file's state is PENDING the operator, not finished. Until it is
 # completed there is no converged staging host, no prune timer and no

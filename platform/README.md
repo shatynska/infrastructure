@@ -41,7 +41,7 @@ A non-relational store — a Redis cache, a queue file, an uploads directory —
 
 **Durable data goes to an external managed service that owns its own backups.** Never into this instance: that prohibition is absolute, and no backup lifts it, because holding only non-durable data is exactly what makes this instance classifiable as needing no backup. Not into a PostgreSQL container of the application's own on this host either — unless the logical backup written off the host and the rehearsed, checked restore that *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) demands are both in place before the data lands. That is a bar, not a footnote, and no application has cleared it.
 
-**Getting a database inside the instance** is a manual step today — `docs/bootstrap-a-new-host.md` carries the `CREATE ROLE` / `CREATE DATABASE` recipe. Automating it, and delivering the credential the way an application's deploy key is delivered, is deliberately deferred until an application actually needs one; see `docs/deferred-work.md`.
+**Getting a database inside the instance** is a manual step today — `docs/bootstrap-a-new-host.md` carries the `CREATE ROLE` / `CREATE DATABASE` recipe. Automating it, and delivering the credential the way an application's deploy key is delivered, is deliberately deferred until an application actually needs one: a mechanism designed against no consumer would fix the shape of a credential path, a naming convention and a failure mode by guesswork. `docs/bootstrap-a-new-host.md` carries the reasoning and the revisit trigger.
 
 ## Monitoring and alerting
 
@@ -59,7 +59,7 @@ See `add-platform-monitoring`'s design.md for the full rationale — network pla
 
 You do not have to compute the value. The `.github/tests` suite recomputes it, fails the pull request when it disagrees, and names the value the label should hold — so this is a paste. Expect the edit to replace that service on the next deploy; that is the point. `apply-shipped-config-on-deploy`'s design.md carries the algorithm and the reasoning.
 
-One thing the label does **not** cover: a value the config interpolates from `.env`, such as Alertmanager's Slack webhook. Rotating that secret changes nothing the checksum can see, so the container is not replaced and keeps the old value — force a replacement by hand when you rotate one. `docs/change-queue.md` entry 48 covers closing this properly.
+One thing the label does **not** cover: a value the config interpolates from `.env`, such as Alertmanager's Slack webhook. Rotating that secret changes nothing the checksum can see, so the container is not replaced and keeps the old value — force a replacement by hand when you rotate one. `docs/backlog.md` entry 12 covers closing this properly.
 
 ### One-time manual step: postgres-exporter's monitoring role
 

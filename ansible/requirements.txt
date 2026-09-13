@@ -55,7 +55,7 @@ ansible-core==2.21.3
 # job running different versions of the library the inventory plugin depends on,
 # which is the same class of drift the `ansible-core` agreement exists to stop.
 #
-# Nothing moves these on their own: `docs/change-queue.md` entry 36 records that
+# Nothing moves these on their own: `docs/backlog.md` entry 44 records that
 # no pip manifest here is under Dependabot, so each is a deliberate bump.
 requests==2.34.2
 python-dateutil==2.9.0.post0

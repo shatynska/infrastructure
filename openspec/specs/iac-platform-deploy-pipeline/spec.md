@@ -105,7 +105,7 @@ A service with no Docker healthcheck defined is only guaranteed to be waited on 
 - **THEN** the deploy job SHALL report success
 
 ### Requirement: A Shipped Configuration Change Is Visible to the Container Runtime
-The shared platform stack embeds its monitoring, alerting and dashboard configuration inside the stack definition itself rather than in separate files — a choice recorded, with its reason, under "Splitting `platform/docker-compose.yml` into multiple files" in `docs/deferred-work.md` — and the runtime copies that configuration into each container when the container is created. A service's embedded configuration therefore changes only when its container is replaced.
+The shared platform stack embeds its monitoring, alerting and dashboard configuration inside the stack definition itself rather than in separate files — a choice made to keep the deploy-receive script's fixed two-member extraction list narrow, recorded with its reason at that list in `ansible/roles/deploy_user/tasks/main.yml` — and the runtime copies that configuration into each container when the container is created. A service's embedded configuration therefore changes only when its container is replaced.
 
 Where the runtime decides whether to replace a container by comparing a digest of the service definition, and that digest does not cover embedded configuration content, the stack definition SHALL carry — for each service that mounts embedded configuration — a property the digest does cover, whose value changes whenever that service's own embedded configuration changes and does not change when any other service's does.
 

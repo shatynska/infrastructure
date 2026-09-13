@@ -17,7 +17,7 @@ Satisfies "The Host Carries Swap That Survives a Reboot" in `openspec/specs/iac-
 
 **It does not fix a memory leak.** It converts a hard out-of-memory kill into a slowdown. That matters here because the OOM killer chooses by resident size rather than by which process leaked: on this host the largest resident processes are Postgres and Prometheus, so the likeliest victim is not the culprit. Swap buys `HostMemoryPressure` — which is computed from `MemAvailable/MemTotal` and is unaffected by swap existing — the ten minutes it needs to fire.
 
-**It does not alert on swap filling up.** Once swap exists, "swap is 80% consumed" is the signal that a leak is underway and the killer is next. `node_memory_SwapFree_bytes` is already scraped; the rule belongs in `platform/docker-compose.yml`, and is recorded in `docs/change-queue.md`.
+**It does not alert on swap filling up.** Once swap exists, "swap is 80% consumed" is the signal that a leak is underway and the killer is next. `node_memory_SwapFree_bytes` is already scraped; the rule belongs in `platform/docker-compose.yml`, and is recorded in `docs/backlog.md`.
 
 **It does not size container memory limits.** That is the companion piece, and it is blocked on observation data rather than on this role.
 

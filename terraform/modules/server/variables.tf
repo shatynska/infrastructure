@@ -74,6 +74,15 @@ variable "web_allowed_cidrs" {
   default     = []
 }
 
+# This one variable drives BOTH Hetzner flags in main.tf, delete protection and
+# rebuild protection. They are distinct capabilities and a consumer could in
+# principle want one without the other, and splitting them is deliberately not
+# done: no consumer wants them apart. Prod sets true and wants rebuild
+# protection with it; staging sets false and wants neither, because being
+# rebuilt is what staging is for. Splitting would add a variable, a validation
+# and a test for a case that does not exist, and the coupled default is the
+# safer one. Revisit when an environment must be rebuildable in place while
+# remaining undeletable, which neither of the two is.
 variable "delete_protection" {
   description = "Whether to enable Hetzner's server-side delete/rebuild protection. Parameterized (not a literal lifecycle.prevent_destroy) so this module stays reusable by environments that must remain destroyable, e.g. a future staging environment. Does not reliably block `terraform destroy`/replace (see design.md decision 7 finding for task 4.6) — the CI destroy-policy gate is the actual Terraform-side guard; this only blocks deletion via the Hetzner console/API."
   type        = bool

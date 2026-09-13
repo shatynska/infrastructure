@@ -222,6 +222,17 @@
 # extraction: GNU tar with named members extracts only those names,
 # ignoring anything else the archive contains (design.md's "explicit,
 # fixed member list" decision).
+#
+# THIS LIST IS WHAT BOUNDS WHAT A HOLDER OF A DEPLOY KEY CAN WRITE, and it is
+# why the platform stack is one 600-line docker-compose.yml holding the
+# Prometheus scrape config, the alerting rules, the Alertmanager routing tree
+# and three Grafana dashboards inline rather than being split into readable
+# files. Carrying additional files would mean widening this list, and every
+# entry added to it is a new path an attacker with that key could write to.
+# The editability gain does not pay for weakening the control. Revisit if the
+# stack outgrows what one file can reasonably hold, or if a mechanism appears
+# that adds files without widening what the forced command accepts -- a
+# checksummed bundle unpacked into a fixed subdirectory, say.
 - name: Install the deploy-receive script
   ansible.builtin.copy:
     dest: /usr/local/bin/deploy-receive

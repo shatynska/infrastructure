@@ -120,7 +120,7 @@ HOST_VOLUME_ROOT = "/mnt/"
 # not the bare string `main-data`: that is also the volume's retired NAME,
 # which `EXPECTED_RETIRED_VOLUME_NAMES` in
 # `test_a_stack_and_its_environment_are_named_separately.py` already covers and
-# which `docs/change-queue.md` entry 74 owns the remaining prose for. Sweeping
+# which a since-archived queue entry owned the remaining prose for. Sweeping
 # the bare name here would take that entry's work without planning it.
 SUPERSEDED_MOUNT_PATH = "/mnt/main-data"
 
@@ -145,19 +145,21 @@ EXEMPT_PREFIXES = ("openspec/", ".github/tests/")
 # edit, and each is checked below for still carrying the needle, so an
 # exemption cannot outlive what it exempts.
 #
-# `docs/review-2026-09-08-host-readiness.md` records what was observed on the
-# host on one date, and on that date the mount was the superseded path. Editing
-# it would make it say something that was not observed. PERMANENT.
+# EMPTY, and it has been since 2026-09-13. Both entries expired the way this
+# mechanism is meant to make them expire, and the shape is kept rather than
+# deleted because the next sweep of this kind needs it.
 #
-# `docs/change-queue.md` names the superseded path in entry 64, which is this
-# change, and that entry is deleted in the archive commit. EXPIRING: the
-# assertion below requires an exempt path to still contain the needle, so
-# archiving turns it red and deleting this line in that same commit is the
-# repair. That is planned into this change's tasks.md rather than met as a
-# surprise.
-EXEMPT_WHOLE_PATHS = {
-    "docs/review-2026-09-08-host-readiness.md": "records what was observed on one date",
-}
+# `docs/change-queue.md` named the superseded path in the entry that WAS this
+# change, and that entry went with the archive commit. `docs/review-2026-09-08-
+# host-readiness.md` recorded what was observed on the host on one date, and on
+# that date the mount was the superseded path -- exempt as PERMANENT, because
+# editing it would have made it say something that was not observed. It stopped
+# being permanent when the document was deleted: `docs/` was consolidated to
+# three files and that dated snapshot was not one of them. The assertion below
+# reports an exemption whose file has gone as loudly as one whose file no longer
+# carries the needle, which is how that deletion was caught rather than
+# discovered later.
+EXEMPT_WHOLE_PATHS: dict[str, str] = {}
 
 # The exemption scoped to a LINE rather than to a file, which this change
 # creates for itself. Its Decision 3 puts the superseded path into both
@@ -279,7 +281,7 @@ def superseded_path_occurrences(
     `<path>:<line>`.
 
     THE FILE SET IS TRACKED FILES, NOT A FILESYSTEM WALK, for the reason
-    `tracked_files()` itself records and `docs/change-queue.md` entry 68 names:
+    `tracked_files()` itself records and `docs/backlog.md` entry 35 names:
     a walk reads `.molecule-home/` and sibling working trees under
     `.claude/worktrees/`, which do not exist in continuous integration and
     appear the moment a developer follows this repository's own Molecule
@@ -349,12 +351,12 @@ def exemptions_naming_no_occurrence(
 ) -> list[str]:
     """Every whole-path exemption whose file no longer carries the needle.
 
-    This is how an exemption expires. `docs/change-queue.md` is exempt because
-    entry 64 names the superseded path; that entry is deleted in the archive
-    commit, and this turns red at exactly that moment so the exemption is
-    deleted in the same commit rather than left standing over a file it no
-    longer describes. An exemption that outlives its reason is a hole nobody
-    can see.
+    This is how an exemption expires, and both of the ones this module carried
+    have. A file exempted because it names the superseded path is reported once
+    it stops naming it -- or once it stops existing, which is what removed the
+    second of the two -- so the exemption is deleted in the same commit rather
+    than left standing over a file it no longer describes. An exemption that
+    outlives its reason is a hole nobody can see.
     """
     wanted = EXEMPT_WHOLE_PATHS if exemptions is None else exemptions
     base = ROOT if root is None else root
@@ -660,7 +662,7 @@ class TestNoCommittedFileStillNamesTheSupersededMountPath(unittest.TestCase):
     def test_every_whole_path_exemption_still_names_the_path(self) -> None:
         """DERIVED -- an exemption naming a path that no longer carries the
         needle is itself an offence. This is the mechanism by which
-        `docs/change-queue.md`'s exemption expires in the archive commit."""
+        the two real exemptions this module carried both expired."""
         stale = exemptions_naming_no_occurrence()
         self.assertEqual(
             [],
@@ -768,7 +770,7 @@ class TestTheSweepDiscriminates(unittest.TestCase):
                 "ansible/inventory/group_vars/staging.yml": (
                     f"{DECLARATION_FORM}\n"
                     "# the volume is named main but is mounted at\n"
-                    f"# {SUPERSEDED_MOUNT_PATH} until change-queue entry 64\n"
+                    f"# {SUPERSEDED_MOUNT_PATH} until the entry is deleted\n"
                 ),
             }
         )
@@ -833,7 +835,7 @@ class TestTheSweepDiscriminates(unittest.TestCase):
         """DERIVED -- both halves of a whole-path exemption, over one tree: the
         file is not reported, and an exemption whose file no longer carries the
         needle is itself reported. The second half is how
-        `docs/change-queue.md`'s exemption expires at archive."""
+        an exemption expires when its file stops naming the path."""
         exemptions = {"docs/kept.md": "records what was observed on one date"}
         tree = self.tree(
             {

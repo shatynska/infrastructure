@@ -94,7 +94,7 @@ Every change reaches the trunk through pull requests, and takes at least two. Be
 
 **confirm** — a healthy deploy is not the change working. Propose how the effect can be observed — what to look at, what provokes it, what result would mean it worked — and wait for the operator's confirmation.
 
-Two classes cannot answer that gate and are waivable. Say so plainly, name the class, and wait for the operator to waive it; record the waiver in the change's own artifacts — the record is archived on the strength of it, and waiving your own gate is not the confirmation this step exists to obtain. Where a successor is intended, the waiver names its change-queue entry or the branch it was opened on:
+Two classes cannot answer that gate and are waivable. Say so plainly, name the class, and wait for the operator to waive it; record the waiver in the change's own artifacts — the record is archived on the strength of it, and waiving your own gate is not the confirmation this step exists to obtain. Where a successor is intended, the waiver names its backlog entry or the branch it was opened on:
 
 - no observation can actually be made — a refactor, a dependency bump or an internal cleanup with no externally observable effect, and equally an observation you proposed that turns out not to be performable;
 - a change that was the wrong change: its observation was made, its effect is absent, and it is not to be corrected in place.
@@ -122,15 +122,15 @@ While applying, the derived tests fail by design until the implementation is com
 **A second change surfacing.** You work on one change at a time. Record the second before doing anything else about it.
 
 - Where the change in progress **depends** on it: record the dependency and the wait in the current change's own artifacts, then at most open the identified change and recommend it be continued in a separate session.
-- Where it **does not**: record it in `docs/change-queue.md`, creating that file if absent, or open the identified change.
+- Where it **does not**: record it in `docs/backlog.md`, creating that file if absent, or open the identified change.
 
 *Opening* one means a branch of its own and a `handoff.md`, with no proposal — why the change was identified, what bears on it, and what it must not undo. Place it in the new change's own directory in this project's change-record layout — for OpenSpec, `openspec/changes/<name>/handoff.md`. The session that takes it up writes the proposal. Commit that branch at once: the session that opened it is not returning to it, so no later commit of its own will carry the handoff.
 
 Such a branch is created and left: it takes no working tree and does not become the branch this session works on.
 
-`docs/change-queue.md` holds identified changes, deleted when archived; an entry there is the separate proposed change the scope rule calls for, recorded rather than opened. `docs/deferred-work.md` holds what this project has deliberately not done, deleted when it stops being true.
+`docs/backlog.md` holds identified changes, deleted when archived; an entry there is the separate proposed change the scope rule calls for, recorded rather than opened.
 
-Both sit outside the change that recorded them, because a note kept inside one is archived with it: it is the change succeeding, not the session ending, that would lose it.
+It sits outside the change that recorded it, because a note kept inside one is archived with it: it is the change succeeding, not the session ending, that would lose it.
 
 **Assumptions.** Do not silently invent a requirement that was not stated and cannot reasonably be inferred; where an important decision cannot be inferred, ask rather than guess. Record significant decisions in this project's own artifacts rather than in conversation history alone.
 
@@ -219,7 +219,7 @@ This project has **three** test commands, and a change may owe tests under any o
 
 The `.github/tests` suite exists because `terraform test` can only exercise Terraform modules, so the guarantees this pipeline makes about its own configuration were unverifiable by anything the project had. Its dependencies are pinned in `.github/requirements-ci.txt`.
 
-Its subject is deliberately wider than `.github/`, and wider than the pipeline: a property is in scope wherever the file holding it lives, so long as the assertion is a static read of a committed file. Most of what it asserts is something the pipeline depends on, but that is not the boundary — the suite is this repository's only mechanism that reads committed files at repository scope, so a convention that has to hold across the tree is asserted here or nowhere. What is *not* in scope is anything needing a network call, a credential, a container runtime or a Terraform binary — those constraints are themselves asserted by tests in that suite, and a check that cannot be written within them belongs somewhere else. **Those assertions currently read only `test_ci_configuration.py`, the module they live in**, so for any other module in the suite this is a convention a reviewer enforces rather than a check. `docs/change-queue.md` entry 45 covers widening them.
+Its subject is deliberately wider than `.github/`, and wider than the pipeline: a property is in scope wherever the file holding it lives, so long as the assertion is a static read of a committed file. Most of what it asserts is something the pipeline depends on, but that is not the boundary — the suite is this repository's only mechanism that reads committed files at repository scope, so a convention that has to hold across the tree is asserted here or nowhere. What is *not* in scope is anything needing a network call, a credential, a container runtime or a Terraform binary — those constraints are themselves asserted by tests in that suite, and a check that cannot be written within them belongs somewhere else. **Those assertions currently read only `test_ci_configuration.py`, the module they live in**, so for any other module in the suite this is a convention a reviewer enforces rather than a check. `docs/backlog.md` entry 34 covers widening them.
 
 The Molecule row and the `.github/tests` row are near-opposites and are easy to confuse. Molecule asserts what a role *does* — it needs a container runtime and converges a real host, so it is the only place a role's failure path can be observed. `.github/tests` asserts what a committed file *says*, statically, and may not spawn a container at all. A property of a `molecule.yml` — its image pin — is therefore asserted by `.github/tests`, while the behaviour that scenario exercises is asserted by Molecule. Its toolchain is pinned in `ansible/requirements-test.txt`, and CI runs it as `ansible-verify.yml`.
 
@@ -250,7 +250,7 @@ One interval is accepted. Where a change introduces a **new** capability, archiv
 
 **The requirement's name rots by the same mechanism, and is asserted too.** A citation naming a requirement is correct until a later change renames that requirement, at which point every citation of the old name is wrong — and the renaming change has no reason to read the files that cite what it renames. `.github/tests/test_the_retired_requirement_names_are_gone.py` sweeps every committed file outside `openspec/` for a name an archived delta retired, deriving that set from the archive rather than from a list anyone maintains, and reports what to write instead. Each exemption is a whole path, never a directory, with its reason stated where it is declared and an assertion that deletes it once the file it excused no longer names a retired requirement; `.github/tests/` is deliberately **not** exempt, because the prose that says which requirement an assertion traces to is the densest citation surface in this repository.
 
-**Scenario titles are not covered by either.** A citation naming a scenario inside a requirement rots the same way and nothing reads it; `docs/change-queue.md` carries the entry that would.
+**Scenario titles are not covered by either.** A citation naming a scenario inside a requirement rots the same way and nothing reads it; `docs/backlog.md` entry 45 carries the entry that would.
 
 ### Development tooling
 

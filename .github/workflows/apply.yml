@@ -5,7 +5,7 @@ name: Terraform Apply
 # a not-yet-computed run. This is the workflow the Gated Production Apply
 # Applies the Reviewed Plan requirement governs; that requirement now governs
 # EVERY stack's apply, and its name reads narrower than its content --
-# recorded in docs/deferred-work.md rather than renamed here.
+# docs/backlog.md entry 46 is the rename, deliberately not taken here.
 #
 # Path-filtered so a merge that cannot change infrastructure does not raise an
 # Environment approval request. An approval prompt that appears on merges with

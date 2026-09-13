@@ -224,7 +224,7 @@ IN_FLIGHT_SPEC = (
 LIVE_SPEC = "openspec/specs/example-capability/spec.md"
 
 RUNBOOK = "docs/runbook.md"
-EXEMPT_FIXTURE_PATH = "docs/change-queue.md"
+EXEMPT_FIXTURE_PATH = "docs/backlog.md"
 
 # The suite reads itself, exempting one module. Written as literals because
 # which module is exempt is the whole of the fifth scenario.
@@ -639,7 +639,7 @@ class TestAnExemptionThatNoLongerExcusesAnythingFailsTheCheck(unittest.TestCase)
     own path rather than by a directory prefix, with the reason stated where the
     exemption is declared, and the assertion SHALL fail where an exemption names
     a file that no longer contains a retired name". The change's design decision
-    6 is what depends on it: `docs/change-queue.md` is exempt for one queue
+    6 is what depends on it: `docs/backlog.md` is exempt for one backlog
     entry, and the archive commit that deletes the entry is what must delete the
     exemption.
     """

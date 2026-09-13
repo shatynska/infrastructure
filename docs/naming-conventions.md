@@ -2,7 +2,7 @@
 
 How everything this repository creates is named, and the one rule the scheme follows.
 
-**In effect, with no exception.** This document records a decision taken on 2026-09-11 and delivered through `docs/change-queue.md` entries 61, 62, 63 and 64, and finally by `rename-the-github-environments`. Read every name here as describing the tree rather than a target — the last quarter of it, the two GitHub Environments, moved onto the stack axis when that last change re-created them, GitHub offering no way to rename a deployment Environment.
+**In effect, with no exception.** This document records a decision taken on 2026-09-11, delivered through four changes — `rename-terraform-environments-to-stacks`, `rename-the-stacks-and-their-resources`, `rename-the-external-services` and finally `rename-the-github-environments`. Read every name here as describing the tree rather than a target — the last quarter of it, the two GitHub Environments, moved onto the stack axis when that last change re-created them, GitHub offering no way to rename a deployment Environment.
 
 ## The rule
 

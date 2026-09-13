@@ -149,6 +149,17 @@ jobs:
             echo "GRAFANA_BIND_ADDRESS=${{ steps.grafana_bind.outputs.address }}"
           } >platform/.env
 
+      # ssh-keyscan above is trust-on-first-use on EVERY run, which verifies
+      # nothing about the host's identity. Accepted deliberately, because the
+      # connection it protects is already bounded by something stronger: the
+      # runner reaches the host only over the tailnet, having authenticated to
+      # it with an OAuth client scoped to the `main-production` Environment,
+      # and the key it presents is restricted to a forced command that accepts
+      # no other invocation. An attacker positioned to answer that keyscan is
+      # already inside the tailnet. Revisit if the deploy ever runs over the
+      # public internet, at which point this stops being defence-in-depth and
+      # becomes the only check.
+      #
       # PLATFORM_DEPLOY_SSH_KEY is the private half of the platform
       # keypair add-per-app-deploy-keys's deploy_user role installs the
       # public half of (as this key's own `deploy_apps` entry) -- generated

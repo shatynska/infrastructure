@@ -49,8 +49,17 @@ platforms:
   #
   # REFRESHING IT IS MANUAL, and nothing warns you when it is stale.
   # Dependabot's docker ecosystem scans Dockerfiles and Compose files, not
-  # molecule.yml, so this pin is invisible to it -- deliberately, see
-  # docs/deferred-work.md. To refresh:
+  # molecule.yml, so this pin is invisible to it -- deliberately. Closing that
+  # would mean a bespoke scheduled workflow querying the registry, rewriting
+  # eight files and opening a pull request: machinery out of proportion to a
+  # test-only base image, and machinery that would itself need pinning, testing
+  # and a credential story. The trade is deliberate rather than reluctant -- a
+  # known-stale image the suite runs against reproducibly is worth more than a
+  # current one it cannot make the same claim about twice, and reproducibility
+  # is the whole point of the pin. Revisit if a scenario fails for a reason
+  # traceable to the base image rather than to the role under test, or if this
+  # repository grows a second hand-pinned digest: one is a manageable
+  # exception, two is a pattern that wants a mechanism. To refresh:
   #
   #   curl -s https://hub.docker.com/v2/repositories/geerlingguy/docker-ubuntu2204-ansible/tags/latest | jq -r .digest
   #

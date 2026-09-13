@@ -61,7 +61,7 @@ pre-archive-citation assertion's subject, the second is nobody's.
 
 It also does not read **scenario** titles, and that hole is deliberate and
 recorded: thirty citations in this tree name a scenario no specification holds,
-which is a different predicate over a different set. `docs/change-queue.md`
+which is a different predicate over a different set. `docs/backlog.md`
 carries the entry that would close it by extending this module.
 
 A green run is therefore evidence that the repository was swept of retired
@@ -168,34 +168,33 @@ def _named_spans(text: str) -> list[str]:
 #       they live in the sibling module `test_a_retired_requirement_name_is_reported`
 #       rather than here; see that module and this change's test-plan.md.
 #
-#   `docs/deferred-work.md` -- the retirement itself is the subject. Its section
-#       "Three `iac-cicd-pipeline` requirement names that now read narrower than
-#       they are" records that `add-a-staging-environment` renamed *Dedicated
-#       Hetzner Cloud Project for Prod*, which is a statement about the rename
-#       rather than a citation of the requirement. That is the only occurrence in
-#       the file, and a reader following this reason should find it there.
-#       Unlike the one below it, this exemption does not expire: the record
-#       stays true.
-#
-#       WHAT THAT COSTS, measured rather than waved at: this file cites 17 live
-#       requirement names, against 13 in `docs/change-queue.md`, so the exemption
-#       leaves a citation surface of the same order as the one the module
-#       refuses to exempt in `.github/tests/`. The next rename lands here unread.
-#       The requirement admits only whole-path exemptions, so nothing narrower is
-#       available; a change wanting to close it would have to move the one
-#       historical sentence somewhere the sweep reads, or give the requirement a
-#       per-occurrence form. Stated here because a change arguing that unchecked
-#       surfaces re-accumulate owes the measurement of the one it leaves.
+#   `docs/deferred-work.md` WAS EXEMPT AND THE FILE NO LONGER EXISTS. It was
+#       exempt because the retirement itself was its subject: its section on the
+#       `iac-cicd-pipeline` requirement names that read narrower than they are
+#       recorded that `add-a-staging-environment` had renamed one, which is a
+#       statement about the rename rather than a citation of the requirement.
+#       The exemption was declared non-expiring because that record stayed true.
+#       It expired anyway, on 2026-09-13, when `docs/` was consolidated to three
+#       files and that document was deleted -- its entries either promoted into
+#       `docs/backlog.md` or relocated into the file that makes each choice.
+#       `TestEveryExemptionStillExcusesSomething` went red on the deletion and
+#       the repair was to delete the exemption in the same commit. WORTH KEEPING
+#       THE LESSON: "this exemption does not expire" is a claim about the reason
+#       and not about the file, and a file can be deleted for reasons that have
+#       nothing to do with why it was exempt. The measurement recorded with that
+#       exemption -- that the file cited 17 live requirement names, an unread
+#       citation surface of the same order as `.github/tests/` -- is now moot,
+#       and the promoted entries in `docs/backlog.md` are swept like anything
+#       else. Any requirement name they carry must be a live one.
 #
 #   `docs/change-queue.md` WAS EXEMPT AND IS NOT ANY MORE, which is the expiry
-#       machinery working rather than a loosening. Entry 74 named a retired
+#       machinery working rather than a loosening. An entry named a retired
 #       requirement, because naming the stale citation was what that entry was
 #       for, and a queue entry is deleted only when its change archives -- so the
 #       file was exempt across that change's life and no longer. Deleting the
-#       entry in this commit turned `TestEveryExemptionStillExcusesSomething`
-#       red, and the repair was to delete the exemption in the same commit. It is
-#       swept from here on. The sibling module records the identical sequence
-#       under its own entry 63, one change earlier.
+#       entry turned `TestEveryExemptionStillExcusesSomething` red, and the
+#       repair was to delete the exemption in the same commit. Its successor
+#       `docs/backlog.md` is swept from here on.
 #
 # `.github/tests/` IS NOT EXEMPT, and that is the decision this module exists to
 # hold. The sibling sweep exempts it wholesale, for two reasons of which only one
@@ -211,10 +210,7 @@ EXEMPT_PREFIXES = (OPENSPEC_PREFIX,)
 
 THIS_MODULE_PATH = ".github/tests/test_the_retired_requirement_names_are_gone.py"
 
-EXEMPT_PATHS: tuple[str, ...] = (
-    THIS_MODULE_PATH,
-    "docs/deferred-work.md",
-)
+EXEMPT_PATHS: tuple[str, ...] = (THIS_MODULE_PATH,)
 
 # Files the sweep must reach for a green result to mean anything -- one per
 # surface the change that added this module edits, at five different depths.
@@ -493,7 +489,7 @@ def idle_exemptions(
     An exemption is a hole, and a hole nobody is looking at is one nobody closes.
     This is what makes each one self-retiring: the change that sweeps an exempt
     file is the change whose run turns red until it also deletes the exemption.
-    The sibling module records that mechanism working -- its `docs/change-queue.md`
+    The sibling module records that mechanism working -- its `docs/backlog.md`
     exemption expired in the archive commit that deleted the entry it existed for.
 
     The read is FLATTENED, for a reason the expiry case makes sharp: an exemption
@@ -504,7 +500,7 @@ def idle_exemptions(
     It asks the SAME question the sweep asks, through the same finder, and that
     is load-bearing rather than tidy. A bare substring test answers "still
     needed" for a file whose only match is a retired name sitting inside a
-    longer live one -- `docs/change-queue.md` cites *Ansible Configuration Is
+    longer live one -- `docs/backlog.md` cites *Ansible Configuration Is
     Verified in Continuous Integration and Gates the Merge*, which contains a
     retired name as its prefix. Under a bare test that citation alone would keep
     the exemption looking alive after the thing it was written for had gone, and
