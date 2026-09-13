@@ -45,7 +45,7 @@ provider "hcloud" {
   #     reviewer, so this is the one apply in this repository that reaches
   #     Hetzner without a human. What bounds it is the project boundary, not
   #     a gate: this token can destroy staging's project and can touch
-  #     nothing in prod's (see the Each Environment Has a Dedicated Hetzner
+  #     nothing in prod's (see the Each Stack Has a Dedicated Hetzner
   #     Cloud Project requirement, openspec/specs/iac-state-management/spec.md);
   #   - every other CI job declares no `environment:` and resolves a
   #     repository-scoped Read Only token, read as

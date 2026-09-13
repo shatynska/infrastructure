@@ -322,12 +322,12 @@ This trigger named entry 50 until 2026-09-10. `configure-the-staging-host` took 
 Recorded by `rename-terraform-environments-to-stacks`, which moved the Terraform root to `terraform/stacks/` and swept the vocabulary that names the unit the pipeline discovers, plans, applies, drift-checks and converges. Three surfaces were deliberately left in the old vocabulary, so that a reader of the tree does not take them for an oversight:
 
 - **`.github/tests` module and method names.** `test_environment_agnostic_pipeline.py`, `test_a_second_environment.py`, `test_planned_environment_apply_stage.py` and `test_host_configuration_names_its_environment.py`, and method names such as `test_a_run_can_also_be_requested_by_hand_for_one_environment`. None of them asserts anything about the word in its own name; renaming them churns several hundred identifiers and changes what no single one checks. Their **literals** were swept — the constants, the path segments and the scratch trees — so the modules assert the new vocabulary under old names.
-- **Requirement titles carrying *Environment*.** Renaming a requirement is a `RENAMED` delta, and that change deferred rather than took it.
-- **Scenario titles.** Barred by the tool rather than chosen: a `MODIFIED` requirement replaces its block whole, so `openspec validate` reads a renamed scenario as a *dropped* one and refuses the change. A change wanting to rename one needs a mechanism, not an edit.
+- **Requirement titles carrying *Environment*.** Renaming a requirement is a `RENAMED` delta, and that change deferred rather than took it. **This bullet is closed**: `rename-the-stacks-and-their-resources` took the rename, as a removal and re-addition rather than a `RENAMED` delta, and moved four titles off the environment axis. Two requirement titles still carry the word — *Host Configuration Names the Environment It Targets* and *Gated Deploy Reuses the Terraform Production Environment* — and both are correct, because each is genuinely about the environment axis rather than about the unit the pipeline iterates.
+- **Scenario titles.** Barred by the tool rather than chosen: a `MODIFIED` requirement replaces its block whole, so `openspec validate` reads a renamed scenario as a *dropped* one and refuses the change. A change wanting to rename one needs a mechanism, not an edit. Still open, and it now has a measured cost: thirty citations in this tree name a scenario no specification currently holds. `docs/change-queue.md` carries the entry that would sweep them and extend the retired-name check to the scenario predicate.
 
-The visible cost is a requirement and a scenario whose titles say *Environment* while the prose under them says *stack*, and a test module named for an axis it no longer asserts. That is self-correcting rather than silent: the mismatch is in one line and the entry that fixes it names it.
+The visible cost is roughly twenty-five scenario titles saying *Environment* while the prose under them says *stack* — and the thirty citations of them the bullet above measures — plus a test module named for an axis it no longer asserts.
 
-**Owner:** `docs/change-queue.md` entry 62, which rewrites this text anyway.
+**What became of its owner.** This section named `docs/change-queue.md` entry 62 as the change that would rewrite it. That change archived as `rename-the-stacks-and-their-resources`, which closed the second bullet above and left the first and third. The first has no owner and wants none: it is a decision to leave several hundred identifiers alone, not work waiting to be done. The third's owner is the queue entry named in its own bullet.
 
 
 ## Loop associations still accumulate, one set per working tree
@@ -341,3 +341,15 @@ Nothing detaches a minor at the end of a scenario, so after any suite run this t
 This is what `AGENTS.md` already says of namespaces generally — they accumulate, they are named after the tree, and nothing reclaims them. The loop minor is now one more of those.
 
 **Revisit when** a workstation is actually inconvenienced by the accumulation, or when a scenario is added whose `prepare` cannot release its own minor for some reason the current fixtures do not have.
+
+## A check over citations naming a change
+
+Declined 2026-09-13 by `correct-the-documents-against-the-tree`, which built the sibling check over citations naming a **requirement** and measured this one rather than assuming it would work the same way.
+
+`docs/change-queue.md` entry 74 raised it: `docs/bootstrap-a-new-host.md` twice cited a change named `add-a-staging-stack`, which never existed, and no check in this repository could see it. That is the same shape as the requirement-name defect — a citation correct when written and wrong once something it names moves — so the same remedy suggests itself.
+
+**It was declined on a measurement, not on a feeling about false positives.** Sweeping every `entry <N>` and every backticked kebab-case token that resolves like a change name finds forty-odd occurrences, and the overwhelming majority are **historical statements that are correct**: "the former entry 50", "Was `docs/change-queue.md` entry 26, deleted from there and recorded here", "8 by `namespace-the-molecule-suite-per-working-tree`". This file and the change queue are *built* out of such statements — saying what became of a deleted entry is their job. A check reporting them would have to exempt both files entirely, which leaves it reading almost nothing, or carry a per-occurrence exemption list longer than the defect it finds.
+
+**The asymmetry with requirement names is what makes one checkable and the other not.** A retired requirement name has no legitimate use outside a record of its own retirement, and that set was one file and one line when the sibling check was written. A retired change name has many legitimate uses, and they are concentrated in exactly the two files that would have to be exempt.
+
+**Revisit when** a mechanism exists to distinguish a citation from a historical mention — an explicit marker at the citation, or a citation form that a record of a deletion would not match. Without one, the check cannot be written without either blinding itself to the two files where change names are densest or reporting correct prose.

@@ -514,13 +514,13 @@ def run_snippet(script: str, environment: dict, cwd: Path) -> subprocess.Complet
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Each Environment Declares Its Own Pipeline Configuration
+# iac-cicd-pipeline / Each Stack Declares Its Own Pipeline Configuration
 # (ADDED)
 # --------------------------------------------------------------------------
 
 
 class TestEveryEnvironmentCarriesAPipelineDeclaration(unittest.TestCase):
-    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    """ADDED requirement: Each Stack Declares Its Own Pipeline
     Configuration.
 
     The static half of the four refusal scenarios: what the committed tree
@@ -790,7 +790,7 @@ class DeclarationTreeFixtureMixin:
 class TestTheDeclarationCensusIsARealReadOfTheTree(
     DeclarationTreeFixtureMixin, unittest.TestCase
 ):
-    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    """ADDED requirement: Each Stack Declares Its Own Pipeline
     Configuration.
 
     At one environment every collision assertion above passes over a set of one
@@ -945,13 +945,13 @@ class TestTheDeclarationCensusIsARealReadOfTheTree(
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Each Environment Declares Its Own Pipeline Configuration
+# iac-cicd-pipeline / Each Stack Declares Its Own Pipeline Configuration
 # -- the workflows carry no environment
 # --------------------------------------------------------------------------
 
 
 class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
-    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    """ADDED requirement: Each Stack Declares Its Own Pipeline
     Configuration -- "Workflows SHALL NOT enumerate environments, name them in
     a condition, or map an environment to its secrets or its Environment name
     in workflow text".
@@ -1208,13 +1208,13 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Each Environment Declares Its Own Pipeline Configuration
+# iac-cicd-pipeline / Each Stack Declares Its Own Pipeline Configuration
 # -- discovery, run rather than read
 # --------------------------------------------------------------------------
 
 
 class TestDiscoveryFailsClosed(DeclarationTreeFixtureMixin, unittest.TestCase):
-    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    """ADDED requirement: Each Stack Declares Its Own Pipeline
     Configuration -- "Discovery SHALL fail closed".
 
     Runs the workflow's own discovery body rather than reading it, the same
@@ -2078,7 +2078,7 @@ class TestEveryApplyIsGatedAndPerEnvironment(unittest.TestCase):
         )
 
     def test_no_apply_job_names_its_environment_as_a_literal(self) -> None:
-        """SPECIFIED -- Each Environment Declares Its Own Pipeline
+        """SPECIFIED -- Each Stack Declares Its Own Pipeline
         Configuration: a workflow SHALL NOT "map an environment to its ...
         Environment name in workflow text", and scenario "A shared module
         change reaches every environment": each environment applies "under its
@@ -2324,7 +2324,7 @@ class TestTheApplyWorkflowStillRaisesNoApprovalForNonInfrastructure(unittest.Tes
     """
 
     def test_the_path_filter_names_no_single_environment(self) -> None:
-        """SPECIFIED -- Each Environment Declares Its Own Pipeline
+        """SPECIFIED -- Each Stack Declares Its Own Pipeline
         Configuration: adding an environment SHALL require "no change to any
         file under `.github/workflows/`", together with scenario "A merge that
         cannot change infrastructure raises no approval request", which the
@@ -2422,7 +2422,7 @@ class TestTheDestroyGateReadsApplicabilityFromTheDeclaration(unittest.TestCase):
         )
 
     def test_the_gate_names_no_environment(self) -> None:
-        """SPECIFIED -- Each Environment Declares Its Own Pipeline
+        """SPECIFIED -- Each Stack Declares Its Own Pipeline
         Configuration: a workflow SHALL NOT "name them in a condition". A gate
         conditioned on `prod` is the mapping in workflow text this requirement
         forbids, written as a condition rather than as a table."""
@@ -2808,7 +2808,7 @@ class TestTheWriteCredentialBoundaryIsStatedToAgents(unittest.TestCase):
 class TestTheDeclarationReaderIsARealReadOfTheFile(
     DeclarationTreeFixtureMixin, unittest.TestCase
 ):
-    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    """ADDED requirement: Each Stack Declares Its Own Pipeline
     Configuration.
 
     The field resolution above is the one piece of machinery every other
@@ -3207,7 +3207,7 @@ class TestThePlanAggregationDiscriminates(unittest.TestCase):
 
 
 class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
-    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    """ADDED requirement: Each Stack Declares Its Own Pipeline
     Configuration -- "Discovery SHALL fail closed."
 
     DERIVED, and added by the implementing author: no scenario states it.
@@ -3323,7 +3323,7 @@ class TestTheDuplicatedBodiesStayIdentical(unittest.TestCase):
 
 
 class TestTheTwoReadersOfADeclarationAgree(DeclarationTreeFixtureMixin, unittest.TestCase):
-    """ADDED requirement: Each Environment Declares Its Own Pipeline
+    """ADDED requirement: Each Stack Declares Its Own Pipeline
     Configuration.
 
     DERIVED, and added by the implementing author: no scenario states it.

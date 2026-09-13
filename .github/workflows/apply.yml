@@ -26,7 +26,7 @@ name: Terraform Apply
 # NO STACK IS NAMED ANYWHERE IN THIS FILE. Each stack's GitHub
 # Environment, its read-only secret and whether the destroy-policy gate applies
 # to it come from that stack's own `terraform/stacks/<name>/pipeline.yml`.
-# See the Each Environment Declares Its Own Pipeline Configuration requirement.
+# See the Each Stack Declares Its Own Pipeline Configuration requirement.
 on:
   push:
     branches: [main]

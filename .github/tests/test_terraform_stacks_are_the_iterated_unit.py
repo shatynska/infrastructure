@@ -49,8 +49,9 @@ These tests were written by an author other than whoever implements the change,
 and that author may only add. That change's tasks.md 4.4 also records that the
 suite's MODULE FILENAMES AND TEST-METHOD NAMES are deliberately left in the old
 vocabulary -- renaming them would churn several hundred identifiers without
-changing what a single one checks, and is deferred to `docs/change-queue.md`
-entry 62. So the old names beside this file are a recorded decision, not an
+changing what a single one checks, and is deferred in `docs/deferred-work.md`,
+"The stack rename left the word in test identifiers and in specification
+titles". So the old names beside this file are a recorded decision, not an
 oversight, and this module does not try to correct them.
 
     `TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource` in
@@ -258,7 +259,7 @@ READ_ONLY_SECRET_FIELD = "read_only_secret"
 
 # The name every GitHub Environment defines for its Read & Write token, and
 # therefore the one name no stack's declaration may give as its READ-ONLY
-# secret. SPECIFIED by iac-cicd-pipeline / Each Environment Declares Its Own
+# secret. SPECIFIED by iac-cicd-pipeline / Each Stack Declares Its Own
 # Pipeline Configuration.
 WRITE_TOKEN_SECRET = "HCLOUD_TOKEN"
 
@@ -499,9 +500,10 @@ OVERSWEPT_KEEPERS = {
     #     in this repository, which is always lowercase.
     #
     #     THE TRAILING LOOKAHEAD WAS ADDED by the change
-    #     rename-the-stacks-and-their-resources, which renamed *Each Environment
-    #     Declares Its Own Pipeline Configuration* to *Each Stack Declares Its
-    #     Own Pipeline Configuration* -- so both `pipeline.yml` files now cite a
+    #     rename-the-stacks-and-their-resources, which moved that requirement's
+    #     title off the environment axis and onto the stack, giving it the name
+    #     *Each Stack Declares Its Own Pipeline Configuration* -- so both
+    #     `pipeline.yml` files now cite a
     #     requirement whose Title Case name carries the word, and the limb fired
     #     on the correct citation. A capitalised word FOLLOWING is what
     #     distinguishes a Title Case name from the common-noun misuse this limb
@@ -509,8 +511,8 @@ OVERSWEPT_KEEPERS = {
     #     -- "Stack's", "Stack-scoped", "Stack requires" -- is followed by
     #     punctuation or a lowercase word and is still caught;
     # The `Each Stack` limb is GONE, and its removal is a supersession rather
-    # than a relaxation. It was forward cover written while *Each Environment
-    # Declares Its Own Pipeline Configuration* still carried that title, on the
+    # than a relaxation. It was forward cover written while that requirement
+    # still carried the environment axis in its title, on the
     # reasoning that "design.md decision 3 renames no requirement title". The
     # change rename-the-stacks-and-their-resources renames exactly that title,
     # so both `pipeline.yml` files now cite *Each Stack Declares Its Own
@@ -527,7 +529,8 @@ OVERSWEPT_KEEPERS = {
     # (*) LIVE. The `environment` Terraform variable, and the label carrying
     # its value. `modules/server` builds `name = "${var.environment}-${var.name}"`,
     # so a `"<stack>-"` prefix is that variable's value under a wrong name --
-    # and after entry 62 the two diverge, which is the coincidence design.md
+    # and since `rename-the-stacks-and-their-resources` the two diverge, which
+    # is the coincidence design.md
     # decision 2a says not to bake in.
     #
     # The label is matched with OPTIONAL BACKTICKS OR QUOTES around the word,
@@ -564,9 +567,9 @@ OVERSWEPT_KEEPERS = {
         r"|\btarget_stack\b"
         r"|--vault-id[^\n]{0,40}\bstack\b"
     ),
-    # FORWARD COVER. The environment axis as the inventory names it; entry 62
-    # renames those paths, not this change. No file under this root names an
-    # inventory source today.
+    # FORWARD COVER. The environment axis as the inventory names it;
+    # `rename-the-stacks-and-their-resources` renamed those paths, not this
+    # change. No file under this root names an inventory source today.
     "the inventory's own axis": re.compile(
         r"\bstack\.hcloud\.yml\b|\bstack_vars\b|\binventory/\$?\{?stacks?\b"
     ),
@@ -697,13 +700,13 @@ def shell_double_quoted_value(assignment: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# iac-repo-foundations / Environment and Module Folder Structure,
+# iac-repo-foundations / Stack and Module Folder Structure,
 # Version Control Excludes State and Secrets
 # --------------------------------------------------------------------------
 
 
 class TestTheTerraformRootIsNamedForTheStack(unittest.TestCase):
-    """MODIFIED requirements: Environment and Module Folder Structure, and
+    """MODIFIED requirements: Stack and Module Folder Structure, and
     Version Control Excludes State and Secrets (iac-repo-foundations)."""
 
     def test_the_stack_root_holds_the_stack_directories(self) -> None:
@@ -852,12 +855,12 @@ class TestTheTerraformRootIsNamedForTheStack(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Each Environment Declares Its Own Pipeline Configuration
+# iac-cicd-pipeline / Each Stack Declares Its Own Pipeline Configuration
 # --------------------------------------------------------------------------
 
 
 class TestEveryStackDeclaresItsPipelineConfiguration(unittest.TestCase):
-    """MODIFIED requirement: Each Environment Declares Its Own Pipeline
+    """MODIFIED requirement: Each Stack Declares Its Own Pipeline
     Configuration (iac-cicd-pipeline).
 
     The requirement's subject moved with the path -- "Every directory under
@@ -1040,7 +1043,7 @@ class TestEachStackNamesAWorkspaceOfItsOwn(unittest.TestCase):
 
 
 class TestDiscoveryIteratesTheStackRoot(unittest.TestCase):
-    """MODIFIED requirements: Each Environment Declares Its Own Pipeline
+    """MODIFIED requirements: Each Stack Declares Its Own Pipeline
     Configuration and Scheduled Drift Detection (iac-cicd-pipeline)."""
 
     def test_each_terraform_workflow_carries_one_discovery_body_over_the_stack_root(self) -> None:
@@ -1136,7 +1139,7 @@ class TestDiscoveryIteratesTheStackRoot(unittest.TestCase):
         )
 
     def test_the_host_converge_discovery_reads_each_stacks_own_declaration(self) -> None:
-        """SPECIFIED -- Each Environment Declares Its Own Pipeline
+        """SPECIFIED -- Each Stack Declares Its Own Pipeline
         Configuration's scenario "A new environment needs no workflow edit",
         which names the host-converge workflow among those that SHALL cover a
         new stack directory, and whose declaration now sits under
@@ -1175,8 +1178,9 @@ class TestDiscoveryIteratesTheStackRoot(unittest.TestCase):
                 kept,
                 body,
                 f"host-converge.yml's discovery no longer names {kept!r}. That handle "
-                "enumerates `ansible/inventory/`, which `docs/change-queue.md` entry 62 "
-                "renames and this change does not -- renaming it here is the sweep "
+                "enumerates `ansible/inventory/`, which "
+                "`rename-the-stacks-and-their-resources` renamed and this change did "
+                "not -- renaming it here is the sweep "
                 "overreaching, not completing",
             )
 
@@ -1292,7 +1296,7 @@ class TestTheMatrixAndItsOutputsNameTheStack(unittest.TestCase):
         its readers yields `needs.discover.outputs.environments`, which
         evaluates to the empty string rather than erroring -- an empty matrix,
         a skipped dependent job and a green run that did nothing. That is the
-        exact failure Each Environment Declares Its Own Pipeline Configuration's
+        exact failure Each Stack Declares Its Own Pipeline Configuration's
         last scenario forbids, reached through the rename rather than through
         discovery.
 
@@ -1483,7 +1487,7 @@ class TestTheEnvironmentAxisIsNotRenamedWithTheUnit(unittest.TestCase):
                     f"apply.yml's `{name}` declares `environment: {declared}`, which "
                     "does not read the `github_environment` field of the stack's own "
                     "declaration. Naming an Environment in workflow text is what Each "
-                    "Environment Declares Its Own Pipeline Configuration forbids",
+                    "Stack Declares Its Own Pipeline Configuration forbids",
                 )
                 self.assertIn(
                     "matrix.stack",
@@ -2947,10 +2951,10 @@ class TestTheStackDirectoryReadsDiscriminate(unittest.TestCase):
         "# Privilege obliges EVERY stack's GitHub Environment to define",
         "# an Environment-scoped secret ahead of a repository-scoped one of the same",
         "# Environment also defines. `.github/tests` asserts that for `HCLOUD_TOKEN`",
-        "# `PRODUCTION` rather than `PROD`, matching the GitHub Environment this",
-        '# discovery step -- see "Each Environment Declares Its Own Pipeline',
-        "#     Environment's Read & Write token. That Environment requires no",
-        "#     nothing in prod's (see the Each Environment Has a Dedicated Hetzner",
+        "# `MAIN_PRODUCTION` rather than `PRODUCTION`, AND THE EXTRA WORD IS THE POINT.",
+        '# discovery step -- see "Each Stack Declares Its Own Pipeline',
+        "#     that Environment's Read & Write token. That Environment requires no",
+        "#     nothing in prod's (see the Each Stack Has a Dedicated Hetzner",
         "# of the Environment's protection rules -- repository settings, which no file",
         "# The apply job still declares this Environment, so the write token stays",
         "#   - the gated apply job, which declares `environment: production`,",

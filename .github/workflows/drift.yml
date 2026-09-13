@@ -3,7 +3,7 @@ name: Drift Detection
 # NO STACK IS NAMED ANYWHERE IN THIS FILE. Each stack's read-only
 # secret comes from that stack's own
 # `terraform/stacks/<name>/pipeline.yml`, and the sweep runs over whatever
-# `discover` finds. See the Each Environment Declares Its Own Pipeline
+# `discover` finds. See the Each Stack Declares Its Own Pipeline
 # Configuration requirement.
 #
 # Unlike the two other Terraform workflows this one is NOT narrowed by changed

@@ -12,7 +12,7 @@ name: PR Validation
 # The GitHub Environment each one attaches to, the repository secret holding
 # its read-only Hetzner token, and whether the destroy-policy gate applies to
 # it are declared by that directory's own `pipeline.yml`. See the Each
-# Environment Declares Its Own Pipeline Configuration requirement.
+# Stack Declares Its Own Pipeline Configuration requirement.
 on:
   pull_request:
     branches: [main]

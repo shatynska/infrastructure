@@ -25,7 +25,7 @@ Satisfies "The Host Carries Swap That Survives a Reboot" in `openspec/specs/iac-
 
 Not a partition: one cannot be added to an already provisioned host without repartitioning it.
 
-Not the attached `main-data` volume, and this is the one placement the specification forbids by name. It is a network block device, so it would make the kernel's last-resort memory tier depend on the component least able to tolerate the pressure that makes swap necessary — and it is the volume `platform/`'s Postgres, Prometheus and Grafana bind-mount.
+Not the attached `main` volume, and this is the one placement the specification forbids by name. It is a network block device, so it would make the kernel's last-resort memory tier depend on the component least able to tolerate the pressure that makes swap necessary — and it is the volume `platform/`'s Postgres, Prometheus and Grafana bind-mount.
 
 ## `swap_activate`
 
