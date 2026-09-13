@@ -611,30 +611,6 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 **Not in scope here:** auto-replanning on staleness. That would apply a plan no human reviewed, which is the requirement this entry exists to respect.
 
 
-## 73. name-the-converge-keypair-for-its-stack
-
-**Not blocked. Recorded 2026-09-12, by `rename-the-external-services`'s code review, which found it while checking that change's own placeholders.**
-
-`docs/bootstrap-a-new-host.md` §0.3, §6.6 and Appendix A all name the converge keypair `~/.ssh/<company>-ansible-ci-<environment>` — and §0.3 itself calls that key **one per stack**. After entry 63 it is the last per-stack artefact in this repository still named for the environment axis: the GitHub Environment, the repository secret, the HCP workspace, the inventory source, the Hetzner project and the server all carry the stack's name, and this one does not.
-
-**It works today by coincidence and fails at the next tenant.** Two stacks, two environments, so `<company>-ansible-ci-production` and `<company>-ansible-ci-staging` are distinct. Add `analytics-production` and it collides with `main-production`'s — which is the exact collision `HCLOUD_TOKEN_MAIN_PRODUCTION` carries four extra characters to avoid, one namespace over.
-
-**It is a workstation filename and nothing reads it.** The key's private half goes into a GitHub Environment secret and its public half into the host's `authorized_keys`; neither carries the filename. So this is a documentation change plus whatever an operator chooses to rename locally, and no check can hold it — which is also why it was recorded rather than folded into entry 63, whose scope was the four names that live outside this repository.
-
-## 74. correct-the-names-two-renames-left-behind
-
-**Not blocked. Recorded 2026-09-12, by `rename-the-external-services`'s code review, which found these in files that change edited without being reached by any of its tasks.**
-
-Five stale names, none of them entry 63's work, all of them rot left by entries 61 and 62 and invisible to every check this repository has:
-
-- `README.md:25` names the stack folders as "`prod` and `staging`". They are `main-production` and `main-staging`, and have been since entry 62.
-- `docs/bootstrap-a-new-host.md:106`, `terraform/stacks/main-staging/versions.tf` and `.github/tests/test_a_second_environment.py` cite *Each Environment Has a Dedicated Hetzner Cloud Project*. Entry 62 renamed that requirement to *Each Stack Has a Dedicated Hetzner Cloud Project*.
-- `docs/bootstrap-a-new-host.md` cites a change named `add-a-staging-stack` twice. No such change exists; the archived records are `add-a-staging-environment` and `configure-the-staging-host`.
-- `ansible/roles/swap/defaults/main.yml:14` and `ansible/roles/swap/README.md:28` both call the data volume `main-data`. That is the volume's retired *name* — entry 62 renamed it to `main` — and not the mount path, which `move-the-platform-data-mount` moved separately. Neither file is reached by that change's path sweep, and nothing else owns them.
-- `docs/bootstrap-a-new-host.md` §7.1 has the operator create a heartbeat check named `<company>-prod alertmanager`. Stale on both axes against Appendix A's own table a few paragraphs away, which uses `main-production-prune-host-images`: `prod` is a spelling this repository retired, and a heartbeat slug carries no company segment because the account holds one company. It is a name an operator types into the observer, so it is the costliest of these five to leave — and unlike the others it needs a step at the observer as well as an edit here, since the check already exists under the old name.
-
-**The check-shaped half is worth deciding on.** `.github/tests/test_ci_configuration.py` enforces the *path* form of a citation to this repository's own records, and that mechanism exists because a citation is correct when written and wrong only once the change it names succeeds — the same argument applies word for word to a citation naming a **requirement** that a later change renames, and to one naming a **change** that never existed. Both are static reads of committed files against `openspec/specs/` and `openspec/changes/archive/`, which is that suite's own subject. Whether the second is worth the false-positive risk — a requirement name appearing in prose that is not a citation — is the judgment this change owes.
-
 ## 75. rename-the-github-environments
 
 **Not blocked, and expensive. Recorded 2026-09-12 by `rename-the-external-services`, which was scoped to do this, probed it before touching anything, and found it cannot be done the way every other rename in that change was done.**
@@ -735,3 +711,32 @@ A citation in this repository names a requirement and, very often, a scenario in
 **Why it was not folded into the sweep that found it.** It is a different predicate over a different set — the live scenario titles, not the retired requirement names — so the check that change built does not hold it and would not have caught a single one of the thirty. And the replacements are not mechanical: several scenario titles were reworded rather than renamed, so each needs a reading rather than a substitution. Folding it in would have doubled that change's diff and put a second unchecked sweep inside the change whose whole argument is that unchecked sweeps re-accumulate.
 
 **Do the check with the sweep, not after it.** `.github/tests/test_the_retired_requirement_names_are_gone.py` already reads every tracked file, already flattens each one so a title wrapped across a comment's line break is found, and already derives its subject from committed specifications. The scenario predicate is the inverse of its current one — a cited title that is **not** among the live scenario titles, rather than a name that **is** among the retired ones — so it needs a reader of its own rather than a second literal. Its false-positive risk is the thing to measure first: a quoted phrase that is not a citation at all looks exactly like a citation of a scenario that does not exist.
+
+## 81. reconcile-the-heartbeat-checks-with-what-the-repository-prescribes
+
+**Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, whose own operator step went looking for a check the observer does not hold.**
+
+`docs/bootstrap-a-new-host.md` §7.1 tells the operator to create a check for Alertmanager's dead-man's switch under a name of the document's choosing. **No check has ever carried that name.** The observer holds *Alertmanager Dead Man's Switch* under the slug `my-first-check` — the vendor's own default first-check name, which is what you get by pinging a project's first check into existence rather than by naming one. The document prescribed, the deployment did something else, and **nothing in this repository can see the difference**, because no committed file names that check: Alertmanager posts to a full ping URL held in `PLATFORM_DEADMANSWITCH_URL`, and a URL carries no slug.
+
+**The two kinds of check differ in exactly the way that decides what may be renamed, and that is worth stating once rather than rediscovering.**
+
+- **Slug-addressed, and a rename of the slug breaks them.** `infrastructure-drift`, `infrastructure-pre-commit-autoupdate` and `<inventory_hostname>-prune-host-images` are reached as `hc-ping.com/<ping key>/<slug>?create=1` — by `.github/workflows/drift.yml`, `.github/workflows/pre-commit-autoupdate.yml` and the `image_prune` role. Because every ping carries `?create=1`, re-slugging one does not fail loudly: the next ping **creates a second check** under the old slug and the renamed one goes quiet, which is an alarm rather than an error and arrives a period later. The display name is free; the slug is not.
+- **URL-addressed, and a rename costs nothing.** The Alertmanager check is reached only by its own ping URL, so its name and its slug may both be changed without touching a secret. That is the one this repository prescribes a name for and the one where the name is least load-bearing.
+
+**What this entry owes.** Decide whether the Alertmanager check is renamed to match §7.1 or §7.1 is amended to match the observer — either is defensible and the divergence is not — and say in the document which field is being named, since the two kinds of check answer differently. Then state the slug rule where an operator meets it rather than here: a reader of §7.1 and Appendix A today cannot tell that renaming one check is free and renaming another quietly doubles it.
+
+**What it must not do.** Re-slug a periodic-job check to tidy the list. `main-production-prune-host-images` and `main-staging-prune-host-images` are templated from `inventory_hostname`, so their slugs are derived rather than chosen, and changing one at the observer alone puts it permanently out of step with what the host pings.
+
+## 82. say-how-to-read-a-converge-log-while-the-run-is-still-going
+
+**Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, from following its own merge through §6.6.**
+
+`docs/bootstrap-a-new-host.md` §6.6 tells the operator to **"read staging's before approving production's — that is what makes staging the rehearsal rather than a second production."** Followed with the obvious command, that instruction cannot be carried out. `gh run view <run> --log` refuses while any job in the run is unfinished:
+
+    run 34739844834 is still in progress; logs will be available when it is complete
+
+and on a merge touching `ansible/`, both converges are jobs of **one** run — so the run is incomplete precisely until production's converge, the thing the reader is deciding whether to approve, has already finished. `--job <id>` does not lift the refusal; it is a property of the run, not of the job.
+
+Two routes do work, measured on run `34739844834`: the web interface streams a running job's log live, and `gh api repos/<owner>/<repo>/actions/jobs/<job id>/logs` serves a completed job's log from inside a still-running run. The second is what this change used to read staging's recap while production's job was in flight.
+
+**Why it is worth an entry rather than a sentence in passing.** §6.6's rehearsal instruction is the whole argument for having a staging host on the converge path at all, and an operator who reaches for the documented CLI gets a refusal that reads like a permissions or timing problem rather than like an unsupported command. The fix is small — name the working route where §6.6 gives the instruction — and until then the rehearsal is available only to someone who already knows it is.

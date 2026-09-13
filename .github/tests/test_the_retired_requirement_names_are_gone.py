@@ -187,13 +187,15 @@ def _named_spans(text: str) -> list[str]:
 #       per-occurrence form. Stated here because a change arguing that unchecked
 #       surfaces re-accumulate owes the measurement of the one it leaves.
 #
-#   `docs/change-queue.md` -- EXPIRES. Entry 74 names *Each Environment Has a
-#       Dedicated Hetzner Cloud Project*, because naming the stale citation is
-#       what that entry is for, and a queue entry is deleted only when its change
-#       archives. So the file is exempt across the life of the change that
-#       sweeps the tree and no longer. The archive commit deletes the entry and
-#       this exemption together; `TestEveryExemptionStillExcusesSomething` below
-#       is what turns red if the second is forgotten.
+#   `docs/change-queue.md` WAS EXEMPT AND IS NOT ANY MORE, which is the expiry
+#       machinery working rather than a loosening. Entry 74 named a retired
+#       requirement, because naming the stale citation was what that entry was
+#       for, and a queue entry is deleted only when its change archives -- so the
+#       file was exempt across that change's life and no longer. Deleting the
+#       entry in this commit turned `TestEveryExemptionStillExcusesSomething`
+#       red, and the repair was to delete the exemption in the same commit. It is
+#       swept from here on. The sibling module records the identical sequence
+#       under its own entry 63, one change earlier.
 #
 # `.github/tests/` IS NOT EXEMPT, and that is the decision this module exists to
 # hold. The sibling sweep exempts it wholesale, for two reasons of which only one
@@ -211,7 +213,6 @@ THIS_MODULE_PATH = ".github/tests/test_the_retired_requirement_names_are_gone.py
 
 EXEMPT_PATHS: tuple[str, ...] = (
     THIS_MODULE_PATH,
-    "docs/change-queue.md",
     "docs/deferred-work.md",
 )
 
