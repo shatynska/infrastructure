@@ -162,12 +162,13 @@ ghcr_pull_username: shatynska
 # repository's own main-staging Environment as PLATFORM_DEPLOY_SSH_KEY,
 # `commerce-ops`'s in that application's repository.
 #
-# `commerce-ops` was deliberately absent while it had no staging deploy path
-# in its own repository (onboard-commerce-ops-to-staging ended that). Its
-# entry lands before that path exists rather than after, and the order is
-# forced: the entry needs a converge before the application's deploy can
-# authenticate, so an application repository that is ready first waits on an
-# infrastructure pull request rather than the reverse.
+# `commerce-ops` was left out of this list while it had no staging deploy
+# path in its own repository. That deploy path is being built now, and its
+# entry deliberately lands BEFORE the path exists rather than after: the
+# entry needs a converge before the application's deploy can authenticate,
+# so an application repository that is ready first waits on an
+# infrastructure pull request rather than the reverse. Until that deploy
+# runs, this entry authorises something that has never used it.
 #
 # NOTE ON THE PRUNE, so neither state is read as a fault. An enumerated
 # application with no Compose file on the host renders no image reference and
