@@ -740,3 +740,19 @@ and on a merge touching `ansible/`, both converges are jobs of **one** run — s
 Two routes do work, measured on run `34739844834`: the web interface streams a running job's log live, and `gh api repos/<owner>/<repo>/actions/jobs/<job id>/logs` serves a completed job's log from inside a still-running run. The second is what this change used to read staging's recap while production's job was in flight.
 
 **Why it is worth an entry rather than a sentence in passing.** §6.6's rehearsal instruction is the whole argument for having a staging host on the converge path at all, and an operator who reaches for the documented CLI gets a refusal that reads like a permissions or timing problem rather than like an unsupported command. The fix is small — name the working route where §6.6 gives the instruction — and until then the rehearsal is available only to someone who already knows it is.
+
+## 83. reconcile-the-alertmanager-check-s-period-and-grace
+
+**Not blocked, and cheap. Recorded 2026-09-13 by the operator, who read §7.1 against the observer's own settings and could not make the two agree.**
+
+`docs/bootstrap-a-new-host.md` §7.1 says of the Alertmanager dead-man's-switch check: *"Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one."* The deployment runs **period 5, grace 2**.
+
+**The sentence is why the divergence is hard to see, and it is wrong in a way that survives a careful reading.** The clause after the colon justifies the **period** and nothing else: a period of 5 minutes against a 2-minute cadence is exactly "tolerate one missed ping before going late". The **grace** value is then stated with no reason attached, so a reader who does the arithmetic finds a number that the sentence appears to explain and does not. That is how it reads as a contradiction when it is really an unexplained figure sitting beside an explained one.
+
+**What the two fields actually do, since the document never says.** They are sequential, not alternatives. *Period* is how long without a ping before the check goes **late**; *grace* is how long it stays late before going **down** and alerting. Time from the last good ping to the alarm is **period + grace**. Against the real cadence — `repeat_interval: 2m` on the `Watchdog` route in `platform/docker-compose.yml` — the documented pair alarms at **10 minutes** and roughly five missed pings; the deployed pair alarms at **7 minutes** and roughly three.
+
+**The deployed value is the better one, which is what makes this a documentation change rather than a configuration one.** This check is the alarm for when everything else is down, so a shorter time to alarm is worth having provided it does not fire on noise — and three consecutive missed pings is well clear of a transient blip or of the brief Alertmanager restart a platform deploy causes. Whoever takes this should change the document to match the observer rather than the reverse, and say *why* the grace is what it is instead of asserting a figure.
+
+**Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
+
+**Related, and deliberately separate.** Entry 81 covers the *name* of this same check diverging from what §7.1 prescribes, and the slug rule that decides which checks may be renamed at all. This entry is the same blind spot on a different field: the observer holds settings no committed file states, so nothing can detect either kind of drift. They are worth taking together; they are recorded apart because one is about naming and one is about timing, and 81 was closed to further additions when this was found.
