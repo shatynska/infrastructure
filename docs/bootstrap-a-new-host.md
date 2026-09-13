@@ -41,6 +41,7 @@ Nothing here touches a server. It is the shopping list.
 | Slack | Alert delivery | The company workspace |
 | A heartbeat service (Healthchecks.io or similar) | Noticing when the whole host or its alerting dies | The company |
 | A DNS provider | Pointing hostnames at the **production** server (§4.4 says why not staging) | Wherever the company's domain already lives |
+| A GitHub App, created in stage 3.2 | Opening the weekly hook-update pull request as an identity that is not the workflow's own token | The company organisation, installed on this repository alone |
 
 Use a shared company password manager for every credential in this document. Several values below exist in exactly one place after they are created, and the password manager is that place.
 
@@ -112,6 +113,7 @@ Covers stages 0 to 6. Three things sit outside it deliberately: stage 7's platfo
 | Tailscale OAuth client | **1** | §5.3 — one client serves every repository |
 | GHCR pull token | **1 value** unless you choose two, stored twice — encrypted separately into each stack's `group_vars` under that stack's own Vault password | `ansible/inventory/group_vars/staging.yml` records the shared *account* and the reasoning: read-only against the same packages, so a second "would be a second thing to rotate for no isolation gained". §6.1 permits reuse rather than requiring it, and the ciphertexts cannot be compared to tell which you chose |
 | GitHub Environment | **2** — `production` and `staging` | §3.2, and each stack's `pipeline.yml` names the one its apply job attaches to. **Named for the environment, unlike the repository secrets two rows up** — `docs/naming-conventions.md` calls for the stack's name here and GitHub offers no rename, so moving it means re-creating the Environment and every secret on it: `docs/change-queue.md` entry 75 |
+| GitHub App, and its two repository secrets | **1**, whatever the stack count | §3.2. It authors one pull request on one repository and knows nothing about stacks, so a second stack adds nothing here. Its credential is a client id and a private key, both repository secrets rather than Environment ones: the workflow that mints a token from them runs on a schedule and declares no `environment:` |
 | Heartbeat project ping key | **1**, shared — it addresses the **four** periodic-job checks Appendix A lists | §7.1: "It addresses one check per periodic job, listed with its period and grace in Appendix A". §7.1's Alertmanager check is **not** one of them: it has a ping URL of its own, held as `PLATFORM_DEADMANSWITCH_URL`, which a ping-key rotation does not touch |
 
 Appendix A is this same set seen from the other end — where each secret lives and what breaks when it is wrong, for rotating rather than for assembling. The two move together; if you change one, change the other.
@@ -268,6 +270,13 @@ All of these are in Settings on github.com, or via `gh`.
 2. **Label.** Issues → Labels → New label: `destroy-override`. A merged pull request must carry this label for the apply workflow to accept a plan that deletes or replaces a resource. Without it, such plans fail on purpose.
 3. **Workflow token.** Settings → Actions → General → Workflow permissions: **Read repository contents and packages permissions**. Each workflow declares the little it needs on top.
 4. **Merge methods.** Leave merge commits enabled. The destroy gate reads the pull request number from the merge commit message; squash and rebase merges fall back to a slower API lookup.
+5. **A GitHub App, to open the weekly hook-update pull request.** Settings → Developer settings → GitHub Apps → New GitHub App. Name it for your company (this repository's is `infrastructure-autoupdate`). Give it repository permissions **Contents: read and write** (to push the update branch) and **Pull requests: read and write** (to open one), **and no account-level permissions at all**. Install it on this repository alone. Then Generate a private key, which downloads a `.pem` once, and note the App's **Client ID** from its settings page. Both become repository secrets in 3.3.
+
+   **Why it exists, because "the workflow can just use `GITHUB_TOKEN`" is the obvious thing to try and it does not work.** Dependabot has no `pre-commit` ecosystem, so hook revisions are kept current by `pre-commit-autoupdate.yml`, which runs weekly and opens a pull request. An event caused by `GITHUB_TOKEN` starts no workflow run — so that pull request would receive no `validate` and no `ansible-verify`, and every required status check on `main` is triggered that way. It would open, report nothing, and stay unmergeable forever. That is worse than a failure, because a failure is red and this is merely permanently pending. *Automated Dependency Updates* (`openspec/specs/iac-safety-hardening/spec.md`) is where this is written down.
+
+   **An App rather than a personal access token, and that is a requirement rather than a preference.** The same requirement forbids a credential that expires on a schedule: a one-time setup step is bounded by the change that introduces it, while a scheduled expiry recurs indefinitely at a date nobody chose, long after anyone is watching for it — and the failure it produces is this mechanism silently ceasing to open pull requests. An App's private key does not expire and the tokens minted from it live minutes; a classic PAT with a mandatory expiry date does not satisfy it.
+
+   **Its scope is the smallest thing that works, and the workflow narrows it again.** The minting step down-scopes each token it issues to those same two permissions, in committed content, so widening the App later does not silently widen the token. That scope also bounds what the workflow's pull-request step may ask for: `labels` and `assignees` are issue operations and would need Issues, and `team-reviewers` needs an organisation permission. Adding any of them means revisiting the App's permissions, not only editing the workflow.
 
 ### 3.3 Secrets
 
@@ -281,7 +290,11 @@ gh secret set HCLOUD_TOKEN --env production         # production Read & Write
 gh secret set TF_API_TOKEN --env production         # the same HCP user token
 gh secret set HCLOUD_TOKEN --env staging            # staging Read & Write
 gh secret set TF_API_TOKEN --env staging            # the same HCP user token
+gh secret set APP_CLIENT_ID                         # the GitHub App's client id
+gh secret set APP_PRIVATE_KEY < <the .pem you downloaded>   # its private key
 ```
+
+`APP_PRIVATE_KEY` is the one secret here read from a file rather than typed: it is a multi-line PEM block, and `gh secret set` reading a prompt takes one line. Pass it with `<` as shown. Delete the `.pem` once it is stored — GitHub will not show it again, and an App can be given a fresh key at any time, so losing it costs one click rather than a re-registration.
 
 Do not pass `--body '<token>'`: that records the secret in your shell history, where it then lives until the file rotates out.
 
@@ -296,6 +309,8 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 | `TF_API_TOKEN` | Repository | Stage 2 | Every Terraform job |
 | `TF_API_TOKEN` | `production` Environment | Stage 2, same value | Production's apply job |
 | `TF_API_TOKEN` | `staging` Environment | Stage 2, same value | Staging's apply job |
+| `APP_CLIENT_ID` | Repository | The GitHub App from 3.2 | `pre-commit-autoupdate.yml`, weekly, to mint the token it opens its pull request with |
+| `APP_PRIVATE_KEY` | Repository | The same App's downloaded `.pem` | The same step. **Repository-scoped, not an Environment secret**: that workflow runs on a schedule and declares no `environment:`, so an Environment secret would be unreachable to it |
 
 **`.github/dependabot.yml` already lists both stack directories**, and it must keep listing exactly the ones that exist. Dependabot's terraform ecosystem has no discovery mechanism, so a directory the list omits is not partially covered — it is uncovered, and its provider pins rot with no signal. The CI suite compares that list against the lockfiles in the tree and fails the build if a lockfile-bearing directory is missing. If you drop the second stack, drop its entry with it; if you add a third, add one.
 
@@ -305,7 +320,7 @@ Do not pass `--body '<token>'`: that records the secret in your shell history, w
 
 **Each Environment must define its own `HCLOUD_TOKEN`.** GitHub resolves an *absent* Environment secret to the repository secret of the same name rather than failing — so an Environment that omits it applies with whatever the repository holds under that name. **No repository secret carries that name here**, deliberately: production's read-only token is `HCLOUD_TOKEN_MAIN_PRODUCTION` and staging's is `HCLOUD_TOKEN_MAIN_STAGING`, precisely so that no job attached to an Environment can resolve a read-only field to a write token. The fallback therefore resolves to nothing, and the apply job's guard still refuses — it digests both sides and they match as the empty string. That is the guard working, not a hole: an Environment that omits its write token fails rather than applying with something else's. The fix is still here.
 
-**Check:** seven secrets set — three at repository scope, two on each Environment; `production` shows one required reviewer and `staging` shows none; the label exists; the repository is private and holds exactly one commit, the license.
+**Check:** nine secrets set — five at repository scope, two on each Environment; `production` shows one required reviewer and `staging` shows none; the label exists; the App is installed on this repository and on no other; the repository is private and holds exactly one commit, the license.
 
 ## Stage 4. First Terraform apply: both servers exist
 
@@ -914,7 +929,7 @@ Do these once the first pull requests have run, since branch protection can only
 
 2. **Dependabot** is configured by `.github/dependabot.yml` and starts on its own. Its pull requests go through the same checks.
 3. **Drift Detection** runs nightly. GitHub disables scheduled workflows after 60 days without commits; `README.md` says how to re-enable it. That disabling now announces itself — the workflow reports to a heartbeat check on every run, and a check that stops being reported to alarms — but re-enabling is still a manual act, and a manual `workflow_dispatch` reports too, so it resets the silence timer. After dispatching one to recover a disabled workflow, confirm the schedule itself is enabled rather than reading the green check as evidence.
-4. **Pre-commit autoupdate** runs weekly and opens a pull request. Dispatch it once here, so its heartbeat check comes into existence and can be given the period and grace from Appendix A — otherwise the check first appears a week later, on its own schedule.
+4. **Pre-commit autoupdate** runs weekly and opens a pull request. Dispatch it once here, so its heartbeat check comes into existence and can be given the period and grace from Appendix A — otherwise the check first appears a week later, on its own schedule. **Its prerequisite is §3.2's GitHub App and the two secrets §3.3 sets from it**: the job's first real step mints a token from them, so on a clone that skipped either, this dispatch fails there rather than at anything to do with hooks.
 5. **Prove that silence alarms.** Everything else you have tested proves a ping *arriving*. The whole design rests on the opposite — that a job which stops reporting is as loud as one that fails — and nothing in the repository can demonstrate it, because the alarm belongs to a third party's timeout.
 
    At the heartbeat service, add a check named `scratch-delete-me`, period **5 minutes**, grace **1 minute**, routed to `#alerts`. Ping it once, then leave it alone:
@@ -969,6 +984,7 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | `PLATFORM_SLACK_WEBHOOK_URL` | Env secret | 7 | Slack app | Alert delivery |
 | `PLATFORM_DEADMANSWITCH_URL` | Env secret | 7 | Heartbeat service | The external alarm |
 | `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in each `group_vars/<environment>.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
+| `APP_CLIENT_ID` / `APP_PRIVATE_KEY` | **Repo** secrets | 3 | The GitHub App (§3.2) — client id from its settings page, private key downloaded once at creation | The weekly hook-update pull request stops being opened, and **nothing says so**: the workflow's heartbeat check reports that the *run* happened, not that a pull request came out of it, so a run that fails at the minting step still looks like a job that had nothing to do. Hook revisions then quietly stop being updated. The key does not expire; the App being uninstalled or its key revoked is what breaks it |
 | `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
 
 `HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.

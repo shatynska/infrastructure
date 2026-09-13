@@ -2,7 +2,7 @@
 
 How everything this repository creates is named, and the one rule the scheme follows.
 
-> **NOT YET IN EFFECT.** This document records a decision taken on 2026-09-11; the repository does not match it yet. What it describes was to arrive through `docs/change-queue.md` entries 61, 62, 63 and 64, in that order. Entries 61, 62 and 63 have archived and 64 lands with `move-the-platform-data-mount`; **75 alone remains after it**, and whoever archives 75 deletes this banner. Until then, read this as the target and the tree as the present.
+> **IN EFFECT, WITH ONE EXCEPTION.** This document records a decision taken on 2026-09-11. It arrived through `docs/change-queue.md` entries 61, 62, 63 and 64, all four archived, and the tree matches it everywhere the scheme reaches — except the two **GitHub Environments**, which are `production` and `staging` where the scheme calls for `main-production` and `main-staging`. Entry 75 is what would move them, and the paragraph below is why it has not. Read every other name here as describing the tree; read the GitHub Environment row as describing the target. Whoever archives 75 deletes this banner.
 >
 > **Entry 75 was not in the original four and is the one name this scheme cannot buy cheaply.** Entry 63 was scoped to rename the two GitHub Environments along with the workspaces, the repository secrets and the Hetzner projects, and found that GitHub offers no way to rename a deployment Environment at all — so moving one means re-creating it and re-entering every secret it holds, three of which are SSH private halves this repository's own bootstrap has the operator delete once stored. That was deferred rather than paid. **A new deployment pays nothing**, because it names its Environments correctly when it creates them; `docs/bootstrap-a-new-host.md` §3.2 says so at the moment of choosing.
 
@@ -96,6 +96,9 @@ The only namespace shared between companies, and the only place the company appe
 | root key | `~/.ssh/shatynska-root` | `~/.ssh/fuperia-root` |
 | operator key | `~/.ssh/shatynska-ops` | `~/.ssh/fuperia-ops` |
 | SSH alias | `ssh shatynska-main-production` | `ssh fuperia-main-production` |
+| converge key, **one per stack** | `~/.ssh/shatynska-ansible-ci-main-production` | `~/.ssh/fuperia-ansible-ci-main-production` |
+
+**The converge key carries the stack, not the environment**, and it is the only per-stack artefact whose name lives on a workstation rather than in a namespace some service owns. That is what made it the last one to move: nothing reads the filename — the private half goes into a GitHub Environment secret and the public half into a host's `authorized_keys`, and neither carries it — so no check can hold this name and only the runbook states it. Two stacks made `-production` and `-staging` distinct by luck; a second tenant would have collided, which is the collision `HCLOUD_TOKEN_MAIN_PRODUCTION` carries four extra characters to avoid one namespace over.
 
 **Pin every alias to an explicit `HostName`.** A bare alias resolved by MagicDNS follows whichever tailnet profile is active, so `ssh main-production` with two tailnets is a command whose destination depends on a setting you cannot see in it.
 
