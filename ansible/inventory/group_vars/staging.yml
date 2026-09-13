@@ -153,27 +153,41 @@ ghcr_pull_username: shatynska
 # Per-application deploy public keys (add-per-app-deploy-keys). Safe to
 # commit -- public keys, not secrets.
 #
-# STAGING'S OWN KEYPAIR, NOT PRODUCTION'S. One leaked private half must not deploy
-# to both environments. Generate it on the workstation, commit the public
-# half here, and keep the private half for the change that deploys the
-# platform stack to staging -- it becomes that environment's own
-# PLATFORM_DEPLOY_SSH_KEY and belongs in no GitHub secret before then.
+# STAGING'S OWN KEYPAIR, NOT PRODUCTION'S -- and that holds of every entry
+# below, not just the first. One leaked private half must deploy to one host,
+# which is why these lists differ per environment rather than being shared.
+# Each keypair is generated on the workstation, its public half committed
+# here, and its private half stored only in the GitHub Environment secret of
+# the repository that deploys that application: `platform`'s in this
+# repository's own main-staging Environment as PLATFORM_DEPLOY_SSH_KEY,
+# `commerce-ops`'s in that application's repository.
 #
-# `commerce-ops` is deliberately absent: it has no staging deploy path in its
-# own repository yet, and an enumerated application with no Compose file
-# contributes nothing to the prune's keep set while implying an
-# authorisation nothing uses.
+# `commerce-ops` was deliberately absent while it had no staging deploy path
+# in its own repository (onboard-commerce-ops-to-staging ended that). Its
+# entry lands before that path exists rather than after, and the order is
+# forced: the entry needs a converge before the application's deploy can
+# authenticate, so an application repository that is ready first waits on an
+# infrastructure pull request rather than the reverse.
 #
-# NOTE ON THE PRUNE, so it is not read as a fault later: on a host where
-# nothing is deployed yet, no enumerated application renders an image
-# reference and no container holds one, so the keep set is empty and the
-# weekly unit ABANDONS and reports failure. That is this role's documented
-# contract, it is accepted deliberately, and it ends when the platform stack
-# reaches staging.
+# NOTE ON THE PRUNE, so neither state is read as a fault. An enumerated
+# application with no Compose file on the host renders no image reference and
+# contributes nothing to the keep set -- harmless, and the reason an entry
+# may sit here before anything deploys behind it. While NOTHING at all was
+# deployed the keep set was empty outright and the weekly unit ABANDONED and
+# reported failure, which was this role's documented contract and was
+# accepted deliberately; that ended when the platform stack reached staging
+# on 2026-09-13, and the prune has reported `considered 8` since.
 #
 deploy_apps:
   - name: platform
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMCOPPlcE5sXqy1//8Cl8S3fac51+ceyD9YBnN4Vwq+ deploy@platform-staging"
+  # The name is not free: image reclamation identifies an application's images
+  # as ghcr.io/<any owner>/<this name>, so it must equal the last segment of
+  # the image repository (ghcr.io/<org>/commerce-ops) or it reclaims nothing,
+  # silently. Same name as production's entry for that reason; a different
+  # keypair for the reason above.
+  - name: commerce-ops
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7D0FcW/kPrjuxwDgy6mt27qx3V8I+1sYT3CcOSY5ID commerce-ops-deploy-staging"
 
 # A genuine secret (a read:packages-scoped GHCR token): Vault-encrypt it in
 # place, never plain text.
