@@ -1,0 +1,42 @@
+## 1. Tests
+
+- [ ] 1.1 Record the baseline: `python3 -m unittest discover --start-directory .github/tests` from this working tree's root, with `.github/requirements-ci.txt`'s pins installed. Verify it is green and note the count.
+- [ ] 1.2 Dispatch the independent test author once the plan review permits proceeding and the plan is committed, before any file below is edited, with **all three rows** of `AGENTS.md`'s test table, no verdict about which apply, and design.md decision 9's statement of what is and is not verifiable. Verify by the author's report: new tests and a `test-plan.md`, or a stated gap with its reason.
+
+## 2. The recipe — `docs/bootstrap-a-new-host.md`
+
+- [ ] 2.1 Rewrite stage 8.3's recipe to design.md decision 5's block: a `set -eu` subshell; the secret-name check as a refusal unless `rotate=yes`; the password generated with `openssl rand -hex 32` and passed to `gh secret set` and to `psql` only over stdin; `ON_ERROR_STOP`; the four logging settings pinned for the session; the converging `\gset`/`\if` script with double-quoted identifiers; `CONNECT` and `TEMPORARY` revoked from `PUBLIC`. Say that the target's Environment from 8.4 must exist first; that the block is pasted whole, as it stands, once per deploy target, with an independently generated password; that a rotation is the same block with `rotate=yes` in its own assignment line — never a variable set in the shell, which would outlive the paste and disable the name check for the next one — picked up by the application on its next deploy; and what each failure in decision 5's list leaves and how to recover. Verify by reading it back against every bullet of decision 5, and by comparing the committed block with decision 5's line by line.
+- [ ] 2.2 Replace stage 8.3's deferral sentence with what is now true: the trigger fired on 2026-09-13 with `commerce-ops`, provisioning is manual and the obligation unmet, the mechanism is `docs/backlog.md` `automate-per-application-database-provisioning`. Cite the requirement by name. Verify the citation form against `AGENTS.md`.
+- [ ] 2.3 Qualify stage 8.3's closing `commerce-ops` paragraph to the production host, say its non-durable half now has a database in production's shared instance awaiting that application's cutover, and keep the paragraph. Verify it no longer reads as describing staging.
+- [ ] 2.4 Stage 8.4's secrets table: replace the `POSTGRES_PASSWORD` row with the shared-instance password under that target's own value from 8.3, named as 8.3 names it, note that it must not reuse a name the Environment already holds, and note that this row is created by 8.3's recipe rather than by hand in 8.4. Verify it cannot be read as one password for every target, or as reusing `POSTGRES_PASSWORD`.
+- [ ] 2.5 Appendix B: after a rebuild, re-run 8.3 for each application with a database in the shared instance, before that application's deploy (design.md decision 8). Verify by reading the step order.
+
+## 3. Backlog and the sweep
+
+- [ ] 3.1 Add `docs/backlog.md` entry `automate-per-application-database-provisioning`: the mechanism and credential path owed since 2026-09-13, why it was not built with one consumer, the secret-name collision decision 5 found as a first data point for it, and that archiving it obliges replacing the divergence paragraph in *Single Shared PostgreSQL Instance, Per-Application Databases*. Verify it says what it waits on or why it is free.
+- [ ] 3.2 Update `move-commerce-ops-durable-data-to-supabase` with the table division from design.md decision 3, the database and the `SHARED_POSTGRES_PASSWORD` secret that now exist for the queue to point at, the three-step ending, and that the step here is gated on `docker ps` and `docker volume ls` rather than on the migration being reported done. Verify the 2026-09-08 figures are kept as dated.
+- [ ] 3.3 Update `expose-staging-on-the-web`: its dependency on this change is satisfied; the staging deploy path in the application's repository remains. Verify nothing in it now reads as the database still outstanding.
+- [ ] 3.4 Add the re-provisioning step to `write-and-rehearse-the-rebuild-runbook`, and a sentence to `upgrade-the-shared-postgres-major` that a volume reset obliges the same. Verify against design.md decision 8.
+- [ ] 3.5 Run `grep -rn 'commerce-ops' --include='*.md' .` outside `openspec/changes/`, read every hit that describes where that application's data lives, and correct each this change makes false or ambiguous outside `openspec/specs/` — qualify to the production host, delete nothing about the private PostgreSQL while it runs. Hits inside `openspec/specs/` other than the requirement this change's delta modifies are left as they are, for the reason in design.md decision 7's last paragraph. Verify by re-running the grep and giving each data-location hit a disposition in this task's notes, naming every file this task edits.
+
+## 4. Staging provisioning
+
+- [ ] 4.1 **Staging, run by the operator** by the recipe as written in 2.1, once `commerce-ops` has a `staging` Environment; until then this task and everything after it is blocked, and the status line says so. Verify from a session on `100.85.219.36`: `\l` shows `commerce-ops` owned by `commerce-ops`; its `datacl` grants nothing to `PUBLIC`; `SELECT has_database_privilege('pgexporter', 'commerce-ops', 'CONNECT')` returns `f`; `docker logs --since <run start> platform-postgres-1 2>&1 | grep -ciE 'create role|alter role'` returns `0`; and `gh secret list --repo fuperia-it/commerce-ops --env staging` lists `SHARED_POSTGRES_PASSWORD`.
+- [ ] 4.2 Record on production, dated and citing the commands: whether `commerce-ops-postgres-1` runs and whether `commerce-ops_commerce_ops_pgdata` exists. Read-only.
+
+## 5. Verification
+
+- [ ] 5.1 `openspec validate provision-commerce-ops-database-in-the-shared-instance --strict`. Verify it passes.
+- [ ] 5.2 `python3 -m unittest discover --start-directory .github/tests`. Verify green, and the count is 1.1's plus the derived tests.
+- [ ] 5.3 `pre-commit run --all-files`. Verify it passes or each skip has no files.
+- [ ] 5.4 `git diff --name-only` against the merge base and `git status --porcelain`. Verify only `openspec/`, `docs/`, `.github/tests/` and the files 3.5's notes name appear.
+
+## 6. Ship
+
+- [ ] 6.1 Commit, then dispatch the code-review gate over the committed diff. If fixes change the recipe, re-run 4.1 by the changed recipe and section 5 before 6.2.
+- [ ] 6.2 **Production, run by the operator** by the recipe as reviewed, only after 6.1 has cleared, with a password generated independently of staging's, into `commerce-ops`'s `production` Environment under `SHARED_POSTGRES_PASSWORD` — confirming first that `POSTGRES_PASSWORD` is untouched. Verify read-only from `ssh prod` with 4.1's host checks, and `gh secret list --env production` showing both names with `POSTGRES_PASSWORD`'s date unchanged from 2026-08-21.
+- [ ] 6.3 Open the pull request; wait for the operator to confirm the merge.
+- [ ] 6.4 Before staging's `commerce-ops` deploy key is handed over, ask the operator to confirm that what the application's staging deploy renders declares no PostgreSQL service and reads its database password from `SHARED_POSTGRES_PASSWORD`; only then tell the operator the key is released. Verify by the operator's confirmation of both the precondition and the handover, or record which has not happened yet.
+- [ ] 6.5 Propose the observation and wait for the operator's confirmation: after staging's first `commerce-ops` deploy, on the staging host, `docker ps --filter name=commerce-ops` shows the application's containers and no PostgreSQL container, `docker volume ls` shows no new volume, and `pg_stat_activity` in `platform-postgres-1` shows a session by `commerce-ops` on database `commerce-ops`. Production's effect is observed by 6.2's checks. Record the confirmation here.
+- [ ] 6.6 Re-run 4.2's check. If both are gone, stop and re-enter `plan` per design.md decision 7. Otherwise record the divergence paragraph's deletion under `## Not performed`, naming `move-commerce-ops-durable-data-to-supabase` as where the remainder lives.
+- [ ] 6.7 Archive: bring the branch to the freshly fetched trunk, archive the change, and open its record's pull request.
