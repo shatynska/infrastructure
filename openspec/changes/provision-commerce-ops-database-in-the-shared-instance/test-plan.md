@@ -154,3 +154,14 @@ Assumptions taken, with the tests depending on each:
 4. **design.md decision 3's division stays one paragraph naming `procrastinate_*` as non-durable, the seven hand-curated tables as durable, and the remainder as unclassified.** Depends: `<M>.TestTheChangeRecordStatesTheTableDivision.test_its_design_states_the_division`.
 5. **Test layout within `.github/tests`.** AGENTS.md fixes the glob but not whether a change adds a module or extends an existing one. A new module was added, following the sibling modules written by earlier independent test authors. No recorded convention decides it.
 6. **Stack skill.** `ai-toolkit:python` was loaded for the suite's idiom; no library skill covers `unittest` specifically.
+
+## Added at code review
+
+Not written by the independent author. The code-review gate, round 1, mutated a copy of the tree and found recipe regressions every test above let through, each failing silently on a real run. They are closed in the same module, marked `ADDED AT CODE REVIEW`, as derived properties of design.md decision 5; no existing assertion was weakened, and the author's conforming fixture is completed in the new fixture class rather than edited.
+
+- **Here-document termination.** `heredoc_openers` compared `line.strip()` with the delimiter, accepting an indented `SQL` that bash does not — so the recipe as it stood before `431f101`, indented under stage 8.3's list, passed all 60 tests while its paste hangs. Termination now follows bash (`heredoc_terminates`: the delimiter alone, preceded by nothing for `<<`, tabs only for `<<-`), and `<TestTheRecipeCannotRegressSilently>.test_every_here_document_terminates` reports a here-document left open. Tightening a shared helper is the one change to the author's code: it makes an existing detector stricter, never looser.
+- **Quoted delimiter** — `test_the_here_document_expanding_the_password_is_not_quoted`: `<<'SQL'` sends `$app` and `$pw` to psql literally and exits 0.
+- **Log settings pinned** — `test_every_statement_logging_setting_is_pinned_before_the_password`: all four, before the first `CREATE ROLE` or `ALTER ROLE` carrying a password.
+- **`rotate` assigned in the block** — `test_rotate_is_assigned_in_the_block_and_tested_by_the_refusal`.
+
+`TestTheCodeReviewDetectorsFire` runs each over fixtures that falsify it: an indented terminator, the whole block indented under a list item, `<<-` with tabs (accepted) and with spaces (reported), both quoting styles, each log setting removed and one moved after the password, `rotate=no` removed and `${ROTATE:-no}` read from the shell.

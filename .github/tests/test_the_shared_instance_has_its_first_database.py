@@ -497,7 +497,7 @@ FENCE = re.compile(r"^\s*(?P<marker>```+|~~~+)")
 CREATE_DATABASE = re.compile(r"\bCREATE\s+DATABASE\b")
 # `<<` or `<<-`, an optionally quoted delimiter; `<<<` is a here-string and not
 # a here-document.
-HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?P<quote>['\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)")
+HEREDOC = re.compile(r"(?<!<)<<(?!<)(?P<dash>-?)\s*(?P<quote>['\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)")
 PASSWORD_ASSIGNMENT = re.compile(r"\b(?P<var>[A-Za-z_][A-Za-z0-9_]*)=\$\(\s*openssl\s+rand\b")
 PSQL = re.compile(r"\bpsql\b")
 COMMAND_OPTION = re.compile(r"(?:^|\s)(?:-c|--command)(?:\s|=|$)")
@@ -551,22 +551,41 @@ def recipe_blocks(text: str) -> list[tuple[int, str]]:
     return [block for block in fenced_blocks(text) if CREATE_DATABASE.search(block[1])]
 
 
-def heredoc_openers(lines: list[str]) -> list[int | None]:
-    """For each line, the index of the line whose here-document it is body of --
-    the terminating delimiter line included -- or None for a command line."""
+def heredoc_terminates(line: str, word: str, dash: str) -> bool:
+    """Whether bash ends a `<<word` (or `<<-word`) here-document at this line.
+
+    Added at code review: the author's version compared `line.strip()`, which
+    accepts an indented delimiter bash does not, so a recipe whose closing
+    `SQL` carried the list indentation -- the defect `431f101` fixed, where the
+    paste hangs -- passed every test. Bash requires the delimiter alone on the
+    line, preceded by nothing for `<<` and by tabs only for `<<-`."""
+    return (line.lstrip("\t") if dash else line) == word
+
+
+def heredoc_scan(lines: list[str]) -> tuple[list[int | None], list[tuple[int, str, str]]]:
+    """The owner of each line, as `heredoc_openers` returns it, and every
+    here-document still open when the lines run out, as `(opener, word, dash)`."""
     owner: list[int | None] = [None] * len(lines)
-    pending: list[tuple[int, str]] = []
+    pending: list[tuple[int, str, str]] = []
     for index, line in enumerate(lines):
         if pending:
-            opener, word = pending[0]
+            opener, word, dash = pending[0]
             owner[index] = opener
-            if line.strip() == word:
+            if heredoc_terminates(line, word, dash):
                 pending.pop(0)
             continue
         if line.lstrip().startswith("#"):
             continue
-        pending.extend((index, match.group("word")) for match in HEREDOC.finditer(line))
-    return owner
+        pending.extend(
+            (index, match.group("word"), match.group("dash")) for match in HEREDOC.finditer(line)
+        )
+    return owner, pending
+
+
+def heredoc_openers(lines: list[str]) -> list[int | None]:
+    """For each line, the index of the line whose here-document it is body of --
+    the terminating delimiter line included -- or None for a command line."""
+    return heredoc_scan(lines)[0]
 
 
 def command_lines(block: str) -> list[tuple[int, str]]:
@@ -725,6 +744,80 @@ def refusal_offences(block: str) -> list[str]:
     return offences
 
 
+# --------------------------------------------------------------------------
+# ADDED AT CODE REVIEW, not by the independent test author. The review found
+# four recipe properties whose loss every test above let through, each of
+# which fails silently on a real run: a here-document that never terminates
+# (the paste hangs), a quoted delimiter (a role literally named `$app`, exit
+# 0), a log setting no longer pinned (the password in `docker logs` on the
+# next failure), and `rotate` read from the shell rather than assigned in the
+# block (the name check silently off). Each traces to design.md decision 5.
+# --------------------------------------------------------------------------
+
+LOG_SETTINGS_PINNED = (
+    ("log_statement", re.compile(r"\bSET\s+log_statement\s*(?:=|\bTO\b)\s*'none'", re.IGNORECASE)),
+    ("log_min_error_statement", re.compile(r"\bSET\s+log_min_error_statement\s*(?:=|\bTO\b)\s*'panic'", re.IGNORECASE)),
+    ("log_min_duration_statement", re.compile(r"\bSET\s+log_min_duration_statement\s*(?:=|\bTO\b)\s*-1\b", re.IGNORECASE)),
+    ("log_min_duration_sample", re.compile(r"\bSET\s+log_min_duration_sample\s*(?:=|\bTO\b)\s*-1\b", re.IGNORECASE)),
+)
+ROLE_PASSWORD_STATEMENT = re.compile(r"\b(?:CREATE|ALTER)\s+ROLE\b[^;]*\bPASSWORD\b", re.IGNORECASE)
+ROTATE_ASSIGNED = re.compile(r"(?:^|\s)rotate=no(?:\s|$)")
+ROTATE_TESTED = re.compile(r"\[\s*\"\$rotate\"\s*!=\s*yes\s*\]")
+
+
+def unterminated_heredocs(block: str) -> list[str]:
+    _, pending = heredoc_scan(block.splitlines())
+    return [
+        f"{opener + 1}: here-document `<<{dash}{word}` is never terminated -- bash ends it only on a "
+        f"line holding `{word}` alone, " + ("after tabs at most" if dash else "at column 0")
+        for opener, word, dash in pending
+    ]
+
+
+def quoted_delimiter_offences(block: str) -> list[str]:
+    """A here-document whose body expands a shell variable, opened with a
+    quoted delimiter, which sends the `$` to psql literally."""
+    lines = block.splitlines()
+    owner = heredoc_openers(lines)
+    offences: list[str] = []
+    for index, line in command_lines(block):
+        for match in HEREDOC.finditer(line):
+            if not match.group("quote"):
+                continue
+            body = [lines[i] for i in range(len(lines)) if owner[i] == index]
+            if any("$" in text for text in body):
+                offences.append(
+                    f"{index + 1}: the here-document delimiter is quoted, so its body's `$` expansions reach psql literally"
+                )
+    return offences
+
+
+def unpinned_log_settings(sql: str) -> list[str]:
+    first = ROLE_PASSWORD_STATEMENT.search(sql)
+    if first is None:
+        return ["no `CREATE ROLE` or `ALTER ROLE` carrying a PASSWORD in standard input"]
+    before = sql[: first.start()]
+    return [
+        f"`{name}` is not pinned off before the first statement carrying the password"
+        for name, pattern in LOG_SETTINGS_PINNED
+        if not pattern.search(before)
+    ]
+
+
+def rotate_offences(block: str) -> list[str]:
+    lines = command_lines(block)
+    listed = next((index for index, line in lines if GH_SECRET_LIST.search(line)), None)
+    assigned = next((index for index, line in lines if ROTATE_ASSIGNED.search(line)), None)
+    offences: list[str] = []
+    if assigned is None or (listed is not None and assigned > listed):
+        offences.append(
+            "`rotate=no` is not assigned in the block before the secret names are read, so a value left set in the shell reaches the check"
+        )
+    if not any(ROTATE_TESTED.search(line) for _, line in lines):
+        offences.append('the refusal does not test the block\'s own `"$rotate"`')
+    return offences
+
+
 class RecipeMixin:
     def recipe(self) -> str:
         blocks = recipe_blocks(read_text(BOOTSTRAP))
@@ -833,6 +926,108 @@ class TestTheRecipeRefusesAnAlreadySetSecretName(RecipeMixin, unittest.TestCase)
     def test_secret_names_are_read_and_a_refusal_precedes_any_write(self) -> None:
         offences = refusal_offences(self.recipe())
         self.assertEqual([], offences, "\n".join(offences))
+
+
+class TestTheRecipeCannotRegressSilently(RecipeMixin, unittest.TestCase):
+    """ADDED AT CODE REVIEW -- DERIVED from design.md decision 5. Each property
+    here fails on a real run without failing loudly; see the section comment
+    above `LOG_SETTINGS_PINNED`."""
+
+    def test_every_here_document_terminates(self) -> None:
+        offences = unterminated_heredocs(self.recipe())
+        self.assertEqual([], offences, "\n".join(offences))
+
+    def test_the_here_document_expanding_the_password_is_not_quoted(self) -> None:
+        offences = quoted_delimiter_offences(self.recipe())
+        self.assertEqual([], offences, "\n".join(offences))
+
+    def test_every_statement_logging_setting_is_pinned_before_the_password(self) -> None:
+        offences = unpinned_log_settings(standard_input_sql(self.recipe()))
+        self.assertEqual([], offences, "\n".join(offences))
+
+    def test_rotate_is_assigned_in_the_block_and_tested_by_the_refusal(self) -> None:
+        offences = rotate_offences(self.recipe())
+        self.assertEqual([], offences, "\n".join(offences))
+
+
+class TestTheCodeReviewDetectorsFire(unittest.TestCase):
+    """ADDED AT CODE REVIEW. Each detector above runs over material written to
+    falsify it. The author's conforming fixture pins one log setting of four,
+    so it is completed here rather than edited."""
+
+    MISSING_SETTINGS = (
+        "SET log_min_error_statement = 'panic';\n"
+        "SET log_min_duration_statement = -1;\n"
+        "SET log_min_duration_sample = -1;\n"
+    )
+
+    def document(self) -> str:
+        anchor = "SET log_statement = 'none';\n"
+        self.assertIn(anchor, CONFORMING_RECIPE_DOCUMENT)
+        return CONFORMING_RECIPE_DOCUMENT.replace(anchor, anchor + self.MISSING_SETTINGS)
+
+    def recipe(self, document: str | None = None) -> str:
+        blocks = recipe_blocks(self.document() if document is None else document)
+        self.assertEqual(1, len(blocks), blocks)
+        return blocks[0][1]
+
+    def replaced(self, old: str, new: str) -> str:
+        document = self.document()
+        self.assertIn(old, document)
+        return self.recipe(document.replace(old, new))
+
+    def test_the_completed_conforming_recipe_yields_no_offence(self) -> None:
+        recipe = self.recipe()
+        sql = standard_input_sql(recipe)
+        self.assertEqual([], unterminated_heredocs(recipe))
+        self.assertEqual([], quoted_delimiter_offences(recipe))
+        self.assertEqual([], unpinned_log_settings(sql))
+        self.assertEqual([], rotate_offences(recipe))
+        self.assertEqual([], statements_not_over_standard_input(recipe))
+        self.assertEqual([], password_on_command_lines(recipe))
+        self.assertEqual([], refusal_offences(recipe))
+
+    def test_an_indented_terminator_is_reported(self) -> None:
+        self.assertTrue(unterminated_heredocs(self.replaced("\nSQL\n)", "\n  SQL\n)")))
+
+    def test_the_whole_block_indented_under_a_list_item_is_reported(self) -> None:
+        document = self.document()
+        start = document.index("```sh")
+        end = document.index("```", start + 3) + 3
+        indented = "\n".join("  " + line for line in document[start:end].splitlines())
+        self.assertTrue(unterminated_heredocs(self.recipe(document[:start] + indented + document[end:])))
+
+    def test_a_dash_here_document_accepts_tabs_but_not_spaces(self) -> None:
+        tabbed = self.replaced("<<SQL", "<<-SQL").replace("\nSQL\n)", "\n\t\tSQL\n)")
+        self.assertEqual([], unterminated_heredocs(tabbed))
+        spaced = self.replaced("<<SQL", "<<-SQL").replace("\nSQL\n)", "\n  SQL\n)")
+        self.assertTrue(unterminated_heredocs(spaced))
+
+    def test_a_quoted_delimiter_is_reported(self) -> None:
+        self.assertTrue(quoted_delimiter_offences(self.replaced("<<SQL", "<<'SQL'")))
+        self.assertTrue(quoted_delimiter_offences(self.replaced("<<SQL", '<<"SQL"')))
+
+    def test_a_quoted_delimiter_over_a_body_expanding_nothing_is_not_reported(self) -> None:
+        block = "cat <<'EOF'\nSELECT 1;\nEOF"
+        self.assertEqual([], quoted_delimiter_offences(block))
+
+    def test_each_log_setting_removed_is_reported_by_name(self) -> None:
+        for line in ["SET log_statement = 'none';\n", *self.MISSING_SETTINGS.splitlines(keepends=True)]:
+            name = line.split()[1]
+            with self.subTest(setting=name):
+                offences = unpinned_log_settings(standard_input_sql(self.replaced(line, "")))
+                self.assertEqual(1, len(offences), offences)
+                self.assertIn(name, offences[0])
+
+    def test_a_log_setting_placed_after_the_password_is_reported(self) -> None:
+        moved = self.replaced("SET log_min_duration_sample = -1;\n", "").replace(
+            "REVOKE CONNECT", "SET log_min_duration_sample = -1;\nREVOKE CONNECT"
+        )
+        self.assertEqual(1, len(unpinned_log_settings(standard_input_sql(moved))))
+
+    def test_rotate_read_from_the_shell_is_reported(self) -> None:
+        self.assertTrue(rotate_offences(self.replaced(" rotate=no\n", "\n")))
+        self.assertTrue(rotate_offences(self.replaced('[ "$rotate" != yes ]', '[ "${ROTATE:-no}" != yes ]')))
 
 
 CONFORMING_RECIPE_DOCUMENT = r"""

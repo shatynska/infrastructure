@@ -116,7 +116,7 @@ Note the divergence this does **not** cover: on the production host, `commerce-o
 
 **Do first**: check whether any application is by then storing something in the shared instance that it would rather not lose, in which case the answer is that it should not have been (see the requirements above) and that is the thing to fix, not the upgrade.
 
-**And re-provision after it.** Discarding the volume discards every application database in the instance, which each application's classification tolerates and none can start without: before redeploying each, run `docs/bootstrap-a-new-host.md` §8.3's recipe for that host with `rotate=yes`. Since 2026-09-13 `commerce-ops` has such a database on both hosts.
+**And re-provision after it.** Discarding the volume discards every application database in the instance, which each application's classification tolerates and none can start without: before redeploying each, run `docs/bootstrap-a-new-host.md` §8.3's recipe for that host with `rotate=yes`. `commerce-ops` has such a database on both hosts, staging's since 2026-09-13.
 
 ## 11. remove-the-stale-test-hostname
 
@@ -819,7 +819,7 @@ Not blocked.
 
 ## 54. automate-per-application-database-provisioning
 
-**Not blocked; recorded because its obligation is due and unmet.** *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) obliges automating how an application's database and role are provisioned in the shared instance and how the role's password reaches the application. That obligation's trigger — the first application given a database there — fired on 2026-09-13 with `commerce-ops`, on both hosts. `provision-commerce-ops-database-in-the-shared-instance` provisioned both by hand, by `docs/bootstrap-a-new-host.md` §8.3's recipe, and recorded the obligation in that requirement as a stated divergence rather than building the mechanism.
+**Not blocked; recorded because its obligation is due and unmet.** *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) obliges automating how an application's database and role are provisioned in the shared instance and how the role's password reaches the application. That obligation's trigger — the first application given a database there — fired on 2026-09-13 with `commerce-ops` on the staging host, and production's database followed by the same recipe. `provision-commerce-ops-database-in-the-shared-instance` provisioned both by hand, by `docs/bootstrap-a-new-host.md` §8.3's recipe, and recorded the obligation in that requirement as a stated divergence rather than building the mechanism.
 
 **Why it was not built then.** A credential path, naming rule and failure mode fitted to one consumer are fitted to one application's Compose file and one repository's secret names, and are discovered wrong by the next application rather than by review. That change met one such fit on its first host: production's `commerce-ops` Environment already held `POSTGRES_PASSWORD`, for the application's private PostgreSQL, so the shared-instance password had to take a name of its own, `SHARED_POSTGRES_PASSWORD`. A mechanism has to handle that collision for every application, not only the one it was designed against.
 
