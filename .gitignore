@@ -56,3 +56,39 @@ __pycache__/
 # its lockfile ARE committed -- they are the pin; what is installed from them
 # is not. `npm ci` recreates this from the lockfile exactly.
 node_modules/
+
+# Private keys. None is ever committed, and nothing else here says so.
+#
+# The hazard is specific rather than general: docs/bootstrap-a-new-host.md
+# stage 0.3 generates six passphrase-less keypairs, stage 4.2 runs `git add -A`
+# from this directory, and those two steps are most of a working day apart.
+# gitleaks catches the content at commit time -- but it is a pre-commit hook,
+# and stage 0 runs before `pre-commit install` necessarily has. This is the
+# layer that does not depend on having installed anything.
+#
+# Conventional names, anywhere in the tree:
+*.pem
+*.key
+id_rsa
+id_ecdsa
+id_ed25519
+
+# And this repository's own scheme, which produces names with NO extension --
+# <company>-ops, <company>-root, <company>-platform, <company>-platform-staging,
+# <company>-ansible-ci-<stack>, <company>-<app>-deploy -- so no suffix pattern
+# reaches them. §0.3 writes each into ~/.ssh/; these catch the relative-path
+# slip that writes one here instead.
+#
+# ANCHORED TO THE ROOT with a leading slash, deliberately. Unanchored, `*-ops`
+# would silently swallow a directory called `commerce-ops` added later, which
+# is the same class of accident this block exists to prevent. The slip lands in
+# the directory the command is run from, and that is this one.
+/*-ops
+/*-root
+/*-platform
+/*-platform-staging
+/*-ansible-ci-*
+/*-deploy
+
+# Public halves are not secret, and one being hidden would be its own defect.
+!*.pub
