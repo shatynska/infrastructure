@@ -2957,7 +2957,7 @@ class TestTheStackDirectoryReadsDiscriminate(unittest.TestCase):
         "#     nothing in prod's (see the Each Stack Has a Dedicated Hetzner",
         "# of the Environment's protection rules -- repository settings, which no file",
         "# The apply job still declares this Environment, so the write token stays",
-        "#   - the gated apply job, which declares `environment: production`,",
+        "#   - the gated apply job, which declares `environment: main-production`,",
         "  # HCLOUD_TOKEN is read from the environment, and WHICH token that is",
     )
 

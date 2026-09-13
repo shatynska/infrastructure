@@ -189,7 +189,7 @@ TARGET_GROUP_KEY_HINT = "target"
 # Environment, and a declaration drifting from either still fails.
 PROD_DIRECTORY = "main-production"
 PROD_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_PRODUCTION"
-PROD_GITHUB_ENVIRONMENT = "production"
+PROD_GITHUB_ENVIRONMENT = "main-production"
 
 TERRAFORM_PLAN = re.compile(r"terraform\s+plan\b")
 TERRAFORM_APPLY = re.compile(r"terraform\s+apply\b")
@@ -633,7 +633,7 @@ class TestEveryEnvironmentCarriesAPipelineDeclaration(unittest.TestCase):
         """SPECIFIED -- Credential Scoping by Privilege places each
         environment's Read Only token in "the read-only secret named by the
         environment's own pipeline declaration", and Gated Production Apply
-        requires the `production` Environment.
+        requires the `main-production` Environment.
 
         The method's NAME is now half wrong and is left alone deliberately: prod
         declares the Environment it already uses and a read-only secret it does
@@ -963,29 +963,35 @@ class TestNoWorkflowNamesAnEnvironment(unittest.TestCase):
     Matched CASE-SENSITIVELY, over the workflow with its whole-line comments
     stripped. Requirement names are cited from these workflows' comments and one
     of them is *Gated Production Apply Applies the Reviewed Plan*: a
-    case-insensitive sweep would read that citation as the workflow naming the
-    `production` Environment, and the repair would be to stop citing the
-    requirement -- which tasks.md 4.6 requires the workflows to keep doing.
+    case-insensitive sweep would read the word `Production` in that citation as
+    a workflow naming an environment, and the repair would be to stop citing the
+    requirement -- which that change's tasks.md requires the workflows to keep
+    doing. The requirement's NAME still carries the word after
+    rename-the-github-environments moved the Environment to `main-production`,
+    so this guard outlives the rename rather than being retired by it.
     """
 
     def _names(self) -> list[str]:
         """Every name a workflow must not spell: the stack directories, the
         declared GitHub Environments, and the declared Ansible groups.
 
-        THE THIRD IS THERE BECAUSE THE FIRST TWO COVER IT ONLY BY COINCIDENCE.
-        The declared GitHub Environments are `production` and `staging`, so the
-        environment axis enters this set through them and the third source adds
-        nothing today. `docs/change-queue.md` entry 75 ends that: it renames the
-        Environments to their stacks' names, at which point the first two
-        sources collapse into one and the axis would drop out of this sweep with
+        THE THIRD IS LOAD-BEARING NOW, AND ONCE COVERED THE AXIS ONLY BY
+        COINCIDENCE. While the declared GitHub Environments were `production`
+        and `staging`, the environment axis entered this set through them and
+        the third source added nothing. `rename-the-github-environments` moved
+        the Environments onto their stacks' names, so the first two sources now
+        collapse into one -- both spell `main-production` and `main-staging` --
+        and WITHOUT THE GROUP the axis would have dropped out of this sweep with
         nothing to say so. The requirement forbids naming an environment in
         workflow text whichever axis the name is on, so a hardcoded `production`
         or an `if: ... == 'staging'` in one of the workflows this class sweeps
-        would quietly stop being reported. The group is read explicitly here so
-        that entry 75 costs this assertion nothing -- added by
-        rename-the-external-services, which met exactly that collapse and
-        reverted it for an unrelated reason. Read from the declarations rather
-        than written as a literal, for the reason every other name here is.
+        would have quietly stopped being reported. The group was read explicitly
+        here BEFORE that change, added by rename-the-external-services, which
+        met exactly that collapse and reverted it for an unrelated reason --
+        which is why this sweep survived the rename unedited while the one in
+        `test_the_gate_names_no_environment` below did not. Read from the
+        declarations rather than written as a literal, for the reason every
+        other name here is.
 
         WHAT THIS REACHES IS `TERRAFORM_WORKFLOWS`, WHICH IS THREE FILES --
         `pr-validation.yml`, `apply.yml` and `drift.yml`. `host-converge.yml` is

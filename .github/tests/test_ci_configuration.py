@@ -1696,7 +1696,7 @@ class TestApplyWorkflowTriggerIsPathFiltered(unittest.TestCase):
             "paths",
             self.push,
             "apply.yml's push trigger declares no `paths:` filter, so every merge "
-            "raises a production Environment approval request",
+            "raises a main-production Environment approval request",
         )
 
     def test_the_path_filter_still_covers_terraform_changes(self) -> None:
@@ -6608,7 +6608,7 @@ COMPOSE_ECOSYSTEM = "docker-compose"
 REQUIRED_ECOSYSTEMS = ("terraform", "github-actions", COMPOSE_ECOSYSTEM)
 
 PLATFORM_DEPLOY = WORKFLOWS / "platform-deploy.yml"
-GATED_DEPLOY_ENVIRONMENT = "production"
+GATED_DEPLOY_ENVIRONMENT = "main-production"
 
 # Dependabot's Docker Compose file fetcher selects by filename, transcribed
 # from `dependabot-core`'s `docker/lib/dependabot/docker_compose/file_fetcher.rb`
@@ -10499,7 +10499,7 @@ PRODUCTION_HEARTBEAT_BASE_URL = "https://hc-ping.com"
 # itself make a job look like a reporter.
 LIVENESS_HINT = re.compile(r"hc-ping|healthcheck|heartbeat|liveness|ping[_-]?key", re.I)
 
-# Secrets on the `production` Environment carry this prefix in this
+# Secrets on the `main-production` Environment carry this prefix in this
 # repository (`PLATFORM_SLACK_WEBHOOK_URL`, `PLATFORM_DEADMANSWITCH_URL`). A
 # job reading one must declare that Environment, and such a job waits on
 # required-reviewer approval -- design Decision 6: an alarm that waits for a
@@ -11150,7 +11150,7 @@ class TestEveryScheduledWorkflowReportsItsOwnLiveness(unittest.TestCase):
                     [],
                     environment_scoped,
                     f"{path.name}'s reporting job {key!r} reads {environment_scoped}. "
-                    "Those are secrets on the `production` Environment: reading one "
+                    "Those are secrets on the `main-production` Environment: reading one "
                     "means declaring that Environment and waiting on required-reviewer "
                     "approval, and PLATFORM_DEADMANSWITCH_URL is additionally the "
                     "out-of-band destination this change must not erode",

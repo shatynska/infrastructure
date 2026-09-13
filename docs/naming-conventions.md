@@ -2,9 +2,7 @@
 
 How everything this repository creates is named, and the one rule the scheme follows.
 
-> **IN EFFECT, WITH ONE EXCEPTION.** This document records a decision taken on 2026-09-11. It arrived through `docs/change-queue.md` entries 61, 62, 63 and 64, all four archived, and the tree matches it everywhere the scheme reaches — except the two **GitHub Environments**, which are `production` and `staging` where the scheme calls for `main-production` and `main-staging`. Entry 75 is what would move them, and the paragraph below is why it has not. Read every other name here as describing the tree; read the GitHub Environment row as describing the target. Whoever archives 75 deletes this banner.
->
-> **Entry 75 was not in the original four and is the one name this scheme cannot buy cheaply.** Entry 63 was scoped to rename the two GitHub Environments along with the workspaces, the repository secrets and the Hetzner projects, and found that GitHub offers no way to rename a deployment Environment at all — so moving one means re-creating it and re-entering every secret it holds, three of which are SSH private halves this repository's own bootstrap has the operator delete once stored. That was deferred rather than paid. **A new deployment pays nothing**, because it names its Environments correctly when it creates them; `docs/bootstrap-a-new-host.md` §3.2 says so at the moment of choosing.
+**In effect, with no exception.** This document records a decision taken on 2026-09-11 and delivered through `docs/change-queue.md` entries 61, 62, 63 and 64, and finally by `rename-the-github-environments`. Read every name here as describing the tree rather than a target — the last quarter of it, the two GitHub Environments, moved onto the stack axis when that last change re-created them, GitHub offering no way to rename a deployment Environment.
 
 ## The rule
 
@@ -48,7 +46,7 @@ A **stack** is one Terraform root module: one state, one Hetzner project, one bl
 
     stack name                 main-production
       ├── directory            terraform/stacks/main-production/
-      ├── GitHub Environment   main-production     (entry 75; see the banner)
+      ├── GitHub Environment   main-production
       ├── HCP workspace        main-production
       ├── Hetzner project      main-production
       ├── read-only secret     HCLOUD_TOKEN_MAIN_PRODUCTION     (upper-cased, - → _)

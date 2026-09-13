@@ -104,6 +104,76 @@ So, for the four writes still to come and for section 6's fifteen:
 
 This is why task 6.3 reads `updated_at` rather than the name list — an addition the fifth review round made for a different reason (a name list cannot distinguish a write from a name already present) which turns out to be the only reliable signal here too.
 
+## Section 4 observed — staging's apply ran under `main-staging`, unattended
+
+PR #167 merged at 2026-09-13T10:33:07Z as `5976efd`. The evidence for task 4.7, read from the run rather than inferred from a green check:
+
+| Fact | Evidence |
+|---|---|
+| The apply attached to the **new** Environment | A deployment record for environment `main-staging` created at 10:33:44Z — the first ever under that name; every prior record reads `staging` |
+| It did **not** wait for a reviewer | `plan (main-staging)` completed 10:33:36Z, `apply (main-staging)` started 10:33:47Z and completed 10:33:59Z — eleven seconds, no pause |
+| Production was not touched | Only `main-staging` appears in the run's jobs, which is the affected-stack rule working: the merge changed `terraform/stacks/main-staging/` and no other stack directory |
+
+**That staging applies unattended is the design, not a defect**, and it is what makes staging worth using as a canary: the whole create-populate-verify-flip-observe sequence has now been exercised where a mistake costs a re-run rather than a production approval.
+
+It also exercised the re-entered `HCLOUD_TOKEN` and `TF_API_TOKEN` on `main-staging` — a successful `terraform apply` cannot be reached with either of those wrong. What it does **not** exercise is the converge key, the vault password or the Tailscale pair, which is why task 4.8 dispatches a staging converge before production's half begins.
+
+**Performed during the GitHub incident** and succeeded anyway: Actions was `degraded_performance` and Pull Requests `major_outage` when the pull request was opened, yet every check and both jobs completed. The pull request body records that window so a later reader does not mistake the timing for a cause.
+
+## Task 4.8 observed — the staging converge proved the three credentials nothing else touches
+
+Dispatched via `workflow_dispatch` with `stack=main-staging`, run `34752311933`, 2026-09-13.
+
+| Job | Result | Timing |
+|---|---|---|
+| `discover` | success | 10:36:55 → 10:37:00 |
+| `publish` | success | 10:37:03 → 10:37:08 |
+| `converge (main-staging)` | success | 10:37:12 → **10:44:24** |
+
+**Seven and a quarter minutes is the point.** A converge that failed on a credential would fail in seconds — at the tailnet join or the first SSH attempt — so the duration is itself evidence that the play ran against a real host rather than dying at the door.
+
+What it establishes, and why no earlier step could:
+
+- **`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`** — the runner joins the tailnet with them, and the host's SSH is reachable over the tailnet and not the public internet, so a wrong value stops the job before Ansible starts.
+- **`ANSIBLE_SSH_PRIVATE_KEY`** — it authenticated as `root` on the staging host. This is the value `credential-audit.md` §1.3 could only establish as *a working key from the workstation*; this establishes that the copy written into `main-staging` is that key.
+- **`ANSIBLE_VAULT_PASSWORD`** — the play reads `group_vars/staging.yml`, whose vault block is `$ANSIBLE_VAULT;1.2;AES256;production`-form encrypted content. A wrong password fails the parse before any task runs.
+
+It also attached to the right Environment and did not pause: a deployment record for `main-staging` was created at 10:37:09Z and the job started three seconds later.
+
+**All six of `main-staging`'s secrets are now exercised** — `HCLOUD_TOKEN` and `TF_API_TOKEN` by task 4.7's apply, these three by this converge. Nothing in staging's half rests on an unverified value.
+
+**This is why the task moved from section 8 to section 4.** Under the plan as first written, the first exercise of these three would have been production's gated deploy, on a trigger `platform-deploy.yml` offers no way to re-raise. Here the same mistake would have cost a re-dispatch.
+
+
+## Section 6 — `main-production` built, and six values recovered rather than retyped
+
+Fifteen secrets present, the name list equal to `production`'s from §1.2, and the required reviewer (`shatynska`) verified both before the writes and after them. The repository-scoped `TF_API_TOKEN` was rewritten from the same workstation file in the same pass, so the two copies *HCP Terraform Access via a Static Token, Unsplit by Privilege* (`openspec/specs/iac-state-management/spec.md`) obliges to be identical are identical by construction rather than by assumption.
+
+**Six of the fifteen were read back off the running production stack instead of retyped**, which matters because these are among the seven that no observation in section 8 exercises. A recovered value is correct by construction; a retyped one is correct only if nobody made a mistake:
+
+| Secret | Where it was read from |
+|---|---|
+| `PLATFORM_ACME_EMAIL` | `platform-traefik-1`'s command line |
+| `PLATFORM_DEPLOY_HOST` | `platform-grafana-1`'s `GF_SERVER_ROOT_URL` |
+| `PLATFORM_SLACK_WEBHOOK_URL` | the `slack` receiver's `api_url` in Alertmanager's rendered config |
+| `PLATFORM_DEADMANSWITCH_URL` | the `deadmansswitch` receiver's webhook `url`, same file |
+| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | `platform-grafana-1`'s `GF_SECURITY_ADMIN_PASSWORD` |
+| the Postgres trio | `platform-postgres-1`'s environment and the exporter's `DATA_SOURCE_NAME` |
+
+### The exporter password contains an `@`, and the DSN is not URL-encoded
+
+Worth recording because the mistake it invites is invisible. `platform-postgres-exporter-1`'s DSN reads
+
+    postgresql://pgexporter:<password>@postgres:5432/postgres?sslmode=disable
+
+and the password itself contains an `@`, so the string carries **two**. Splitting on the first — the obvious parse — yields a truncated password that looks entirely plausible. The correct extraction takes everything up to the **last** `@`, and it was verified by reconstructing the DSN and comparing byte-for-byte rather than by inspection.
+
+The live value is 15 characters, contains exactly one `@`, ends `Xk4`, and its SHA-256 begins `eacaa954a403`. That fingerprint is recorded so a future operator can check a stored copy without either value being printed.
+
+**A latent trap in the platform's Compose configuration, which is not this change's to fix**: a password embedded in a URI should be percent-encoded. This one is not, and it works only because the driver splits on the last `@`. A password containing `/` or `?` would break the DSN outright.
+
+**Why the care is proportionate.** `PLATFORM_POSTGRES_EXPORTER_PASSWORD` is exercised by nothing in section 8: a production apply, converge and deploy all succeed with it wrong, and the symptom is Postgres metrics quietly absent from Prometheus — plausibly noticed weeks later, after this change is archived and nobody is looking at it as a cause.
+
 ## Incidental observations, recorded rather than acted on
 
 - The tailnet machine names are `main-production` and `main-staging` — the stack names, per `docs/naming-conventions.md`'s rule that a server's name reaches the tailnet and therefore carries its stack. The hosts' own hostnames are `shatynska-main-production` and `shatynska-main-staging`, templated by the converge from the `company` group variable. Both are correct under the scheme and the divergence is deliberate; noted because reading the two side by side invites the conclusion that one of them is wrong.

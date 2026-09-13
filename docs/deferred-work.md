@@ -40,7 +40,7 @@ Deriving them from Terraform output would remove the drift class entirely, and i
 
 `.github/workflows/platform-deploy.yml:157` runs `ssh-keyscan` into `known_hosts` on every run — trust-on-first-use, every time, which verifies nothing about the host's identity.
 
-Accepted, because the connection it protects is already bounded by something stronger: the runner reaches the host only over the tailnet, having authenticated to it with an OAuth client scoped to the `production` Environment, and the key it presents is restricted to a forced command that accepts no other invocation. An attacker positioned to answer that keyscan is already inside the tailnet.
+Accepted, because the connection it protects is already bounded by something stronger: the runner reaches the host only over the tailnet, having authenticated to it with an OAuth client scoped to the `main-production` Environment, and the key it presents is restricted to a forced command that accepts no other invocation. An attacker positioned to answer that keyscan is already inside the tailnet.
 
 **Revisit if** the deploy ever runs over the public internet, at which point this stops being defence-in-depth and becomes the only check.
 

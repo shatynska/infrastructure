@@ -16,21 +16,20 @@
 #
 # Whether that pauses for a human is a property of the Environment's protection
 # rules -- repository settings, which no file here can verify -- and not of the
-# workflow. `production` requires a reviewer.
+# workflow. `main-production` requires a reviewer.
 #
 # SHALL be distinct from every other stack's: two stacks naming the
 # same GitHub Environment share its WRITE token and its protection rules, so a
 # stack meant to be ungated would hold this one's write credential.
 #
-# IT IS NOT THIS STACK'S NAME, AND THAT IS NOW A PERMANENT STATE RATHER THAN AN
-# INTERVAL. `docs/naming-conventions.md` calls for `main-production` here.
-# GitHub offers no way to rename a deployment Environment -- no UI control, and
-# the REST API exposes only GET, PUT and DELETE with the name in the URL path
-# (measured 2026-09-12). Moving it therefore means creating a new Environment
-# and re-entering all fifteen of this one's secrets, three of which are SSH
-# private halves this repository's own bootstrap has you delete once stored. See
-# `docs/change-queue.md` entry 75, which owns that work and its price.
-github_environment: production
+# IT IS THIS STACK'S NAME, and reaching that took a re-creation rather than a
+# rename. GitHub offers no way to rename a deployment Environment -- no UI
+# control, and the REST API exposes only GET, PUT and DELETE with the name in
+# the URL path (measured 2026-09-12). So `main-production` was created fresh and
+# all fifteen of this Environment's secrets were re-entered by hand, which is
+# the only route GitHub allows. `docs/naming-conventions.md` asks for exactly
+# this name, and the tree now matches the scheme with no exception.
+github_environment: main-production
 
 # The repository secret holding this stack's read-only Hetzner token.
 # REQUIRED.
@@ -84,13 +83,15 @@ read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION
 # -- as a group that does not exist, reported several steps after the run
 # began.
 #
-# IT AND `github_environment` ABOVE NOW SPELL THE SAME WORD FOR DIFFERENT
-# REASONS, which is the confusing part and is why both say so. This one is
-# `production` because an Ansible group IS the environment; that one is
-# `production` because GitHub cannot rename an Environment and entry 75 has not
-# been paid for yet. `read_only_secret` is the field that did move. A future
-# `analytics-production` declares `production` here too, and reads the same
-# `group_vars/production.yml`.
+# IT AND `github_environment` ABOVE NO LONGER SPELL THE SAME WORD, and that is
+# the scheme arriving rather than a discrepancy. This one is `production`
+# because an Ansible group IS the environment; that one is `main-production`
+# because a GitHub Environment belongs to one stack. They read alike for as
+# long as this repository had one tenant, which is precisely what made the
+# collision invisible: a second tenant's production would have shared an
+# Environment, its write token and its protection rules. A future
+# `analytics-production` declares `production` HERE too, and reads the same
+# `group_vars/production.yml`, while naming an Environment of its own.
 #
 # IT NAMES THREE THINGS, WHICH MOVE TOGETHER: the play's `hosts:`, the
 # `--vault-id` label that environment's secrets are labelled under, and the
