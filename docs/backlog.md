@@ -247,7 +247,7 @@ Staging is a configured host with no way in from the internet:
 
 **It must not undo what `add-a-staging-environment` shipped deliberately.** `web_allowed_cidrs = []` is not an oversight: it is a firewall that opens no port in front of a host with nothing behind it, and the intended order is that the change with something to put there opens them. That is this entry.
 
-**Blocked on 29, or at least pointless before it.** The undivided entry held both halves and got this ordering for free; splitting them loses it, so it is stated. Ports opened before the stack can reach staging is precisely the state the bullet above warns against.
+**Blocked on `deploy-the-platform-stack-per-environment`, or at least pointless before it.** The undivided entry held both halves and got this ordering for free; splitting them loses it, so it is stated. Ports opened before the stack can reach staging is precisely the state the bullet above warns against. (This read "blocked on 29" until 2026-09-13, a number that named that entry under a numbering this file has since been through — the hazard its own header warns about. Cited by name from here on, which is what survives a renumbering.)
 
 ## 18. refresh-staging-group-vars-banner
 
@@ -754,3 +754,19 @@ Only the first kind survives archiving. Concrete instances of the other two (the
 - `terraform/stacks/main-production/main.tf` — explains a value the file no longer holds.
 
 The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-13; it was 48 against 90 when this entry was written, so the ratio has worsened rather than held. This is a style question with a real maintenance cost, not a cosmetic one.
+
+## 50. label-each-stack-s-alerts-with-the-stack-they-came-from
+
+Recorded 2026-09-13 by `deploy-the-platform-stack-per-environment`, which put the platform stack on a second host and found that nothing distinguishes the two hosts' alerts.
+
+`platform/docker-compose.yml`'s Prometheus configuration declares no `external_labels`, so a `MetricsTargetDown` raised on staging and one raised on production are **identical text**. Alertmanager adds nothing either: its routes group on the alert's own labels, and none of them names a host, a stack or an environment.
+
+**What that change did instead, and why it is not enough.** Each stack's `PLATFORM_SLACK_WEBHOOK_URL` and `PLATFORM_DEADMANSWITCH_URL` are secrets on that stack's own GitHub Environment, so the operator can — and on 2026-09-13 did — point each stack at a channel and a dead-man's-switch check of its own. Attribution then comes from *where the message arrived* rather than from anything in it. That works, costs nothing, and is what `docs/bootstrap-a-new-host.md` §7.3 now instructs.
+
+It is not enough because **nothing enforces it**. An operator who pastes production's webhook into staging's Environment gets two hosts alerting into one channel with no way to tell them apart, and no check in this repository reports it — the values are repository settings, and `.github/tests` may not read those. The failure is also silent in the direction that matters: the alerts keep arriving, so nothing looks broken until someone acts on the wrong host.
+
+**Why it was not folded in.** It is a change to the committed stack definition — `external_labels` under Prometheus's `global:`, a new variable in `platform/.env.example`, a tenth `PLATFORM_*` secret, and a regenerated `platform.config-checksum` on the Prometheus service. The change that found it had declared parameterising the Compose file a Non-Goal, and its deltas were approved on that boundary.
+
+**Worth settling when it is taken.** Whether the label is the stack (`main-staging`) or the environment (`staging`) — these are different axes and this repository has been bitten by conflating them before; whether the value is rendered from the existing `PLATFORM_DEPLOY_HOST` rather than adding a secret, which would avoid a tenth value to enter per stack; and whether Alertmanager's routes should group on it, which is what would stop two stacks' alerts collapsing into one notification that names neither.
+
+Not blocked.

@@ -14,7 +14,7 @@ What you will have at the end:
 
 **How to read this.** Stages are in dependency order; do not skip ahead. Each stage ends with a **Secrets created in this stage** table and a **Check** list. `<angle brackets>` are placeholders you replace. "Operator" means the person doing this. Commands are run from the repository root unless a `cd` is shown. The reasoning behind most decisions is in `openspec/specs/` and in the archived changes under `openspec/changes/archive/`; this document only says what to do.
 
-**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. The second stack adds perhaps an hour of console work in stages 1 to 3, **and a second converge in stage 6** — stage 6 runs once per stack. Stages 7 to 9 are production's alone. Stage 8 is repeated per application.
+**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. The second stack adds perhaps an hour of console work in stages 1 to 3, **a second converge in stage 6 and a second run of stage 7** — both run once per stack. Stage 9 is production's alone, its web exposure being what staging does not have. Stage 8 is repeated per application.
 
 ## Before you edit this document
 
@@ -75,7 +75,7 @@ Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two **purpos
 |---|---|---|---|
 | Operator key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-root -C "<you>@<company> root"` | Yes | Your workstation only. This is `root` on **both** servers. |
 | Operator inspection key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ops -C "ops-<you>"` | Yes | Your workstation. Unprivileged login, used daily instead of root. Configured on **both** hosts, in stage 6. |
-| Platform deploy key — **production** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform -N "" -C "deploy@platform"` | **No** (CI cannot type one) | The `main-production` Environment secret `PLATFORM_DEPLOY_SSH_KEY` (stage 6.4); delete `~/.ssh/<company>-platform` once it is stored |
+| Platform deploy key — **one per stack** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform-<stack> -N "" -C "deploy@platform-<stack>"` | **No** (CI cannot type one) | That stack's own Environment secret `PLATFORM_DEPLOY_SSH_KEY` (stage 6.4); delete the local file once it is stored. **One key per stack, never one shared**: the public half is committed in that environment's `group_vars`, and one leaked private half must deploy to one host |
 | Platform deploy key — **staging** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform-staging -N "" -C "deploy@platform-staging"` | **No** | **Your password manager, and no GitHub secret yet** — so `~/.ssh/<company>-platform-staging` stays where it is. Do not delete it; see below |
 | One deploy key per application | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-deploy -N "" -C "<app>-deploy"` | **No** | That application's GitHub secret only; delete the local file once it is stored |
 | Converge key — **one per stack** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ansible-ci-<stack> -N "" -C "ansible-ci-<stack>"` | **No** (CI cannot type one) | That stack's GitHub Environment secret `ANSIBLE_SSH_PRIVATE_KEY` (stage 6.6); delete the local private half once it is stored. The public half is appended to `root`'s `authorized_keys` on that stack's host — see below |
@@ -86,7 +86,9 @@ Keep the `.pub` halves; they are committed to the repository in later stages and
 
 **Why it is not the operator key**, which already authorises `root` on both servers and would need no new keypair. Three reasons, and the first is the one that matters: a key held by continuous integration is held by whoever can reach the repository's Environment secrets, and the operator key is the human's own. Rotating CI's must not re-key the human, and a compromise of one must not be a compromise of the other. It is **one per stack** for the same reason the platform deploy keys are: one leaked private half must not converge both hosts.
 
-**Why the two platform deploy keys are stored differently**, since the difference reads like an inconsistency and is not. Production's private half goes straight into a GitHub secret because a workflow reads it: `platform-deploy.yml` deploys to production. Staging has no deploy workflow yet — that workflow declares `environment: production`, and giving staging one is a change of its own — so there is nothing to put staging's private half into, and "delete the local file after storing it" would mean deleting it outright. Keep it in the password manager until staging gets a deploy path.
+**Both platform deploy keys are stored the same way**, and each goes into its own stack's GitHub Environment as that Environment's `PLATFORM_DEPLOY_SSH_KEY`. Delete the local file once it is stored, for each of them.
+
+This paragraph used to say otherwise, and the reason is worth keeping because it explains an interval a reader may still meet in the history: staging's private half was held in the password manager alone, because `platform-deploy.yml` declared `environment: production` and deployed to one host, so there was nothing to put staging's key into. `deploy-the-platform-stack-per-environment` gave every opted-in stack a deploy job of its own, and with it a place for that stack's key. **Verify before storing** that the file is the right one for the stack — `ssh-keygen -lf ~/.ssh/<company>-platform-<stack>` prints a fingerprint that must equal the public half committed in that environment's `group_vars`.
 
 **Every private half above is generated into `~/.ssh/`, and none into the repository.** These are passphrase-less keys and stage 4.2 runs `git add -A`, so a key generated where you stand is one routine commit away from being published. Two things catch it and neither is a reason to relax: gitleaks reads the content at commit time, but it is a pre-commit hook and this stage runs before `pre-commit install` necessarily has; and `.gitignore` now carries a private-key block covering both the conventional names and this scheme's own extension-less ones, anchored to the repository root, which is where the slip lands. Write the path out in full anyway — an ignored key is still sitting in your checkout. The window is worst for staging's, which is never deleted at all, but production's and each application's are also generated in stage 0 and not stored until stage 6 or 8: most of a working day apart, with that `git add -A` in between.
 
@@ -100,7 +102,7 @@ Two servers do not mean two of everything. This table is the whole answer, so th
 
 **If you decided on one stack** (see the note above stage 1), read this table's "How many" column as its smaller number throughout: one Hetzner project, two tokens rather than four, one workspace, one Vault password, one GitHub Environment, one platform deploy keypair. The rows already marked "1, shared" do not change — they were never per stack.
 
-Covers stages 0 to 6. Three things sit outside it deliberately: stage 7's platform-stack secrets, production's alone until staging gets a deploy path, listed at §7.3 and Appendix A; `PLATFORM_DEPLOY_HOST`, which is created at stage 6.4 but belongs to that same production-only deploy path; and §0.3's last row, one deploy key per application, which belongs to stage 8.
+Covers stages 0 to 6. Two things sit outside it deliberately: stage 7's platform-stack secrets, a set of nine per stack, listed at §7.3 and Appendix A — `PLATFORM_DEPLOY_HOST` and `PLATFORM_DEPLOY_SSH_KEY` are created at stage 6.4 and belong to that same set; and §0.3's last row, one deploy key per application, which belongs to stage 8.
 
 | Thing | How many | What proves it |
 |---|---|---|
@@ -118,7 +120,7 @@ Covers stages 0 to 6. Three things sit outside it deliberately: stage 7's platfo
 | GHCR pull token | **1 value** unless you choose two, stored twice — encrypted separately into each stack's `group_vars` under that stack's own Vault password | `ansible/inventory/group_vars/staging.yml` records the shared *account* and the reasoning: read-only against the same packages, so a second "would be a second thing to rotate for no isolation gained". §6.1 permits reuse rather than requiring it, and the ciphertexts cannot be compared to tell which you chose |
 | GitHub Environment | **2** — `main-production` and `main-staging` | §3.2, and each stack's `pipeline.yml` names the one its apply job attaches to. **Named for the stack**, like the repository secrets two rows up. GitHub offers no rename for a deployment Environment, so this repository's two were re-created and every secret on them re-entered; a new deployment names them correctly at creation and pays nothing |
 | GitHub App, and its two repository secrets | **1**, whatever the stack count | §3.2. It authors one pull request on one repository and knows nothing about stacks, so a second stack adds nothing here. Its credential is a client id and a private key, both repository secrets rather than Environment ones: the workflow that mints a token from them runs on a schedule and declares no `environment:` |
-| Heartbeat project ping key | **1**, shared — it addresses the **four** periodic-job checks Appendix A lists | §7.1: "It addresses one check per periodic job, listed with its period and grace in Appendix A". §7.1's Alertmanager check is **not** one of them: it has a ping URL of its own, held as `PLATFORM_DEADMANSWITCH_URL`, which a ping-key rotation does not touch |
+| Heartbeat project ping key | **1**, shared — it addresses the **four** periodic-job checks Appendix A lists | §7.1: "It addresses one check per periodic job, listed with its period and grace in Appendix A". §7.1's Alertmanager checks are **not** among them: there is one per stack, each with a ping URL of its own held as that stack's `PLATFORM_DEADMANSWITCH_URL`, and a ping-key rotation touches none of them |
 
 Appendix A is this same set seen from the other end — where each secret lives and what breaks when it is wrong, for rotating rather than for assembling. The two move together; if you change one, change the other.
 
@@ -431,22 +433,26 @@ In the DNS provider, create an `A` record per hostname an application will serve
 
 **Check:** `terraform plan` says "No changes" locally in **both** stack directories; the nightly Drift Detection workflow, run once by hand from Actions → Drift Detection → Run workflow, reports no drift for **both** stacks in one run — its own `report` job will still fail at this stage, because `HEARTBEAT_PING_KEY` is not created until stage 7.3, so read the two `drift` jobs rather than the run's overall result; `ssh root@<prod ipv4>` works with the operator key and nothing else; both servers appear in their own Hetzner projects and neither project holds anything you created by hand.
 
-## From here on, two hosts — but only one of them runs anything
+## From here on, two hosts — both of which run the platform stack
 
 You now have two servers, and **stage 6 configures both**. It is written once and run once per stack: the inventory has a source per stack, and the host-baseline play takes the stack it targets as an input.
 
-**Stages 7 to 9 are still production's alone**, and one mechanism is why:
+**Stage 7 now runs once per stack too.** It used to be production's alone, because `platform-deploy.yml` declared `environment: main-production` as a literal and deployed to a single `PLATFORM_DEPLOY_HOST`. `deploy-the-platform-stack-per-environment` removed that: the workflow discovers which stacks receive the platform stack by reading each one's `terraform/stacks/<name>/pipeline.yml`, and deploys to each from a job attached to that stack's own GitHub Environment. A stack opts in with `deploys_platform: true`; absent, it receives nothing, which is the safe direction for a stack committed before its Environment holds any platform secret.
 
-- **`.github/workflows/platform-deploy.yml` declares `environment: production`** and deploys to a single `PLATFORM_DEPLOY_HOST`. The platform stack has no per-stack path at all. That is `docs/backlog.md`'s platform-per-stack entry.
+**What still differs between the two, and it is no longer the deploy path:**
 
-So after stage 6 the staging server is a **configured** host — Docker, UFW and fail2ban, on the tailnet, data volume mounted, operator account, deploy account — with no application stack on it. Its cloud firewall still opens no web port (`web_allowed_cidrs = []`), and it has no **public DNS name** and no certificate; those come with the stack, in the queue entry for staging's web exposure. Its own host name is set, like production's — the `hostname` role runs on every converge.
+- **Staging has no way in from the internet.** Its cloud firewall opens no web port (`web_allowed_cidrs = []`, mirrored in its `group_vars`), it has no **public DNS name** and no certificate. That is `docs/backlog.md`'s staging-web-exposure entry, and it is deliberate: the ports open when there is something to reach through them, and the stack arriving is what makes that true. Traefik runs there and binds 80 and 443 on the host; both firewall layers refuse inbound traffic to them, and no certificate is requested because ACME is driven by router rules and staging has no application. Inert, not broken.
+- **Its approval gate.** Production's deploy waits for a reviewer because `main-production` requires one; staging's does not, because `main-staging` requires none. That is a repository setting, not a difference in the workflow — nothing in `platform-deploy.yml` distinguishes them.
+- **Its Vault password and its deploy keypair**, both its own, for the reasons below.
+
+So after stage 6 the staging server is a **configured** host — Docker, UFW and fail2ban, on the tailnet, data volume mounted, operator account, deploy account — and stage 7 is what puts the stack on it. Its own host name is set, like production's — the `hostname` role runs on every converge.
 
 Two things about staging in stage 6 that differ from production, both deliberate:
 
 - **Its own Vault password**, under the vault id `staging`. Reusing production's would mean anyone who can converge staging holds the password protecting production's secrets.
 - **Its own deploy keypair** for `platform`. One leaked private half must not deploy to both stacks.
 
-**Its weekly image prune will report failure until the stack arrives**, and that is expected rather than a fault to chase: with nothing deployed, no application contributes an image and no container holds one, so the keep set is empty and the unit abandons by its own documented contract. See stage 6.5.
+**Its weekly image prune reports failure between its first converge and its first deploy**, and that is expected rather than a fault to chase: with nothing deployed, no application contributes an image and no container holds one, so the keep set is empty and the unit abandons by its own documented contract. See stage 6.5. It goes green on the first Monday after stage 7 reaches that host — which is the observation that proves the stack is really running there, and the only one that cannot be made on the day.
 
 **If you decide you do not want it yet**, delete `terraform/stacks/main-staging/` and `ansible/inventory/main-staging.hcloud.yml` and `ansible/inventory/group_vars/staging.yml`, drop `HCLOUD_TOKEN_MAIN_STAGING` from `ansible/.envrc`, remove its `HCLOUD_TOKEN_MAIN_STAGING` repository secret and its `main-staging` Environment (with the two secrets on it), drop its `.github/dependabot.yml` entry, and delete its Hetzner project and HCP workspace. Then skip staging wherever stage 6 says "once per stack". Nothing else in this document depends on it. Adding it back later is stages 1 to 4 again, against a running production system — which is the order this document is arranged to spare you.
 
@@ -482,7 +488,7 @@ Both hosts run with no further restriction, so any tailnet member can reach eith
 
 | Name | Scope | Value from | Read by |
 |---|---|---|---|
-| `TAILSCALE_OAUTH_CLIENT_ID` | **Each** stack's GitHub Environment, infrastructure repository | The OAuth client — the same client's values in both | `platform-deploy.yml`'s deploy job (production only), and `host-converge.yml`'s converge job for **every** stack |
+| `TAILSCALE_OAUTH_CLIENT_ID` | **Each** stack's GitHub Environment, infrastructure repository | The OAuth client — the same client's values in both | `platform-deploy.yml`'s deploy job and `host-converge.yml`'s converge job, both for **every** stack |
 | `TAILSCALE_OAUTH_SECRET` | Same | Same | Same |
 | The server auth key | Password manager only, no GitHub secret | The auth key | You, passing it with `-e tailscale_auth_key=…` in stage 6.3 — there is no prompt for it, and the role has no default, so omitting it fails inside `tailscale` after two roles have already changed the host. That form puts the key in your workstation's shell history, so clear it or accept it; §6.3a covers the separate exposure of running `tailscale up` by hand on the host |
 
@@ -698,8 +704,8 @@ The usual causes, in rough order: the key was already consumed, because it was g
 | Vault password, one per stack | Password manager only | You chose it | Anyone running that stack's playbook |
 | `ghcr_pull_token` | One encrypted block per stack, of the same token value unless you chose two | GitHub classic PAT, `read:packages` | The playbook, to log the host's Docker into GHCR |
 | `image_prune_heartbeat_ping_key` | One encrypted block per stack, of the same project ping key | The heartbeat service's project ping key | The prune unit's reporting script, on every activation. The same value becomes the `HEARTBEAT_PING_KEY` repository secret in stage 7.3, and addresses a different check per host because the check name comes from the host's name |
-| `PLATFORM_DEPLOY_SSH_KEY` | `main-production` Environment, infrastructure repository. **Production's key only** | The **private** half of the *production* platform deploy key from stage 0. Store it now, then delete the local file. **Staging's key is not stored here and must not be deleted** — it stays at `~/.ssh/<company>-platform-staging` and in your password manager until staging gets a deploy path (§0.3) | `platform-deploy.yml`'s deploy job |
-| `PLATFORM_DEPLOY_HOST` | `main-production` Environment, infrastructure repository | **Either** the server's tailnet IPv4 (`100.x.y.z`) **or** its tailnet machine name (`main-production`) — `platform-deploy.yml` accepts both and tests which it was given. **They fail differently, and that is the thing to choose on**; see below. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
+| `PLATFORM_DEPLOY_SSH_KEY` | **Each** stack's GitHub Environment, infrastructure repository — a different key in each | The **private** half of *that stack's* platform deploy key from stage 0. Store it, then delete the local file. Verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-platform-<stack>` must print the fingerprint of the public half committed in that environment's `group_vars` | `platform-deploy.yml`'s deploy job for that stack |
+| `PLATFORM_DEPLOY_HOST` | **Each** stack's GitHub Environment, infrastructure repository | **Either** that server's tailnet IPv4 (`100.x.y.z`) **or** its tailnet machine name (the stack's name) — `platform-deploy.yml` accepts both and tests which it was given. **They fail differently, and that is the thing to choose on**; see below. **A TAILNET ADDRESS, NEVER A PUBLIC ONE**: the deploy reaches the host only over the tailnet, and this same value becomes Grafana's bind address, so a public address here publishes that stack's Grafana on the public interface. | `platform-deploy.yml`, for both the SSH target and Grafana's bind address |
 
 **Which form to put in `PLATFORM_DEPLOY_HOST`, and why it is a real choice.** An earlier version of this document recommended the literal IP because it "avoids a resolution step", which is true and is not the reason that matters. The two forms survive different events, and neither survives both:
 
@@ -828,7 +834,7 @@ Traefik, PostgreSQL and monitoring, deployed by `platform-deploy.yml` on a merge
 
 **Slack.** In the workspace, create a channel `#alerts`. Then api.slack.com → Your Apps → Create New App → From scratch → enable **Incoming Webhooks** → Add New Webhook to Workspace → choose `#alerts`. Copy the webhook URL. The channel name is fixed in `platform/docker-compose.yml`'s Alertmanager config; change it there if you named the channel differently.
 
-**Heartbeat.** At healthchecks.io (or an equivalent), create a check named `main-production-alertmanager` — the stack's name and the job's, the same shape Appendix A's table gives every other check. No company segment: one company per heartbeat account, so the account boundary already carries it (`docs/naming-conventions.md`). Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one. Copy the ping URL. Configure where that service should alert you when pings stop, ideally somewhere other than the same Slack workspace: this is the alarm for when everything else is down.
+**Heartbeat.** At healthchecks.io (or an equivalent), create a check named `<stack>-alertmanager` — `main-production-alertmanager`, `main-staging-alertmanager` — the stack's name and the job's, the same shape Appendix A's table gives every other check. **One per stack, and each stack's ping URL goes in its own Environment**: a single check fed by two hosts stays green while either is alive, which is the opposite of what a dead-man's-switch is for. No company segment: one company per heartbeat account, so the account boundary already carries it (`docs/naming-conventions.md`). Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one. Copy the ping URL. Configure where that service should alert you when pings stop, ideally somewhere other than the same Slack workspace: this is the alarm for when everything else is down.
 
 **Periodic-job heartbeats.** The project ping key already exists — stage 6.1 created it, because the host play refuses to run without it. It addresses one check per periodic job, listed with its period and grace in Appendix A, and it is also the `HEARTBEAT_PING_KEY` **repository** secret in stage 7.3.
 
@@ -842,7 +848,9 @@ openssl rand -base64 32   # run three times
 
 ### 7.3 Secrets
 
-All in the `main-production` Environment of the infrastructure repository.
+**All in the GitHub Environment of the stack you are doing this for**, and a set of its own per stack — `--env main-production` or `--env main-staging`, on the stack axis like every other Environment. Nine secrets in total per stack: the seven below, plus `PLATFORM_DEPLOY_SSH_KEY` and `PLATFORM_DEPLOY_HOST` from stage 6.4.
+
+**No value is shared between stacks, and none is held as a repository secret.** A repository secret holds one value, so a `PLATFORM_*` name defined there would render the same database password, the same dashboard credential and the same alert targets onto every host — and a GitHub Environment secret shadows a repository one of the same name, so the mistake would be invisible on the stack that also defines it and live on every stack that does not.
 
 | Name | Value from |
 |---|---|
@@ -854,7 +862,11 @@ All in the `main-production` Environment of the infrastructure repository.
 | `PLATFORM_SLACK_WEBHOOK_URL` | The Slack webhook URL |
 | `PLATFORM_DEADMANSWITCH_URL` | The heartbeat ping URL |
 
-Together with `PLATFORM_DEPLOY_SSH_KEY`, `PLATFORM_DEPLOY_HOST`, `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` from earlier stages, that is the complete set `platform-deploy.yml` reads. If any is missing the deploy job fails at the step that needs it, before touching the server.
+Together with `PLATFORM_DEPLOY_SSH_KEY`, `PLATFORM_DEPLOY_HOST`, `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` from earlier stages, that is the complete set `platform-deploy.yml` reads.
+
+**A missing one fails the deploy before it touches the server, and by name.** The job's first step reads all nine and refuses if any resolved empty, naming the stack, the Environment and each empty name — because a GitHub secret that is not defined resolves to an *empty string* rather than to an error. That matters most for the values rendered into `.env`: `docker-compose.yml` interpolates each as `${VAR}` with no error-if-unset form, so an absent one becomes an empty assignment, and a service that tolerates an empty value starts, satisfies `docker compose up --wait`, and leaves the run green. An empty `PLATFORM_GRAFANA_ADMIN_PASSWORD` is the case to have in mind: a green deploy, and Grafana with no credential on it.
+
+**Two of the seven are registrations, not values you invent, and each stack needs its own.** The Slack webhook should address a **channel of that stack's own** and the dead-man's-switch URL a **check of that stack's own**. Nothing in the running stack says which host an alert came from — Prometheus declares no `external_labels` — so the delivery target is the only thing that distinguishes them, and two stacks pointed at one channel produce alerts nobody can attribute. **No check in this repository reports that**, which is why it is written here rather than left to a build to catch.
 
 One more secret belongs to this stage and is **not** in the table above, because it must not be scoped the way those are:
 
@@ -866,9 +878,15 @@ Scoping it to the `main-production` Environment would break it: a job reading an
 
 ### 7.4 Deploy
 
-The workflow triggers on a change under `platform/`. Open a pull request that makes one, even a one-line edit to `platform/README.md` naming the company. PR Validation runs `docker compose config` against it. Merge. In Actions, **Platform Deploy** posts the diff to its summary and waits for approval; approve. The deploy job succeeds only when every service reports healthy.
+The workflow triggers on a change under `platform/`. Open a pull request that makes one, even a one-line edit to `platform/README.md` naming the company. PR Validation runs `docker compose config` against it. Merge. In Actions, **Platform Deploy** discovers every stack whose declaration opts in and runs one deploy job per stack, having first posted the diff to the run's summary from a job holding no credential. A stack whose Environment requires a reviewer waits there; approve it. Each deploy job succeeds only when every service on that host reports healthy, and one stack's failure does not cancel or delay another's.
+
+**The trigger is `platform/**` and the opt-in lives under `terraform/stacks/`**, which that filter does not match. A merge that opts a stack in and touches nothing under `platform/` therefore starts no run at all — the stack arrives at the next platform change. To deploy to it straight away, run **Platform Deploy** from Actions with that stack's name as the `stack` input. The same dispatch is what redeploys to a single rebuilt host without waking every other stack's gate (Appendix B).
+
+**Doing this for a second stack** is this stage over again with that stack's own values, and nothing under `.github/workflows/` changes: set its nine secrets (§7.3), add `deploys_platform: true` to its `pipeline.yml`, merge, then §7.5 against that host.
 
 ### 7.5 Two manual steps the automation deliberately does not do
+
+**Run both once per stack, against that host**, each with that stack's own values. They are not repeated across hosts by anything: each host has its own Postgres instance and its own heartbeat check.
 
 **The monitoring role in Postgres.** postgres-exporter connects as a restricted role that nothing creates automatically. From your operator account on the server:
 
@@ -879,11 +897,13 @@ docker exec -it platform-postgres-1 psql -U <PLATFORM_POSTGRES_USER> -c \
 
 Until this is done the `MetricsTargetDown` alert fires for `postgres-exporter`, which is the intended signal that the step is missing.
 
-**The heartbeat.** Nothing to run; confirm in the heartbeat service that pings are arriving every couple of minutes.
+**The heartbeat.** Nothing to run; confirm in the heartbeat service that this host's own check is receiving pings every couple of minutes. Give it the period and grace Appendix A records — a check created by its first ping carries the observer's default until corrected.
 
-**Check** (the production host): `docker ps` shows nine `platform-*` containers, all `(healthy)`; `http://100.x.y.z:3000` from your workstation opens Grafana and `admin` with the Grafana password shows three dashboards; the heartbeat service shows the check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in `#alerts`.
+**Check**, on each host you have deployed to: `docker ps` shows nine `platform-*` containers, all `(healthy)`; `http://<that host's tailnet IP>:3000` from your workstation opens **that stack's** Grafana, and `admin` with that stack's Grafana password shows three dashboards; the heartbeat service shows that host's own check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in that stack's own Slack channel.
 
-**Secrets created in this stage:** the seven in 7.3.
+**Two of those are also the check that the stacks are genuinely separate**, and it is worth making deliberately the first time a second stack is deployed: the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports.
+
+**Secrets created in this stage:** the seven in 7.3, per stack.
 
 ## Stage 8. Onboarding an application
 
@@ -1016,14 +1036,14 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | `TAILSCALE_OAUTH_CLIENT_ID` / `_SECRET` | Env secret, infrastructure and each app repo | 5 | Tailscale → OAuth clients | Every deploy job |
 | Vault password, one per stack | Password manager | 6 | Chosen | Running that stack's playbook |
 | `ghcr_pull_token` | One encrypted block per stack, in each `group_vars/<environment>.yml` — of the same token value, unless you chose two | 6 | GitHub classic PAT, `read:packages` | Pulling private images at deploy |
-| `PLATFORM_DEPLOY_SSH_KEY` | `production` Env secret. Staging's keypair exists but has no secret yet (§0.3) | 6 | `ssh-keygen`, production's platform key | Platform deploys |
-| `PLATFORM_DEPLOY_HOST` | `production` Env secret | 6 | Tailscale → Machines | Platform deploys, Grafana bind |
-| `PLATFORM_ACME_EMAIL` | Env secret | 7 | A mailbox | Certificate registration |
-| `PLATFORM_POSTGRES_USER` / `_PASSWORD` | Env secret | 7 | Chosen / generated | Postgres startup; every manual `psql` |
-| `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | Env secret and typed into Postgres | 7 | Generated | Postgres metrics |
-| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | Env secret | 7 | Generated | Grafana login |
-| `PLATFORM_SLACK_WEBHOOK_URL` | Env secret | 7 | Slack app | Alert delivery |
-| `PLATFORM_DEADMANSWITCH_URL` | Env secret | 7 | Heartbeat service | The external alarm |
+| `PLATFORM_DEPLOY_SSH_KEY` | **Each** stack's Env secret — a different key in each | 6 | `ssh-keygen`, that stack's own platform key (§0.3) | That stack's platform deploy. One leaked private half deploys to one host |
+| `PLATFORM_DEPLOY_HOST` | **Each** stack's Env secret | 6 | Tailscale → Machines, that host's **tailnet** address | That stack's platform deploy, and its Grafana bind. A public address here would publish that stack's Grafana on the public interface |
+| `PLATFORM_ACME_EMAIL` | **Each** stack's Env secret | 7 | A mailbox | Certificate registration |
+| `PLATFORM_POSTGRES_USER` / `_PASSWORD` | **Each** stack's Env secret, its own values | 7 | Chosen / generated per stack | That host's Postgres startup; every manual `psql` there |
+| `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | **Each** stack's Env secret, and typed into that host's Postgres | 7 | Generated per stack | That host's Postgres metrics |
+| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | **Each** stack's Env secret, its own value | 7 | Generated per stack | That stack's Grafana login |
+| `PLATFORM_SLACK_WEBHOOK_URL` | **Each** stack's Env secret | 7 | Slack app, **a channel per stack** | Alert delivery. Nothing labels an alert with its host, so the channel is what attributes it |
+| `PLATFORM_DEADMANSWITCH_URL` | **Each** stack's Env secret | 7 | Heartbeat service, **a check per stack** | The external alarm. One check fed by two hosts stays green while either is alive |
 | `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in each `group_vars/<environment>.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
 | `APP_CLIENT_ID` / `APP_PRIVATE_KEY` | **Repo** secrets | 3 | The GitHub App (§3.2) — client id from its settings page, private key downloaded once at creation | The weekly hook-update pull request stops being opened, and **nothing says so**: the workflow's heartbeat check reports that the *run* happened, not that a pull request came out of it, so a run that fails at the minting step still looks like a job that had nothing to do. Hook revisions then quietly stop being updated. The key does not expire; the App being uninstalled or its key revoked is what breaks it |
 | `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
@@ -1041,7 +1061,11 @@ The checks it addresses, and the settings each needs at the observer. A check co
 
 The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system.
 
-The host slug is templated from `inventory_hostname`, which is why the two servers are named differently in their `terraform.tfvars` — sharing a name would merge them into one check, where the live host's weekly success would keep it green while the other's timer was dead. **Staging's check is expected to be red** until the platform stack reaches it; §6.5 says why, and that is a state to leave alone rather than mute.
+The host slug is templated from `inventory_hostname`, which is why the two servers are named differently in their `terraform.tfvars` — sharing a name would merge them into one check, where the live host's weekly success would keep it green while the other's timer was dead.
+
+**Staging's prune check is red only between its first converge and its first platform deploy.** §6.5 says why — an empty keep set is a refusal, not licence to remove everything — and that interval ends at stage 7, which now runs for staging too. A prune check still red on the first Monday after a deploy is a real failure to read rather than the expected state.
+
+**Not in this table: the per-stack Alertmanager checks** (`<stack>-alertmanager`, §7.1). They are addressed by a ping URL of their own rather than by the project ping key, one per stack, each held as that stack's `PLATFORM_DEADMANSWITCH_URL`. Count them against the free tier's twenty alongside the rows above: two stacks is six checks, not four.
 
 ## Appendix B. Rebuilding an existing host
 
@@ -1053,7 +1077,7 @@ An important consequence for staging specifically: its data volume is **not** wi
 
 **A rebuilt host's first converge is a workstation converge again**, for the same reason a new host's is — it is on no tailnet and carries no converge key until §6.3 and §6.6 have run. That is the one time `ansible-playbook` against an existing host is correct rather than a sign that stage 9 was left unfinished.
 
-The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, **delete the old machine from the tailnet** (see below), 5.3's auth key if the old one expired, 6.3, 6.6's converge key, 6.4 (new tailnet IP → `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by re-running the last Platform Deploy from Actions, 7.5, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/backlog.md` entry 19 is what closes that, and entry 20 is the plan to turn this paragraph into a rehearsed runbook with timings.
+The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, **delete the old machine from the tailnet** (see below), 5.3's auth key if the old one expired, 6.3, 6.6's converge key, 6.4 (new tailnet IP → that stack's `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by running **Platform Deploy** from Actions **with this stack's name as the `stack` input** — re-running the last run would redeploy every stack and wake another stack's approval gate for a host that did not change — then 7.5 against this host, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/backlog.md` entry 19 is what closes that, and entry 20 is the plan to turn this paragraph into a rehearsed runbook with timings.
 
 ## Appendix C. What to change for a company deployment
 
