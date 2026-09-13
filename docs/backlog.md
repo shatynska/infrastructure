@@ -2,24 +2,9 @@
 
 Changes this project has identified and not yet opened. An entry is deleted when its change is archived. See `AGENTS.md`, "A second change surfacing".
 
-An entry carries a number, the change's name, and — where it has one — what it waits on. Not everything here is blocked: where an entry is free to be taken, it says instead why it was recorded rather than folded into the change that found it, usually because it belongs to a different concern than the one that change was closing. The numbering is an identifier, not a priority; where order matters between two entries, the entries say so.
+An entry carries a number, the change's name, and — where it has one — what it waits on. Not everything here is blocked: where an entry is free to be taken, it says instead why it was recorded rather than folded into the change that found it, usually because it belongs to a different concern than the one that change was closing.
 
-**Renumbered from 1 on 2026-09-13**, when `docs/deferred-work.md` was folded away and this file was renamed from `docs/change-queue.md`. **Numbers written before that date do not refer to the entries they now name** — an archived change record, a source comment or a specification citing "entry 54" is citing the old sequence. The entry names are stable and the numbers are not, so cite an entry by name where the citation has to survive.
-
-What is no longer tracked here: work this project has deliberately **declined**. It used to live in `docs/deferred-work.md`, which was deleted on 2026-09-13 because an archived change already records why it was declined, and a decision kept in two places drifts in one of them. Six of its entries turned out to be work rather than decisions and are below, as 51 to 56. The rest were relocated into the file that makes each choice, which is this repository's practice for reasoning anyway: the DNS zone's records into `docs/bootstrap-a-new-host.md` §4.4, and one note each into the tar-extraction task in `ansible/roles/deploy_user/`, `ansible/roles/hardening/README.md`, `terraform/modules/server/variables.tf`, `.github/workflows/platform-deploy.yml`, `ansible/roles/docker/molecule/default/molecule.yml`, and the two specifications that cited the file.
-
-## Where to start
-
-The order below is what the host-readiness review of 2026-09-08 recommended, carried forward to the entries that survive it. That review read the tree, the live host, the Hetzner API and the repository settings to ask whether this repository's shape could be reused for a company-owned host, and its verdict was that the architecture fits and needs no restructuring — the gaps it found were operational. Everything else it said was a dated snapshot and is gone with the document.
-
-1. **5** — container resource limits. The last of the three cheap host-level protections; log rotation and swap were the other two and are delivered.
-2. **8** and **11** — hardening and Traefik defaults. Each is small on its own.
-3. **9** and **12** — external checks and the rebuild runbook. These are what turn "the host can be rebuilt" into "we know it can, and how long it takes".
-4. **10** — log aggregation, when the second or third service lands.
-
-**13** sits outside that order and above it in consequence: `commerce-ops` keeps durable data in a PostgreSQL container that nothing backs up, which is the one gap the database-scoping decision left open.
-
-Three findings of that review are not entries here and never were, because they are settings and policy rather than code: a private repository in the company organisation, a `production` approver who is not the author, and a decision about how much of the OpenSpec workflow a team of human engineers would carry across.
+**The number is an identifier, not a priority, and it is not stable.** This file has been renumbered from 1 before and may be again, so a number written elsewhere — in a source comment, a specification, an archived change record — may no longer name the entry it was written for. The names are stable; cite an entry by name where the citation has to survive.
 
 ---
 
@@ -106,7 +91,7 @@ Adopting it would also cover the two abandon branches added by that review's own
 
 ---
 
-The entries from here to 13 came out of a second full review on 2026-09-08 (trunk at `74c7101`), made to judge whether this repository's shape can be reused for a second, company-owned host — the review the *Where to start* section above carries forward. It opened with two entries that are gone from this file, logical off-host backups of the shared database and a decision on the database model, resolved together by `scope-the-shared-database-to-non-durable-data`: reading the host showed the instance those entries argued over holds no application data at all, and that what this host needs is a stated boundary rather than a backup pipeline.
+The entries from here to 13 came out of a second full review on 2026-09-08 (trunk at `74c7101`), made to judge whether this repository's shape can be reused for a second, company-owned host. It opened with two entries that are gone from this file, logical off-host backups of the shared database and a decision on the database model, resolved together by `scope-the-shared-database-to-non-durable-data`: reading the host showed the instance those entries argued over holds no application data at all, and that what this host needs is a stated boundary rather than a backup pipeline.
 
 Only what applies to **this** host too is recorded here; the company-only findings (repository visibility, a second approver, an organisation-owned repository) are not this repository's concern. The review's verdict repeated the first audit's: the architecture is sound, and what follows is operational rather than structural. It read the live host as well as the tree, so where an entry cites a host fact, that is what `main-server` showed on 2026-09-08, not an inference from the code.
 
@@ -773,7 +758,7 @@ The file is named for the purpose it **keeps**, which is what makes the remainde
 
 ## 51. unify-the-two-role-exclusion-rules
 
-**Not blocked. Promoted from `docs/deferred-work.md` on 2026-09-13**, where it had been recorded as declined; it is work deferred on diff-hygiene grounds rather than a decision taken, which is what puts it here instead.
+**Not blocked.** Recorded as declined until 2026-09-13, and re-read then as work deferred on diff-hygiene grounds rather than a decision taken, which is what puts it here.
 
 `.github/tests/test_ci_configuration.py` decides twice, differently, which directories under `ansible/roles/` are this repository's own. `role_names()` excludes any name containing a `.` — the Galaxy `namespace.role` convention — and the newer image-pinning checks exclude names appearing in `ansible/requirements.yml`'s `roles:` list.
 
@@ -785,7 +770,7 @@ Worth doing before a directory appears that the two rules would classify differe
 
 ## 52. widen-what-the-pull-request-identity-checks-can-read
 
-**Not blocked. Promoted from `docs/deferred-work.md` on 2026-09-13.**
+**Not blocked.** Recorded as declined until 2026-09-13.
 
 `open-autoupdate-pr-with-app-token` added a section to `.github/tests/test_ci_configuration.py` that discovers every workflow step opening a pull request and asserts what identity it uses. The discovery and its helpers make four assumptions that are true of this repository today and would each produce a **false positive** — a failing build on a legitimate change — rather than a false negative:
 
@@ -802,7 +787,7 @@ The first of the four is the one most likely to bite: it fires the first time a 
 
 ## 53. assert-the-autoupdate-workflow-s-two-unchecked-properties
 
-**Not blocked. Promoted from `docs/deferred-work.md` on 2026-09-13**, which recorded it with its own successor already named: "a small change of its own that adds the scenario and has the assertion derived from it".
+**Not blocked.** Recorded as declined until 2026-09-13, though with its own successor already named: "a small change of its own that adds the scenario and has the assertion derived from it".
 
 `.github/workflows/pre-commit-autoupdate.yml` carries two properties its own test section does not assert:
 
@@ -817,7 +802,7 @@ The workflow header says plainly which of its claims the suite does not stand be
 
 ## 54. correct-the-tfvars-parenthetical-that-names-labels
 
-**Not blocked, and small. Promoted from `docs/deferred-work.md` on 2026-09-13**, where it had waited three months for a carrier that never came — which is what makes it an entry of its own rather than a correction to batch.
+**Not blocked, and small.** It waited three months as a correction to batch into whatever change next touched the requirement, and no such change came — which is what makes it an entry of its own.
 
 *Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/stacks/main-production/` is in `ssh_key.tf`.
 
@@ -829,7 +814,7 @@ The disagreement is **factual, not normative**. The parenthetical is illustrativ
 
 ## 55. rename-the-three-pipeline-requirements-that-read-narrower
 
-**Not blocked. Promoted from `docs/deferred-work.md` on 2026-09-13. Do it with entry 56, which is the same sweep over a different set.**
+**Not blocked. Do it with entry 56, which is the same sweep over a different set.**
 
 `make-the-pipeline-environment-agnostic` made the pipeline environment-agnostic without renaming three requirements whose names still name production alone:
 
@@ -847,7 +832,7 @@ Only the first is a genuine name/content mismatch; the other two are listed beca
 
 ## 56. generalise-the-requirements-still-stated-over-prod-alone
 
-**Not blocked. Promoted from `docs/deferred-work.md` on 2026-09-13. The same sweep as entry 55 over a different set; take them together.**
+**Not blocked. The same sweep as entry 55 over a different set; take them together.**
 
 Six requirements are stated over prod alone, or over "this host" at a repository that now has two:
 

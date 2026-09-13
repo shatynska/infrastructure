@@ -154,12 +154,11 @@ EXEMPT_PREFIXES = ("openspec/", ".github/tests/")
 # host-readiness.md` recorded what was observed on the host on one date, and on
 # that date the mount was the superseded path -- exempt as PERMANENT, because
 # editing it would have made it say something that was not observed. It stopped
-# being permanent when the document was deleted: the consolidation of `docs/`
-# to three files kept the review's recommended working order, in
-# `docs/backlog.md`'s *Where to start*, and dropped the dated snapshot around
-# it. The assertion below reports an exemption whose file has gone as loudly as
-# one whose file no longer carries the needle, which is how that deletion was
-# caught rather than discovered later.
+# being permanent when the document was deleted: `docs/` was consolidated to
+# three files and that dated snapshot was not one of them. The assertion below
+# reports an exemption whose file has gone as loudly as one whose file no longer
+# carries the needle, which is how that deletion was caught rather than
+# discovered later.
 EXEMPT_WHOLE_PATHS: dict[str, str] = {}
 
 # The exemption scoped to a LINE rather than to a file, which this change
