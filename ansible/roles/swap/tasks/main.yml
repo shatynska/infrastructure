@@ -123,8 +123,9 @@
 # -- an expression error in place of the diagnosis written below, and it aborts
 # the play. A `--check` run of host-baseline.yml is an anticipated use here:
 # ansible/roles/tailscale/tasks/main.yml sets `check_mode: false` precisely so
-# one does not abort, and docs/change-queue.md entry 23 proposes `--check
-# --diff` as the reviewable artifact of a gated host-config workflow. In a real
+# one does not abort, and `apply-host-configuration-through-a-gated-workflow`
+# considered `--check --diff` as the reviewable artifact of the gated host-config
+# workflow it built, and shipped the workflow without it. In a real
 # run the guard costs no coverage, because a failed `dd` would already have
 # failed its own task.
 #

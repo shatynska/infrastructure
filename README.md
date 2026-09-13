@@ -22,7 +22,7 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
 
 - `terraform/` — Terraform provisions infrastructure (server, volumes, cloud firewall).
   - `terraform/modules/` — shared, reusable Terraform modules (e.g. `terraform/modules/server`).
-  - `terraform/stacks/<name>/` — one folder per stack (`prod` and `staging`), each calling the shared modules with stack-specific variables. New stacks are added as new folders, never as branches.
+  - `terraform/stacks/<name>/` — one folder per stack (`main-production` and `main-staging`), each calling the shared modules with stack-specific variables. New stacks are added as new folders, never as branches.
 - `ansible/` — Ansible configures the provisioned host (container runtime, host-level security), applied by `host-converge.yml` on a merge rather than from a workstation. Scope stops at the container runtime; it never templates a service-definition file or manages application lifecycle.
 - `platform/` — the shared Compose stack that every application on the host depends on, deployed by a mechanism other than Ansible: reverse proxy, shared PostgreSQL instance, and the monitoring services (Prometheus, Alertmanager, Grafana and three exporters).
 - `.github/` — the pipeline: workflows, the CI-configuration test suite under `.github/tests/`, `dependabot.yml`, and the pinned CI dependencies.

@@ -11,7 +11,7 @@
 
 # Backed by a file on the ROOT filesystem, deliberately. A partition cannot be
 # added to an already provisioned host without repartitioning it, and the
-# attached main-data volume is a network block device -- putting the kernel's
+# attached main volume is a network block device -- putting the kernel's
 # last-resort memory tier on the network makes the tier least able to tolerate
 # pressure depend on the component least able to tolerate it. It is also the
 # volume platform/'s Postgres, Prometheus and Grafana bind-mount.

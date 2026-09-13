@@ -73,7 +73,7 @@ Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two **purpos
 | Platform deploy key — **production** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform -N "" -C "deploy@platform"` | **No** (CI cannot type one) | The `production` Environment secret `PLATFORM_DEPLOY_SSH_KEY` (stage 6.4); delete `~/.ssh/<company>-platform` once it is stored |
 | Platform deploy key — **staging** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform-staging -N "" -C "deploy@platform-staging"` | **No** | **Your password manager, and no GitHub secret yet** — so `~/.ssh/<company>-platform-staging` stays where it is. Do not delete it; see below |
 | One deploy key per application | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-deploy -N "" -C "<app>-deploy"` | **No** | That application's GitHub secret only; delete the local file once it is stored |
-| Converge key — **one per stack** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ansible-ci-<environment> -N "" -C "ansible-ci-<environment>"` | **No** (CI cannot type one) | That stack's GitHub Environment secret `ANSIBLE_SSH_PRIVATE_KEY` (stage 6.6); delete the local private half once it is stored. The public half is appended to `root`'s `authorized_keys` on that stack's host — see below |
+| Converge key — **one per stack** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ansible-ci-<stack> -N "" -C "ansible-ci-<stack>"` | **No** (CI cannot type one) | That stack's GitHub Environment secret `ANSIBLE_SSH_PRIVATE_KEY` (stage 6.6); delete the local private half once it is stored. The public half is appended to `root`'s `authorized_keys` on that stack's host — see below |
 
 Keep the `.pub` halves; they are committed to the repository in later stages and are not secret.
 
@@ -180,7 +180,7 @@ Terraform needs somewhere to keep its state file (the record of what it created)
 
    **Its failure signature, because it does not look like a credential problem.** With an organisation token, `terraform init` *succeeds* — reading a workspace is organisation administration — and the run then dies at `Error acquiring the state lock / Error message: resource not found`. HCP reports the authorisation failure as a 404, so the error names the lock, not the token, and every plausible cause it suggests is the wrong one. If you see it, check the token kind first: in HCP, Organisation settings → API token shows a `last used` timestamp, and if it matches the failing run to the second, that is your answer.
 
-   This step previously offered an organisation token as an equivalent alternative. Following that cost an afternoon during `add-a-staging-stack`, whose record has the full diagnosis.
+   This step previously offered an organisation token as an equivalent alternative. Following that cost an afternoon during `add-a-staging-environment`, whose record has the full diagnosis.
 5. On your workstation, run `terraform login` and paste the same token when asked. It is stored in `~/.terraform.d/credentials.tfrc.json`.
 
 **Secrets created in this stage**
@@ -713,9 +713,9 @@ Everything above happens once per host. From here the same play reaches that hos
 **Install the converge key on the host.** The public half of the keypair §0.3 has you generate, appended to `root`'s own `authorized_keys` — not to the operator's file, and not through Ansible, which manages neither:
 
 ```sh
-ssh-copy-id -i ~/.ssh/<company>-ansible-ci-<environment>.pub \
+ssh-copy-id -i ~/.ssh/<company>-ansible-ci-<stack>.pub \
   -o IdentityFile=~/.ssh/<company>-root root@<the host's tailnet name>
-ssh -i ~/.ssh/<company>-ansible-ci-<environment> root@<the host's tailnet name> true
+ssh -i ~/.ssh/<company>-ansible-ci-<stack> root@<the host's tailnet name> true
 ```
 
 The second line is the check, and it is not optional: a key that is installed but not *usable* fails the pipeline's converge rather than this stage, where you are watching. Run both from a machine on the tailnet — the same route CI takes.
@@ -723,11 +723,13 @@ The second line is the check, and it is not optional: a key that is installed bu
 **Then store the two secrets, on that stack's GitHub Environment**, not as repository secrets. Both are read only by a job that has passed that Environment's protection rules, which is the whole reason they live there:
 
 ```sh
-gh secret set ANSIBLE_SSH_PRIVATE_KEY --env <environment> <~/.ssh/<company>-ansible-ci-<environment>
+gh secret set ANSIBLE_SSH_PRIVATE_KEY --env <environment> <~/.ssh/<company>-ansible-ci-<stack>
 gh secret set ANSIBLE_VAULT_PASSWORD --env <environment>
 ```
 
-**`--env` takes the `<environment>` here because a GitHub Environment is still named for the environment**, unlike this stack's read-only secret, its HCP workspace and its inventory source, which all carry the stack's name. `docs/naming-conventions.md` would have this one carry it too, and `docs/change-queue.md` entry 75 is why it does not yet — so if you are reading this after that entry lands, these two commands take the `<stack>` and every other command in this stage still takes the `<environment>`.
+**The two commands above carry both axes on one line, and that is not a typo.** The key's filename is `<stack>` and `--env` is `<environment>`: the key is a per-stack artefact and is named for its stack, while a GitHub Environment is still named for the environment. Read the two arguments separately — on the second command they sit a few characters apart.
+
+**`--env` takes the `<environment>` because a GitHub Environment is still named for the environment**, unlike this stack's converge key, its read-only secret, its HCP workspace and its inventory source, which all carry the stack's name. `docs/naming-conventions.md` would have this one carry it too, and `docs/change-queue.md` entry 75 is why it does not yet — so if you are reading this after that entry lands, these two commands take the `<stack>` and every other command in this stage still takes the `<environment>`.
 
 **A mistyped `--env` fails loudly rather than quietly**, which is worth knowing either way: to encrypt a secret `gh` first fetches that Environment's public key from GitHub's REST API, and that request returns `404 Not Found` for an Environment that does not exist — measured against this repository on 2026-09-12. **Do not read that reassurance across to a workflow's own `environment:` key**, which behaves the other way: GitHub's documented behaviour there is to create the Environment it names, with no protection rules.
 
@@ -770,7 +772,7 @@ Traefik, PostgreSQL and monitoring, deployed by `platform-deploy.yml` on a merge
 
 **Slack.** In the workspace, create a channel `#alerts`. Then api.slack.com → Your Apps → Create New App → From scratch → enable **Incoming Webhooks** → Add New Webhook to Workspace → choose `#alerts`. Copy the webhook URL. The channel name is fixed in `platform/docker-compose.yml`'s Alertmanager config; change it there if you named the channel differently.
 
-**Heartbeat.** At healthchecks.io (or an equivalent), create a check named `<company>-prod alertmanager`. Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one. Copy the ping URL. Configure where that service should alert you when pings stop, ideally somewhere other than the same Slack workspace: this is the alarm for when everything else is down.
+**Heartbeat.** At healthchecks.io (or an equivalent), create a check named `main-production-alertmanager` — the stack's name and the job's, the same shape Appendix A's table gives every other check. No company segment: one company per heartbeat account, so the account boundary already carries it (`docs/naming-conventions.md`). Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one. Copy the ping URL. Configure where that service should alert you when pings stop, ideally somewhere other than the same Slack workspace: this is the alarm for when everything else is down.
 
 **Periodic-job heartbeats.** The project ping key already exists — stage 6.1 created it, because the host play refuses to run without it. It addresses one check per periodic job, listed with its period and grace in Appendix A, and it is also the `HEARTBEAT_PING_KEY` **repository** secret in stage 7.3.
 
@@ -998,8 +1000,8 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 
 ## Appendix C. What to change for a company deployment
 
-Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/change-queue.md`. The first two findings there — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The ones still to do before real data arrives: log rotation (21), swap and container limits (22, 7). The ones a company needs that this repository does not: a private repository in the company organisation, an approver who is not the author, and DNS as code (26).
+Recorded in detail in `docs/review-2026-09-08-host-readiness.md` and in `docs/change-queue.md`. The first two findings there — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The one still to do before real data arrives is container resource limits, `docs/change-queue.md` entry 7 — log rotation and swap were the other two and were delivered together by `bound-host-log-growth-and-add-swap`. The ones a company needs that this repository does not: a private repository in the company organisation, and an approver who is not the author. DNS as code was the third until the zone was read: it is served by a registrar carrying live MX and SPF, so managing it in Terraform means an NS migration that moves mail, and it is declined rather than queued — `docs/deferred-work.md`, "Managing DNS in Terraform", which §4.4 already cites.
 
 **Two stacks are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per stack. What a company still gets that this repository does not is an application stack on the second host, which waits on `docs/change-queue.md` entry 52.
 
-**Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-production` would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. This stopped being hypothetical when `add-a-staging-stack` added a second stack, and the naming scheme's answer is that a server carries its **stack's** name — which makes the two distinct by construction rather than by a choice someone has to remember. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.
+**Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-production` would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. This stopped being hypothetical when `add-a-staging-environment` added a second stack, and the naming scheme's answer is that a server carries its **stack's** name — which makes the two distinct by construction rather than by a choice someone has to remember. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.
