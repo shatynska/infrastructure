@@ -22,7 +22,7 @@ both of which are static reads of a committed file (AGENTS.md, "Testing"):
 
 1. Every host bind mount the platform stack declares whose source lies under
    `/mnt/` lies under the mount path the `platform_data_volume` role
-   establishes. This is the proposition `docs/change-queue.md` entry 62
+   establishes. This is the proposition `rename-the-stacks-and-their-resources`
    deliberately suspended when the volume was renamed and the mount path was
    not, and its absence is why the two could drift silently. A compose file
    naming a path the role does not mount produces an empty directory on the
@@ -68,7 +68,7 @@ establishes that the COMMITTED FILES agree with one another about which path
 the volume is mounted at -- never that any host is mounted there.
 
 Nor does the sweep prove the sweep was complete. Its needle is the PATH, so it
-misses a file whose commitment to `docs/change-queue.md` entry 64 names no path
+misses a file whose commitment to `move-the-platform-data-mount` names no path
 at all, and it is blind inside its own exempt prefixes. That change's design
 records which two files are in that position; they are caught by review or not
 at all.

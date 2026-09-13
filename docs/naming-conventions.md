@@ -84,7 +84,7 @@ An SSH key is not distinguished by rank. A second key here would be a deploy key
 
 `inventory_hostname` is `main-production` and the host's own hostname is `shatynska-main-production`. That divergence is the rule doing its job rather than an oversight: `inventory_hostname` lives inside a repository that belongs to one company, and the hostname is read on a laptop that serves two.
 
-**Nothing sets the hostname today.** Cloud-init sets it once, at creation, from the Hetzner server name — so renaming a server in Terraform does not rename the running host, and a stack renamed without an Ansible hostname task leaves the host answering to its old name forever. The task is part of entry 62 for that reason, and the hostname it templates is `{{ company }}-{{ inventory_hostname }}`, with `company` a single group variable that the company's clone changes once.
+**The converge sets the hostname, and it did not always.** Cloud-init sets it once, at creation, from the Hetzner server name — so renaming a server in Terraform does not rename the running host, and a stack renamed without an Ansible hostname task would leave the host answering to its old name forever. That is why `rename-the-stacks-and-their-resources` brought the `hostname` role with it: it runs on every converge, templates `{{ company }}-{{ inventory_hostname }}`, and satisfies *The Host's Own Name Is Set by the Converge* (`openspec/specs/iac-host-configuration/spec.md`). `company` is a single group variable that the company's clone changes once.
 
 ## The workstation
 

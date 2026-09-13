@@ -49,8 +49,9 @@ These tests were written by an author other than whoever implements the change,
 and that author may only add. That change's tasks.md 4.4 also records that the
 suite's MODULE FILENAMES AND TEST-METHOD NAMES are deliberately left in the old
 vocabulary -- renaming them would churn several hundred identifiers without
-changing what a single one checks, and is deferred to `docs/change-queue.md`
-entry 62. So the old names beside this file are a recorded decision, not an
+changing what a single one checks, and is deferred in `docs/deferred-work.md`,
+"The stack rename left the word in test identifiers and in specification
+titles". So the old names beside this file are a recorded decision, not an
 oversight, and this module does not try to correct them.
 
     `TestEveryModuleInTheSuiteDirectoryNeedsNoPrivilegedResource` in
@@ -528,7 +529,8 @@ OVERSWEPT_KEEPERS = {
     # (*) LIVE. The `environment` Terraform variable, and the label carrying
     # its value. `modules/server` builds `name = "${var.environment}-${var.name}"`,
     # so a `"<stack>-"` prefix is that variable's value under a wrong name --
-    # and after entry 62 the two diverge, which is the coincidence design.md
+    # and since `rename-the-stacks-and-their-resources` the two diverge, which
+    # is the coincidence design.md
     # decision 2a says not to bake in.
     #
     # The label is matched with OPTIONAL BACKTICKS OR QUOTES around the word,
@@ -565,9 +567,9 @@ OVERSWEPT_KEEPERS = {
         r"|\btarget_stack\b"
         r"|--vault-id[^\n]{0,40}\bstack\b"
     ),
-    # FORWARD COVER. The environment axis as the inventory names it; entry 62
-    # renames those paths, not this change. No file under this root names an
-    # inventory source today.
+    # FORWARD COVER. The environment axis as the inventory names it;
+    # `rename-the-stacks-and-their-resources` renamed those paths, not this
+    # change. No file under this root names an inventory source today.
     "the inventory's own axis": re.compile(
         r"\bstack\.hcloud\.yml\b|\bstack_vars\b|\binventory/\$?\{?stacks?\b"
     ),
@@ -1176,8 +1178,9 @@ class TestDiscoveryIteratesTheStackRoot(unittest.TestCase):
                 kept,
                 body,
                 f"host-converge.yml's discovery no longer names {kept!r}. That handle "
-                "enumerates `ansible/inventory/`, which `docs/change-queue.md` entry 62 "
-                "renames and this change does not -- renaming it here is the sweep "
+                "enumerates `ansible/inventory/`, which "
+                "`rename-the-stacks-and-their-resources` renamed and this change did "
+                "not -- renaming it here is the sweep "
                 "overreaching, not completing",
             )
 
