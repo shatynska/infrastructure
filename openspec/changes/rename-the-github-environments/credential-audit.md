@@ -174,6 +174,48 @@ The live value is 15 characters, contains exactly one `@`, ends `Xk4`, and its S
 
 **Why the care is proportionate.** `PLATFORM_POSTGRES_EXPORTER_PASSWORD` is exercised by nothing in section 8: a production apply, converge and deploy all succeed with it wrong, and the symptom is Postgres metrics quietly absent from Prometheus — plausibly noticed weeks later, after this change is archived and nobody is looking at it as a cause.
 
+## Section 8 observed — all three gates wait under `main-production`
+
+PR #168 merged 2026-09-13T11:22:24Z as `960b68b`. **The waiting is the evidence**: a job that ran without pausing would look identical in every other respect — same name, same green check. Staging's ungated apply took three seconds from deployment record to job start; production's take a minute or more, and that difference is the reviewer.
+
+| Task | Job | Approval requested | Job started | Waited | Ran for |
+|---|---|---|---|---|---|
+| 8.1 | `apply (main-production)` | 11:22:57Z | 11:24:04Z | **67s** | 9s |
+| 8.3 | `deploy` | 11:22:37Z | 11:25:01Z | **2m 24s** | 19s |
+| 8.2 | `converge (main-production)` | 11:26:57Z | 11:27:53Z | **56s** | **8m 17s** |
+
+Every one attached to `main-production`, read from its deployment record rather than from the job name — the job name is the matrix stack and would read the same either way.
+
+### What each one proved
+
+- **The apply** — `HCLOUD_TOKEN` and `TF_API_TOKEN` on the new Environment, since it cannot reach HCP or Hetzner with either wrong. Its plan read *"No changes. Your infrastructure matches the configuration."*, which is correct: everything this change touches in that stack directory is prose.
+- **The deploy** — `PLATFORM_DEPLOY_SSH_KEY` and production's Tailscale pair. Its steps confirm the chain individually rather than as one green result: *Connect to the tailnet*, *Set up the deploy SSH key*, *Deliver docker-compose.yml and .env, and trigger the deploy* all succeeded, and SSH to that host is reachable over the tailnet alone.
+- **The converge** — `ANSIBLE_SSH_PRIVATE_KEY` and `ANSIBLE_VAULT_PASSWORD` on production. Eight minutes is itself the evidence: a wrong credential fails in seconds, at the tailnet join or the first SSH attempt.
+
+### The deploy closed the gap the plan left open, by a mechanism the plan did not anticipate
+
+`design.md` and task 9.2 record seven values exercised by no observation, covered only by the soak. That is now largely false, and better so.
+
+The deploy's *Render .env from secrets* step regenerates the host's `.env` from all fifteen secrets, and `docker compose up -d` **recreates a container whose environment has changed**. After the deploy, every platform container held its pre-deploy uptime — `platform-postgres-1`, `platform-postgres-exporter-1` and `platform-traefik-1` at 4 days, `platform-grafana-1` at 19 hours. Nothing was recreated, so the rendered `.env` was byte-identical to what was already there, so **every value read back off the running stack was exact**:
+
+| Value | Confirmed by |
+|---|---|
+| `PLATFORM_POSTGRES_USER`, `_PASSWORD` | Postgres not recreated |
+| `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | exporter not recreated — **the `@` was extracted correctly** |
+| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | Grafana not recreated |
+| `PLATFORM_ACME_EMAIL` | Traefik not recreated |
+
+**Two are not covered by that argument**, and the distinction matters rather than being a quibble: `PLATFORM_SLACK_WEBHOOK_URL` and `PLATFORM_DEADMANSWITCH_URL` are interpolated into Alertmanager's rendered *config file*, not into container environment, so a change there forces no recreation — which is precisely the case `docs/change-queue.md` entry 48 exists for. They are exact because they were copied verbatim out of the running Alertmanager config, not because nothing restarted.
+
+### State after section 8
+
+    main-production  rules=1  secrets=15
+    main-staging     rules=0  secrets=6
+    production       rules=1
+    staging          rules=0
+
+Both new Environments carry what they should; the old pair still exists and is now named by no committed file.
+
 ## Incidental observations, recorded rather than acted on
 
 - The tailnet machine names are `main-production` and `main-staging` — the stack names, per `docs/naming-conventions.md`'s rule that a server's name reaches the tailnet and therefore carries its stack. The hosts' own hostnames are `shatynska-main-production` and `shatynska-main-staging`, templated by the converge from the `company` group variable. Both are correct under the scheme and the divergence is deliberate; noted because reading the two side by side invites the conclusion that one of them is wrong.
