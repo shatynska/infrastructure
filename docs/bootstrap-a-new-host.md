@@ -459,10 +459,32 @@ Two things about staging in stage 6 that differ from production, both deliberate
 
 The private network. CI runners join it for the length of one job to reach a host; operators join it permanently. Both servers join it in stage 6. SSH for deploys never crosses the public internet.
 
+**What you do in this stage:** create the tailnet, put **your workstation** on it, allow the CI tag, and create two credentials. **What you do not do: add either server.** Ansible joins each one in stage 6.3 using the auth key from §5.3; everything about a server in the Tailscale console — whether it is listed, its machine name, its key expiry — is done in §6.4, after it has joined. If the sign-up wizard asks you to add another device, skip it.
+
 ### 5.1 Create the tailnet
 
 1. Sign up at login.tailscale.com. It offers identity providers (Google, Microsoft, GitHub and others) rather than a password; sign in with the **company's** account on that provider, not a personal one. The tailnet is created on that first login and belongs to that identity, and colleagues join it by logging in with an account from the same organisation.
-2. Install the Tailscale client on your workstation and log in with the same account. Your machine is now on the tailnet. The sign-up wizard asks you to add a device; this is that device.
+2. Install the Tailscale client on your workstation and log in with the same account.
+
+   **Linux:**
+
+   ```sh
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up     # prints a login URL: open it and sign in with the account from step 1
+   tailscale status      # your workstation, first line, with a 100.x.y.z address
+   ```
+
+   **Windows, including a WSL 2 workstation** — install it on Windows, not inside WSL: Tailscale recommends against running it inside WSL 2 (its default MTU is too small), and the Windows client carries WSL's traffic to the tailnet. In PowerShell:
+
+   ```powershell
+   winget install --exact --id Tailscale.Tailscale
+   ```
+
+   Then right-click the Tailscale icon in the system tray → **Log in**, which opens a browser; sign in with the account from step 1.
+
+   **macOS:** download the standalone app from tailscale.com/download/mac, open it, and follow its prompts to log in.
+
+   On any of them, the admin console's **Machines** page now lists this computer. That is the only machine that should be there at the end of this stage.
 
 ### 5.2 Access control: allow the CI tag
 
@@ -482,7 +504,7 @@ Both hosts run with no further restriction, so any tailnet member can reach eith
 
 | Credential | Where | Settings |
 |---|---|---|
-| Auth key for the servers | Settings → Keys → Generate auth key | **Reusable**, **not** ephemeral, no tags, expiry as long as allowed (90 days). **One reusable key serves both hosts** — Ansible consumes it once per run and skips the join on a host already on the tailnet — so generate a second only if you make it single-use, or if you want to revoke one host's join without touching the other. A single-use key is also burnt by the *first* join, so a host that has to be rebuilt needs a fresh one. **Then, per machine:** Machines → that server → **Disable key expiry**, or that host silently drops off the tailnet in 180 days. It is a per-node setting; doing it for one host does nothing for the other. |
+| Auth key for the servers | Settings → Keys → Generate auth key | **Reusable**, **not** ephemeral, no tags, expiry as long as allowed (90 days). **One reusable key serves both hosts** — Ansible consumes it once per run and skips the join on a host already on the tailnet — so generate a second only if you make it single-use, or if you want to revoke one host's join without touching the other. A single-use key is also burnt by the *first* join, so a host that has to be rebuilt needs a fresh one. **Later, per server, once it has joined in stage 6.3** (§6.4 has you do it): Machines → that server → **Disable key expiry**, or that host silently drops off the tailnet in 180 days. It is a per-node setting; doing it for one host does nothing for the other. |
 | OAuth client for CI | **Trust credentials** (called OAuth clients in older consoles) → Credential → OAuth | Scope **Auth Keys: Write**, with tag `tag:ci`, which is offered only once §5.2's `tagOwners` entry is saved. Produces a client ID and a client secret. |
 
 **Secrets created in this stage**
@@ -497,9 +519,10 @@ Each application repository will need the same two OAuth values in stage 8; one 
 
 **`tag:ci` must reach every host, not production's alone.** The converge job joins the tailnet for whichever stack its matrix row names, and it reaches that host over the tailnet and by no other route — the cloud firewall admits the operator's range and nothing else. An access rule that admits `tag:ci` to one host leaves the other convergeable only from a workstation, which is the state this whole stage exists to end.
 
-**Check:** your workstation appears in Machines; `tag:ci` appears in the policy file without a syntax error; and each server's **machine name is the server's own name** — `main-production` and `main-staging`. That last is what the converge job looks the host up by: it asks `tailscaled` for the peer of that name and maps the answer, rather than trusting DNS. A name that does not match is a converge that cannot find its host.
+**Check:** your workstation is the one machine in Machines; the policy file saved with `tag:ci` in `tagOwners`; the auth key and the OAuth client's two values are in the password manager. **After stage 6.3, not now:** each server's **machine name is the server's own name** — `main-production` and `main-staging`. That is what the converge job looks the host up by: it asks `tailscaled` for the peer of that name and maps the answer, rather than trusting DNS. A name that does not match is a converge that cannot find its host.
 
 **The machine name is not the same field as the name the host reports, and only one of them is this repository's to set.** The `tailscale` role pins what the host reports, to `{{ inventory_hostname }}`, so that the host's own name — which carries the company, `shatynska-main-production` — never drives it. The *machine* name is assigned when the host first joins and is changed in the Tailscale interface and nowhere else. A rename of either therefore has two halves: a commit for the first, and a click for the second.
+
 ## Stage 6. Ansible: configure the host
 
 This stage is run from your workstation — **once per host, and only once.** Every converge after this one is a merge: `host-converge.yml` runs the same play, against the same inventory, on a merge to `main` touching `ansible/`, with production's waiting for the same Environment approval a Terraform apply waits for. §6.6 is where you hand that workflow what it needs.
@@ -668,7 +691,7 @@ The usual causes, in rough order: the key was already consumed, because it was g
 
 ### 6.4 After the run
 
-1. Tailscale admin → Machines: **the host you have just converged** is listed. Note its tailnet IPv4 (`100.x.y.z`). Disable key expiry for it (stage 5.3) — per node, so this is done again after the other stack's converge.
+1. Tailscale admin → Machines: **the host you have just converged** is listed, under the server's own name (`main-production` or `main-staging`; §5.3's check says why). Note its tailnet IPv4 (`100.x.y.z`). Disable key expiry for it (stage 5.3) — per node, so this is done again after the other stack's converge.
 2. Log in the way you will from now on, over the tailnet, unprivileged:
 
    ```sh
