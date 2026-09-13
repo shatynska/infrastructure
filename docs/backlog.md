@@ -755,3 +755,24 @@ It is not enough because **nothing enforces it**. An operator who pastes product
 **Worth settling when it is taken.** Whether the label is the stack (`main-staging`) or the environment (`staging`) — these are different axes and this repository has been bitten by conflating them before; whether the value is rendered from the existing `PLATFORM_DEPLOY_HOST` rather than adding a secret, which would avoid a tenth value to enter per stack; and whether Alertmanager's routes should group on it, which is what would stop two stacks' alerts collapsing into one notification that names neither.
 
 Not blocked.
+
+## 51. record-how-an-application-is-onboarded
+
+Recorded 2026-09-13 by the operator, who is about to onboard `commerce-ops` to a second host and found the procedure written as a stage of a document about bootstrapping a **host**.
+
+`docs/bootstrap-a-new-host.md` stage 8 is the whole of what exists, and it is in the wrong document for what it now has to serve: that document is a once-per-server procedure read front to back, while this is a once-per-application procedure read out of order, years apart, by someone who is not bootstrapping anything. Extract it to a document of its own and leave a pointer in stage 8.
+
+**Extract rather than copy.** A second copy of a procedure that touches deploy keys, sudoers rules and a database decision would drift from the first, and the drift would be invisible: both would read as authoritative. The test is whether stage 8 still says anything the new document does not — if it does, the extraction was partial.
+
+**What the move has to fix, and it is the reason this is not a file rename.** Stage 8 is written for one host, and says so in a parenthetical: *"Add to `deploy_apps` in `ansible/inventory/group_vars/production.yml` (and, once an application has a staging deploy path, to `staging.yml` with a keypair of its own)"*. That parenthetical was accurate while the platform stack reached one host. `deploy-the-platform-stack-per-environment` ended that, and the real shape is a **grid**: several applications across several stacks, where each cell needs a keypair of its own, a `deploy_apps` entry in that environment's `group_vars`, a deploy path in the application's own repository, and a secret set in an Environment there. The document should say which steps repeat on which axis, because getting that wrong is how one leaked private half ends up deploying to two hosts.
+
+**Three things stage 8 does not say and the first real onboarding will want:**
+
+- **What is reachable before DNS exists.** Traefik routes on the `Host` header, so an application deployed to a host with no public hostname is fully testable over the tailnet with a `Host:` header — but **not from a browser**, because Traefik redirects `web` to `websecure` unconditionally and the certificate cannot issue while 443 is closed (the resolver uses TLS-ALPN-01, which Let's Encrypt performs by connecting inbound). That distinction decides whether a given stack needs its web ports opened at all, and it is currently written down nowhere.
+- **The order that avoids a wasted converge.** The `deploy_apps` entry needs a converge before the application's own deploy can authenticate, and that converge is a merge to `main` touching `ansible/` — so an application repository that is ready first waits on an infrastructure pull request rather than the reverse.
+- **What an enumerated-but-undeployed application does to the image prune.** `ansible/inventory/group_vars/staging.yml` records it: such an application "contributes nothing to the prune's keep set while implying an authorisation nothing uses". Harmless, and worth knowing before it is read as a fault.
+
+**Write it from a real onboarding rather than from stage 8's text.** The operator is onboarding `commerce-ops` to staging now; a procedure transcribed from a document is a procedure nobody has walked, and this one has a parenthetical in it that was true for exactly as long as there was one host. Taking this immediately after that onboarding is what makes it accurate.
+
+Not blocked. It touches `docs/` and no mechanism.
+
