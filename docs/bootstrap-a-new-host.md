@@ -752,6 +752,28 @@ Then delete the local private half, exactly as you do for the platform deploy ke
 
 **Check**, on the next merge that touches `ansible/`: the run shows the diff before any approval; staging converges unattended; production's job waits. Read staging's before approving production's — that is what makes staging the rehearsal rather than a second production.
 
+**How to read it, because `gh run view <run> --log` will not.** Both converges are jobs of **one** run, so the run is unfinished precisely until production's job — the one you are deciding about — has finished, and the run-level log refuses until then:
+
+```
+run <run id> is still in progress; logs will be available when it is complete
+```
+
+`--job <id>` does not lift that: the refusal is a property of the run, not of the job. What works is the jobs API, which serves a **finished** job's log from inside a run that is still going:
+
+```sh
+run=$(gh run list --workflow host-converge.yml --limit 1 --json databaseId -q '.[0].databaseId')
+job=$(gh run view "$run" --json jobs -q '.jobs[] | select(.name == "converge (<staging stack>)") | .databaseId')
+gh api "repos/{owner}/{repo}/actions/jobs/$job/logs"
+```
+
+`{owner}` and `{repo}` are `gh`'s own placeholders and resolve from the checkout you run this in. The job is selected **by name**, because the jobs are not ordered by stack — and a name that matches nothing fails one step later than it happens: the `select` exits **0** with `$job` empty, and the request that follows asks for a job with no id and returns `gh: Not Found (HTTP 404)`, which reads like a missing log or a permissions problem rather than like a stack name that is not this repository's. Measured on 2026-09-13. When you meet that 404, list what the run actually has before suspecting the route:
+
+```sh
+gh run view "$run" --json jobs -q '.jobs[].name'
+```
+
+**For production's own converge while it is running**, the API has nothing to serve — a job's log exists once the job has finished. The web interface streams a running job's output live, and that is the route for watching that one. What you are reading either log *for* is the three lines below.
+
 **Two ways a gated converge fails that are not about your host, met on 2026-09-12 and worth recognising rather than diagnosing twice.**
 
 - **It dies at *Install Galaxy content*, before Ansible reads anything.** That step runs `ansible-galaxy install` against `galaxy.ansible.com` at converge time, with no retry and nothing vendored, so an upstream hiccup fails the job — and on the production path it fails *after* you have granted the approval, which then has to be requested and granted again. The signature is a `[WARNING]: Skipping Galaxy server` line naming a collection, followed by an `[ERROR]` about the ansible-galaxy cache. Re-run the failed job; it is transient. `docs/change-queue.md` entry 76 is the change that would stop it.
