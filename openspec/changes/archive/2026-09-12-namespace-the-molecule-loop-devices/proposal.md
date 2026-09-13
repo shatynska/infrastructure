@@ -53,7 +53,11 @@ A second premise was checked the same way and needed nothing: this change puts `
 
 **Documentation.** `AGENTS.md`'s *Namespacing Molecule per working tree* and its *Testing* section, both of which currently say Molecule shares **two** handles.
 
-**Operations.** None. No workflow, stack, inventory or platform file is touched, so the merge starts no apply, no converge and no deploy. The Molecule matrix runs, because `ansible/` changed.
+**Operations.** No workflow, stack, inventory or platform file is touched, so the merge starts no Terraform apply and no platform deploy. The Molecule matrix runs, because `ansible/` changed.
+
+**It also starts a host converge, and this paragraph said it would not.** Corrected retroactively on 2026-09-13 against run `34716999142`, which the merge of PR #161 triggered: `host-converge.yml` fires on `push` to `main` with `paths: ansible/**` and does not distinguish what under `ansible/` changed, so this change's Molecule fixtures and `ansible/scripts/run-molecule` were enough. Staging converged unattended in 5m31s; **production's job then waited 6h34m for its Environment approval** before running in 8m59s.
+
+**What the original claim got right is the part that matters, and it is worth separating from the part it got wrong.** Both hosts reported `changed=0`, `failed=0`, `unreachable=0` — 87 tasks on production, 85 on staging — because nothing in this change's diff is something a converge reads. The defensible claim was that a converge would *change nothing*, not that none would *run*. `docs/change-queue.md` entry 71 exists to close that gap and now carries this run as its evidence.
 
 **This workstation.** The five minors above are orphaned by this change rather than reclaimed by it: nothing will ever detach them, and each holds a deleted sparse file whose blocks the kernel cannot free while the association stands. Detaching them is a one-time local command needing `sudo`, recorded in `tasks.md` rather than performed by the change.
 
