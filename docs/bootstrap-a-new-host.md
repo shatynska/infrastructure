@@ -898,7 +898,7 @@ Until this is done the `MetricsTargetDown` alert fires for `postgres-exporter`, 
 
 **The heartbeat.** Nothing to run; confirm in the heartbeat service that this host's own check is receiving pings every couple of minutes. Give it the period and grace Appendix A records — a check created by its first ping carries the observer's default until corrected.
 
-**Check**, on each host you have deployed to: `docker ps` shows nine `platform-*` containers, all `(healthy)`; `http://<that host's tailnet IP>:3000` from your workstation opens **that stack's** Grafana, and `admin` with that stack's Grafana password shows three dashboards; the heartbeat service shows that host's own check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in that stack's own Slack channel.
+**Check**, on each host you have deployed to: `docker ps` shows **eight** `platform-*` containers, all `(healthy)` — one per service in `platform/docker-compose.yml`, which is the count to check against rather than the number written here; `http://<that host's tailnet IP>:3000` from your workstation opens **that stack's** Grafana, and `admin` with that stack's Grafana password shows three dashboards; the heartbeat service shows that host's own check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in that stack's own Slack channel.
 
 **Two of those are also the check that the stacks are genuinely separate**, and it is worth making deliberately the first time a second stack is deployed: the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports.
 
