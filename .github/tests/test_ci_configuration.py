@@ -6608,7 +6608,14 @@ COMPOSE_ECOSYSTEM = "docker-compose"
 REQUIRED_ECOSYSTEMS = ("terraform", "github-actions", COMPOSE_ECOSYSTEM)
 
 PLATFORM_DEPLOY = WORKFLOWS / "platform-deploy.yml"
-GATED_DEPLOY_ENVIRONMENT = "main-production"
+# `GATED_DEPLOY_ENVIRONMENT` STOOD HERE AND IS GONE, retired by
+# `deploy-the-platform-stack-per-environment`. It held the literal
+# `main-production` and the assertion below counted the jobs in
+# `platform-deploy.yml` declaring it. That workflow now names no Environment at
+# all -- each deploy row resolves one per matrix row from the discovered stack
+# declarations -- so the constant would name a string no workflow contains, and
+# a dead constant asserting a retired rule is worse than no constant at all:
+# the next reader takes it for the rule.
 
 # Dependabot's Docker Compose file fetcher selects by filename, transcribed
 # from `dependabot-core`'s `docker/lib/dependabot/docker_compose/file_fetcher.rb`
@@ -7416,28 +7423,71 @@ class TestAProposedImageUpdateIsNotExemptFromTheStacksObligations(unittest.TestC
             f"`{COMPOSE_ECOSYSTEM}` configuration: {offences}",
         )
 
-    def test_the_stack_deploy_stays_gated_on_the_production_environment(self) -> None:
+    def test_the_stack_deploy_stays_gated_on_a_declared_environment(self) -> None:
         """SPECIFIED -- scenario "Platform image update is proposed
         automatically": such a pull request is "subject to ... the same gated
-        deploy approval as any other change to the stack definition". This
-        change alters no pipeline behaviour; the assertion exists because the
-        gate is what makes an automatically proposed bump acceptable, and its
-        removal would be invisible to every other test in this suite."""
+        deploy approval as any other change to the stack definition". The gate
+        is what makes an automatically proposed bump acceptable, and its
+        removal would be invisible to every other test in this suite.
+
+        RE-POINTED by `deploy-the-platform-stack-per-environment`, and the
+        proposition it now asserts is the one that survived that change rather
+        than a weakening of the one that did not. This test asserted that
+        exactly one job declared `environment: main-production`, a literal held
+        in `GATED_DEPLOY_ENVIRONMENT`. That workflow no longer names any
+        Environment: *The Platform Deploy Names No Stack*
+        (openspec/specs/iac-platform-deploy-pipeline/spec.md) forbids it, and
+        each deploy row now resolves its Environment per matrix row from
+        discovery. Counting jobs that declare one literal would therefore find
+        zero, and the repair is NOT to look for the new literal -- there is
+        none -- but to assert what actually keeps a merged image bump gated:
+        that EVERY job which delivers to a host declares an `environment:`, and
+        that each one is resolved from the discovered matrix rather than
+        written in workflow text. A row attached to no Environment reads no
+        deploy credential at all; a row attached to a literal would be the
+        stack-naming that requirement forbids.
+
+        Which Environments those rows can resolve to, and that each belongs to
+        exactly one stack, is asserted by
+        `test_the_platform_stack_deploys_per_stack.py` and not restated here.
+        """
         workflow = load_yaml(PLATFORM_DEPLOY)
-        gated = [
-            name
+        # Read over the WHOLE step, not its `run:` alone. The key is
+        # interpolated into a shell body today, and the convention this
+        # repository is moving towards brings such a value in through the
+        # step's `env:` instead -- a read of `run:` alone would report that
+        # move as a deploy with no gate, which is the same message as a gate
+        # genuinely removed.
+        delivering = {
+            name: job
             for name, job in jobs(workflow).items()
-            if str(job.get("environment", "")) == GATED_DEPLOY_ENVIRONMENT
-            or (
-                isinstance(job.get("environment"), dict)
-                and job["environment"].get("name") == GATED_DEPLOY_ENVIRONMENT
+            if any(
+                "secrets.PLATFORM_DEPLOY_SSH_KEY" in str(step)
+                for step in (job.get("steps") or [])
             )
-        ]
+        }
+        self.assertTrue(
+            delivering,
+            "no job in platform-deploy.yml sets up the platform deploy key, so this "
+            "assertion would pass having found no deploy to check the gate on",
+        )
+        ungated = []
+        for name, job in sorted(delivering.items()):
+            declared = job.get("environment")
+            declared = declared.get("name") if isinstance(declared, dict) else declared
+            if not declared:
+                ungated.append(f"{name}: declares no `environment:`")
+            elif "matrix." not in str(declared):
+                ungated.append(
+                    f"{name}: attaches to {str(declared)!r}, which does not vary by "
+                    "matrix row and is therefore a literal in workflow text"
+                )
         self.assertEqual(
-            1,
-            len(gated),
-            "expected exactly one job in platform-deploy.yml to declare "
-            f"`environment: {GATED_DEPLOY_ENVIRONMENT}`, found {gated}",
+            [],
+            ungated,
+            "these jobs reach a host with the platform deploy key without a gate "
+            "resolved from the stacks' own declarations, so an automatically proposed "
+            f"image bump could deploy unapproved: {ungated}",
         )
 
     def _refresh_sections(self) -> list[str]:

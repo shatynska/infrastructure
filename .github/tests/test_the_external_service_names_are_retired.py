@@ -373,8 +373,8 @@ class TestNoCommittedFileNamesARetiredExternalService(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-platform-deploy-pipeline / Gated Deploy Reuses the Terraform Production
-# Environment
+# iac-platform-deploy-pipeline / Each Stack's Deploy Attaches to the
+# Environment Its Own Declaration Names
 #
 # The one obligation in these deltas that IS a static read of committed files
 # and that nothing in this suite reads yet. Everything else the deltas say about
@@ -434,48 +434,77 @@ def gate_disagreements(gated, declared) -> list[str]:
     """
     offences = []
     names = sorted(set(gated))
-    if len(names) != 1:
+    if not names:
+        return [
+            "platform-deploy.yml declares no deployment environment at all, so its "
+            "deploy is gated by nothing"
+        ]
+    for name in names:
+        if "matrix." in name:
+            # Resolved per matrix row from discovery, which is what *The
+            # Platform Deploy Names No Stack* obliges. Which Environments the
+            # expression can reach is every declared one, and each of those is
+            # checked below in the same sweep the literal case gets.
+            continue
+        owners = sorted(stack for stack, environment in declared.items() if environment == name)
+        if not owners:
+            offences.append(
+                f"platform-deploy.yml gates its deploy on the {name!r} Environment and no "
+                f"stack declares it -- the stacks declare {sorted(set(declared.values()))}. "
+                "GitHub creates an Environment a workflow names, with no protection rules, "
+                "so this deploy is gated on nothing rather than refused"
+            )
+        else:
+            offences.append(
+                f"platform-deploy.yml names the {name!r} Environment as a literal, which "
+                f"{owners} declares. A literal is the stack-naming the deploy workflow "
+                "forbids: it gates one stack and silently excludes every other, and it "
+                "drifts from the declaration in a separate commit"
+            )
+    # Whichever form the gate takes, no two stacks may declare one Environment:
+    # two stacks sharing one share its write token and its protection rules.
+    shared = sorted(
+        environment
+        for environment in set(declared.values())
+        if len([stack for stack, value in declared.items() if value == environment]) > 1
+    )
+    for environment in shared:
+        owners = sorted(stack for stack, value in declared.items() if value == environment)
         offences.append(
-            f"platform-deploy.yml declares {names or 'no'} deployment environment(s); "
-            "the requirement names one, reused from the Terraform apply workflow"
-        )
-        return offences
-    name = names[0]
-    owners = sorted(stack for stack, environment in declared.items() if environment == name)
-    if not owners:
-        offences.append(
-            f"platform-deploy.yml gates its deploy on the {name!r} Environment and no "
-            f"stack declares it -- the stacks declare {sorted(set(declared.values()))}. "
-            "GitHub creates an Environment a workflow names, with no protection rules, "
-            "so this deploy is gated on nothing rather than refused"
-        )
-    elif len(owners) > 1:
-        offences.append(
-            f"{owners} all declare the {name!r} Environment, so which stack's apply "
-            "the deploy shares its approvers with is not readable from the committed "
+            f"{owners} all declare the {environment!r} Environment, so which stack a "
+            "deploy row resolving to it belongs to is not readable from the committed "
             "files"
         )
     return offences
 
 
 class TestTheDeployGateNamesTheEnvironmentAStackDeclares(unittest.TestCase):
-    """SPECIFIED -- Gated Deploy Reuses the Terraform Production Environment
-    (openspec/specs/iac-platform-deploy-pipeline/spec.md): "SHALL require manual
-    approval via the same GitHub Environment protection rule already used by the
-    Terraform apply workflow for the production stack -- the Environment that
-    stack's own committed pipeline declaration names, which is
-    `main-production`", and its scenario "Same approvers gate both kinds of
-    production change": "both SHALL be gated by the same `main-production`
-    Environment's required reviewers, rather than each defining its own separate
-    approval list".
+    """SPECIFIED -- Each Stack's Deploy Attaches to the Environment Its Own
+    Declaration Names (openspec/specs/iac-platform-deploy-pipeline/spec.md):
+    each stack "SHALL be deployed by a job of its own, attached to the GitHub
+    Environment **that stack's** declaration names -- the same Environment that
+    stack's Terraform apply and host converge attach to", and its scenario "Same
+    approvers gate both kinds of change to one stack".
+
+    RE-POINTED by `deploy-the-platform-stack-per-environment`, and the
+    requirement this quotes is not the one it used to. It read *Gated Deploy
+    Reuses the Terraform Production Environment*, which asserted that there is
+    ONE deploy gated on production's Environment -- the proposition that change
+    removes, by making the deploy a matrix over every stack that opts in. So
+    `gate_disagreements` no longer requires exactly one gated name; it accepts a
+    gate resolved per matrix row and reports a LITERAL, which is now the defect
+    rather than the expected form. What is unchanged is the hazard the class
+    exists for and the reason it is written as a relation between committed
+    files rather than against a literal: GitHub CREATES an Environment a
+    workflow names, with no protection rules, so a gate naming an Environment no
+    stack declares runs unreviewed rather than failing.
 
     ASSERTED AGAINST THE STANDING REQUIREMENT, not against a delta. This class
     arrived with rename-the-external-services, which drafted a delta moving that
     literal to `main-production` and withdrew it, GitHub offering no way to
     rename a deployment Environment. `rename-the-github-environments` made the
     move the only way GitHub allows -- creating the Environment and re-entering
-    every secret -- and the quotations above follow the requirement text as that
-    change left it. The quotation is the thing to keep current here: it is
+    every secret. The quotation is the thing to keep current here: it is
     correct when written, correct when reviewed, and wrong only once a later
     change edits the requirement it quotes.
 
@@ -490,12 +519,12 @@ class TestTheDeployGateNamesTheEnvironmentAStackDeclares(unittest.TestCase):
 
     `test_ci_configuration.py`'s
     `TestAProposedImageUpdateIsNotExemptFromTheStacksObligations
-    .test_the_stack_deploy_stays_gated_on_the_production_environment` already
-    asserts that exactly one job in that workflow declares the Environment
-    `GATED_DEPLOY_ENVIRONMENT` names, and this does not restate it: that
-    constant and the one prod's declaration is read against are separate
-    literals in separate modules, and nothing until now read them as the same
-    Environment.
+    .test_the_stack_deploy_stays_gated_on_a_declared_environment` asserts that
+    every job reaching a host declares an `environment:` resolved from the
+    matrix, which is what keeps an automatically proposed image bump gated.
+    This does not restate it: that one reads whether a gate exists on each
+    delivering job, and this one reads whether the Environment it resolves to
+    is one a stack actually declares.
     """
 
     def test_the_deploy_gate_and_a_stacks_declaration_name_one_environment(self) -> None:
@@ -656,16 +685,44 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         self.assertEqual(1, len(offences), offences)
         self.assertIn("no stack declares it", offences[0])
 
-    def test_an_agreeing_pair_is_not_reported(self) -> None:
+    def test_a_gate_resolved_per_matrix_row_is_not_reported(self) -> None:
         """Without this, a comparison that refused every input would satisfy the
-        test above while making the committed assertion unfailable."""
+        test above while making the committed assertion unfailable.
+
+        THE CONFORMING CASE IS NOW AN EXPRESSION, NOT A NAME, and that is the
+        change `deploy-the-platform-stack-per-environment` made to what this
+        predicate means. A gate resolved from the discovered matrix reaches
+        every stack that opts in; the declarations are what say which
+        Environments those are, and the sweep below is what holds them
+        distinct.
+        """
         self.assertEqual(
             [],
             gate_disagreements(
-                ["main-production"],
+                ["${{ matrix.stack.github_environment }}"],
                 {"main-production": "main-production", "main-staging": "main-staging"},
             ),
         )
+
+    def test_a_literal_gate_is_reported_even_where_a_stack_declares_it(self) -> None:
+        """The offence this predicate gained, and the one its previous form
+        asserted the opposite of.
+
+        A literal Environment in `platform-deploy.yml` used to be the required
+        shape. Under *The Platform Deploy Names No Stack*
+        (openspec/specs/iac-platform-deploy-pipeline/spec.md) it is a defect
+        even when a stack declares exactly that name: it gates that one stack
+        and silently excludes every other, which is a smaller matrix rather
+        than a failure, and it drifts from the declaration in a separate
+        commit. Without this case the predicate would accept the very form the
+        requirement removed.
+        """
+        offences = gate_disagreements(
+            ["main-production"],
+            {"main-production": "main-production", "main-staging": "main-staging"},
+        )
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("as a literal", offences[0])
 
     def test_a_workflow_gating_on_no_environment_is_reported(self) -> None:
         """A deploy job whose `environment:` was dropped is ungated, and reads
@@ -680,11 +737,11 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         kept because this comparison would otherwise pick an owner arbitrarily
         and report agreement."""
         offences = gate_disagreements(
-            ["main-production"],
+            ["${{ matrix.stack.github_environment }}"],
             {"main-production": "main-production", "other": "main-production"},
         )
         self.assertEqual(1, len(offences), offences)
-        self.assertIn("which stack's apply", offences[0])
+        self.assertIn("is not readable from the committed", offences[0])
 
     def test_the_workflow_read_finds_the_environment_in_either_form(self) -> None:
         """GitHub accepts `environment: name` and `environment: {name: ...}`,

@@ -118,3 +118,40 @@ target_environment: production
 # nothing in a value can tell a reader which was meant. A stack that
 # exists to be rebuilt may set this `false`; this one may not.
 destroy_policy_gate: true
+
+# Whether the shared platform stack is deployed to this stack's host.
+# OPTIONAL; absent means it is NOT, so a stack directory committed before its
+# GitHub Environment holds any platform secret receives no deploy.
+#
+# POLARITY IS LOAD-BEARING AND LIVES IN THE NAME, as it does for the gate
+# above. This field names what is true when the value is `true`.
+# `platform_excluded: false` would be the same value with the opposite
+# meaning, and nothing in a value can tell a reader which was meant.
+#
+# THE TWO OPTIONAL FIELDS DEFAULT TO OPPOSITE VALUES, FOR ONE REASON. Each
+# default is the safe value when the field was forgotten. For the destroy
+# policy that is "the gate applies"; for this it is "deployed to by nothing",
+# because a new stack has none of the nine `PLATFORM_*` secrets when its
+# directory is first committed, and a default of `true` would have its first
+# merge touching `platform/**` attempt a deploy under credentials that do not
+# exist, against a host that may not yet authorise the key.
+#
+# THIS FIELD IS THE ONLY THING THAT POINTS THE PLATFORM DEPLOY AT THIS STACK.
+# Which GitHub Environment that deploy attaches to is `github_environment`
+# above -- the same Environment this stack's apply and converge attach to, so
+# one set of approvers gates every kind of change to this stack.
+#
+# IT IS ABOUT A LAYER THAT IS NOT TERRAFORM, AND THAT IS NOT NEW HERE.
+# `target_environment` above is an Ansible group sitting beside a
+# `terraform.tfvars`. This file is the stack's PIPELINE configuration rather
+# than its Terraform configuration, which is why it is `.yml`: Terraform must
+# not read it, and `terraform fmt`, `terraform validate` and `tflint` all
+# ignore it.
+#
+# OPTING IN IS NOT THE SAME FACT AS THE HOST AUTHORISING THE DEPLOY KEY, and
+# the two are checked against each other rather than derived one from the
+# other. `deploy_apps` in this stack's `group_vars` must enumerate `platform`,
+# or `.github/tests` fails the pull request naming both files -- left to the
+# deploy, the same disagreement surfaces as an authentication failure after
+# the tailnet join and after a human approved it.
+deploys_platform: true
