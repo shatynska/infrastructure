@@ -7452,11 +7452,17 @@ class TestAProposedImageUpdateIsNotExemptFromTheStacksObligations(unittest.TestC
         `test_the_platform_stack_deploys_per_stack.py` and not restated here.
         """
         workflow = load_yaml(PLATFORM_DEPLOY)
+        # Read over the WHOLE step, not its `run:` alone. The key is
+        # interpolated into a shell body today, and the convention this
+        # repository is moving towards brings such a value in through the
+        # step's `env:` instead -- a read of `run:` alone would report that
+        # move as a deploy with no gate, which is the same message as a gate
+        # genuinely removed.
         delivering = {
             name: job
             for name, job in jobs(workflow).items()
             if any(
-                "secrets.PLATFORM_DEPLOY_SSH_KEY" in str(step.get("run") or "")
+                "secrets.PLATFORM_DEPLOY_SSH_KEY" in str(step)
                 for step in (job.get("steps") or [])
             )
         }
