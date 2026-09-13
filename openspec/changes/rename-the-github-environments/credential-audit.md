@@ -145,6 +145,35 @@ It also attached to the right Environment and did not pause: a deployment record
 **This is why the task moved from section 8 to section 4.** Under the plan as first written, the first exercise of these three would have been production's gated deploy, on a trigger `platform-deploy.yml` offers no way to re-raise. Here the same mistake would have cost a re-dispatch.
 
 
+## Section 6 — `main-production` built, and six values recovered rather than retyped
+
+Fifteen secrets present, the name list equal to `production`'s from §1.2, and the required reviewer (`shatynska`) verified both before the writes and after them. The repository-scoped `TF_API_TOKEN` was rewritten from the same workstation file in the same pass, so the two copies *HCP Terraform Access via a Static Token, Unsplit by Privilege* (`openspec/specs/iac-state-management/spec.md`) obliges to be identical are identical by construction rather than by assumption.
+
+**Six of the fifteen were read back off the running production stack instead of retyped**, which matters because these are among the seven that no observation in section 8 exercises. A recovered value is correct by construction; a retyped one is correct only if nobody made a mistake:
+
+| Secret | Where it was read from |
+|---|---|
+| `PLATFORM_ACME_EMAIL` | `platform-traefik-1`'s command line |
+| `PLATFORM_DEPLOY_HOST` | `platform-grafana-1`'s `GF_SERVER_ROOT_URL` |
+| `PLATFORM_SLACK_WEBHOOK_URL` | the `slack` receiver's `api_url` in Alertmanager's rendered config |
+| `PLATFORM_DEADMANSWITCH_URL` | the `deadmansswitch` receiver's webhook `url`, same file |
+| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | `platform-grafana-1`'s `GF_SECURITY_ADMIN_PASSWORD` |
+| the Postgres trio | `platform-postgres-1`'s environment and the exporter's `DATA_SOURCE_NAME` |
+
+### The exporter password contains an `@`, and the DSN is not URL-encoded
+
+Worth recording because the mistake it invites is invisible. `platform-postgres-exporter-1`'s DSN reads
+
+    postgresql://pgexporter:<password>@postgres:5432/postgres?sslmode=disable
+
+and the password itself contains an `@`, so the string carries **two**. Splitting on the first — the obvious parse — yields a truncated password that looks entirely plausible. The correct extraction takes everything up to the **last** `@`, and it was verified by reconstructing the DSN and comparing byte-for-byte rather than by inspection.
+
+The live value is 15 characters, contains exactly one `@`, ends `Xk4`, and its SHA-256 begins `eacaa954a403`. That fingerprint is recorded so a future operator can check a stored copy without either value being printed.
+
+**A latent trap in the platform's Compose configuration, which is not this change's to fix**: a password embedded in a URI should be percent-encoded. This one is not, and it works only because the driver splits on the last `@`. A password containing `/` or `?` would break the DSN outright.
+
+**Why the care is proportionate.** `PLATFORM_POSTGRES_EXPORTER_PASSWORD` is exercised by nothing in section 8: a production apply, converge and deploy all succeed with it wrong, and the symptom is Postgres metrics quietly absent from Prometheus — plausibly noticed weeks later, after this change is archived and nobody is looking at it as a cause.
+
 ## Incidental observations, recorded rather than acted on
 
 - The tailnet machine names are `main-production` and `main-staging` — the stack names, per `docs/naming-conventions.md`'s rule that a server's name reaches the tailnet and therefore carries its stack. The hosts' own hostnames are `shatynska-main-production` and `shatynska-main-staging`, templated by the converge from the `company` group variable. Both are correct under the scheme and the divergence is deliberate; noted because reading the two side by side invites the conclusion that one of them is wrong.
