@@ -104,6 +104,22 @@ So, for the four writes still to come and for section 6's fifteen:
 
 This is why task 6.3 reads `updated_at` rather than the name list — an addition the fifth review round made for a different reason (a name list cannot distinguish a write from a name already present) which turns out to be the only reliable signal here too.
 
+## Section 4 observed — staging's apply ran under `main-staging`, unattended
+
+PR #167 merged at 2026-09-13T10:33:07Z as `5976efd`. The evidence for task 4.7, read from the run rather than inferred from a green check:
+
+| Fact | Evidence |
+|---|---|
+| The apply attached to the **new** Environment | A deployment record for environment `main-staging` created at 10:33:44Z — the first ever under that name; every prior record reads `staging` |
+| It did **not** wait for a reviewer | `plan (main-staging)` completed 10:33:36Z, `apply (main-staging)` started 10:33:47Z and completed 10:33:59Z — eleven seconds, no pause |
+| Production was not touched | Only `main-staging` appears in the run's jobs, which is the affected-stack rule working: the merge changed `terraform/stacks/main-staging/` and no other stack directory |
+
+**That staging applies unattended is the design, not a defect**, and it is what makes staging worth using as a canary: the whole create-populate-verify-flip-observe sequence has now been exercised where a mistake costs a re-run rather than a production approval.
+
+It also exercised the re-entered `HCLOUD_TOKEN` and `TF_API_TOKEN` on `main-staging` — a successful `terraform apply` cannot be reached with either of those wrong. What it does **not** exercise is the converge key, the vault password or the Tailscale pair, which is why task 4.8 dispatches a staging converge before production's half begins.
+
+**Performed during the GitHub incident** and succeeded anyway: Actions was `degraded_performance` and Pull Requests `major_outage` when the pull request was opened, yet every check and both jobs completed. The pull request body records that window so a later reader does not mistake the timing for a cause.
+
 ## Incidental observations, recorded rather than acted on
 
 - The tailnet machine names are `main-production` and `main-staging` — the stack names, per `docs/naming-conventions.md`'s rule that a server's name reaches the tailnet and therefore carries its stack. The hosts' own hostnames are `shatynska-main-production` and `shatynska-main-staging`, templated by the converge from the `company` group variable. Both are correct under the scheme and the divergence is deliberate; noted because reading the two side by side invites the conclusion that one of them is wrong.
