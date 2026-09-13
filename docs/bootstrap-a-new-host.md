@@ -67,7 +67,7 @@ Follow `README.md`, "Local setup", steps 1 to 5. Step 5 installs Ansible into a 
 
 Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two **purposes**; each has a different holder and a different blast radius.
 
-**A purpose may span both stacks, and several do** — the operator key most obviously; §0.4 lists the rest. Both stack directories in this repository carry the same `ssh_public_key`, and that is deliberate rather than an oversight: the key authorises `root` on hosts this repository can recreate in their entirety, both are reached by the same operator, and a second private half would be one more thing to hold, rotate and lose for no gain. What must never be shared is a key across *purposes* — the operator key, the inspection key, the platform deploy keys and each application's deploy key stay distinct, because those have different holders. The platform deploy key is the one whose *purpose* differs per stack, so it is two keys rather than one; the table below has a row for each. If you decide otherwise for your company, generate a second operator key and put its public half in the second stack's `terraform.tfvars`; nothing else changes.
+**A purpose may span both stacks, and several do** — the operator key most obviously; §0.4 lists the rest. Both stack directories in this repository carry the same `ssh_public_key`, and that is deliberate rather than an oversight: the key authorises `root` on hosts this repository can recreate in their entirety, both are reached by the same operator, and a second private half would be one more thing to hold, rotate and lose for no gain. What must never be shared is a key across *purposes* — the operator key, the inspection key, the platform deploy keys and each application's deploy key stay distinct, because those have different holders. Two purposes differ per deploy target rather than spanning both: the platform deploy key and each application's, so each is one key per deploy target rather than one key, and the table below has a row for each — the platform row spelling that target as the stack and the application row as the environment, a discrepancy `docs/backlog.md` entry 51 carries rather than one to resolve in passing. The application row read "one deploy key per application" while the platform stack reached one host; `deploy-the-platform-stack-per-environment` ended that, and the real shape is a grid — several applications across several environments, each cell a keypair of its own. If you decide otherwise for your company, generate a second operator key and put its public half in the second stack's `terraform.tfvars`; nothing else changes.
 
 **`<company>` in every path below is a literal, and `~/.ssh/` is the only place one belongs.** Every other namespace this repository writes into already belongs to one company — the Hetzner account, the HCP organisation, this repository's own clone, the tailnet, the heartbeat account — so nothing inside those carries a company segment, and §1.1 and §7.1 say so where it would otherwise be tempting. A workstation is the exception: it belongs to *you*, and yours may operate a second company tomorrow, so `~/.ssh/` is the one namespace two companies share and the filename is the only thing keeping their operator keys apart. The same reasoning covers the SSH alias you give each host and the directory you check this repository out into. `docs/naming-conventions.md`, *The workstation*, is the full list, with a second company worked through beside the first.
 
@@ -76,7 +76,7 @@ Generate each with `ssh-keygen -t ed25519`. Never reuse one key for two **purpos
 | Operator key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-root -C "<you>@<company> root"` | Yes | Your workstation only. This is `root` on **both** servers. |
 | Operator inspection key | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ops -C "ops-<you>"` | Yes | Your workstation. Unprivileged login, used daily instead of root. Configured on **both** hosts, in stage 6. |
 | Platform deploy key — **one per stack** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-platform-<stack> -N "" -C "deploy@platform-<stack>"` | **No** (CI cannot type one) | That stack's own Environment secret `PLATFORM_DEPLOY_SSH_KEY` (stage 6.4); delete the local file once it is stored. **One key per stack, never one shared**: the public half is committed in that environment's `group_vars`, and one leaked private half must deploy to one host |
-| One deploy key per application | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-deploy -N "" -C "<app>-deploy"` | **No** | That application's GitHub secret only; delete the local file once it is stored |
+| Application deploy key — **one per application per environment** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-<environment> -N "" -C "<app>-deploy-<environment>"` | **No** | That application repository's Environment secret for that deploy target only; delete the local file once it is stored. **The environment, not the stack** — the entry it authorises lives in `ansible/inventory/group_vars/<environment>.yml`, and one leaked private half must deploy to one host |
 | Converge key — **one per stack** | `ssh-keygen -t ed25519 -f ~/.ssh/<company>-ansible-ci-<stack> -N "" -C "ansible-ci-<stack>"` | **No** (CI cannot type one) | That stack's GitHub Environment secret `ANSIBLE_SSH_PRIVATE_KEY` (stage 6.6); delete the local private half once it is stored. The public half is appended to `root`'s `authorized_keys` on that stack's host — see below |
 
 Keep the `.pub` halves; they are committed to the repository in later stages and are not secret.
@@ -101,7 +101,7 @@ Two servers do not mean two of everything. This table is the whole answer, so th
 
 **If you decided on one stack** (see the note above stage 1), read this table's "How many" column as its smaller number throughout: one Hetzner project, two tokens rather than four, one workspace, one Vault password, one GitHub Environment, one platform deploy keypair. The rows already marked "1, shared" do not change — they were never per stack.
 
-Covers stages 0 to 6. Two things sit outside it deliberately: stage 7's platform-stack secrets, a set of nine per stack, listed at §7.3 and Appendix A — `PLATFORM_DEPLOY_HOST` and `PLATFORM_DEPLOY_SSH_KEY` are created at stage 6.4 and belong to that same set; and §0.3's last row, one deploy key per application, which belongs to stage 8.
+Covers stages 0 to 6. Two things sit outside it deliberately: stage 7's platform-stack secrets, a set of nine per stack, listed at §7.3 and Appendix A — `PLATFORM_DEPLOY_HOST` and `PLATFORM_DEPLOY_SSH_KEY` are created at stage 6.4 and belong to that same set; and §0.3's application deploy key, one per application per environment, which belongs to stage 8.
 
 | Thing | How many | What proves it |
 |---|---|---|
@@ -940,11 +940,11 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 ### 8.2 Infrastructure side
 
 1. Generate the application's deploy key (stage 0.3 table).
-2. Add to `deploy_apps` in `ansible/inventory/group_vars/production.yml` (and, once an application has a staging deploy path, to `staging.yml` with a keypair of its own):
+2. Add to `deploy_apps` in the `group_vars` of **every environment the application deploys to**, each with a keypair of its own. The entry lands **before** that environment's deploy path exists in the application's repository, not after: the entry needs a converge before the application's deploy can authenticate, so a repository that is ready first waits on an infrastructure pull request rather than the reverse.
 
    ```yaml
    - name: <app>
-     public_key: "ssh-ed25519 AAAA... <app>-deploy"
+     public_key: "ssh-ed25519 AAAA... <app>-deploy-<environment>"
    ```
 
 3. Open a pull request, merge it, then run the playbook (stage 6.3, the tailnet key may be omitted now that the host has joined). This creates `/opt/<app>`, the forced-command `authorized_keys` line, and the sudoers rule that lets that key trigger `app-deploy <app>` and nothing else.
@@ -974,8 +974,8 @@ In the application repository:
 
 1. **Anything your Compose file persists — a volume, named or anonymous, or a writable bind mount — has to say why it needs no backup.** Name which reason in *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) the store satisfies, in the change that adds it; a store satisfying none owes a logical backup written off this host and a rehearsed, checked restore before it first holds data. This catches the store a bumped image newly declares as much as one you wrote.
 2. A `Dockerfile` and a `docker-compose.yml` whose web service joins the external network `platform_edge` and carries the Traefik labels shown in `platform/README.md`, "Joining the platform network", with its hostname and its container port. Use `env_file: .env` for runtime secrets and `image: ghcr.io/<org>/<app>:${IMAGE_TAG}`.
-2. A `production` Environment with a required reviewer, as in stage 3.2. The name is the application repository's own: it has one deploy target and no stacks, so `production` is right for it however this repository's Environments are eventually named.
-3. A deploy workflow on push to `main` with two jobs, copied from commerce-ops: a `build-and-push` job (`permissions: packages: write`, `docker/login-action` with `GITHUB_TOKEN`, `docker/build-push-action` tagging the image with `github.sha`), then a `deploy` job on the `production` Environment that joins the tailnet with `tailscale/github-action`, renders `.env` from secrets (including `IMAGE_TAG=${{ github.sha }}`), and runs:
+2. One Environment per deploy target, each with the reviewer that target warrants, as in stage 3.2. The names are the application repository's own — `production` for the production host, `staging` for a staging one — and they sit on the environment axis whatever this repository's own Environments are called. An application deploying to one host needs one; the shape below repeats per Environment, which is what keeps one private half to one host.
+3. A deploy workflow on push to `main` with two jobs, copied from commerce-ops — **one `deploy` job per target**, each naming its own Environment, since an Environment is what selects which host's `DEPLOY_HOST` and deploy key the job resolves: a `build-and-push` job (`permissions: packages: write`, `docker/login-action` with `GITHUB_TOKEN`, `docker/build-push-action` tagging the image with `github.sha`), then a `deploy` job on **that target's** Environment that joins the tailnet with `tailscale/github-action`, renders `.env` from secrets (including `IMAGE_TAG=${{ github.sha }}`), and runs:
 
    ```sh
    tar -czf - docker-compose.yml .env | ssh -i ~/.ssh/deploy_key deploy@${{ secrets.DEPLOY_HOST }}
@@ -985,13 +985,13 @@ In the application repository:
 
 4. A DNS `A` record for the hostname (stage 4.4). Traefik requests the certificate on the first request to it.
 
-**Secrets created in this stage**, all in the application repository's `production` Environment:
+**Secrets created in this stage**, in the application repository's Environment **for each deploy target** — the whole table repeats per Environment, and the last three rows take that target's own values:
 
 | Name | Value from |
 |---|---|
 | `TAILSCALE_OAUTH_CLIENT_ID`, `TAILSCALE_OAUTH_SECRET` | The same OAuth client as stage 5, or a second one with the same tag |
-| `DEPLOY_HOST` | The server's tailnet IPv4, same value as `PLATFORM_DEPLOY_HOST` |
-| `<APP>_DEPLOY_SSH_KEY` | The private half of the key from 8.2; delete the local file after storing |
+| `DEPLOY_HOST` | That target's server's tailnet IPv4, same value as that stack's `PLATFORM_DEPLOY_HOST` |
+| `<APP>_DEPLOY_SSH_KEY` | The private half of **that target's** key from 8.2 — one per application per environment, never one shared; delete the local file after storing |
 | `POSTGRES_PASSWORD` and the application's own settings | 8.3, and whatever the application needs |
 
 **Check:** the deploy run is green; `https://<hostname>` answers with a valid certificate; the application appears on Grafana's "Application HTTP error rates" dashboard after its first requests; `docker ps` shows the application's containers `(healthy)`.
@@ -1070,7 +1070,7 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | `PLATFORM_DEADMANSWITCH_URL` | **Each** stack's Env secret | 7 | Heartbeat service, **a check per stack** | The external alarm. One check fed by two hosts stays green while either is alive |
 | `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in each `group_vars/<environment>.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
 | `APP_CLIENT_ID` / `APP_PRIVATE_KEY` | **Repo** secrets | 3 | The GitHub App (§3.2) — client id from its settings page, private key downloaded once at creation | The weekly hook-update pull request stops being opened, and **nothing says so**: the workflow's heartbeat check reports that the *run* happened, not that a pull request came out of it, so a run that fails at the minting step still looks like a job that had nothing to do. Hook revisions then quietly stop being updated. The key does not expire; the App being uninstalled or its key revoked is what breaks it |
-| `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys |
+| `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys. **One set per deploy target** — a different key and a different host in each, like the per-stack rows above |
 
 `HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `main-production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.
 
