@@ -9,9 +9,9 @@ artifacts move when it is archived, and this repository's citation convention is
 to name the change and the artifact in prose instead.
 
 Four capabilities are reached below. `iac-cicd-pipeline`'s *Each Stack Declares
-Its Own Pipeline Configuration* (ADDED, replacing *Each Environment Declares Its
-Own Pipeline Configuration*) gains the third required field and the two
-scenarios that govern it. `iac-host-configuration`'s *Dynamic Inventory via the
+Its Own Pipeline Configuration* (ADDED, replacing the requirement of the same
+subject that named the environment axis) gains the third required field and the
+two scenarios that govern it. `iac-host-configuration`'s *Dynamic Inventory via the
 hcloud Plugin, One Source per Stack* (ADDED) separates the source's name from
 the group's. `iac-repo-foundations`' *Stack and Module Folder Structure* (ADDED)
 states that a stack's directory name is not to be read as any axis it carries.

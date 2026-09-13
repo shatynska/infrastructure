@@ -565,12 +565,12 @@ class TestEachEnvironmentHasAWorkspaceOfItsOwn(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-state-management / Each Environment Has a Dedicated Hetzner Cloud Project
+# iac-state-management / Each Stack Has a Dedicated Hetzner Cloud Project
 # --------------------------------------------------------------------------
 
 
 class TestIdenticalResourceNamesAcrossEnvironmentsAreKept(unittest.TestCase):
-    """ADDED requirement: Each Environment Has a Dedicated Hetzner Cloud
+    """ADDED requirement: Each Stack Has a Dedicated Hetzner Cloud
     Project (iac-state-management).
 
     "Resource names are unique per project rather than globally, so
@@ -665,12 +665,12 @@ class TestIdenticalResourceNamesAcrossEnvironmentsAreKept(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-repo-foundations / Environment and Module Folder Structure
+# iac-repo-foundations / Stack and Module Folder Structure
 # --------------------------------------------------------------------------
 
 
 class TestEveryEnvironmentConsumesTheSharedModules(unittest.TestCase):
-    """MODIFIED requirement: Environment and Module Folder Structure
+    """MODIFIED requirement: Stack and Module Folder Structure
     (iac-repo-foundations).
 
     "Environments consume modules by relative path, which means every
@@ -762,7 +762,7 @@ class TestEveryEnvironmentConsumesTheSharedModules(unittest.TestCase):
 
 
 class TestNoEnvironmentsApplyWaitsOnAnother(unittest.TestCase):
-    """MODIFIED requirement: Environment and Module Folder Structure
+    """MODIFIED requirement: Stack and Module Folder Structure
     (iac-repo-foundations).
 
     "**Promotion ordering is not a property of the apply workflow.** A merge

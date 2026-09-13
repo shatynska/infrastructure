@@ -474,13 +474,13 @@ class WorkflowLocatorMixin:
 
 
 # --------------------------------------------------------------------------
-# iac-cicd-pipeline / Each Environment Declares Its Own Pipeline Configuration
+# iac-cicd-pipeline / Each Stack Declares Its Own Pipeline Configuration
 # (MODIFIED) -- the read-only secret's name
 # --------------------------------------------------------------------------
 
 
 class TestNoDeclarationNamesTheWriteTokensOwnName(unittest.TestCase):
-    """MODIFIED requirement: Each Environment Declares Its Own Pipeline
+    """MODIFIED requirement: Each Stack Declares Its Own Pipeline
     Configuration -- scenario "A declaration naming the write token's own name
     is refused".
 
@@ -557,12 +557,12 @@ class TestNoDeclarationNamesTheWriteTokensOwnName(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-host-configuration / Dynamic Inventory via hcloud Plugin (MODIFIED)
+# iac-host-configuration / Dynamic Inventory via the hcloud Plugin, One Source per Stack (MODIFIED)
 # --------------------------------------------------------------------------
 
 
 class TestASourcesCredentialVariableIsTheNameTheEnvironmentDeclares(unittest.TestCase):
-    """MODIFIED requirement: Dynamic Inventory via hcloud Plugin -- scenario "A
+    """MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenario "A
     source's credential variable is the name the environment declares"."""
 
     def setUp(self) -> None:
@@ -620,7 +620,7 @@ class TestASourcesCredentialVariableIsTheNameTheEnvironmentDeclares(unittest.Tes
 
 
 class TestAnEnvironmentThatCanBeProvisionedCanBeConverged(unittest.TestCase):
-    """MODIFIED requirement: Dynamic Inventory via hcloud Plugin -- scenario "An
+    """MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenario "An
     environment that can be provisioned but not converged is reported", and the
     clause "An environment that carries a pipeline declaration SHALL carry an
     inventory source and a variables file of its own"."""

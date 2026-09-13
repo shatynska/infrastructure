@@ -144,6 +144,13 @@ def _named_spans(text: str) -> list[str]:
 #       fixture trees in its discriminating class do, and the next person to add
 #       a literal here should not have to also add the exemption.
 #
+#   `docs/deferred-work.md` -- the retirement itself is the subject. Its entry
+#       on requirements still stated over prod alone records that
+#       `add-a-staging-environment` renamed *Dedicated Hetzner Cloud Project for
+#       Prod*, which is a statement about the rename rather than a citation of
+#       the requirement. Unlike the one below it, this exemption does not expire:
+#       the record stays true.
+#
 #   `docs/change-queue.md` -- EXPIRES. Entry 74 names *Each Environment Has a
 #       Dedicated Hetzner Cloud Project*, because naming the stale citation is
 #       what that entry is for, and a queue entry is deleted only when its change
@@ -169,6 +176,7 @@ THIS_MODULE_PATH = ".github/tests/test_the_retired_requirement_names_are_gone.py
 EXEMPT_PATHS: tuple[str, ...] = (
     THIS_MODULE_PATH,
     "docs/change-queue.md",
+    "docs/deferred-work.md",
 )
 
 # Files the sweep must reach for a green result to mean anything -- one per

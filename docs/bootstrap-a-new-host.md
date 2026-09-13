@@ -103,7 +103,7 @@ Covers stages 0 to 6. Three things sit outside it deliberately: stage 7's platfo
 | Operator inspection key | **1**, shared | Both `group_vars` files carry the same `ops_user_accounts` entry |
 | Platform deploy keypair | **2** | Each stack's `deploy_apps` carries a `platform` entry, and the two public keys differ |
 | Converge keypair | **2** | Each stack's GitHub Environment carries an `ANSIBLE_SSH_PRIVATE_KEY` of its own (§6.6). Nothing in this repository proves it, which is what §0.3 says about that key: its public half is installed on the host by hand and is committed nowhere |
-| Hetzner project | **2** | §1.1, and *Each Environment Has a Dedicated Hetzner Cloud Project* (`openspec/specs/iac-state-management/spec.md`) |
+| Hetzner project | **2** | §1.1, and *Each Stack Has a Dedicated Hetzner Cloud Project* (`openspec/specs/iac-state-management/spec.md`) |
 | Hetzner API token | **4** — read-only and read-write per project | §1.2. **Not six:** each read-only token is *also* exported under a second variable name for Ansible, and a second name is not a second token |
 | HCP workspace | **2** | The two `versions.tf` name `main-production` and `main-staging` |
 | `TF_API_TOKEN` | **1**, shared | *HCP Terraform Access via a Static Token, Unsplit by Privilege* (same spec file), cited for "one value, unsplit by privilege" and not for where it is stored — that requirement predates staging and names only `production`, while §3.3 now sets the token on both Environments |

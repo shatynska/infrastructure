@@ -8,7 +8,7 @@ instead.
 
 Every requirement below belongs to `iac-host-configuration`
 (openspec/specs/iac-host-configuration/spec.md). Three are in the change's
-delta: *Dynamic Inventory via hcloud Plugin* (MODIFIED), *Host Configuration
+delta: *Dynamic Inventory via the hcloud Plugin, One Source per Stack* (MODIFIED), *Host Configuration
 Names the Environment It Targets* (ADDED) and *A Run Whose Target Group Resolves
 to No Host Refuses* (ADDED). Each section below names the one it traces to, and
 every assertion is annotated SPECIFIED (it traces to SHALL text or to a scenario
@@ -464,12 +464,12 @@ def condition_variables(conditions: list[str]) -> set[str]:
 
 
 # ==========================================================================
-# iac-host-configuration / Dynamic Inventory via hcloud Plugin (MODIFIED)
+# iac-host-configuration / Dynamic Inventory via the hcloud Plugin, One Source per Stack (MODIFIED)
 # ==========================================================================
 
 
 class TestEachEnvironmentHasAnInventorySourceOfItsOwn(unittest.TestCase):
-    """MODIFIED requirement: Dynamic Inventory via hcloud Plugin -- scenario
+    """MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenario
     "An environment's source reaches only its own project"."""
 
     def setUp(self) -> None:
@@ -593,7 +593,7 @@ class TestEachEnvironmentHasAnInventorySourceOfItsOwn(unittest.TestCase):
 
 
 class TestAFurtherEnvironmentIsAddedRatherThanEditedIn(unittest.TestCase):
-    """MODIFIED requirement: Dynamic Inventory via hcloud Plugin -- scenario "A
+    """MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenario "A
     further environment is brought into inventory"."""
 
     def test_the_inventory_sources_differ_only_in_the_credential_they_name(self) -> None:
@@ -640,7 +640,7 @@ class TestAFurtherEnvironmentIsAddedRatherThanEditedIn(unittest.TestCase):
 
 
 class TestANamedInventorySourceIsWhatMakesARunReachAnEnvironment(unittest.TestCase):
-    """MODIFIED requirement: Dynamic Inventory via hcloud Plugin -- scenarios
+    """MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenarios
     "An environment's source reaches only its own project" and "An inventory
     source cannot authenticate"."""
 
@@ -729,7 +729,7 @@ class TestANamedInventorySourceIsWhatMakesARunReachAnEnvironment(unittest.TestCa
 
 
 class TestInventoryIsResolvedLiveRatherThanFromACommittedFile(unittest.TestCase):
-    """MODIFIED requirement: Dynamic Inventory via hcloud Plugin -- scenarios
+    """MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenarios
     "Inventory resolved live from Hetzner" and "Disabled server yields no stale
     inventory entry".
 
