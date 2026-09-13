@@ -61,6 +61,35 @@ That is the third time this change priced work against a document saying a value
 
 This is no longer this change's problem, because this change no longer revokes anything. It is recorded here rather than discarded because it remains true and it is the kind of fact that is expensive to rediscover: **whoever eventually rotates that OAuth client must treat `commerce-ops` as a holder**, and a secret's value cannot be read back, so no API call can establish whether it is the same client or a second one with the same tag. Only the Tailscale console can.
 
+## Section 3, partial — two of six written 2026-09-13, during a GitHub incident
+
+`main-staging` was created by the operator at 08:49:39Z and carries **no protection rules**, which is correct: staging is ungated by design.
+
+Two of its six secrets are written and verified, both from sources this session holds:
+
+| Secret | Source | `updated_at` |
+|---|---|---|
+| `ANSIBLE_SSH_PRIVATE_KEY` | `~/.ssh/shatynska-ansible-ci-main-staging` | 2026-09-13T08:56:03Z |
+| `TF_API_TOKEN` | `~/.terraform.d/credentials.tfrc.json` | 2026-09-13T08:56:16Z |
+
+Four remain and are the operator's: `ANSIBLE_VAULT_PASSWORD`, `HCLOUD_TOKEN` (staging's **Read & Write** token, not the read-only repository secret of a similar name), `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`.
+
+### `gh secret set` reported failure on writes that succeeded
+
+Measured rather than inferred, and worth keeping because it inverts the obvious reading of an error.
+
+GitHub's secrets service was degraded throughout: the web UI answered *"Failed to load secrets"*, and the REST list endpoint returned `500`/`502` for every Environment holding secrets while answering instantly for an empty one. The repository-level list took 8.4s against a normal 0.4s. GitHub's status page reported all systems operational the whole time.
+
+**Both writes to `ANSIBLE_SSH_PRIVATE_KEY` returned `HTTP 502`, and the secret exists.** A read taken immediately after the first attempt reported the Environment still empty, which read as confirmation that the write had failed; it had not. The `updated_at` of `08:56:03Z` belongs to the **second** attempt, which also reported `502`. The list endpoint then failed for several minutes before returning `2`.
+
+So, for the four writes still to come and for section 6's fifteen:
+
+- **A `5xx` is not evidence the write failed.** Verify by `updated_at`, never by exit status.
+- **A read immediately after a write is not evidence either.** The list endpoint lagged the write by minutes.
+- **Re-running a write was safe here only because the value was identical.** Two attempts with different values would have left the later one winning silently, with the error suggesting neither had.
+
+This is why task 6.3 reads `updated_at` rather than the name list — an addition the fifth review round made for a different reason (a name list cannot distinguish a write from a name already present) which turns out to be the only reliable signal here too.
+
 ## Incidental observations, recorded rather than acted on
 
 - The tailnet machine names are `main-production` and `main-staging` — the stack names, per `docs/naming-conventions.md`'s rule that a server's name reaches the tailnet and therefore carries its stack. The hosts' own hostnames are `shatynska-main-production` and `shatynska-main-staging`, templated by the converge from the `company` group variable. Both are correct under the scheme and the divergence is deliberate; noted because reading the two side by side invites the conclusion that one of them is wrong.
