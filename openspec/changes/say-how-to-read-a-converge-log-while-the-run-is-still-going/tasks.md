@@ -5,7 +5,7 @@ Verification for a docs-only change is the static suite from the repository root
 
 ## 1. §6.6 — how to read staging's converge while production's is still waiting
 
-- [ ] 1.1 At the check paragraph that already says *"Read staging's before approving production's"*, give the route that works: `gh run view <run> --json jobs` for the job's id, then `gh api repos/{owner}/{repo}/actions/jobs/<job id>/logs`. Print it as a copy-pasteable block that selects the staging job **by name rather than by position**, since the jobs are not ordered by stack.
+- [x] 1.1 At the check paragraph that already says *"Read staging's before approving production's"*, give the route that works: `gh run view <run> --json jobs` for the job's id, then `gh api repos/{owner}/{repo}/actions/jobs/<job id>/logs`. Print it as a copy-pasteable block that selects the staging job **by name rather than by position**, since the jobs are not ordered by stack.
 
       Two things the block must get right, each of which fails silently if it does not:
 
@@ -13,15 +13,25 @@ Verification for a docs-only change is the static suite from the repository root
       - **Say where `<run>` comes from.** The check paragraph precedes the dispatch block that prints `gh run list --workflow host-converge.yml --limit 1`, so a reader at this point has no run id in hand. Put the lookup in the same block, or point forward to that command.
 
       Verify each command as written against run `34739844834`, which still exists: the `{owner}/{repo}` placeholders are `gh`'s own and resolve from the checkout, and with the placeholder filled as `converge (main-staging)` the `-q '.jobs[] | select(.name == "<name>") | .databaseId'` query returns `103677602494` — that literal belongs in this task as the measurement, not in the document as the instruction.
-- [ ] 1.2 Name the refusal in the same place, with its message, and say that `--job <id>` does not lift it — it is a property of the run. A reader who reaches for `gh run view --log` first must recognise what came back rather than diagnose it as a permission problem or their own timing error. Evidence: the measurement above; do not claim it was reproduced while writing this change, because it was not and cannot be without a run in flight.
-- [ ] 1.3 Give the second route and say which job each one is for: the **web interface** streams a *running* job's log live, so it is what you use for production's own converge as it happens, where the API route has nothing to serve yet. The API route is for a job that has **finished** inside a run that has not, which is exactly staging's position at the moment §6.6 tells you to read it.
-- [ ] 1.4 Keep all of it in §6.6, beside the instruction it rescues, rather than in a new subsection or an appendix — the reader who needs it is mid-stage and already there. Cite nothing by a path under `openspec/changes/`; verify the citation form by `python3 -m unittest discover --start-directory .github/tests` passing, which enforces it.
+- [x] 1.2 Name the refusal in the same place, with its message, and say that `--job <id>` does not lift it — it is a property of the run. A reader who reaches for `gh run view --log` first must recognise what came back rather than diagnose it as a permission problem or their own timing error. Evidence: the measurement above; do not claim it was reproduced while writing this change, because it was not and cannot be without a run in flight.
+- [x] 1.3 Give the second route and say which job each one is for: the **web interface** streams a *running* job's log live, so it is what you use for production's own converge as it happens, where the API route has nothing to serve yet. The API route is for a job that has **finished** inside a run that has not, which is exactly staging's position at the moment §6.6 tells you to read it.
+- [x] 1.4 Keep all of it in §6.6, beside the instruction it rescues, rather than in a new subsection or an appendix — the reader who needs it is mid-stage and already there. Cite nothing by a path under `openspec/changes/`; verify the citation form by `python3 -m unittest discover --start-directory .github/tests` passing, which enforces it.
 
 ## 2. Verification
 
-- [ ] 2.1 `python3 -m unittest discover --start-directory .github/tests` from the repository root, passing — the suite that holds this repository's citation form and its repository-wide conventions, to which the prose added here is subject.
-- [ ] 2.2 `pre-commit run --all-files`, passing. Note what it does not establish: no hook reads prose for truth, so every sentence added here rests on the evidence its task names.
-- [ ] 2.3 Read §6.6 end to end as an operator meeting it for the first time, and confirm that every command the section prints has been executed in the form it prints — the two this change adds were, in this session, against run `34739844834`. That obligation is the one `align-the-bootstrap-doc-with-a-real-run` set for stage 6 and this change is subject to it too.
+- [x] 2.1 `python3 -m unittest discover --start-directory .github/tests` from the repository root, passing — the suite that holds this repository's citation form and its repository-wide conventions, to which the prose added here is subject.
+- [x] 2.2 `pre-commit run --all-files`, passing. Note what it does not establish: no hook reads prose for truth, so every sentence added here rests on the evidence its task names.
+- [x] 2.3 Read §6.6 end to end as an operator meeting it for the first time, and confirm that every command the section prints has been executed in the form it prints — the two this change adds were, in this session, against run `34739844834`. That obligation is the one `align-the-bootstrap-doc-with-a-real-run` set for stage 6 and this change is subject to it too.
+
+## Verification record
+
+**2.1** `python3 -m unittest discover --start-directory .github/tests` — 1006 tests, OK, on the provisioned working tree. **2.2** `pre-commit run --all-files` — every hook passes. Neither establishes that a sentence is true; what follows is what does.
+
+**2.3 — every command §6.6's new passage prints was executed in the form it prints**, in this session, against run `34739844834`: the run lookup (`gh run list --workflow host-converge.yml --limit 1 --json databaseId -q '.[0].databaseId'`, which returned `34754451746`, the newest converge run); the job selection, which returned `103677602494` with the placeholder filled as `converge (main-staging)`; `gh api "repos/{owner}/{repo}/actions/jobs/$job/logs"`, 912 lines carrying the `converging`, `SUCCESS => { "msg": … }` and `PLAY RECAP` lines; and the fallback `gh run view "$run" --json jobs -q '.jobs[].name'`, which printed `discover`, `publish`, `converge (main-staging)`, `converge (main-production)`.
+
+The one command the passage names and does **not** instruct — `gh run view <run> --log` — was not re-run in its refusing form, and could not be: that needs a run in flight. It is quoted from entry 82's measurement and task 1.2 forbade claiming otherwise.
+
+**A claim in task 1.1 was wrong and the document says the measured thing instead.** The task asserted that a stack name matching nothing makes `gh` "exit **0** with no output". Measured on 2026-09-13: the `select` exits 0 with an empty `$job`, but the request that follows then asks for a job with no id and fails — `gh: Not Found (HTTP 404)`, exit 1. The failure is therefore *displaced* rather than silent, which is worse in the way this change cares about: a 404 reads as a missing log or a permissions problem, not as a mistyped stack name. §6.6 states it that way, with the fallback that distinguishes the two.
 
 ## 3. Ship
 
@@ -36,3 +46,8 @@ Verification for a docs-only change is the static suite from the repository root
 - [ ] 3.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`, deleting `docs/change-queue.md` entry 82 in the same commit. Verify `openspec validate --archived` passes.
 
 Opening the record's own pull request, and removing the branch and the working tree once it merges, happen after the commit that writes this file, so they are recorded in prose here rather than as tasks that could never be ticked in the file containing them.
+
+## Not performed
+
+- The `build` stage's independent code review of the committed diff, which `AGENTS.md` prescribes and binds to `ai-toolkit:change-code-reviewer`.
+  Reason: the operator instructed mid-change that no further review was to be dispatched. The gate is stated here rather than quietly skipped, and what stands in its place is named: the plan review that ran before implementation returned CONDITIONALLY APPROVED and its six `[MINOR]` fixes were applied; the diff is one documentary passage touching no executable file; and every command that passage prints was executed in the form it prints and is recorded above. None of that is a substitute for a reviewer reading the diff, which is why it is disclosed.
