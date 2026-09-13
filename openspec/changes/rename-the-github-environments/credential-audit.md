@@ -61,18 +61,32 @@ That is the third time this change priced work against a document saying a value
 
 This is no longer this change's problem, because this change no longer revokes anything. It is recorded here rather than discarded because it remains true and it is the kind of fact that is expensive to rediscover: **whoever eventually rotates that OAuth client must treat `commerce-ops` as a holder**, and a secret's value cannot be read back, so no API call can establish whether it is the same client or a second one with the same tag. Only the Tailscale console can.
 
-## Section 3, partial — two of six written 2026-09-13, during a GitHub incident
+## Section 3, complete — `main-staging` built 2026-09-13, during a GitHub incident
 
 `main-staging` was created by the operator at 08:49:39Z and carries **no protection rules**, which is correct: staging is ungated by design.
 
-Two of its six secrets are written and verified, both from sources this session holds:
+All six secrets are written and verified by `updated_at`, and the name list equals `staging`'s from 1.2 exactly:
 
-| Secret | Source | `updated_at` |
+| Secret | Written by | `updated_at` |
 |---|---|---|
-| `ANSIBLE_SSH_PRIVATE_KEY` | `~/.ssh/shatynska-ansible-ci-main-staging` | 2026-09-13T08:56:03Z |
-| `TF_API_TOKEN` | `~/.terraform.d/credentials.tfrc.json` | 2026-09-13T08:56:16Z |
+| `ANSIBLE_SSH_PRIVATE_KEY` | this session, from `~/.ssh/shatynska-ansible-ci-main-staging` | 08:56:03Z |
+| `TF_API_TOKEN` | this session, from `~/.terraform.d/credentials.tfrc.json` | 08:56:16Z |
+| `ANSIBLE_VAULT_PASSWORD` | operator | 09:34:05Z |
+| `TAILSCALE_OAUTH_CLIENT_ID` | operator | 09:36:05Z |
+| `TAILSCALE_OAUTH_SECRET` | operator | 09:36:29Z |
+| `HCLOUD_TOKEN` | operator | 09:37:20Z |
 
-Four remain and are the operator's: `ANSIBLE_VAULT_PASSWORD`, `HCLOUD_TOKEN` (staging's **Read & Write** token, not the read-only repository secret of a similar name), `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`.
+`main-staging` carries **no protection rules**, matching `staging`'s deliberate ungated design, and was created at 08:49:39Z.
+
+### The GitHub incident this section was performed during
+
+GitHub posted **"Incident with several GitHub Services"** at 09:16:11Z, impact **critical**, affecting *API Requests, Issues, Pull Requests, Actions and Pages*. Its 09:36Z update named the cause: *"increased database replication delays on collab which is causing increased error rates in authorization endpoints and follow-on increased error rates across the system"*.
+
+**The errors were visible from this session well before the incident was posted**, which is the normal lag rather than a contradiction — an earlier check of the status page during the same failures reported all systems operational. A status page saying nothing is wrong is not evidence that nothing is wrong.
+
+It was established as GitHub's rather than this change's by four reads: `staging`'s secrets failed although neither the operator nor this session had touched that Environment all day; `commerce-ops`, a different repository entirely, failed the same way; non-Actions endpoints on this repository answered instantly; and repository-level secrets still answered. One component failing across several repositories is the opposite signature from a repository this change had damaged.
+
+**Replication lag is why the reads disagreed with themselves**, and it bounds how far to trust them. A lagging replica can hide a write that happened; it cannot invent one that did not. So the six names reading back with today's timestamps is trustworthy in the direction that matters, while the earlier read showing an empty Environment after a successful write is exactly what a stale replica looks like.
 
 ### `gh secret set` reported failure on writes that succeeded
 
