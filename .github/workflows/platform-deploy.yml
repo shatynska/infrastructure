@@ -76,22 +76,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Nothing in this step's body is an `${{ }}` expression: the dispatch
-      # input arrives through `env:` below. An interpolated expression is
-      # substituted as TEXT before bash parses the line, and .github/tests
-      # executes this body against a scratch tree, which it could not do if
-      # the body only made sense after GitHub had rewritten it.
-      #
-      # THIS BODY IS DELIBERATELY NOT IDENTICAL TO THE TERRAFORM DISCOVERY
-      # BODY, nor to host-converge.yml's. It reads a field none of them read
-      # and emits two columns where they emit three or four, so it falls
-      # outside the identity assertion in .github/tests, which stays covering
-      # the three Terraform workflows exactly as it does today. What it DOES
-      # share with them is the `field()` reader, the control-character
-      # refusal, the empty-result refusal and the JSON emission -- the overlap
-      # is idiom rather than accident. Five near-siblings now exist where the
-      # decision to keep three was taken; docs/backlog.md carries the entry
-      # that would collapse them.
       # ITS OWN STEP, AND FIRST. A push to `main` can only be `main`; a
       # dispatch is whatever ref was chosen, and `actions/checkout` takes it --
       # so without this the deploy would ship an unmerged branch's stack
@@ -119,6 +103,22 @@ jobs:
             exit 1
           fi
 
+      # Nothing in this step's body is an `${{ }}` expression: the dispatch
+      # input arrives through `env:` below. An interpolated expression is
+      # substituted as TEXT before bash parses the line, and .github/tests
+      # executes this body against a scratch tree, which it could not do if
+      # the body only made sense after GitHub had rewritten it.
+      #
+      # THIS BODY IS DELIBERATELY NOT IDENTICAL TO THE TERRAFORM DISCOVERY
+      # BODY, nor to host-converge.yml's. It reads a field none of them read
+      # and emits two columns where they emit three or four, so it falls
+      # outside the identity assertion in .github/tests, which stays covering
+      # the three Terraform workflows exactly as it does today. What it DOES
+      # share with them is the `field()` reader, the control-character
+      # refusal, the empty-result refusal and the JSON emission -- the overlap
+      # is idiom rather than accident. Five near-siblings now exist where the
+      # decision to keep three was taken; docs/backlog.md carries the entry
+      # that would collapse them.
       - name: Discover the stacks the platform stack is deployed to
         id: discover
         env:
