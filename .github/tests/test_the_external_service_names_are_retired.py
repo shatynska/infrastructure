@@ -487,10 +487,13 @@ class TestTheDeployGateNamesTheEnvironmentAStackDeclares(unittest.TestCase):
     approvers gate both kinds of change to one stack".
 
     RE-POINTED by `deploy-the-platform-stack-per-environment`, and the
-    requirement this quotes is not the one it used to. It read *Gated Deploy
-    Reuses the Terraform Production Environment*, which asserted that there is
-    ONE deploy gated on production's Environment -- the proposition that change
-    removes, by making the deploy a matrix over every stack that opts in. So
+    requirement this quotes is not the one it used to. Its predecessor -- named
+    for production, which is what obliged the rename rather than a modification
+    -- asserted that there is ONE deploy gated on production's Environment, the
+    proposition that change removes by making the deploy a matrix over every
+    stack that opts in. That name is deliberately not spelled here: it is
+    retired, this module is not exempt from the sweep that says so, and the
+    archived change's own REMOVED block is where the old name is recorded. So
     `gate_disagreements` no longer requires exactly one gated name; it accepts a
     gate resolved per matrix row and reports a LITERAL, which is now the defect
     rather than the expected form. What is unchanged is the hazard the class
