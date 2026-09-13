@@ -955,18 +955,60 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 This is settled, and the answer depends on one question about the data: would losing it be tolerable?
 
 - **Durable data** — anything whose loss would not be tolerable — goes to an **external managed service that owns its own backups**, not onto this host. Never into the shared instance: that is absolute, and no backup lifts it, because holding only non-durable data is what makes that instance classifiable as needing none. Not into a PostgreSQL container of the application's own either, unless a logical backup written off the host and a restore rehearsed and checked are both in place before the data lands — *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) is where that is written, and no application has cleared that bar.
-- **Non-durable relational data** — a job table, bookkeeping, state whose loss its writer can shrug at — goes in the **shared instance**, never a container of the application's own. That part is unconditional: no backup licenses a private PostgreSQL. From your operator account, create a database and a role:
+- **Non-durable relational data** — a job table, bookkeeping, state whose loss its writer can shrug at, and anything an application keeps in its database on a **staging** host, where the operator is the only party writing it and its loss is tolerable to the operator — goes in the **shared instance**, never a container of the application's own. That part is unconditional: no backup licenses a private PostgreSQL. Where an application's tables divide, only the non-durable ones go here, and the change in this repository that records the database states which are which; a table that division does not name stays out until one does. Never copy production data into a staging instance.
+
+  Provision one role and one database, named after the application, **once per deploy target**. The application's repository needs that target's Environment first (8.4, the Environments item): the recipe stores the password there, and stops before changing anything if the Environment does not exist. Fill in the first line — `<SECRET>` is the name the application's deploy reads the password from, and must be a name that Environment does not already hold — then paste the whole block, as it stands, into one shell on your workstation:
 
   ```sh
-  docker exec -it platform-postgres-1 psql -U <PLATFORM_POSTGRES_USER> -c \
-    "CREATE ROLE <app> WITH LOGIN PASSWORD '<generated>'; CREATE DATABASE <app> OWNER <app>;"
+  (
+  set -eu
+  app=<app> secret=<SECRET> repo=<org>/<app> env=<environment> host=<operator>@<host> rotate=no
+  names=$(gh secret list --repo "$repo" --env "$env" --json name --jq '.[].name')
+  if printf '%s\n' "$names" | grep -qx "$secret" && [ "$rotate" != yes ]; then
+    echo "refusing: $secret is already set in $env; set rotate=yes in this block only to rotate it" >&2; exit 1
+  fi
+  pw=$(openssl rand -hex 32)
+  printf '%s' "$pw" | gh secret set "$secret" --repo "$repo" --env "$env"
+  ssh "$host" 'docker exec -i platform-postgres-1 sh -c '\''psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'\' <<SQL
+  SET log_statement = 'none';
+  SET log_min_error_statement = 'panic';
+  SET log_min_duration_statement = -1;
+  SET log_min_duration_sample = -1;
+  SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$app') AS create_role,
+         NOT EXISTS (SELECT FROM pg_database WHERE datname = '$app') AS create_database \gset
+  \if :create_role
+  CREATE ROLE "$app" WITH LOGIN PASSWORD '$pw';
+  \else
+  ALTER ROLE "$app" WITH LOGIN PASSWORD '$pw';
+  \endif
+  \if :create_database
+  CREATE DATABASE "$app" OWNER "$app";
+  \endif
+  REVOKE CONNECT, TEMPORARY ON DATABASE "$app" FROM PUBLIC;
+  SQL
+  )
   ```
 
-  The application reaches it at `postgres:5432` over `platform_edge` with that role. Automating this step, and delivering that password the way a deploy key is delivered, is deliberately deferred until an application actually needs a database here. A provisioning mechanism designed against no consumer would fix the shape of a credential path, a naming convention and a failure mode by guesswork, and the guesses would be discovered wrong by the first real user rather than by review — so until then this recipe is not a workaround but the whole of what is needed. *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) states the obligation and its trigger.
+  What each part is for:
+
+  - **A subshell with `set -eu`**: a failing step ends the run before the next one, and the password disappears with the subshell. Paste it bare — wrapped in `if`, `&&` or `||`, `set -e` is suspended.
+  - **The name check refuses** if `<SECRET>` is already set in that Environment, because overwriting a secret the application already reads is an outage whose old value GitHub cannot give back. `rotate=yes` on the first line is the only way past it, and means this run replaces that very secret. Keep it on that line rather than in your shell: a variable left set in the shell would switch the check off for the next paste.
+  - **The password reaches `gh` and `psql` only over standard input** — never a command line, so it is in no shell history and no process listing on either machine. A single `psql -c` would not work in any case: it sends several statements as one transaction, and `CREATE DATABASE` cannot run inside one.
+  - **Every log setting that writes statement text is off for the session**, so a failing `CREATE ROLE … PASSWORD` does not put the password into `docker logs`, which every `docker`-group account can read.
+  - **Identifiers are double-quoted**, because an application name may carry a hyphen, which PostgreSQL otherwise parses as a subtraction.
+  - **It converges**: it creates the role or resets its password, creates the database if absent, and revokes `CONNECT` and `TEMPORARY` from `PUBLIC` — which a new database otherwise grants to every role in the instance, so without it any other application's role could connect.
+
+  **When it fails**, what it leaves depends on where. The secret-name read or `gh secret set` failed: the host is untouched; fix the cause and paste it again unchanged. The host step failed on a first provisioning: the Environment holds a password no role has, which nothing uses yet; paste it again with `rotate=yes`. The host step failed on a rotation: the Environment is ahead of the role, and the application's next deploy would render a password the role rejects; paste it again with `rotate=yes` before that deploy.
+
+  **Rotating** is the same block with `rotate=yes`. The application picks the new password up on its next deploy; connections it opens before then are refused.
+
+  **Check** from a session on the host: `\l` in `platform-postgres-1` lists the database owned by its role; `SELECT has_database_privilege('pgexporter', '<app>', 'CONNECT')` returns `f`; `docker logs --since <when you ran it> platform-postgres-1 2>&1 | grep -ciE 'create role|alter role'` returns `0`.
+
+  The application reaches it at `postgres:5432` over `platform_edge` with that role. This step is manual and is not meant to stay so. *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) obliges automating the provisioning and the delivery of the password; that obligation's trigger fired on 2026-09-13, when `commerce-ops` became the first application given a database here, and it is unmet. The mechanism is `docs/backlog.md` `automate-per-application-database-provisioning`.
 
   A **non-relational** store — a Redis cache, a queue file, an uploads directory — is not covered by either bullet and does not belong in this instance. It is governed by *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) like any other store on this host, which is to say: name which of its reasons the store satisfies, in the change that adds it, or give it a logical backup written off the host and a rehearsed restore before it holds anything.
 
-  `commerce-ops` runs a PostgreSQL container of its own, which is what the first bullet forbids. That is a known divergence, named as such in the requirement above, and its resolution is in that application's own repository rather than here. Do not read it as a pattern to copy.
+  On the **production** host, `commerce-ops` still runs a PostgreSQL container of its own holding durable data, which is what the first bullet forbids. That is a known divergence, named as such in *No Store on This Host Holds Data Requiring Backup*, and its resolution — the durable tables moving to an external managed service and that container removed — is in that application's own repository rather than here. Its non-durable half, the `procrastinate_*` job queue, has a database in production's shared instance to move to, provisioned by the recipe above. Staging's `commerce-ops` has no such container. Do not read production's as a pattern to copy.
 
 ### 8.4 Application side
 
@@ -992,7 +1034,8 @@ In the application repository:
 | `TAILSCALE_OAUTH_CLIENT_ID`, `TAILSCALE_OAUTH_SECRET` | The same OAuth client as stage 5, or a second one with the same tag |
 | `DEPLOY_HOST` | That target's server's tailnet IPv4, same value as that stack's `PLATFORM_DEPLOY_HOST` |
 | `<APP>_DEPLOY_SSH_KEY` | The private half of **that target's** key from 8.2 — one per application per environment, never one shared; delete the local file after storing |
-| `POSTGRES_PASSWORD` and the application's own settings | 8.3, and whatever the application needs |
+| The shared-instance database password, under the name 8.3 gave it — `SHARED_POSTGRES_PASSWORD` for commerce-ops | Written by 8.3's recipe, with that target's own independently generated value — never set by hand here, and never under a name the Environment already holds |
+| The application's own settings | Whatever the application needs |
 
 **Check:** the deploy run is green; `https://<hostname>` answers with a valid certificate; the application appears on Grafana's "Application HTTP error rates" dashboard after its first requests; `docker ps` shows the application's containers `(healthy)`.
 
@@ -1101,7 +1144,7 @@ An important consequence for staging specifically: its data volume is **not** wi
 
 **A rebuilt host's first converge is a workstation converge again**, for the same reason a new host's is — it is on no tailnet and carries no converge key until §6.3 and §6.6 have run. That is the one time `ansible-playbook` against an existing host is correct rather than a sign that stage 9 was left unfinished.
 
-The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, **delete the old machine from the tailnet** (see below), 5.3's auth key if the old one expired, 6.3, 6.6's converge key, 6.4 (new tailnet IP → that stack's `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by running **Platform Deploy** from Actions **with this stack's name as the `stack` input** — re-running the last run would redeploy every stack and wake another stack's approval gate for a host that did not change — then 7.5 against this host, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/backlog.md` entry 19 is what closes that, and entry 20 is the plan to turn this paragraph into a rehearsed runbook with timings.
+The same stages, in this order, skipping what still exists: 4.2 (with `server_enabled` toggled off then on, or a replace with the `destroy-override` label), 4.3, 4.4 if the address changed, **delete the old machine from the tailnet** (see below), 5.3's auth key if the old one expired, 6.3, 6.6's converge key, 6.4 (new tailnet IP → that stack's `PLATFORM_DEPLOY_HOST` and every application's `DEPLOY_HOST`), 7.4 by running **Platform Deploy** from Actions **with this stack's name as the `stack` input** — re-running the last run would redeploy every stack and wake another stack's approval gate for a host that did not change — then 7.5 against this host, then each application's deploy from its own Actions. There is no database restore step: no platform-stack store needs one, because each is either recreated by a redeploy or its loss is accepted — see §8.3 and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`). There **is** a re-provisioning step: every application with a database in the shared instance loses it with the instance, which its classification tolerates, but cannot start until it exists again — so before each such application's deploy, run §8.3's recipe for this host with `rotate=yes`, which recreates the role and database and replaces the password in that target's Environment. Two consequences to say out loud, because a rebuild is when they arrive: Prometheus's metrics history and Grafana's UI-created state do not come back, and on the production host `commerce-ops`'s own PostgreSQL — the one divergence that requirement names — is lost outright, since nothing backs it up. `docs/backlog.md` entry 19 is what closes that, and entry 20 is the plan to turn this paragraph into a rehearsed runbook with timings.
 
 ## Appendix C. What to change for a company deployment
 
