@@ -47,16 +47,20 @@ provider "hcloud" {
   #   - the gated apply job, which declares `environment: main-production`,
   #     resolves that Environment's Read & Write token;
   #   - every other CI job declares no `environment:` and resolves a
-  #     repository-scoped Read Only token — but not by this name. It is
+  #     repository-scoped Read Only token — but NOT by this name. It is
   #     read as `secrets[<the name pipeline.yml declares>]`, which for
-  #     this stack is `HCLOUD_TOKEN` and for a second stack
-  #     will not be. A repository secret holds one value, so each
-  #     stack needs a read-only secret of its own. (What it says about
-  #     THIS stack is wrong and is knowingly left so: this stack's
-  #     pipeline.yml declares HCLOUD_TOKEN_MAIN_PRODUCTION, and
-  #     declaring `HCLOUD_TOKEN` is exactly what that file argues at
-  #     length against. Correcting it is `docs/backlog.md` entry
-  #     48's work rather than a rename's.);
+  #     this stack is HCLOUD_TOKEN_MAIN_PRODUCTION and for every other
+  #     stack is a name of its own. A repository secret holds one value,
+  #     so each stack needs a read-only secret of its own.
+  #
+  #     THE ONE NAME IT MAY NOT BE IS `HCLOUD_TOKEN`, and that is the
+  #     whole reason this bullet spells the name out. Every stack's
+  #     GitHub Environment defines `HCLOUD_TOKEN` as that stack's Read &
+  #     Write token, and GitHub resolves an Environment-scoped secret
+  #     ahead of a repository-scoped one of the same name — so a job
+  #     that declares an `environment:` and reads `HCLOUD_TOKEN` gets
+  #     the WRITE token, silently, from a field that says read-only.
+  #     pipeline.yml carries the full argument beside the declaration.
   #   - locally, whatever the operator exports, which is the Read Only
   #     token and is never the Read & Write one.
   #

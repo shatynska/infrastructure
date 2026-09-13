@@ -50,11 +50,18 @@ provider "hcloud" {
   #   - every other CI job declares no `environment:` and resolves a
   #     repository-scoped Read Only token, read as
   #     `secrets[<the name pipeline.yml declares>]` — for this stack
-  #     HCLOUD_TOKEN_MAIN_STAGING, and for prod HCLOUD_TOKEN. A repository
-  #     secret holds one value, which is why each stack needs a name of its
-  #     own. (What it says about prod is wrong and is knowingly left so:
-  #     prod declares a name of its own, and correcting this is
-  #     `docs/backlog.md` entry 48's work rather than a rename's.);
+  #     HCLOUD_TOKEN_MAIN_STAGING, and for prod
+  #     HCLOUD_TOKEN_MAIN_PRODUCTION. A repository secret holds one value,
+  #     which is why each stack needs a name of its own.
+  #
+  #     NEITHER IS `HCLOUD_TOKEN`, and that is deliberate rather than
+  #     incidental. Every stack's GitHub Environment defines
+  #     `HCLOUD_TOKEN` as that stack's Read & Write token, and GitHub
+  #     resolves an Environment-scoped secret ahead of a
+  #     repository-scoped one of the same name — so a job that declares
+  #     an `environment:` and reads `HCLOUD_TOKEN` gets the WRITE token,
+  #     silently, from a field that says read-only. pipeline.yml carries
+  #     the full argument beside the declaration.
   #   - locally, whatever the operator exports for THIS directory, which is
   #     staging's Read Only token and is never the Read & Write one.
   #
