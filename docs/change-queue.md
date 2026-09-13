@@ -611,25 +611,6 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 **Not in scope here:** auto-replanning on staleness. That would apply a plan no human reviewed, which is the requirement this entry exists to respect.
 
 
-## 75. rename-the-github-environments
-
-**Not blocked, and expensive. Recorded 2026-09-12 by `rename-the-external-services`, which was scoped to do this, probed it before touching anything, and found it cannot be done the way every other rename in that change was done.**
-
-`docs/naming-conventions.md` calls for the two GitHub Environments to be named for their stacks — `main-production` and `main-staging`. They are `production` and `staging`, and that is the one quarter of the naming scheme still undelivered after entries 61, 62 and 63.
-
-**GitHub offers no way to rename a deployment Environment.** Measured on 2026-09-12, three ways: the UI exposes no rename control on an Environment's settings page; `PATCH` and `POST` on the REST endpoint for a single environment both return `404`; and the REST documentation lists only `GET`, `PUT` and `DELETE` for that path, with the name in the URL, so `PUT` cannot move it either. GitHub's own page on managing them documents creation and deletion and says nothing about renaming.
-
-**So the move is a re-creation, and the price is a credential audit.** Create the two new Environments, populate them, re-add production's required reviewer, then delete the old two. That means re-entering **21 secrets** — fifteen on production, six on staging — and a secret's value cannot be read back out of GitHub. Against `docs/bootstrap-a-new-host.md` Appendix A, eighteen are recoverable from the password manager or cheaply regenerable in place (`TF_API_TOKEN` is on the operator's workstation; the two Hetzner write tokens can be reissued in the Hetzner console). **Three are not**, because §0.3 has the operator delete the local private half once it is stored:
-
-- **`ANSIBLE_SSH_PRIVATE_KEY`, twice** — one converge key per stack. Rotating means generating a keypair and appending the public half to `/root/.ssh/authorized_keys` on that host by hand, over the tailnet: no role owns that file, which §0.3 already calls a gap.
-- **`PLATFORM_DEPLOY_SSH_KEY`** — production's platform deploy key. Its public half lives in `group_vars/production.yml`'s `deploy_apps`, so rotating it is a commit *and* a production converge before the new key works.
-
-**Two failure modes to design against**, both of which arrive late and quietly. A job naming an Environment that does not exist does not fail — GitHub creates it, with no protection rules, so a mis-sequenced step can leave a production apply, converge or platform deploy running **unreviewed**. And a converge or deploy key that was re-entered wrong fails on the next merge as an unreachable host, several steps from the cause. Note the asymmetry the same change measured: `gh secret set --env <name>` *does* fail loudly on an unknown Environment (`404` from the public-key fetch), so the two halves of GitHub's Environment API behave oppositely on a name that is not there.
-
-**Whether it is worth paying is the open question, and it was left open deliberately.** What it buys is that `production` stops being a name a second tenant collides with — and a second tenant's Environment would be *created* under the right name rather than renamed, so the collision is not one that arrives by surprise. What it costs is rotating three credentials whose failure mode is that continuous integration silently cannot reach a host. The alternative disposition is to decide the Environments keep the environment axis permanently and amend `docs/naming-conventions.md` to say so with this reason; that was considered and not chosen, because it weakens the scheme rather than postponing it.
-
-**What is already done and must not be undone.** Entry 63 renamed the HCP workspaces, the repository read-only secrets and the Hetzner projects, and left every `github_environment` declaration, `platform-deploy.yml`'s `environment:` key and the `.github/tests` literals that assert them on the environment axis. `terraform/stacks/*/pipeline.yml`, `.github/workflows/platform-deploy.yml`, `.github/tests/test_a_second_environment.py` and `docs/bootstrap-a-new-host.md` each carry a comment pointing here; those comments are a commitment, and deleting them is part of this entry's work.
-
 ## 76. make-the-converge-survive-a-galaxy-outage
 
 **Not blocked. Recorded 2026-09-12, from the merge of `rename-the-external-services` (PR #155), whose gated production converge failed on it.**

@@ -160,7 +160,7 @@ This requirement governs where the tokens live *inside GitHub*. Confining the Re
 ### Requirement: Gated Production Apply Applies the Reviewed Plan
 `terraform apply` against a stack SHALL run only after a pull request is merged to `main`, SHALL attach to that stack's own GitHub Environment, and SHALL apply a **saved plan file produced before that Environment's protection rules were satisfied** rather than recomputing a plan afterwards.
 
-Every stack's apply job SHALL declare an `environment:`. Whether that pauses for a human is a property of the GitHub Environment's protection rules — repository settings, which no file in this repository can verify — and not of the workflow. The `production` Environment SHALL require a reviewer. A stack whose Environment requires no reviewer is still gated in the sense this requirement means: its write credential remains confined to that job, per Credential Scoping by Privilege.
+Every stack's apply job SHALL declare an `environment:`. Whether that pauses for a human is a property of the GitHub Environment's protection rules — repository settings, which no file in this repository can verify — and not of the workflow. The `main-production` Environment SHALL require a reviewer. A stack whose Environment requires no reviewer is still gated in the sense this requirement means: its write credential remains confined to that job, per Credential Scoping by Privilege.
 
 The apply workflow SHALL be structured as two jobs per stack in a single run:
 
@@ -191,11 +191,11 @@ Because a saved plan file stores sensitive values in cleartext, the `tfplan` art
 
 #### Scenario: Merge does not apply immediately
 - **WHEN** a pull request changing `terraform/stacks/main-production/` is merged to `main`
-- **THEN** the apply job SHALL pause and wait for a required reviewer to approve the `production` GitHub Environment before running `terraform apply`
+- **THEN** the apply job SHALL pause and wait for a required reviewer to approve the `main-production` GitHub Environment before running `terraform apply`
 
 #### Scenario: A merge affecting one environment raises no other environment's approval
 - **WHEN** a pull request changing only `terraform/stacks/main-staging/` is merged to `main`
-- **THEN** no `production` Environment approval SHALL be requested, and `main-production` SHALL NOT be planned or applied by that run
+- **THEN** no `main-production` Environment approval SHALL be requested, and the `main-production` stack SHALL NOT be planned or applied by that run
 
 #### Scenario: A shared module change reaches every environment
 - **WHEN** a pull request changing a file under `terraform/modules/` is merged to `main`
@@ -789,7 +789,7 @@ The observer SHALL NOT be a workflow in this repository. A watcher that is itsel
 
 Each such workflow SHALL address its own report by an identifier that is a **literal in the workflow file**, distinct per workflow, so that the obligation is a static read of a committed file. That the repository's schedule-triggered workflows each carry such a report SHALL be asserted by the executable suite required by *The Continuous-Integration Configuration Is Itself Verified* in this capability — a scheduled workflow added later without one is a pull request that fails, not a gap discovered by a reader.
 
-The credential that report is sent under SHALL be repository-scoped and SHALL NOT be an Environment secret. Secrets on the `production` Environment are readable only by a job that declares that Environment, and such a job waits on required-reviewer approval per *Gated Production Apply Applies the Reviewed Plan* in this capability. An alarm that waits for a human to approve its own delivery is not an alarm.
+The credential that report is sent under SHALL be repository-scoped and SHALL NOT be an Environment secret. Secrets on the `main-production` Environment are readable only by a job that declares that Environment, and such a job waits on required-reviewer approval per *Gated Production Apply Applies the Reviewed Plan* in this capability. An alarm that waits for a human to approve its own delivery is not an alarm.
 
 The report SHALL be emitted from a job that runs whatever the outcome of the rest of the workflow, and that depends on every other job in it. A report emitted only on the success path leaves an early failure to be caught by the observer's silence timeout, which is slower than the failure signal that was available at the time.
 
