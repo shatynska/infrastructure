@@ -733,7 +733,9 @@ ansible <environment> -i inventory/<stack>.hcloud.yml \
   -a "journalctl -u prune-host-images.service -n 20 --no-pager" --vault-id <environment>@prompt
 ```
 
-The journal should carry `prune-host-images: considered N, removed M` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed.
+The journal should carry `prune-host-images: considered N, removed M` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence, and `OK` on every activation after it. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed.
+
+**Read that journal as `root`, not as the inspection account.** `ops-claude` is in `docker` and in no other group, so it is not in `systemd-journal` or `adm` — and `journalctl -u prune-host-images.service` run as that account prints `-- No entries --` rather than a permission error. That is indistinguishable from a unit that has never run, and it is a trap worth knowing about before it costs you an hour: it reads as evidence and is the absence of evidence. `systemctl show prune-host-images.service -p ExecMainStartTimestamp -p Result` needs no privilege and answers the same question honestly.
 
 A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service — `main-production-prune-host-images` and `main-staging-prune-host-images`, one per host and distinctly named because the two servers are named differently on purpose. **Give each the period and grace from Appendix A now.** A check created by its own first ping carries the *observer's* default period, not the unit's weekly one, so until you correct it the observer will call a perfectly healthy weekly job overdue within a day.
 
@@ -743,7 +745,22 @@ On staging, the run above will not say `considered N, removed M`. It will report
 
 The prune protects images that a deployed application references or a running container holds. On a host where nothing is deployed there are neither, so an empty keep set is the honest answer — and the role treats it as a refusal rather than proceeding, because proceeding would mean `docker image prune -a`, weekly, reporting success. That guard is doing exactly what it exists to do.
 
-So `main-staging-prune-host-images` is red from the moment it exists until the platform stack reaches staging. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
+So `main-staging-prune-host-images` is red from the moment it exists until the platform stack reaches it. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
+
+**It does not go green by itself when the stack arrives, and this is the step everyone misses.** The check reflects the last *activation*, and the timer is weekly — so a stack deployed on Saturday leaves a red check until the following Saturday, with nothing wrong. Trigger one activation by hand after stage 7 reaches that host:
+
+```sh
+ssh -i ~/.ssh/<company>-root root@<that host's tailnet IP> \
+  'systemctl start prune-host-images.service; \
+   journalctl -u prune-host-images.service -n 25 --no-pager'
+```
+
+What you are reading for is the transition, and the journal shows both sides of it in one place:
+
+    prune-host-images: abandoned -- the keep set is empty     <- before the stack
+    prune-host-images: considered 8, removed 0                <- after it
+
+`considered N` with N at least 1 is the confirmation; `removed 0` is correct on a host whose images are all in use. **N should equal the number of services in `platform/docker-compose.yml`** plus whatever any deployed application contributes — anything less means an enumerated application is not rendering an image reference.
 
 ### 6.6 Hand the converge to the pipeline
 
@@ -896,9 +913,17 @@ docker exec -it platform-postgres-1 psql -U <PLATFORM_POSTGRES_USER> -c \
 
 Until this is done the `MetricsTargetDown` alert fires for `postgres-exporter`, which is the intended signal that the step is missing.
 
+**Confirm it cleared, and do it from inside the container.** Only Traefik (80, 443) and Grafana (the tailnet address, 3000) publish a host port — every other service in this stack is reachable on the Docker network alone, so `curl localhost:9090` on the host returns nothing at all. That silence looks like a broken Prometheus and is not:
+
+```sh
+docker exec platform-prometheus-1 wget -qO- "http://localhost:9090/api/v1/targets?state=active"
+```
+
+All five active targets should report `"health":"up"` — `prometheus`, `node-exporter`, `cadvisor`, `traefik` and `postgres-exporter`. The last is the one this step fixes; it is also the only one whose failure means a credential rather than a dead container, since its container is healthy either way.
+
 **The heartbeat.** Nothing to run; confirm in the heartbeat service that this host's own check is receiving pings every couple of minutes. Give it the period and grace Appendix A records — a check created by its first ping carries the observer's default until corrected.
 
-**Check**, on each host you have deployed to: `docker ps` shows nine `platform-*` containers, all `(healthy)`; `http://<that host's tailnet IP>:3000` from your workstation opens **that stack's** Grafana, and `admin` with that stack's Grafana password shows three dashboards; the heartbeat service shows that host's own check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in that stack's own Slack channel.
+**Check**, on each host you have deployed to: `docker ps` shows **eight** `platform-*` containers, all `(healthy)` — one per service in `platform/docker-compose.yml`, which is the count to check against rather than the number written here; `http://<that host's tailnet IP>:3000` from your workstation opens **that stack's** Grafana, and `admin` with that stack's Grafana password shows three dashboards; the heartbeat service shows that host's own check as up; a test alert (temporarily lower a threshold in the rules and redeploy, then revert) arrives in that stack's own Slack channel.
 
 **Two of those are also the check that the stacks are genuinely separate**, and it is worth making deliberately the first time a second stack is deployed: the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports.
 
@@ -1083,5 +1108,7 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 Recorded in detail in `docs/backlog.md`. Two of them — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The one still to do before real data arrives is container resource limits, `docs/backlog.md` entry 6 — log rotation and swap were the other two and were delivered together by `bound-host-log-growth-and-add-swap`. The ones a company needs that this repository does not: a private repository in the company organisation, and an approver who is not the author. DNS as code was the third until the zone was read: it is served by a registrar carrying live MX and SPF, so managing it in Terraform means an NS migration that moves mail, and it is declined rather than queued — §4.4 records the zone, the reasoning and what would reopen it.
 
 **Two stacks are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per stack. What a company still gets that this repository does not is a **publicly reachable** second host: staging runs the platform stack once `deploy-the-platform-stack-per-environment` lands, but has no hostname, no certificate and no open web port until `docs/backlog.md`'s staging-web-exposure entry does. (Cited by name rather than by number: this file has been renumbered before, and a number written elsewhere may no longer name the entry it was written for.)
+
+**Renaming a server leaves its old check behind, and nothing cleans it up.** The slug is templated from `inventory_hostname`, so the day a server is renamed its pings start addressing a new slug — `create=1` brings that one into existence — and the old check is pinged by nothing ever again. It goes overdue and stays there. This is not hypothetical: `rename-the-stacks-and-their-resources` renamed both servers, and a `staging-server-prune-host-images` check survived the rename, red forever, discovered only by reading a journal that still carried the pre-rename hostname. **Delete the old check by hand as part of any rename**, and check the list for orphans after one. A permanently red check nobody can act on is worse than no check: it is what teaches an operator to stop reading the list, which is the failure this whole mechanism exists to prevent.
 
 **Heartbeat check names must stay distinct, and only half of that is automatic.** The workflow slugs carry this repository's name (`infrastructure-`), so a second repository's workflows get checks of their own. The host slug does **not**: it is `<inventory_hostname>-prune-host-images` with no repository or project segment, so two hosts both named `main-production` would share one check in the same heartbeat project, and the live one's weekly success would keep it green while the other's timer was dead. That is the masking failure this mechanism exists to end. This stopped being hypothetical when `add-a-staging-environment` added a second stack, and the naming scheme's answer is that a server carries its **stack's** name — which makes the two distinct by construction rather than by a choice someone has to remember. Give a company host an `inventory_hostname` of its own, or a heartbeat project of its own. The free tier's 20 checks is the ceiling either way; count them before adding a third host.
