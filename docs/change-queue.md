@@ -579,6 +579,10 @@ So the safe exclusion set is roughly: documentation (`**/README.md`), `.envrc*`,
 
 **The failure mode to design against, and it is the expensive one.** Getting the Molecule filter wrong under-runs a test suite, which is loud on the next real change. Getting this one wrong means **a host silently not converging when it should** — the merge reports green, the host keeps its old firewall or its old container runtime, and nothing says so. That asymmetry argues for a conservative exclusion list and for the same `some-with-excludes` quantifier discipline `ansible-verify.yml` already documents, plus a `.github/tests` assertion that every path a converge actually reads is **not** excluded.
 
+**A second instance, 2026-09-13, and it is the one this entry was written for.** The merge of `namespace-the-molecule-loop-devices` (PR #161) triggered run `34716999142`. Its entire `ansible/` diff was `ansible/roles/platform_data_volume/molecule/**` and `ansible/scripts/run-molecule` — **exactly the exclusion set this entry proposes**, Molecule's own scenario directories plus the entry point that runs them, and nothing else. Both hosts reported `changed=0`: 87 tasks on production, 85 on staging.
+
+The cost was not the wall clock. Production's job sat **6h34m** waiting for its Environment approval, because the change's own author had told the operator the merge would start no converge and nobody was watching for one. A test-fixture change held a production approval open overnight to discover it had nothing to do. That is the concrete form of "a comment fix should not reach a production host", and it is now twice.
+
 **Weigh it against the alternative of doing nothing.** The cost today is wall-clock and a standing risk that a documentation change perturbs production. The benefit of the current coarse trigger is that it cannot under-converge. That is a real benefit and this entry should not be taken as a foregone conclusion — a reviewer may decide the coarse trigger is the right answer for the host layer precisely because the failure mode is silent.
 
 ## 72. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
@@ -703,6 +707,10 @@ The cost here is lower than on the converge — a red check and a re-run, not a 
 **What it must not become.** A notifier that fires on every run teaches the operator to ignore it, and the run that then goes unapproved is indistinguishable from the noise. The signal is specifically *waiting on a human*, and it is worth a reminder that repeats while the state persists rather than one announcement at the moment the request is raised — the 06:26 request was raised while nobody was reading.
 
 **A related gap, not this entry's to close.** Nothing in this repository bounds how long a request may wait. GitHub is understood to expire a pending deployment review after some weeks and cancel the run — unverified here, and worth measuring against the documentation rather than trusting this sentence. Either way, whether an unapproved converge *should* expire sooner is a separate decision from whether anyone is told about it.
+
+**A second instance, 2026-09-13: 6h34m.** The merge of `namespace-the-molecule-loop-devices` (PR #161) left `converge (main-production)` in run `34716999142` pending approval from 20:24 until 02:58. Nothing announced it. It was found only because the operator mentioned a check still running, and the session then read `gh run list` — which is the failure this entry names: the run is visible to anyone who goes looking, and nothing makes anyone look.
+
+Two things make this instance worse than the first. The approval **should not have been requested at all** — entry 71 above covers why, and this same run is its evidence. And the session that opened the pull request had stated the merge would start no converge, so the operator had been told there was nothing to watch for. A mechanism that announces a waiting approval does not depend on anyone having predicted it correctly, which is the argument for building one rather than relying on the author's summary.
 
 ## 79. tighten-the-refusal-scenario-s-own-filesystem-assert
 
