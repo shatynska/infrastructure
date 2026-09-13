@@ -759,22 +759,17 @@ The disagreement is **factual, not normative**. The parenthetical is illustrativ
 
 **What it costs is the part to decide when it is proposed.** Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the requirement's parenthetical agrees with `terraform.tfvars`" — a cross-file assertion this repository has declined twice on its own merits, on the grounds that an assertion converts a silent staleness into a standing editing obligation. So this change should probably correct the prose and argue explicitly that the scenario it owes is not that assertion.
 
-## 48. correct-the-read-only-secret-name-in-the-provider-comments
+## 48. assert-a-stack-s-versions-tf-names-its-own-read-only-secret
 
-**Not blocked. Recorded 2026-09-11 by `rename-terraform-environments-to-stacks`'s code review, which found it while reading the files that change swept.**
+**Not blocked, and this is what is left of a larger entry.** The factual error it was recorded for — both `versions.tf` provider comments stating prod's read-only secret name wrongly — was corrected on 2026-09-13 as a quick fix. What was not decided then is whether anything stops it recurring, and that is this entry.
 
-Both `versions.tf` provider comments state prod's read-only secret name wrongly, and have since prod's secret was renamed:
+**Why the error lasted as long as it did.** Prod declares `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` in its own `pipeline.yml`, whose comment argues at length that the name must **not** be `HCLOUD_TOKEN` — every GitHub Environment defines that name as its stack's Read & Write token, and GitHub resolves an Environment-scoped secret ahead of a repository-scoped one, so a job declaring an `environment:` and reading `HCLOUD_TOKEN` resolves a write credential silently. The comment three lines away asserted the opposite. Two renames swept those exact lines and left it standing, each correctly treating a credential-name correction as unrelated scope. Nothing could see it, which is why it survived two readings by changes that were in the file.
 
-- `terraform/stacks/main-production/versions.tf` says the name "for this stack is `HCLOUD_TOKEN`".
-- `terraform/stacks/main-staging/versions.tf` says "for this stack HCLOUD_TOKEN_MAIN_STAGING, and for prod HCLOUD_TOKEN". `rename-the-external-services` moved the first name and left the second wrong, adding a parenthesis saying so and pointing here; the error itself is untouched and is still this entry's to fix.
+**The shape most likely to work is positive rather than negative.** Assert that each `terraform/stacks/<name>/versions.tf` contains, somewhere, the literal value that stack's own `pipeline.yml` declares as `read_only_secret`. Both sides are static reads of committed files, the suite already reads every `pipeline.yml`, and prod's `versions.tf` did not name `HCLOUD_TOKEN_MAIN_PRODUCTION` anywhere — so this would have caught it.
 
-Prod declares `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` in its own `pipeline.yml`, and that same file argues at length that the name must **not** be `HCLOUD_TOKEN` — a repository secret of that name is shadowed by the Read & Write token every GitHub Environment defines, so a gated job reading it resolves a write credential silently. `README.md` agrees: "neither is named `HCLOUD_TOKEN`". The comment contradicts the declaration sitting beside it.
+**What to avoid, and it is the trap the earlier entry warned about.** The negative form — no `versions.tf` may say `HCLOUD_TOKEN` — is wrong, because both comments now discuss `HCLOUD_TOKEN` on purpose, as the name a stack may not use. A check written that way fires on correct prose, and a check that fires on correct prose gets weakened at the keyboard. Locating a claim inside a comment is harder than reading a declaration; the positive form sidesteps it by not needing to know which sentence the name appears in.
 
-**Why it is its own entry rather than folded into either rename, and two have now gone past it.** It predates `rename-terraform-environments-to-stacks`, whose review found it: `origin/main`'s copy carried the same claim, and that change's diff touched those lines only to spell the unit `stack`. `rename-the-external-services` then edited the same two comment blocks again — moving staging's retired token name and correcting what they said about pushing ahead of a workspace rename — and left this claim standing, adding a parenthesis to each saying so. Correcting a factual error about credential names inside a rename is unrelated scope both times, and being walked past twice is not an argument for a third.
-
-**Why it is worth doing rather than tolerating.** The next reader of that comment is someone debugging a credential — the one moment a wrong secret name costs the most. It is also the exact confusion the shadowing paragraph exists to prevent, restated incorrectly three lines away from itself.
-
-**Whether a check can hold it.** Probably: the declared `read_only_secret` and the names these comments assert are both static reads of committed files, which is `.github/tests`' own subject, and the suite already reads every `pipeline.yml`. Worth deciding when the change is proposed rather than now — a comment asserting a secret name is harder to locate reliably than a declaration stating one, and a check that locates it badly is worse than the prose.
+Note the declaration side is already held: `.github/tests` asserts that no stack declares `HCLOUD_TOKEN` as its read-only secret. It is the prose beside the declaration that nothing reads.
 
 ## 49. separate-history-from-rationale-in-source-comments
 
