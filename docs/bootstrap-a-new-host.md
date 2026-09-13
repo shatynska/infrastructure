@@ -291,10 +291,10 @@ gh secret set TF_API_TOKEN --env production         # the same HCP user token
 gh secret set HCLOUD_TOKEN --env staging            # staging Read & Write
 gh secret set TF_API_TOKEN --env staging            # the same HCP user token
 gh secret set APP_CLIENT_ID                         # the GitHub App's client id
-gh secret set APP_PRIVATE_KEY < <the .pem you downloaded>   # its private key
+gh secret set APP_PRIVATE_KEY < ~/Downloads/<app-name>.private-key.pem
 ```
 
-`APP_PRIVATE_KEY` is the one secret here read from a file rather than typed: it is a multi-line PEM block, and `gh secret set` reading a prompt takes one line. Pass it with `<` as shown. Delete the `.pem` once it is stored — GitHub will not show it again, and an App can be given a fresh key at any time, so losing it costs one click rather than a re-registration.
+`APP_PRIVATE_KEY` is the one secret here read from a file rather than typed: it is a multi-line PEM block, and `gh secret set` reading a prompt takes one line. Pass it with `<` and the path the browser saved it to — GitHub names that file for the App, and the line above assumes your download directory. Delete the `.pem` once it is stored — GitHub will not show it again, and an App can be given a fresh key at any time, so losing it costs one click rather than a re-registration.
 
 Do not pass `--body '<token>'`: that records the secret in your shell history, where it then lives until the file rotates out.
 

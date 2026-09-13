@@ -139,17 +139,23 @@ def _named_spans(text: str) -> list[str]:
 #       is where a live name lives. This is a PREFIX, and it is the only prefix
 #       here; the requirement forbids exempting by directory otherwise.
 #
-#   this module        -- a check must be able to name what it forbids. It does
-#       not, in fact, name one as a literal -- the names are derived -- but the
-#       fixture trees in its discriminating class do, and the next person to add
-#       a literal here should not have to also add the exemption.
+#   this module        -- a check must be able to name what it forbids. Mostly
+#       it does not: the names are derived rather than declared. But
+#       `KNOWN_RETIRED` below is a retired name written as a literal, on purpose
+#       -- it is what stops a derivation that silently returned nothing from
+#       satisfying every assertion here -- so the module is an offence against
+#       itself without this line. The reader is falsified by fixture trees, but
+#       they live in the sibling module `test_a_retired_requirement_name_is_reported`
+#       rather than here; see that module and this change's test-plan.md.
 #
-#   `docs/deferred-work.md` -- the retirement itself is the subject. Its entry
-#       on requirements still stated over prod alone records that
-#       `add-a-staging-environment` renamed *Dedicated Hetzner Cloud Project for
-#       Prod*, which is a statement about the rename rather than a citation of
-#       the requirement. Unlike the one below it, this exemption does not expire:
-#       the record stays true.
+#   `docs/deferred-work.md` -- the retirement itself is the subject. Its section
+#       "Three `iac-cicd-pipeline` requirement names that now read narrower than
+#       they are" records that `add-a-staging-environment` renamed *Dedicated
+#       Hetzner Cloud Project for Prod*, which is a statement about the rename
+#       rather than a citation of the requirement. That is the only occurrence in
+#       the file, and a reader following this reason should find it there.
+#       Unlike the one below it, this exemption does not expire: the record
+#       stays true.
 #
 #   `docs/change-queue.md` -- EXPIRES. Entry 74 names *Each Environment Has a
 #       Dedicated Hetzner Cloud Project*, because naming the stale citation is
@@ -395,22 +401,37 @@ def retired_name_offences(
         names = tuple(derived) if names is None else names
         live = tuple(specifications) if live is None else live
 
-    longer = tuple(sorted((name for name in live), key=len, reverse=True))
     offences: list[str] = []
     for path in sorted(files):
         if not swept(path):
             continue
-        flat, index = flattened(files[path])
-        for name in names:
-            start = flat.find(name)
-            while start != -1:
-                if not any(
-                    len(candidate) > len(name) and flat.startswith(candidate, start)
-                    for candidate in longer
-                ):
-                    offences.append(f"{path}:{index[start]}: {name}")
-                start = flat.find(name, start + 1)
+        offences.extend(_offences_in(path, files[path], names, live))
     return sorted(offences, key=_offence_order)
+
+
+def _offences_in(
+    path: str, text: str, names: Sequence[str], live: Sequence[str]
+) -> list[str]:
+    """Every retired name `text` states, as `<path>:<line>: <name>`.
+
+    The one place a file is read for a retired name. Both callers go through it
+    so that the sweep and the exemption-expiry check cannot answer the same
+    question differently -- which they did, until the expiry was found counting
+    a retired name that was only the prefix of a live one.
+    """
+    longer = tuple(sorted(live, key=len, reverse=True))
+    flat, index = flattened(text)
+    found: list[str] = []
+    for name in names:
+        start = flat.find(name)
+        while start != -1:
+            if not any(
+                len(candidate) > len(name) and flat.startswith(candidate, start)
+                for candidate in longer
+            ):
+                found.append(f"{path}:{index[start]}: {name}")
+            start = flat.find(name, start + 1)
+    return found
 
 
 def _offence_order(entry: str) -> tuple[str, int, str]:
@@ -434,6 +455,7 @@ def idle_exemptions(
     files: Mapping[str, str],
     names: Sequence[str] | None = None,
     paths: Sequence[str] = EXEMPT_PATHS,
+    live: Sequence[str] | None = None,
 ) -> list[str]:
     """Every whole-path exemption whose file no longer names a retired requirement.
 
@@ -447,9 +469,21 @@ def idle_exemptions(
     over a file naming a retired requirement across a line break would otherwise
     be reported as idle, and deleting it -- the repair the report asks for --
     turns the sweep red on the very file the exemption was written for.
+
+    It asks the SAME question the sweep asks, through the same finder, and that
+    is load-bearing rather than tidy. A bare substring test answers "still
+    needed" for a file whose only match is a retired name sitting inside a
+    longer live one -- `docs/change-queue.md` cites *Ansible Configuration Is
+    Verified in Continuous Integration and Gates the Merge*, which contains a
+    retired name as its prefix. Under a bare test that citation alone would keep
+    the exemption looking alive after the thing it was written for had gone, and
+    the expiry would never fire: exactly the reminder design decision 6 depends
+    on, silently absent.
     """
-    if names is None:
-        names = tuple(retirements(files))
+    if names is None or live is None:
+        derived = retirements(files)
+        names = tuple(derived) if names is None else names
+        live = tuple(_live_names(files)) if live is None else live
     idle: list[str] = []
     for path in paths:
         text = files.get(path)
@@ -459,8 +493,8 @@ def idle_exemptions(
                 "file that is not there excuses nothing"
             )
             continue
-        flat, _ = flattened(text)
-        if not any(name in flat for name in names):
+        excused = _offences_in(path, text, names, live)
+        if not excused:
             idle.append(
                 f"{path}: exempted, but it names no retired requirement any more. The "
                 "exemption is to be deleted in the change that swept the file"
