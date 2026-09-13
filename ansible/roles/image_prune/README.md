@@ -45,7 +45,7 @@ Each reports its own condition, distinguishably: an absent enumeration is remedi
 
 Unlike `app-deploy`'s reclamation, which must never fail a deploy that already succeeded, this unit has no caller to damage. It fails, so the host records it.
 
-**Nothing scrapes the journal.** `systemctl list-units --failed` and `HostDiskPressure` (at 90% full, which is very late) are the only signals. Making a silently-stopped prune alertable needs node-exporter's textfile collector and is recorded in `docs/change-queue.md`.
+**Nothing scrapes the journal.** `systemctl list-units --failed` and `HostDiskPressure` (at 90% full, which is very late) are the only signals. Making a silently-stopped prune alertable needs node-exporter's textfile collector and is recorded in `docs/backlog.md`.
 
 ## Liveness reporting — a silent check is the alarm, not a red unit
 

@@ -27,7 +27,7 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
 - `platform/` — the shared Compose stack that every application on the host depends on, deployed by a mechanism other than Ansible: reverse proxy, shared PostgreSQL instance, and the monitoring services (Prometheus, Alertmanager, Grafana and three exporters).
 - `.github/` — the pipeline: workflows, the CI-configuration test suite under `.github/tests/`, `dependabot.yml`, and the pinned CI dependencies.
 - `openspec/` — this repository's specifications (`openspec/specs/`) and the record of every change made to it.
-- `docs/` — `change-queue.md`, identified changes not yet opened, and `deferred-work.md`, what this project has deliberately not done.
+- `docs/` — `backlog.md`, changes identified and not yet opened; `bootstrap-a-new-host.md`, the runbook that stands a pair of hosts up from nothing; `naming-conventions.md`, the naming scheme in force.
 - `.claude/` — coding-agent tooling: the OpenSpec slash commands and skills under `commands/` and `skills/` are committed. Working trees live under `.claude/worktrees/` and are not.
 
 ## Local setup
@@ -197,7 +197,7 @@ The bootstrap is done. `main-production` is provisioned from `terraform/stacks/m
 
 **Two servers now run**, one per stack and each named for its stack: `main-production` on a `cx33` (4 vCPU / 8 GB) and `main-staging` on a `cx23` (2 vCPU), each with its own 10 GB volume named `main`, in separate Hetzner projects. Two bills, two hosts to patch and converge, two tailnet members to keep track of — staging costs roughly half what production does and is not free in either money or attention.
 
-What staging is *not*, yet: configured. It carries no Ansible group variables, no platform stack and no DNS records, so it is a provisioned host rather than a place applications deploy to. `docs/change-queue.md` records that half.
+What staging is *not*, yet: configured. It carries no Ansible group variables, no platform stack and no DNS records, so it is a provisioned host rather than a place applications deploy to. `docs/backlog.md` records that half.
 
 Adding the stack after it changed **no file under `.github/workflows/`** — `pr-validation.yml`, `apply.yml` and `drift.yml` discover `terraform/stacks/*/` and run per stack. What adding one does still take is everything outside those files:
 
@@ -205,7 +205,7 @@ Adding the stack after it changed **no file under `.github/workflows/`** — `pr
 - its own HCP Terraform workspace, and a `.github/dependabot.yml` entry for the lockfile `terraform init` creates in that folder;
 - a GitHub Environment of the declared name, holding `HCLOUD_TOKEN` (that stack's **Read & Write** token) and `TF_API_TOKEN` (an HCP **user** token, from Account settings → Tokens — an organisation token can read a workspace but cannot write its state, and fails as `Error acquiring the state lock: resource not found` long after `init` succeeded). An Environment that omits `HCLOUD_TOKEN` silently resolves to the repository secret of that name, so the apply job refuses to apply where it detects that;
 - a repository secret of the declared read-only name, holding that stack's **Read Only** token;
-- whatever the stack is *for* — a host to configure, group variables, DNS. For staging, `docs/change-queue.md` records what that half still needs;
+- whatever the stack is *for* — a host to configure, group variables, DNS. For staging, `docs/backlog.md` records what that half still needs;
 - and the thing the rest of this list does not say, because it is about secrets and settings: **a stack is a second server, running permanently.** Another instance and another volume on the bill every month, another host to patch, converge, monitor and rebuild, and another set of credentials to rotate. Adding one is a standing commitment rather than a one-off configuration.
 
 The `terraform/`/`ansible/`/`platform/` structure, and the pipeline boundary between the three, were established by the change `integrate-ansible-host-config`.

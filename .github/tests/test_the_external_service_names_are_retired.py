@@ -147,7 +147,8 @@ REPLACEMENTS = {
 #       declaration by its own module, so a constant left behind while the
 #       declaration moves fails there.
 #
-#   `docs/change-queue.md` WAS EXEMPT AND IS NOT ANY MORE, which is the
+#   `docs/change-queue.md` -- now `docs/backlog.md` -- WAS EXEMPT AND IS NOT
+#       ANY MORE, which is the
 #       exemption machinery working rather than a loosening. Entry 63 named all
 #       four retired literals as the work it described, and a queue entry is
 #       deleted only when its change archives -- so the file had to be exempt
@@ -156,7 +157,7 @@ REPLACEMENTS = {
 #       deleting entry 63 in the archive commit turned it red and the repair was
 #       to delete the exemption in that same commit. It is swept from here on.
 #
-# `docs/deferred-work.md` is deliberately NOT exempt, though it is the paired
+# `docs/deferred-work.md` was deliberately NOT exempt, though it was the paired
 # surface: an entry there records work not done, and about a rename that means
 # the old name genuinely persists -- which is a thing to report.
 # --------------------------------------------------------------------------
@@ -328,7 +329,7 @@ class TestNoCommittedFileNamesARetiredExternalService(unittest.TestCase):
                 # A WHOLE-PATH EXEMPTION MUST STILL BE EARNING ITS KEEP, which a
                 # prefix exemption cannot be held to: `openspec/changes/` and
                 # `.github/tests/` cover many files and will always hold one,
-                # while `docs/change-queue.md` is exempt for a single entry that
+                # while `docs/backlog.md` is exempt for a single entry that
                 # is deleted when its change archives. Requiring the file to
                 # still CONTAIN a retired name makes the exemption self-
                 # retiring: the archive commit that deletes the entry turns this
@@ -586,13 +587,13 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
                     [], retired_name_offences({path: "infrastructure-prod\n"})
                 )
 
-        # `docs/change-queue.md` was the fourth case here until its exemption
+        # `docs/backlog.md` was the fourth case here until its exemption
         # expired with entry 63. It is swept now, and is asserted as swept rather
         # than dropped from this class: a path that stops being exempt and is
         # merely deleted from the list leaves nothing saying which way it goes.
         self.assertEqual(
-            ["docs/change-queue.md:1: infrastructure-prod"],
-            retired_name_offences({"docs/change-queue.md": "infrastructure-prod\n"}),
+            ["docs/backlog.md:1: infrastructure-prod"],
+            retired_name_offences({"docs/backlog.md": "infrastructure-prod\n"}),
         )
 
     def test_a_path_merely_resembling_an_exempt_one_is_still_swept(self) -> None:
@@ -605,7 +606,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             "openspec/specs/iac-state-management/spec.md",
             "openspec/changes-are-not-a-file.md",
             ".github/workflows/apply.yml",
-            "docs/change-queue-notes.md",
+            "docs/backlog-notes.md",
         ):
             with self.subTest(path=path):
                 self.assertEqual(

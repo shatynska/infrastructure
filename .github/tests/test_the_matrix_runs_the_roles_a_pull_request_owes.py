@@ -1311,7 +1311,7 @@ class TestARoleNothingConvergesAndNothingTestsWidensOnItsOwn(unittest.TestCase):
 
     `ansible/roles/tailscale/` is named here rather than built as a fixture, per
     tasks.md 1.5a: the tree contains this case NOW, and a fixture would let it
-    be read as hypothetical. `docs/change-queue.md` entry 3b owns its having no
+    be read as hypothetical. `docs/backlog.md` entry 2 owns its having no
     scenario.
     """
 
@@ -1804,7 +1804,7 @@ class TestDiscoverysVacuityRefusalReadsTheUnfilteredTree(
         (scratch / "ansible" / "roles" / "alpha" / "tasks" / "main.yml").write_text(
             "---\n- name: Noop\n  ansible.builtin.debug:\n    msg: alpha\n", encoding="utf-8"
         )
-        for empty_diff in ("[]", '["docs/change-queue.md"]', "false", ""):
+        for empty_diff in ("[]", '["docs/backlog.md"]', "false", ""):
             for index, step in self._discovery_steps(discovery_job):
                 with self.subTest(step=index, diff=empty_diff):
                     result, _ = self._run_body(

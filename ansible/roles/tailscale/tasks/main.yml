@@ -52,7 +52,7 @@
 # 2. The install is PINNED to an exact version. A stale index does not hand a
 #    pinned install an older candidate; it hands it nothing.
 # 3. This role carries no Molecule scenario, so nothing here would observe a
-#    bound behaving either way. See docs/change-queue.md entry 3b.
+#    bound behaving either way. See docs/backlog.md entry 2.
 #
 # See the change cache-the-apt-index-within-a-converge.
 - name: Ensure Tailscale is installed (pinned exact version)

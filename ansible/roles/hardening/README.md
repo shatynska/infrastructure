@@ -13,6 +13,8 @@ The pair is per environment, and both environments must be checked: prod's `web_
 
 Whenever either side's CIDR list changes, check the other. Leaving UFW stricter than the cloud firewall silently blocks traffic the cloud layer already permits (this happened once already — see `bootstrap-ansible-host-baseline`'s design.md, Context section for the `web_allowed_cidrs` correction that prompted this note). Leaving UFW looser than the cloud firewall doesn't expose anything new (the cloud layer still blocks it first), but defeats the point of having host-level defense-in-depth at all.
 
+**Deriving the Ansible side from Terraform output is deliberately not done**, though it would remove this drift class entirely. It would make an Ansible run depend on Terraform state and an HCP Terraform token, coupling the two layers that this repository's structure exists to keep separate. The hand-mirror is the accepted cost, and the check above is what holds it. **Revisit if it drifts a second time**: one recurrence is evidence the manual sync does not hold, and would outweigh the coupling objection.
+
 ## Tailnet-scoped rules
 
 UFW's default-deny-incoming policy applies to the `tailscale0` interface the same as the public one, so any service meant to be reachable only from tailnet peers needs its own explicit allow rule here, in addition to whatever binds it to the tailnet interface at the application level. Two such rules exist today, both restricted to `100.64.0.0/10` (the tailnet's CGNAT range — not publicly routable, so only authenticated tailnet peers can present it as a source):

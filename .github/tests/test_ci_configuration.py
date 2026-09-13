@@ -1678,7 +1678,7 @@ class TestApplyWorkflowTriggerIsPathFiltered(unittest.TestCase):
 
     NON_INFRASTRUCTURE_PATHS = [
         "README.md",
-        "docs/change-queue.md",
+        "docs/backlog.md",
         "ansible/roles/docker/tasks/main.yml",
         "platform/docker-compose.yml",
         "openspec/specs/iac-cicd-pipeline/spec.md",
@@ -9254,7 +9254,7 @@ class TestDockerLogBoundCannotBeUnset(unittest.TestCase):
 # establish that a session heeded it.
 #
 # It exists because the knowledge has already been lost once. It was recorded
-# in a `docs/change-queue.md` entry, that entry was deleted when its change
+# in a backlog entry, that entry was deleted when its change
 # archived, as the queue's own rule requires, and two later sessions then spent
 # time rediscovering it. Moving the text into AGENTS.md is what makes it
 # durable against archiving; this assertion is what makes it durable against
@@ -9358,7 +9358,7 @@ class TestTheConventionsFileStatesTheMoleculeSharedStateHazard(unittest.TestCase
 # --------------------------------------------------------------------------
 # The suite stays green in the repository's MAIN working tree.
 #
-# The obligation was recorded in `docs/change-queue.md` until this change
+# The obligation was recorded in the backlog until this change
 # deleted that entry, as the queue's own rule requires; the account below is
 # self-contained so that nothing here cites a note that no longer exists.
 #

@@ -54,7 +54,7 @@ provider "hcloud" {
   #     secret holds one value, which is why each stack needs a name of its
   #     own. (What it says about prod is wrong and is knowingly left so:
   #     prod declares a name of its own, and correcting this is
-  #     `docs/change-queue.md` entry 70's work rather than a rename's.);
+  #     `docs/backlog.md` entry 41's work rather than a rename's.);
   #   - locally, whatever the operator exports for THIS directory, which is
   #     staging's Read Only token and is never the Read & Write one.
   #

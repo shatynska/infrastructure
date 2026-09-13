@@ -24,7 +24,7 @@
 # (openspec/specs/iac-host-configuration/spec.md, "Container Logs Are Bounded
 # by the Host's Daemon Configuration") asks for a ceiling, not a diet.
 #
-# REVISIT WHEN log aggregation lands -- docs/change-queue.md entry 28. That is
+# REVISIT WHEN log aggregation lands -- docs/backlog.md entry 10. That is
 # the event that makes small local retention harmless; until then, shrinking
 # these buys disk this host is not short of and costs history it cannot
 # replace.

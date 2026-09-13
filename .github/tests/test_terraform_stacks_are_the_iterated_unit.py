@@ -49,7 +49,8 @@ These tests were written by an author other than whoever implements the change,
 and that author may only add. That change's tasks.md 4.4 also records that the
 suite's MODULE FILENAMES AND TEST-METHOD NAMES are deliberately left in the old
 vocabulary -- renaming them would churn several hundred identifiers without
-changing what a single one checks, and is deferred in `docs/deferred-work.md`,
+changing what a single one checks, and is deferred -- the decision is recorded
+in this module's own banner,
 "The stack rename left the word in test identifiers and in specification
 titles". So the old names beside this file are a recorded decision, not an
 oversight, and this module does not try to correct them.
@@ -170,7 +171,7 @@ OLD_ROOT_DIRECTORY = OLD_ROOT_SEGMENT.rpartition("/")[2]
 #
 # The second was added after code review found two committed files naming the
 # directory without its `terraform/` prefix -- a `.tftest.hcl` comment reading
-# "(not environments/prod)" and a `docs/change-queue.md` entry -- over which
+# "(not environments/prod)" and a `docs/backlog.md` entry -- over which
 # the sweep reported a clean tree. The instances were corrected; this closes
 # the class.
 #
@@ -354,7 +355,7 @@ def old_root_occurrences(root: Path | None = None) -> list[str]:
     made it likely: that shape is common in third-party Ansible content where
     the prefixed path never was. `AGENTS.md` scopes this suite to a static read
     of a COMMITTED file, and vendored untracked content is not committed. See
-    `docs/change-queue.md` entry 68, which names this class and recommends this
+    `docs/backlog.md` entry 39, which names this class and recommends this
     helper.
 
     A `root` argument means a scratch tree instead, which is NOT a repository
@@ -1839,7 +1840,7 @@ class TestNoCommittedFileStillNamesTheOldTerraformRoot(unittest.TestCase):
 
 class TestTheSweepReadsCommittedFilesOnly(unittest.TestCase):
     """DERIVED -- `AGENTS.md` scopes this suite to a static read of a COMMITTED
-    file, and `docs/change-queue.md` entry 68 names the class this closes.
+    file, and `docs/backlog.md` entry 39 names the class this closes.
 
     `old_root_occurrences()` selected its files with a filesystem walk until
     this was written, and that walk prunes four directory names of which
@@ -1897,7 +1898,7 @@ class TestTheSweepReadsCommittedFilesOnly(unittest.TestCase):
             "an UNTRACKED file naming the old root was reported as an offence: "
             f"{reported}. This sweep's subject is the committed file; reading a "
             "developer's provisioned content makes it red on a working machine and "
-            "green on a runner, which is `docs/change-queue.md` entry 68's class",
+            "green on a runner, which is `docs/backlog.md` entry 39's class",
         )
 
 
@@ -2010,7 +2011,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
     def test_the_old_root_sweep_reports_a_bare_directory_reference(self) -> None:
         """The defect this pair was added for. Two committed files named the
         directory WITHOUT its `terraform/` prefix -- a `.tftest.hcl` comment
-        and a `docs/change-queue.md` entry -- and the sweep reported a clean
+        and a `docs/backlog.md` entry -- and the sweep reported a clean
         tree over both. The instances were corrected before this was written,
         so the real tree establishes nothing about it; only a fixture can."""
         tree = self._tree()
