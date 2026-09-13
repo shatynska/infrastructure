@@ -704,25 +704,6 @@ The cost here is lower than on the converge — a red check and a re-run, not a 
 
 **A related gap, not this entry's to close.** Nothing in this repository bounds how long a request may wait. GitHub is understood to expire a pending deployment review after some weeks and cancel the run — unverified here, and worth measuring against the documentation rather than trusting this sentence. Either way, whether an unapproved converge *should* expire sooner is a separate decision from whether anyone is told about it.
 
-## 78. namespace-the-molecule-loop-devices
-
-**Not blocked. Recorded 2026-09-12 by `move-the-platform-data-mount`, whose own new scenario failed against a device a previous run had formatted.**
-
-**A loop device minor is a kernel-global handle and is not namespaced by the container that creates it.** `platform_data_volume`'s Molecule scenarios each `mknod` a fixed minor and associate a backing file inside the container — `default` takes 87, `multiple-devices-*` take 88 and 89, and the two scenarios `move-the-platform-data-mount` added take 90 and 91. The association outlives the container. On the workstation this was found on, `losetup -a` listed all five, every one naming a backing file inside a container that had been destroyed:
-
-    /dev/loop87: []: (/root/platform-data-volume-backing.img)
-    /dev/loop90: []: (/root/platform-data-volume-retire-backing.img)
-
-Each fixture then asks *"is this minor already associated?"* and skips associating when it is — so a run inherits whatever the last one left on that minor, **including a filesystem a previous converge created**.
-
-**The danger is the green run, not the red one.** The red one is how this was found: an assertion that the role had not formatted the device failed against contamination rather than against the role, and read as an implementation defect for as long as it took to run `losetup -a` on the host. The silent case is worse and is already live. `default`'s subject is that the role formats an *unformatted* device; inheriting a formatted minor makes its format task a no-op and the scenario passes without exercising what it exists to exercise. Nothing reports that, and nothing distinguishes it from a genuine pass.
-
-**This is a third shared handle, alongside the two `AGENTS.md` names.** *Namespacing Molecule per working tree* covers the instance name and the ephemeral directory, both stable per role and both now namespaced by `ansible/scripts/run-molecule`. The loop minor is not — and it is worse in one respect than either: it is shared across **machines' kernels rather than working trees**, so two working trees are not the boundary, and a single tree's consecutive runs collide with themselves.
-
-**`move-the-platform-data-mount` fixed only its own two scenarios**, by detaching the minor unconditionally before associating and then asserting the device starts with no filesystem — the premise its later assertions rest on, checked rather than assumed. What remains is the other three scenarios, which still carry the conditional-associate pattern, and the question of whether the minors should be namespaced per working tree the way the instance name is, or simply always torn down. A minor is one byte of space and the fixture picks it by hand today, so a derivation from the tree's namespace is available; whether it is worth more than an unconditional detach is this entry's judgment to make.
-
-**One thing it must not do.** The `cleanup` and `destroy` actions run inside Molecule's own lifecycle, and a teardown that detaches a minor another scenario is mid-run on would break a suite that Molecule runs sequentially today but may not always. Detaching *your own* minor at the start of `prepare` is safe for that reason and a global sweep is not.
-
 ## 79. tighten-the-refusal-scenario-s-own-filesystem-assert
 
 **Not blocked. Recorded 2026-09-12 by `namespace-the-molecule-loop-devices`, whose code review found it in a file that change edits but in a line it does not author.**
