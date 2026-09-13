@@ -10,6 +10,46 @@ services:
       - --providers.docker.network=platform_edge
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
+      # ENTRYPOINT-WIDE DEFAULTS, so that the safe form is what an
+      # application gets by saying nothing. Without these, every router in
+      # every application repository must repeat `entrypoints=websecure`
+      # and `tls.certresolver=letsencrypt` on itself, and one that forgets
+      # is served over plain HTTP with no signal at all -- the failure is
+      # a working site, not a broken one. A router that sets either label
+      # explicitly still wins; these only decide what an unopinionated one
+      # gets.
+      #
+      # The redirect cannot break certificate issuance HERE, and the
+      # reason is worth stating because it usually can: this resolver uses
+      # the TLS-ALPN-01 challenge (`acme.tlschallenge` below), which is
+      # answered on 443. An HTTP-01 resolver answers on 80, and a blanket
+      # redirect of that entrypoint is the classic way to lock yourself
+      # out of renewal. If the challenge type ever changes, this pair has
+      # to be revisited with it.
+      #
+      # `scheme=https` and the permanent (308) status are Traefik's own
+      # defaults for an entrypoint redirection; the scheme is stated
+      # anyway so a reader does not have to know that, and so a future
+      # default cannot move it silently.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.http.tls.certresolver=letsencrypt
+      # Access logging to stdout, where the host's daemon bounds it -- see
+      # "Container Logs Are Bounded by the Host's Daemon Configuration"
+      # (openspec/specs/iac-host-configuration/spec.md) and the 50m x 3
+      # ceiling in ansible/roles/docker/defaults/main.yml, whose own
+      # comment sized itself expecting exactly this ("on a Traefik
+      # fronting a public site 30 MB is plausibly an hour").
+      #
+      # TWO CONSEQUENCES, neither hidden. Traefik's own `docker logs`
+      # history gets shorter, because the ceiling is per container and
+      # access lines will dominate it. And the default CLF format records
+      # client IP addresses, which is personal data under GDPR -- fine for
+      # a personal host, a retention and lawful-basis question for a
+      # company one, and the reason to decide it here rather than discover
+      # it later. `--accesslog.fields.headers.defaultmode=drop` is the
+      # default and stays so; no request headers are recorded.
+      - --accesslog=true
       - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
