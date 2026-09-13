@@ -288,8 +288,8 @@ gh secret set HCLOUD_TOKEN_MAIN_STAGING             # staging Read Only
 gh secret set TF_API_TOKEN                          # the HCP user token
 gh secret set HCLOUD_TOKEN --env production         # production Read & Write
 gh secret set TF_API_TOKEN --env production         # the same HCP user token
-gh secret set HCLOUD_TOKEN --env staging            # staging Read & Write
-gh secret set TF_API_TOKEN --env staging            # the same HCP user token
+gh secret set HCLOUD_TOKEN --env main-staging       # staging Read & Write
+gh secret set TF_API_TOKEN --env main-staging       # the same HCP user token
 gh secret set APP_CLIENT_ID                         # the GitHub App's client id
 gh secret set APP_PRIVATE_KEY < ~/Downloads/<app-name>.private-key.pem
 ```

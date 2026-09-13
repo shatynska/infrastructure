@@ -133,17 +133,21 @@ PLATFORM_COMPOSE = ROOT / "platform" / "docker-compose.yml"
 # decommissioned by removing its directory -- which design.md's Rollback names
 # as a legitimate path -- this class fails, and the correct response is to
 # delete it as a change of its own, not to weaken it.
-# RE-POINTED twice, and the four constants below deliberately do NOT all agree.
+# RE-POINTED three times, and the four constants below now ALL agree -- which
+# they did not for most of this module's life, and the history is why the note
+# below about convention-not-derivation matters.
 # rename-the-stacks-and-their-resources moved the stack DIRECTORY to
 # `main-staging` and left the GitHub Environment, the read-only secret and the
 # workspace alone -- each lives in a namespace of its own, renamed by its own
 # interface. rename-the-external-services then moved the workspace and the
-# secret, and could not move the Environment: GitHub offers no rename for one
-# (measured 2026-09-12), so moving it means re-creating it with every secret
-# re-entered. `docs/change-queue.md` entry 75 owns that.
+# secret, and could NOT move the Environment: GitHub offers no rename for one
+# (measured 2026-09-12). rename-the-github-environments finally moved it, the
+# only way GitHub allows -- by creating `main-staging` and re-entering every
+# secret by hand -- so the interval in which three of these read `main-staging`
+# and the fourth read `staging` is closed.
 #
-# SO THREE OF THESE READ `main-staging` AND THE FOURTH READS `staging`, and the
-# difference is a fact about GitHub rather than an inconsistency here.
+# THEIR AGREEING IS NOT EVIDENCE THAT ANYTHING DERIVES THEM. It is four
+# separate renames in four separate interfaces that have arrived at one word.
 #
 # WHERE THEY DO AGREE IT IS A CONVENTION AND NOT A DERIVATION. Nothing computes
 # any of them from any other: a directory is renamed by a commit, a workspace in
@@ -153,7 +157,7 @@ PLATFORM_COMPOSE = ROOT / "platform" / "docker-compose.yml"
 # spec.md), which forbids exactly that and permits the agreement.
 SECOND_ENVIRONMENT = "main-staging"
 SECOND_ENVIRONMENT_READ_ONLY_SECRET = "HCLOUD_TOKEN_MAIN_STAGING"
-SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "staging"
+SECOND_ENVIRONMENT_GITHUB_ENVIRONMENT = "main-staging"
 SECOND_ENVIRONMENT_DESTROY_GATE = False
 # The workspace this stack names. A LITERAL, per the note above: it equals the
 # directory name and is not read from it.
@@ -332,15 +336,32 @@ def prose_sentences(text: str) -> list[str]:
 def environment_identifiers(root: Path | None = None) -> set[str]:
     """Every word that names one environment and not the others.
 
-    Both spellings an environment is referred to by: its directory name, and
-    the GitHub Environment its declaration names. Prod is `prod` in a path and
-    `production` in a secret store, and a record naming either one has named a
-    single environment.
+    All THREE spellings an environment is referred to by: its directory name,
+    the GitHub Environment its declaration names, and the Ansible group its
+    converge targets. Prod is `main-production` in a path and in a secret
+    store, and `production` as a group -- and a record naming any one of them
+    has named a single environment.
+
+    Four call sites read this, two here and two in
+    `test_host_configuration_names_its_environment`, so a source missing here
+    narrows all four at once.
     """
     names = {directory.name for directory in environment_directories(root)}
     for declaration in environment_declarations(root).values():
         if declaration.github_environment:
             names.add(declaration.github_environment)
+        # THE THIRD SOURCE IS NOT REDUNDANT, AND STOPPED BEING SO AT
+        # `rename-the-github-environments`. While every stack's GitHub
+        # Environment was named for its environment, the first two sources
+        # already covered the environment axis and this one added nothing.
+        # That change moved the Environments onto the STACK axis, at which
+        # point the first two collapse into each other -- both spell
+        # `main-production` and `main-staging` -- and the words `production`
+        # and `staging` drop out of this set entirely. They are the words
+        # `README.md` and `AGENTS.md` use in prose, so a sweep that lost them
+        # would go green by losing its subject rather than by being satisfied.
+        if declaration.target_group:
+            names.add(declaration.target_group)
     return names
 
 
@@ -1044,10 +1065,11 @@ class TestTheSecondEnvironmentIsDeclared(unittest.TestCase):
     def test_the_second_environment_declares_its_own_secret_and_environment(self) -> None:
         """DERIVED -- add-a-staging-environment's tasks.md 2.4 established the
         pair. rename-the-external-services moved one of them and not the
-        other: `github_environment: staging` stands, because GitHub cannot
-        rename an Environment, while `read_only_secret:
-        HCLOUD_TOKEN_MAIN_STAGING` moved because a repository secret can be
-        created under a new name.
+        other, because a repository secret can be created under a new name and
+        a deployment Environment cannot be renamed at all;
+        rename-the-github-environments then moved the second by re-creating it,
+        so `github_environment: main-staging` and `read_only_secret:
+        HCLOUD_TOKEN_MAIN_STAGING` now name the same stack.
 
         That the two must DIFFER from every other environment's is specified,
         and is asserted over the whole tree by

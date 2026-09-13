@@ -2427,11 +2427,27 @@ class TestTheDestroyGateReadsApplicabilityFromTheDeclaration(unittest.TestCase):
         conditioned on `prod` is the mapping in workflow text this requirement
         forbids, written as a condition rather than as a table."""
         self.test_the_gate_still_exists()
-        names = {directory.name for directory in environment_directories()} | {
-            declaration.github_environment
-            for declaration in environment_declarations().values()
-            if declaration.github_environment
-        }
+        names = (
+            {directory.name for directory in environment_directories()}
+            | {
+                declaration.github_environment
+                for declaration in environment_declarations().values()
+                if declaration.github_environment
+            }
+            # The third source, for the reason `_names()` above gives at
+            # length: `rename-the-github-environments` moved the GitHub
+            # Environments onto the stack axis, so the first two sources now
+            # spell the same two words and the environment axis would leave
+            # this sweep with nothing to say so. `_names()` read the group
+            # explicitly before that change and THIS SET DID NOT -- one of
+            # this module's two sweeps had the defence and the other did not,
+            # which is how the gap survived being looked at.
+            | {
+                declaration.target_group
+                for declaration in environment_declarations().values()
+                if declaration.target_group
+            }
+        )
         offenders = []
         for job, index, step in self.gate_steps:
             body = uncommented(yaml.safe_dump(step, sort_keys=True))

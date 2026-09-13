@@ -1018,6 +1018,18 @@ class TestTheConvergeJobIsGatedOnItsOwnGitHubEnvironment(
         for declaration in environment_declarations().values():
             if declaration.github_environment:
                 names.add(declaration.github_environment)
+        # THE THIRD SOURCE IS NOT REDUNDANT, AND STOPPED BEING SO AT
+        # `rename-the-github-environments`. While every stack's GitHub
+        # Environment was named for its environment, the first two sources
+        # already covered the environment axis and this one added nothing.
+        # That change moved the Environments onto the STACK axis, at which
+        # point the first two collapse into each other -- both spell
+        # `main-production` and `main-staging` -- and the words `production`
+        # and `staging` drop out of this set entirely. They are the words
+        # `README.md` and `AGENTS.md` use in prose, so a sweep that lost them
+        # would go green by losing its subject rather than by being satisfied.
+            if declaration.target_group:
+                names.add(declaration.target_group)
         self.assertTrue(
             names,
             "no environment directory and no declared GitHub Environment name was "
