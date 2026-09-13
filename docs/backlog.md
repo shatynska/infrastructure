@@ -4,15 +4,13 @@ Changes this project has identified and not yet opened. An entry is deleted when
 
 An entry carries a number, the change's name, and — where it has one — what it waits on. Not everything here is blocked: where an entry is free to be taken, it says instead why it was recorded rather than folded into the change that found it, usually because it belongs to a different concern than the one that change was closing.
 
-Entries are grouped by the part of the system they touch, and within a group an entry that another depends on comes first.
+Related entries tend to sit together and an entry another depends on tends to come first, but neither is a rule: a new entry is appended, so the order says nothing on its own. Where one entry actually waits on another, the entry says so.
 
 **The number is an identifier, not a priority, and it is not stable.** This file has been renumbered from 1 before and may be again, so a number written elsewhere — in a source comment, a specification, an archived change record — may no longer name the entry it was written for. The names are stable; cite an entry by name where the citation has to survive.
 
 ---
 
-## Host configuration
-
-### 1. close-public-ssh-and-manage-sshd-explicitly
+## 1. close-public-ssh-and-manage-sshd-explicitly
 
 **Not blocked; a policy decision the hardening role already anticipates.**
 
@@ -26,7 +24,7 @@ Closing it is `ssh_allowed_cidrs = []` -- except that `modules/server`'s validat
 
 Two smaller things in the same area, neither managed by any role today, both running on the image's defaults: `sshd_config` (the host has no drop-in under `/etc/ssh/sshd_config.d/`; `PasswordAuthentication` is unset, harmless only because no account has a password) and `unattended-upgrades` (installed and enabled by the image, not by `hardening`, with no `Automatic-Reboot` decision recorded). Both belong to the hardening role, and both can be asserted by its Molecule scenario.
 
-### 2. manage-root-authorized-keys-from-a-role
+## 2. manage-root-authorized-keys-from-a-role
 
 **Not blocked. Recorded by `apply-host-configuration-through-a-gated-workflow`, which installs a key it cannot revoke.**
 
@@ -38,7 +36,7 @@ That is not a regression -- root's existing key is unmanaged in exactly the same
 
 **The chicken-and-egg is real either way and is not an argument against it**: the role that would install the key is a role CI runs, so the first installation is manual whichever shape this takes. What the change buys is every installation after the first.
 
-### 3. report-an-absent-tailscale-auth-key
+## 3. report-an-absent-tailscale-auth-key
 
 **Not blocked on another change; recorded because doing it well is a larger job than it looks, and doing it badly breaks the host's reachability.**
 
@@ -56,7 +54,7 @@ Three things make this its own change rather than a fold-in:
 
 Recorded by `fix-volume-discovery-and-consistency`, whose `design.md` Decision 3a carries the full reasoning.
 
-### 4. collect-each-role-s-apt-installs-into-one-task
+## 4. collect-each-role-s-apt-installs-into-one-task
 
 Recorded 2026-09-11 by `cache-the-apt-index-within-a-converge`, whose Non-Goals name it and whose own saving it would extend.
 
@@ -68,7 +66,7 @@ That change bounded how stale an index a converge will install from, which remov
 
 So the honest framing is that this is the fix for the production half that `cache-the-apt-index-within-a-converge` explicitly did not deliver, rather than a further trim of the continuous-integration half it did.
 
-### 5. report refused removals in the host prune
+## 5. report refused removals in the host prune
 
 `prune-host-images` reports `considered N, removed M`, where `considered` is every distinct image identity on the host rather than a candidate set. A shortfall between the two therefore carries no signal: a defective keep set prints `considered N, removed 0`, byte-identical to a healthy run over a host where everything is referenced.
 
@@ -76,15 +74,13 @@ So the honest framing is that this is the fix for the production half that `cach
 
 Recorded rather than folded into `prune-unreferenced-host-images-periodically` because it adds a field to a report the delta specifies exactly, and that is a specification change, not an implementation detail.
 
-## The platform stack and its deploy
-
-### 6. size-platform-container-resource-limits
+## 6. size-platform-container-resource-limits
 
 **Blocked on data, not on another change.** No service in `platform/docker-compose.yml` declares a memory or CPU limit, on a `cx33`, while `ContainerRestartingOrOOMKilled` alerts on the consequence. A single container can currently starve the host.
 
 Limits picked without evidence are guesses that cause the outage they were meant to prevent. The monitoring stack now collects exactly the data needed — `container_memory_usage_bytes` by container, already on the "Container health" dashboard. Let it run long enough to show real steady-state and peak, then size from observation.
 
-### 7. alert-on-swap-utilisation
+## 7. alert-on-swap-utilisation
 
 **Not blocked; recorded rather than folded into `bound-host-log-growth-and-add-swap`, which is the change that gives this host swap in the first place.** That change is host-level Ansible; this one is a `platform/` Compose change reached by a different pipeline, and folding it in would have made a single change need two deploys.
 
@@ -96,7 +92,7 @@ Worth deciding at the same time whether the threshold is a level (swap above som
 
 **Do not size it before entry 6.** Container memory limits change what swap is ever asked to absorb, so a threshold chosen now describes a host that is about to change.
 
-### 8. set-traefik-wide-defaults-for-redirect-and-tls
+## 8. set-traefik-wide-defaults-for-redirect-and-tls
 
 **Not blocked; small, and it removes a class of application mistake.**
 
@@ -104,7 +100,7 @@ Traefik's `web` entrypoint (80) is open and serves whatever an application route
 
 `--entrypoints.web.http.redirections.entrypoint.to=websecure` and `--entrypoints.websecure.http.tls.certresolver=letsencrypt` on the Traefik service make the safe form the default and the labels optional. While there, Traefik's access log is off; turning it on (to stdout, where the host's daemon now bounds it -- see *Container Logs Are Bounded by the Host's Daemon Configuration* in openspec/specs/iac-host-configuration/spec.md) is what makes entry 9 useful for HTTP traffic.
 
-### 9. aggregate-container-logs
+## 9. aggregate-container-logs
 
 **Not blocked; lowest priority in this batch for a host running one application, and the first thing missed when it runs several.**
 
@@ -112,7 +108,7 @@ Logs are read by `docker logs` over SSH as `ops-claude`, per container, and are 
 
 Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones.
 
-### 10. upgrade-the-shared-postgres-major
+## 10. upgrade-the-shared-postgres-major
 
 **Not blocked; recorded rather than opened because it needs a maintenance window and a deliberate volume reset, neither of which a version-bump pull request can carry.** Recorded 2026-09-08, when Dependabot proposed it and the proposal was closed.
 
@@ -128,7 +124,7 @@ Note the divergence this does **not** cover: `commerce-ops` runs its own Postgre
 
 **Do first**: check whether any application is by then storing something in the shared instance that it would rather not lose, in which case the answer is that it should not have been (see the requirements above) and that is the thing to fix, not the upgrade.
 
-### 11. remove-the-stale-test-hostname
+## 11. remove-the-stale-test-hostname
 
 **Not blocked; small, and recorded rather than folded into `alert-on-certificate-expiry`, which found it while reading Traefik's certificate metrics on 2026-09-09.**
 
@@ -141,7 +137,7 @@ Nothing is broken by it. It is a standing request to a public certificate author
 
 **Order matters when removing it.** Take the DNS record away first, then the certificate from Traefik's `acme.json`. The reverse leaves a name resolving to the host whose certificate has already gone, which is a worse state than the one being cleaned up. There is no router to remove -- the container that had one is already gone -- so this is a DNS edit plus an `acme.json` edit, and the second requires deciding whether editing that file by hand is acceptable at all or whether the entry is better closed by leaving the certificate to lapse once the record is gone.
 
-### 12. verify-at-deploy-time-that-what-shipped-is-what-runs
+## 12. verify-at-deploy-time-that-what-shipped-is-what-runs
 
 **Not blocked; recorded rather than folded into `apply-shipped-config-on-deploy`, which deliberately stops short of it.**
 
@@ -167,9 +163,7 @@ Nothing currently reports this. The deploy-time hash comparison above does not: 
 
 Bounded in the meantime by how rotation actually happens here: it is a manual act by the operator, who can force the replacement in the same session. Worth writing that into the rotation step of whatever runbook covers it, which is a smaller piece of work than this entry and does not wait on it.
 
-## Monitoring and alerting
-
-### 13. name-every-alert-in-a-grouped-slack-notification
+## 13. name-every-alert-in-a-grouped-slack-notification
 
 **Not blocked; recorded rather than folded into `alert-on-certificate-expiry`, which routed around it for its own alert and found the general case in doing so.**
 
@@ -181,7 +175,7 @@ Alertmanager's `slack` receiver renders `{{ .CommonAnnotations.summary }}` and `
 
 The general fix is in the receiver, not in a route: render `{{ range .Alerts }}` so a grouped notification lists each alert's own annotations. That changes delivery for **every** alert in the stack, including ones nobody has re-read, which is why it is a change of its own rather than a fold-in. Worth pairing with an assertion that no alert's annotations reference a label absent from its route's `group_by`, which is a static read of the committed file and would catch the next instance instead of waiting for it to fire.
 
-### 14. check-public-endpoints-from-outside
+## 14. check-public-endpoints-from-outside
 
 **Not blocked; recorded because the monitoring stack watches the host and not the customer's path to it. Narrowed on 2026-09-09 by `alert-on-certificate-expiry`, which delivered the certificate-expiry half.**
 
@@ -199,7 +193,7 @@ The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves t
 
 **So what is left is an external uptime service**, with a check per hostname, independent of the host in the way the Watchdog is. Note that the assumption this entry made about it is probably false: the heartbeat provider named in `docs/bootstrap-a-new-host.md` is healthchecks.io, which monitors inbound pings and does not make outbound HTTP checks. This is likely a second vendor account and therefore an operator decision with a cost attached, which is the main reason it is still queued rather than opened.
 
-### 15. reconcile-the-heartbeat-checks-with-what-the-repository-prescribes
+## 15. reconcile-the-heartbeat-checks-with-what-the-repository-prescribes
 
 **Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, whose own operator step went looking for a check the observer does not hold.**
 
@@ -226,9 +220,7 @@ The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves t
 
 **Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
 
-## Staging and the second environment
-
-### 16. deploy-the-platform-stack-per-environment
+## 16. deploy-the-platform-stack-per-environment
 
 Recorded 2026-09-10 by `bootstrap-two-environments`, which needed to tell a company reader what their second server can and cannot have. Two of the three answers were already written down; this was the third and it was recorded nowhere.
 
@@ -251,7 +243,7 @@ Once converged, staging's `deploy` account is authorised for `platform` under a 
 
 **Staging's prune check will be red until this lands** -- from the converge that arms the timer, not from now. `main-staging-prune-host-images` does not exist until the unit's first activation pings it into being. Once it does, it reports failure every week, because a host with nothing deployed has an empty keep set, which the prune treats as a refusal rather than licence to remove everything. That was accepted deliberately and bounded by this entry; if it stays red long enough to be tuned out, that is the signal to revisit rather than to mute it.
 
-### 17. expose-staging-on-the-web
+## 17. expose-staging-on-the-web
 
 **The half of that same split entry which 16 does not claim.** Recorded 2026-09-10 by `configure-the-staging-host`, which took its host half and deleted it on archiving. Without this entry the work below would have gone with it, since entry 16's own text scopes itself to `platform-deploy.yml`'s `environment:` literal and the eight `PLATFORM_*` secrets and mentions neither ports nor DNS.
 
@@ -265,7 +257,7 @@ Staging is a configured host with no way in from the internet:
 
 **Blocked on 29, or at least pointless before it.** The undivided entry held both halves and got this ordering for free; splitting them loses it, so it is stated. Ports opened before the stack can reach staging is precisely the state the bullet above warns against.
 
-### 18. refresh-staging-group-vars-banner
+## 18. refresh-staging-group-vars-banner
 
 Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, which sends a reader to that file for evidence and meets a banner saying the opposite of what the file now is.
 
@@ -279,9 +271,7 @@ The banner was correct when written and is the kind of text that goes stale sile
 
 Not blocked, and small. It touches one file and no mechanism.
 
-## Data, recovery and the rebuild
-
-### 19. move-commerce-ops-durable-data-to-supabase
+## 19. move-commerce-ops-durable-data-to-supabase
 
 **Not blocked, and not this repository's to do — recorded because `openspec/specs/iac-safety-hardening/spec.md` now names it as a divergence and nothing else tracks it.**
 
@@ -293,7 +283,7 @@ The resolution is that the application's durable data moves to Supabase, which o
 
 Worth knowing for whoever takes it: the migration is not all-or-nothing. The `procrastinate_*` tables could legitimately stay on this host, in the shared instance, under the scoping that requirement now records.
 
-### 20. write-and-rehearse-the-rebuild-runbook
+## 20. write-and-rehearse-the-rebuild-runbook
 
 **Not blocked; recorded because every piece exists and nobody has run them in sequence.**
 
@@ -301,7 +291,7 @@ Recovering this host from nothing is: a Terraform apply through the gated pipeli
 
 A `docs/runbook-rebuild.md` that lists them in order, names the secret each step needs, and records the last rehearsal's date and duration is the deliverable. The rehearsal is the point; the document is how it survives. Staging is where the rehearsal can happen without touching prod — converged since 2026-09-10, though entry 16 is what puts a platform stack on it to rehearse against.
 
-### 21. exercise-the-volume-server-coupling-against-live-state
+## 21. exercise-the-volume-server-coupling-against-live-state
 
 **Not blocked; recorded because an archived change is where it would be lost.** Recovered 2026-09-08 by `make-openspec-validation-a-usable-gate` while settling the red archived records. `add-prod-data-volume`'s task 3.5 was left unticked with the note *"Still open; consider doing this as a follow-up plan-only check"* — real outstanding work, sitting in prose inside a change that had already been archived, which is precisely where nobody would look for it. That task is now disclosed under that change's `## Not performed`; the work it names is here.
 
@@ -318,9 +308,7 @@ The requirement this protects is *Conditional Prod Volume Creation* in `openspec
 
 Worth doing before the coupling is next relied on — a volume that survived its server would be an orphaned resource with no location, which is the failure the coupling exists to prevent and which nothing has yet observed being prevented.
 
-## Continuous integration and the gated workflows
-
-### 22. narrow-the-converge-trigger-to-what-a-converge-reads
+## 22. narrow-the-converge-trigger-to-what-a-converge-reads
 
 **Not blocked. Recorded 2026-09-12, from the merge of `rename-terraform-environments-to-stacks` (PR #148).**
 
@@ -346,7 +334,7 @@ The cost was not the wall clock. Production's job sat **6h34m** waiting for its 
 
 **Weigh it against the alternative of doing nothing.** The cost today is wall-clock and a standing risk that a documentation change perturbs production. The benefit of the current coarse trigger is that it cannot under-converge. That is a real benefit and this entry should not be taken as a foregone conclusion — a reviewer may decide the coarse trigger is the right answer for the host layer precisely because the failure mode is silent.
 
-### 23. make-the-converge-survive-a-galaxy-outage
+## 23. make-the-converge-survive-a-galaxy-outage
 
 **Not blocked. Recorded 2026-09-12, from the merge of `rename-the-external-services` (PR #155), whose gated production converge failed on it.**
 
@@ -380,7 +368,7 @@ A different collection, a different error and a different workflow, so a fix aim
 
 The cost here is lower than on the converge — a red check and a re-run, not a spent production approval — but it broadens the subject: whatever the fix is, it belongs to **every** workflow that installs Galaxy content, not to `host-converge.yml` alone. Weigh the options above against how often this happens: twice in one day, on two different workflows, against two different collections.
 
-### 24. detect-host-drift-on-a-schedule
+## 24. detect-host-drift-on-a-schedule
 
 **Not blocked, and deliberately not done by `apply-host-configuration-through-a-gated-workflow`**, which is the change that made it possible and the one that declined it. That change's own `design.md` Decision 10 carries the full reasoning; what follows is what this entry inherits.
 
@@ -394,7 +382,7 @@ A converge applies what is committed. Nothing reports what a host has drifted to
 
 Shape it as `drift.yml`'s sibling: scheduled, per environment, an issue per environment deduplicated by title, and a liveness report -- the last is obligatory, since *Scheduled Workflows Report Their Own Liveness* reaches every `schedule:`-triggered workflow.
 
-### 25. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
+## 25. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
 
 **Not blocked. Recorded 2026-09-12, from the same merge.**
 
@@ -419,7 +407,7 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 
 **Not in scope here:** auto-replanning on staleness. That would apply a plan no human reviewed, which is the requirement this entry exists to respect.
 
-### 26. make-a-waiting-approval-announce-itself
+## 26. make-a-waiting-approval-announce-itself
 
 **Not blocked. Recorded 2026-09-12 by `rename-the-external-services`, which lost three and a half hours to it and recorded the recognition advice without recording the gap.**
 
@@ -443,7 +431,7 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 
 Two things make this instance worse than the first. The approval **should not have been requested at all** — entry 22 above covers why, and this same run is its evidence. And the session that opened the pull request had stated the merge would start no converge, so the operator had been told there was nothing to watch for. A mechanism that announces a waiting approval does not depend on anyone having predicted it correctly, which is the argument for building one rather than relying on the author's summary.
 
-### 27. factor-the-four-stack-discovery-bodies
+## 27. factor-the-four-stack-discovery-bodies
 
 **Not blocked. Recorded when the fourth one was written.**
 
@@ -455,7 +443,7 @@ The existing comment in those three anticipated this: *"Copies are not the only 
 
 Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.
 
-### 28. matrix-the-molecule-suite-over-scenarios-and-bound-each-job
+## 28. matrix-the-molecule-suite-over-scenarios-and-bound-each-job
 
 **Not blocked; recorded rather than folded into `promote-molecule-to-a-required-check`**, whose proposal names it as a non-goal. That change decides which job is required and reshapes the workflow's triggers; this one changes what a job *is*. Landing both in one diff would mean the change that picks the registered context also redefines the thing being registered.
 
@@ -481,7 +469,7 @@ No workflow in `.github/workflows/` declares `timeout-minutes` anywhere, so ever
 
 `cache-the-apt-index-within-a-converge` has since lowered both the baseline and the ceiling, so the durations this one chooses against are the ones measured after it and not the ones quoted above. They are independent in mechanism and not in the number.
 
-### 29. two-deferred-ci-items
+## 29. two-deferred-ci-items
 
 Both noticed during `close-ci-verification-gaps`, neither a verification gap:
 
@@ -489,7 +477,7 @@ Both noticed during `close-ci-verification-gaps`, neither a verification gap:
 - **The destroy-policy gate's inspection logic is inline workflow shell.** Moving it into a version-controlled script with executable fixtures would make the highest-consequence logic in this repository reviewable and testable as code — `design.md` Decision 5 of that change names this as considered and deferred on merit-vs-scope grounds, not as rejected. Four fixtures already exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are described in that change's `tasks.md` 1.1; the structural tests in `.github/tests/test_ci_configuration.py` currently assert the routes are closed, not that each is reached.
 - **`actionlint` is named as a verification means but nothing installs it.** Three tasks in `close-ci-verification-gaps` cite it, and it was run manually from a scratch install. Adding it to `.pre-commit-config.yaml` would close that permanently — but it exits non-zero on two pre-existing `SC2016:info` findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the job-summary step — both single-quoted literal markdown in an `echo`, and both intentional). So landing the hook means dispositioning those two first, by fixing or ignoring them. That is the same trap this change refused to lay for the next person when `ansible-lint` failed on pre-existing violations, and it wants its own decision rather than being folded in.
 
-### 30. lint-the-repository's-shell-scripts
+## 30. lint-the-repository's-shell-scripts
 
 **Not blocked; recorded rather than folded into `namespace-the-molecule-suite-per-working-tree`**, which added the script that makes this worth doing.
 
@@ -497,9 +485,7 @@ Both noticed during `close-ci-verification-gaps`, neither a verification gap:
 
 The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a decision about whether `.github/tests` should assert that the hook exists — the same shape as the pins that suite already reads. Small, and worth doing before there is a second script.
 
-## Role and play testing
-
-### 31. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
+## 31. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
 
 `prune-unreferenced-host-images-periodically` shipped two guards that no assertion covers: local images are enumerated *before* the keep set is computed, and each tag is re-resolved immediately before removal. Both are observable only when the host's images change midway through a run, and a black-box Molecule scenario has no seam at which to change them. They are also the two that close the concurrent-deploy window against `app-deploy`, so the least-verified part of that design is the part facing the only actor competing with it.
 
@@ -513,7 +499,7 @@ The entries from here to 13 came out of a second full review on 2026-09-08 (trun
 
 Only what applies to **this** host too is recorded here; the company-only findings (repository visibility, a second approver, an organisation-owned repository) are not this repository's concern. The review's verdict repeated the first audit's: the architecture is sound, and what follows is operational rather than structural. It read the live host as well as the tree, so where an entry cites a host fact, that is what `main-server` showed on 2026-09-08, not an inference from the code.
 
-### 32. test-a-play-at-play-scope
+## 32. test-a-play-at-play-scope
 
 Recorded 2026-09-10 by `configure-the-staging-host`, whose `design.md` Decision 10 found the gap and whose test author independently confirmed it.
 
@@ -530,7 +516,7 @@ What a play-scope harness would cover, beyond this one guard: any play-level beh
 
 Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and whatever runner it needs, which is why it was not invented inside a change whose diff most needed reading closely.
 
-### 33. tighten-the-refusal-scenario-s-own-filesystem-assert
+## 33. tighten-the-refusal-scenario-s-own-filesystem-assert
 
 **Not blocked. Recorded 2026-09-12 by `namespace-the-molecule-loop-devices`, whose code review found it in a file that change edits but in a line it does not author.**
 
@@ -540,9 +526,7 @@ Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and wh
 
 **A second, separate hazard in the same assert, which tightening the predicate does NOT close.** Each play redeclares its loop-minor offset by hand, so `verify.yml` and `prepare.yml` could drift apart. A drifted `verify` probes an unassociated minor, gets rc 2, and passes — under `rc != 2` exactly as under `rc != 0`. Whoever takes this entry should fix the rc-1 case and record the drift as still open, rather than closing one believing it closed the other. Deriving both from one place, or asserting in `verify` that the device is the one `prepare` associated, are the two shapes available.
 
-## The static test suite
-
-### 34. hold-the-whole-static-suite-to-its-own-constraints
+## 34. hold-the-whole-static-suite-to-its-own-constraints
 
 **Not blocked; small, and recorded by `alert-on-certificate-expiry`, which is the change that made it untrue.**
 
@@ -554,7 +538,7 @@ The fix is to widen the three from their own file to every `test_*.py` in the su
 
 Note the edge this sits on. The derive-tests step has an author other than the implementer write a change's tests, and forbids that author editing an existing test file — so tests belonging in one arrive as a new module instead. Whether such a module is then folded into an existing one or left standing is a question about that workflow rather than about this repository, and it is settled where the workflow is written. This entry is what the tree owes either way: a module left standing must be held to the suite's own constraints.
 
-### 35. prune-the-repository-walkers-of-provisioned-content
+## 35. prune-the-repository-walkers-of-provisioned-content
 
 Recorded 2026-09-11 by the test author deriving `cache-the-apt-index-within-a-converge`, who met it as a red suite on a provisioned working tree.
 
@@ -570,7 +554,7 @@ Worth doing before the next person meets it: this failure reads as "your tree is
 
 **It is also a race, not only a false positive.** That directory is *live* while Molecule runs — the ephemeral `tmp/` is created and removed under it — so running this suite during a Molecule run produces an intermittent error on top of the steady failure, as a file the walker has listed disappears before it is read. Observed 2026-09-11 while both ran at once, and not reproducible afterwards, which is the worst shape for anyone trying to diagnose it. Reading tracked files removes the race with the false positive, since nothing under that directory is tracked.
 
-### 36. unify-the-two-role-exclusion-rules
+## 36. unify-the-two-role-exclusion-rules
 
 **Not blocked.** Recorded as declined until 2026-09-13, and re-read then as work deferred on diff-hygiene grounds rather than a decision taken, which is what puts it here.
 
@@ -582,7 +566,7 @@ The newer rule is the stronger one: content vendored into `ansible/roles/` that 
 
 Worth doing before a directory appears that the two rules would classify differently, at which point the disagreement stops being theoretical and one of the two is silently wrong about a real role.
 
-### 37. widen-what-the-pull-request-identity-checks-can-read
+## 37. widen-what-the-pull-request-identity-checks-can-read
 
 **Not blocked.** Recorded as declined until 2026-09-13.
 
@@ -599,7 +583,7 @@ None is a defect in what the tests assert; each is a limit on the shapes they ca
 
 The first of the four is the one most likely to bite: it fires the first time a workflow here opens a pull request with `gh` instead of an action, and it fires as a red build on a correct change.
 
-### 38. assert-the-autoupdate-workflow-s-two-unchecked-properties
+## 38. assert-the-autoupdate-workflow-s-two-unchecked-properties
 
 **Not blocked.** Recorded as declined until 2026-09-13, though with its own successor already named: "a small change of its own that adds the scenario and has the assertion derived from it".
 
@@ -614,7 +598,7 @@ Neither is a live risk today: the App's own scope is exactly the two permissions
 
 The workflow header says plainly which of its claims the suite does not stand behind, and that note is what this entry replaces.
 
-### 39. assert-every-role-has-a-mock_roles-entry
+## 39. assert-every-role-has-a-mock_roles-entry
 
 **Not blocked; recorded rather than folded into `bound-host-log-growth-and-add-swap`, which is the change that hit it.** Adding the missing entry belonged to that change; asserting the invariant is a different concern, and the `.github/tests` suite is not that change's subject.
 
@@ -626,7 +610,7 @@ This is a **static read of a committed file** -- the set of directories under `a
 
 Worth doing because the cost is paid by whoever adds the *next* role, not by whoever left the list short, and because the failure arrives as a message pointing somewhere else.
 
-### 40. assert-every-tfvars-assigns-its-required-variables
+## 40. assert-every-tfvars-assigns-its-required-variables
 
 Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the gap by falling into it.
 
@@ -636,7 +620,7 @@ That places it squarely in `.github/tests`, whose subject is any property that i
 
 **Not blocked.** It was left out of `add-a-staging-environment` because the gap it covers was that change's own disclosed, in-flight state — writing the check that fails the tree you are still assembling is a different change than the one that assembled it.
 
-### 41. assert-the-bootstrap-document's-static-conventions
+## 41. assert-the-bootstrap-document's-static-conventions
 
 Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, whose code review identified two conventions that hold across `docs/bootstrap-a-new-host.md` and are checkable by a static read of it — which `AGENTS.md` says is asserted in `.github/tests` "or nowhere".
 
@@ -649,7 +633,7 @@ Both have the property the citation-form check already exists for: correct when 
 
 Not blocked. One new module in `.github/tests`, whose constraints it fits: a static read of one committed file, no network, no credential, no container.
 
-### 42. assert-markdown-prose-is-not-hard-wrapped
+## 42. assert-markdown-prose-is-not-hard-wrapped
 
 Recorded 2026-09-11, alongside the fix that removed the hard wraps this entry exists to keep out. `AGENTS.md`'s "Throughout" section now states the rule — *"Do not hard-wrap prose. Keep each paragraph on a single line whatever its length"* — and nothing checks it.
 
@@ -663,9 +647,7 @@ The rule makes the assertion crisp rather than heuristic: under "one line per pa
 
 Not blocked. One new module in `.github/tests`, whose constraints it fits: a static read of committed files, no network, no credential, no container.
 
-## Dependency pins
-
-### 43. catch-up-the-drifted-galaxy-pins
+## 43. catch-up-the-drifted-galaxy-pins
 
 **Not blocked.** Recorded 2026-09-08, from an inventory taken while archiving `open-autoupdate-pr-with-app-token`.
 
@@ -685,7 +667,7 @@ Four majors is a migration rather than a version bump, which is why this is an e
 
 **Also delete the stale caveat while here.** Four of the five pins carry a comment saying the version "was chosen without the ability to query Galaxy from this environment (no network access) -- confirm it resolves". All five were confirmed against the Galaxy API on 2026-09-08 and every one resolves. The comment is now false where it is not merely stale, and it invites the next reader to re-do work that has been done.
 
-### 44. cover-the-unwatched-manifests-and-settle-the-watcher
+## 44. cover-the-unwatched-manifests-and-settle-the-watcher
 
 **Not blocked; the same shape as `cover-platform-images-with-dependabot`**, whose entry was deleted from this file when that change landed.
 
@@ -713,9 +695,7 @@ Self-hosted Renovate is the interesting middle: it would reuse the `infrastructu
 
 **The condition this waited on is met.** It said: do not add a fifth automation to a repository where nothing notices a red scheduled run, which is the lesson `open-autoupdate-pr-with-app-token` was. Something notices now — `notice-when-a-periodic-job-stops-reporting` gives every scheduled workflow a heartbeat check whose silence alarms, and its own coverage test obliges any workflow added later to carry one. The trust cost argued above is what remains to weigh.
 
-## Specifications, citations and naming
-
-### 45. sweep-the-stale-scenario-titles-and-check-them
+## 45. sweep-the-stale-scenario-titles-and-check-them
 
 **Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, which swept the requirement half of this defect and measured the scenario half rather than folding it in.**
 
@@ -729,7 +709,7 @@ A citation in this repository names a requirement and, very often, a scenario in
 
 **Do the check with the sweep, not after it.** `.github/tests/test_the_retired_requirement_names_are_gone.py` already reads every tracked file, already flattens each one so a title wrapped across a comment's line break is found, and already derives its subject from committed specifications. The scenario predicate is the inverse of its current one — a cited title that is **not** among the live scenario titles, rather than a name that **is** among the retired ones — so it needs a reader of its own rather than a second literal. Its false-positive risk is the thing to measure first: a quoted phrase that is not a citation at all looks exactly like a citation of a scenario that does not exist.
 
-### 46. rename-the-requirements-that-read-narrower-than-they-are
+## 46. rename-the-requirements-that-read-narrower-than-they-are
 
 **Not blocked.**
 
@@ -767,7 +747,7 @@ The first two describe a mechanism both environments now use: staging declares `
 
 **What makes it live rather than theoretical.** Entry 16 puts the platform stack and a database on staging. That is the moment "this host" stops being merely imprecise and starts being wrong about which host a durability obligation binds — so this is worth taking before 29 rather than after it.
 
-### 47. correct-the-tfvars-parenthetical-that-names-labels
+## 47. correct-the-tfvars-parenthetical-that-names-labels
 
 **Not blocked, and small.** It waited three months as a correction to batch into whatever change next touched the requirement, and no such change came — which is what makes it an entry of its own.
 
@@ -779,7 +759,7 @@ The disagreement is **factual, not normative**. The parenthetical is illustrativ
 
 **What it costs is the part to decide when it is proposed.** Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the requirement's parenthetical agrees with `terraform.tfvars`" — a cross-file assertion this repository has declined twice on its own merits, on the grounds that an assertion converts a silent staleness into a standing editing obligation. So this change should probably correct the prose and argue explicitly that the scenario it owes is not that assertion.
 
-### 48. correct-the-read-only-secret-name-in-the-provider-comments
+## 48. correct-the-read-only-secret-name-in-the-provider-comments
 
 **Not blocked. Recorded 2026-09-11 by `rename-terraform-environments-to-stacks`'s code review, which found it while reading the files that change swept.**
 
@@ -796,7 +776,7 @@ Prod declares `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` in its own `pipel
 
 **Whether a check can hold it.** Probably: the declared `read_only_secret` and the names these comments assert are both static reads of committed files, which is `.github/tests`' own subject, and the suite already reads every `pipeline.yml`. Worth deciding when the change is proposed rather than now — a comment asserting a secret name is harder to locate reliably than a declaration stating one, and a check that locates it badly is worse than the prose.
 
-### 49. separate-history-from-rationale-in-source-comments
+## 49. separate-history-from-rationale-in-source-comments
 
 **No longer blocked.** It waited on the citation-form decision and on the sweep that followed it; both were delivered by `decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which also converted every citation in the comment blocks below. What remains here is the separation this change deliberately did not do: it changed citation *form* only, and left the prose around it alone.
 
@@ -813,7 +793,7 @@ Only the first kind survives archiving. Concrete instances of the other two (the
 
 The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-13; it was 48 against 90 when this entry was written, so the ratio has worsened rather than held. This is a style question with a real maintenance cost, not a cosmetic one.
 
-### 50. bring-the-workstation-onto-the-naming-scheme
+## 50. bring-the-workstation-onto-the-naming-scheme
 
 **Partly done on 2026-09-13, and what remains is the part that costs something. Recorded by `rename-the-github-environments`, which read every one of these files while establishing that three "unrecoverable" private halves were not gone.**
 
