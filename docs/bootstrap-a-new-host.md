@@ -24,6 +24,8 @@ Two habits, learned by getting them wrong. Both are about the *kind* of mistake 
 
 **A fix aimed at the row a reviewer named will recreate the defect one row over.** Ask instead what predicate produced it and sweep every candidate: *for each creation step in a per-stack stage, what does the second run do?* *For each `ssh-keygen`, where does the private half sit and what removes it?* Both of those, swept, found instances nobody had reported.
 
+**Two of those sweeps are now a check rather than a habit**, in `.github/tests/test_the_bootstrap_documents_static_conventions.py`: that every `ssh-keygen -f` here writes under `~/.ssh/`, and that every cross-reference — `§6.6` and the prose `stage 6.6` alike — names a heading this document actually has. Both fail the pull request, so neither needs remembering. What is *not* checked is the half that matters as much: whether the section a reference resolves to still says what the citing sentence claims it says. That stays with the habits above.
+
 The generator behind both: **a property that holds when this document is read once, straight through, and fails when it is read the way it is actually used** — twice, once per stack; across elapsed time, with a `git add -A` in the middle; by following its own cross-references; on a rebuild, re-entering from the middle; by someone who wants one stack and is translating every "two" as they go. Each of those is a sweep, and each has caught something.
 
 ## Stage 0. Accounts, tools and keys
