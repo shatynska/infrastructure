@@ -47,15 +47,19 @@ Both read back exactly rather than reconstructed, from the deployment that is us
 
 `~/.terraform.d/credentials.tfrc.json` holds a token for `app.terraform.io`, where `terraform login` put it. It is **recovered, not reissued**. `docs/change-queue.md` entry 75 recorded this and an earlier draft of `design.md` denied it; entry 75 was right.
 
-## 1.6 — The Tailscale client is held outside this repository, and that decides task 9.4
+## 1.6 — The Tailscale pair is recoverable after all, which removed a whole mechanism
 
-**`commerce-ops` holds it.** `gh api repos/shatynska/commerce-ops/environments/production/secrets` lists 20 secrets including `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`. That repository is real and running: `commerce-ops-app-1`, `commerce-ops-worker-1` and `commerce-ops-postgres-1` are up on the production host alongside the platform stack.
+**The operator holds both halves of the existing OAuth client**, confirmed 2026-09-13. So the pair is carried over like the other twenty values and **nothing in this change is reissued, replaced or invalidated**.
 
-Task 9.4's rule applies directly: an Environment defining `TAILSCALE_OAUTH_CLIENT_ID` counts as a holder **unless that repository's own client ID is confirmed distinct from the Tailscale console**. A secret's value cannot be read back, so `gh` cannot settle which client it is. So unless the operator confirms from the console that `commerce-ops` uses a different client, **the old client is not revoked**, and task 9.4's default branch — leave it live, record the decision, open a queue entry for the wider rotation, and correct the runbook's Appendix A row — is the one that applies.
+That is the third time this change priced work against a document saying a value was gone and found it was not. §0.3 says to delete each SSH private half once stored — they were not deleted. An earlier draft of `design.md` said `TF_API_TOKEN` could not be read back — it is in `~/.terraform.d/credentials.tfrc.json`. An earlier draft said an OAuth client secret, shown once at creation, could not be recovered — the operator has it.
 
-This was found in section 1 rather than at section 9, which is where it would have been expensive. It is the concrete instance of the hazard the third review round raised as a possibility.
+**What it removed from the plan**: the task that created a replacement client, the task that revoked the old one, the rule deciding when revocation was permissible, and the design reasoning that held all three together. That reasoning had already been rewritten twice across review rounds 2 and 3 — first because reissuing late would have left `main-staging` holding a dead credential, then because revoking would have reached repositories outside this change's scope. None of it was needed.
 
-**Still outstanding in 1.6**, and an operator action: confirming the *scope and tag* of the client to be created at 3.2 against the old one — Auth Keys: Write, `tag:ci` per the runbook's stage 5.
+### The finding that made revocation dangerous, kept because it stays true
+
+`commerce-ops` holds `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` on its own `production` Environment — `gh api repos/shatynska/commerce-ops/environments/production/secrets` lists 20 secrets including both. That repository is live: `commerce-ops-app-1`, `commerce-ops-worker-1` and `commerce-ops-postgres-1` are running on the production host alongside the platform stack.
+
+This is no longer this change's problem, because this change no longer revokes anything. It is recorded here rather than discarded because it remains true and it is the kind of fact that is expensive to rediscover: **whoever eventually rotates that OAuth client must treat `commerce-ops` as a holder**, and a secret's value cannot be read back, so no API call can establish whether it is the same client or a second one with the same tag. Only the Tailscale console can.
 
 ## Incidental observations, recorded rather than acted on
 
