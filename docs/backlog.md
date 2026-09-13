@@ -92,21 +92,13 @@ Worth deciding at the same time whether the threshold is a level (swap above som
 
 **Do not size it before entry 6.** Container memory limits change what swap is ever asked to absorb, so a threshold chosen now describes a host that is about to change.
 
-## 8. set-traefik-wide-defaults-for-redirect-and-tls
-
-**Not blocked; small, and it removes a class of application mistake.**
-
-Traefik's `web` entrypoint (80) is open and serves whatever an application routes there; there is no entrypoint-level redirect to `websecure`, and no default `certresolver`. Every application's Compose file must therefore repeat `entrypoints=websecure` and `tls.certresolver=letsencrypt` on each router, and one that forgets is served over plain HTTP with no signal. commerce-ops sets both; the next application may not.
-
-`--entrypoints.web.http.redirections.entrypoint.to=websecure` and `--entrypoints.websecure.http.tls.certresolver=letsencrypt` on the Traefik service make the safe form the default and the labels optional. While there, Traefik's access log is off; turning it on (to stdout, where the host's daemon now bounds it -- see *Container Logs Are Bounded by the Host's Daemon Configuration* in openspec/specs/iac-host-configuration/spec.md) is what makes entry 9 useful for HTTP traffic.
-
 ## 9. aggregate-container-logs
 
 **Not blocked; lowest priority in this batch for a host running one application, and the first thing missed when it runs several.**
 
 Logs are read by `docker logs` over SSH as `ops-claude`, per container, and are lost when a container is recreated -- which every deploy does. Alerts say *that* a container restarted; the reason is in the log that just went away.
 
-Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones.
+Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones. Traefik's access log was turned on to stdout on 2026-09-13 alongside the entrypoint-wide TLS defaults, so the HTTP traffic this would aggregate is now being written — and is now what shortens Traefik's own `docker logs` history, which is the argument for doing this rather than a detail of it.
 
 ## 10. upgrade-the-shared-postgres-major
 
