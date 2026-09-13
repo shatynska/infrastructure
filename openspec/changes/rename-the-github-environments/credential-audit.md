@@ -120,6 +120,31 @@ It also exercised the re-entered `HCLOUD_TOKEN` and `TF_API_TOKEN` on `main-stag
 
 **Performed during the GitHub incident** and succeeded anyway: Actions was `degraded_performance` and Pull Requests `major_outage` when the pull request was opened, yet every check and both jobs completed. The pull request body records that window so a later reader does not mistake the timing for a cause.
 
+## Task 4.8 observed — the staging converge proved the three credentials nothing else touches
+
+Dispatched via `workflow_dispatch` with `stack=main-staging`, run `34752311933`, 2026-09-13.
+
+| Job | Result | Timing |
+|---|---|---|
+| `discover` | success | 10:36:55 → 10:37:00 |
+| `publish` | success | 10:37:03 → 10:37:08 |
+| `converge (main-staging)` | success | 10:37:12 → **10:44:24** |
+
+**Seven and a quarter minutes is the point.** A converge that failed on a credential would fail in seconds — at the tailnet join or the first SSH attempt — so the duration is itself evidence that the play ran against a real host rather than dying at the door.
+
+What it establishes, and why no earlier step could:
+
+- **`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET`** — the runner joins the tailnet with them, and the host's SSH is reachable over the tailnet and not the public internet, so a wrong value stops the job before Ansible starts.
+- **`ANSIBLE_SSH_PRIVATE_KEY`** — it authenticated as `root` on the staging host. This is the value `credential-audit.md` §1.3 could only establish as *a working key from the workstation*; this establishes that the copy written into `main-staging` is that key.
+- **`ANSIBLE_VAULT_PASSWORD`** — the play reads `group_vars/staging.yml`, whose vault block is `$ANSIBLE_VAULT;1.2;AES256;production`-form encrypted content. A wrong password fails the parse before any task runs.
+
+It also attached to the right Environment and did not pause: a deployment record for `main-staging` was created at 10:37:09Z and the job started three seconds later.
+
+**All six of `main-staging`'s secrets are now exercised** — `HCLOUD_TOKEN` and `TF_API_TOKEN` by task 4.7's apply, these three by this converge. Nothing in staging's half rests on an unverified value.
+
+**This is why the task moved from section 8 to section 4.** Under the plan as first written, the first exercise of these three would have been production's gated deploy, on a trigger `platform-deploy.yml` offers no way to re-raise. Here the same mistake would have cost a re-dispatch.
+
+
 ## Incidental observations, recorded rather than acted on
 
 - The tailnet machine names are `main-production` and `main-staging` — the stack names, per `docs/naming-conventions.md`'s rule that a server's name reaches the tailnet and therefore carries its stack. The hosts' own hostnames are `shatynska-main-production` and `shatynska-main-staging`, templated by the converge from the `company` group variable. Both are correct under the scheme and the divergence is deliberate; noted because reading the two side by side invites the conclusion that one of them is wrong.
