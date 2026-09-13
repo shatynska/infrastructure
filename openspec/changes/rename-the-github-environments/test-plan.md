@@ -25,6 +25,14 @@ The second file imports three readers from the first (`declared_axes`, `off_the_
 
 **One test in the second file is green from the moment it is committed and must not be read as slack.** `TestTheRunbookWritesSecretsIntoAnEnvironmentAStackDeclares` passes both before and after this change; what it reports is the *interval*, and both ends of that interval (task 7.1's declaration flip and task 7.6's runbook correction) land in the same pull request. Its effect is to refuse to let that pull request merge with the declaration moved and the document not.
 
+## The split was violated once, and repaired before it cost anything
+
+**Recorded because the mechanism this file describes is exactly what caught it.** Both modules were committed together in `2887795`, although the table above says the production module rides the *second* pull request and must be committed only after the first has merged. The consequence was latent for several commits: the branch carried five assertions about production's Environment name that cannot pass until section 7 lands, so the canary pull request would have opened with a red required check.
+
+It surfaced at the moment of opening that pull request, on a routine re-read of what the branch actually contained — not from a review round and not from a failing check, because no check had yet run on a pull request. The module was removed from the branch with the suite going 1006 → 980 and all 980 passing, and `tasks.md` 7.0 restores it from `2887795` as the first act of section 7, before any of that section's edits, so the five run red and then go green rather than appearing to have passed all along.
+
+**The wider point is the one this file already makes.** A red canary invites exactly one remedy — weakening or deleting the test that is red — and the split exists so that nobody is ever offered that choice. Committing both files at once quietly reintroduced the choice while every artifact still said it had been designed away.
+
 ## What was written
 
 39 tests across two new modules. Nothing existing was edited, deleted or disabled.
