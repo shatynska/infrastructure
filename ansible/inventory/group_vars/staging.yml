@@ -37,9 +37,16 @@ hardening_ssh_allowed_cidrs:
 #
 # Stated rather than omitted. The role defaults it to [] anyway, but the
 # mirror obligation above is between this file and terraform.tfvars, and an
-# absent value mirrors nothing. The change that puts the platform stack on
-# staging opens 80/443 in both places together -- see docs/backlog.md entry
-# 17, expose-staging-on-the-web.
+# absent value mirrors nothing.
+#
+# NARROWER THAN IT READS, and the sentence above it is the one to read with
+# care: this value does NOT decide what is reachable on 80/443. Traefik
+# PUBLISHES those ports, and a container-published port is DNAT'd and
+# traversed in FORWARD, never offered to UFW's INPUT chain -- so a tailnet
+# peer reaches them today and the cloud firewall is the whole of what refuses
+# from the internet. See docs/backlog.md entry 53. What stands here is the
+# mirror of terraform.tfvars, and opening staging to the public web is still
+# entry 17, which needs a DNS record too.
 hardening_web_allowed_cidrs: []
 
 # Operator identities allowed an unprivileged, interactive login on this
@@ -177,7 +184,7 @@ ghcr_pull_username: shatynska
 # deployed the keep set was empty outright and the weekly unit ABANDONED and
 # reported failure, which was this role's documented contract and was
 # accepted deliberately; that ended when the platform stack reached staging
-# on 2026-09-13, and the prune has reported `considered 8` since.
+# and the keep set stopped being empty.
 #
 deploy_apps:
   - name: platform

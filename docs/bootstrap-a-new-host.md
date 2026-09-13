@@ -940,7 +940,7 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 ### 8.2 Infrastructure side
 
 1. Generate the application's deploy key (stage 0.3 table).
-2. Add to `deploy_apps` in `ansible/inventory/group_vars/production.yml` (and, once an application has a staging deploy path, to `staging.yml` with a keypair of its own):
+2. Add to `deploy_apps` in the `group_vars` of **every environment the application deploys to**, each with a keypair of its own. The entry lands **before** that environment's deploy path exists in the application's repository, not after: the entry needs a converge before the application's deploy can authenticate, so a repository that is ready first waits on an infrastructure pull request rather than the reverse.
 
    ```yaml
    - name: <app>
@@ -974,7 +974,7 @@ In the application repository:
 
 1. **Anything your Compose file persists — a volume, named or anonymous, or a writable bind mount — has to say why it needs no backup.** Name which reason in *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) the store satisfies, in the change that adds it; a store satisfying none owes a logical backup written off this host and a rehearsed, checked restore before it first holds data. This catches the store a bumped image newly declares as much as one you wrote.
 2. A `Dockerfile` and a `docker-compose.yml` whose web service joins the external network `platform_edge` and carries the Traefik labels shown in `platform/README.md`, "Joining the platform network", with its hostname and its container port. Use `env_file: .env` for runtime secrets and `image: ghcr.io/<org>/<app>:${IMAGE_TAG}`.
-2. A `production` Environment with a required reviewer, as in stage 3.2. The name is the application repository's own: it has one deploy target and no stacks, so `production` is right for it however this repository's Environments are eventually named.
+2. One Environment per deploy target, each with the reviewer that target warrants, as in stage 3.2. The names are the application repository's own — `production` for the production host, `staging` for a staging one — and they sit on the environment axis whatever this repository's own Environments are called. An application deploying to one host needs one; the shape below repeats per Environment, which is what keeps one private half to one host.
 3. A deploy workflow on push to `main` with two jobs, copied from commerce-ops: a `build-and-push` job (`permissions: packages: write`, `docker/login-action` with `GITHUB_TOKEN`, `docker/build-push-action` tagging the image with `github.sha`), then a `deploy` job on the `production` Environment that joins the tailnet with `tailscale/github-action`, renders `.env` from secrets (including `IMAGE_TAG=${{ github.sha }}`), and runs:
 
    ```sh
@@ -985,13 +985,13 @@ In the application repository:
 
 4. A DNS `A` record for the hostname (stage 4.4). Traefik requests the certificate on the first request to it.
 
-**Secrets created in this stage**, all in the application repository's `production` Environment:
+**Secrets created in this stage**, in the application repository's Environment **for each deploy target** — the whole table repeats per Environment, and the last three rows take that target's own values:
 
 | Name | Value from |
 |---|---|
 | `TAILSCALE_OAUTH_CLIENT_ID`, `TAILSCALE_OAUTH_SECRET` | The same OAuth client as stage 5, or a second one with the same tag |
-| `DEPLOY_HOST` | The server's tailnet IPv4, same value as `PLATFORM_DEPLOY_HOST` |
-| `<APP>_DEPLOY_SSH_KEY` | The private half of the key from 8.2; delete the local file after storing |
+| `DEPLOY_HOST` | That target's server's tailnet IPv4, same value as that stack's `PLATFORM_DEPLOY_HOST` |
+| `<APP>_DEPLOY_SSH_KEY` | The private half of **that target's** key from 8.2 — one per application per environment, never one shared; delete the local file after storing |
 | `POSTGRES_PASSWORD` and the application's own settings | 8.3, and whatever the application needs |
 
 **Check:** the deploy run is green; `https://<hostname>` answers with a valid certificate; the application appears on Grafana's "Application HTTP error rates" dashboard after its first requests; `docker ps` shows the application's containers `(healthy)`.
