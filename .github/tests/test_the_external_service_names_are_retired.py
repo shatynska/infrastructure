@@ -154,8 +154,9 @@ REPLACEMENTS = {
 #       deleted only when its change archives -- so the file had to be exempt
 #       across the whole of that change and no longer. The assertion below
 #       requires a whole-path exemption to still CONTAIN a retired name, so
-#       deleting entry 63 in the archive commit turned it red and the repair was
-#       to delete the exemption in that same commit. It is swept from here on.
+#       deleting that entry in the archive commit turned it red and the repair
+#       was to delete the exemption in that same commit. It is swept from here
+#       on.
 #
 # `docs/deferred-work.md` was deliberately NOT exempt, though it was the paired
 # surface: an entry there records work not done, and about a rename that means
@@ -587,8 +588,9 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
                     [], retired_name_offences({path: "infrastructure-prod\n"})
                 )
 
-        # `docs/backlog.md` was the fourth case here until its exemption
-        # expired with entry 63. It is swept now, and is asserted as swept rather
+        # `docs/backlog.md` was the fourth case here until the entry that
+        # earned its exemption was archived. It is swept now, and is asserted as
+        # swept rather
         # than dropped from this class: a path that stops being exempt and is
         # merely deleted from the list leaves nothing saying which way it goes.
         self.assertEqual(

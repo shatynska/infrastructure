@@ -355,7 +355,7 @@ def old_root_occurrences(root: Path | None = None) -> list[str]:
     made it likely: that shape is common in third-party Ansible content where
     the prefixed path never was. `AGENTS.md` scopes this suite to a static read
     of a COMMITTED file, and vendored untracked content is not committed. See
-    `docs/backlog.md` entry 39, which names this class and recommends this
+    `docs/backlog.md` entry 35, which names this class and recommends this
     helper.
 
     A `root` argument means a scratch tree instead, which is NOT a repository
@@ -1410,9 +1410,10 @@ class TestTheEnvironmentAxisIsNotRenamedWithTheUnit(unittest.TestCase):
 
         SUPERSEDED IN PART BY THE CHANGE rename-the-stacks-and-their-resources,
         and this test's own docstring predicted it: it used to assert the
-        assignment reads `matrix.stack.name`, "what keeps this true when entry
-        62 makes the group `production` while the stack is `main-production`".
-        Entry 62 is that change, and the prediction was wrong in one direction
+        assignment reads `matrix.stack.name`, "what keeps this true when the
+        queued rename makes the group `production` while the stack is
+        `main-production`". That rename is the change above, and the prediction
+        was wrong in one direction
         -- the group stopped being derivable from the stack's name at all, so
         reading `matrix.stack.name` became the defect rather than the
         obligation. Where the value now comes from is asserted by
@@ -1507,7 +1508,8 @@ class TestTheEnvironmentAxisIsNotRenamedWithTheUnit(unittest.TestCase):
         SUPERSEDED IN PART, AND RE-POINTED RATHER THAN DELETED. This test used
         to assert the environment label EQUALS the stack's directory name. That
         equality held only while a repository had one tenant, and this test's
-        own docstring said so: "the first thing entry 62 will have to restate".
+        own docstring said so: "the first thing the queued rename will have to
+        restate".
         The change rename-the-stacks-and-their-resources restated it -- the
         directory is `main-production` and the label is `production` -- so the
         equality is now the defect rather than the obligation, and asserting its
@@ -1840,7 +1842,7 @@ class TestNoCommittedFileStillNamesTheOldTerraformRoot(unittest.TestCase):
 
 class TestTheSweepReadsCommittedFilesOnly(unittest.TestCase):
     """DERIVED -- `AGENTS.md` scopes this suite to a static read of a COMMITTED
-    file, and `docs/backlog.md` entry 39 names the class this closes.
+    file, and `docs/backlog.md` entry 35 names the class this closes.
 
     `old_root_occurrences()` selected its files with a filesystem walk until
     this was written, and that walk prunes four directory names of which
@@ -1898,7 +1900,7 @@ class TestTheSweepReadsCommittedFilesOnly(unittest.TestCase):
             "an UNTRACKED file naming the old root was reported as an offence: "
             f"{reported}. This sweep's subject is the committed file; reading a "
             "developer's provisioned content makes it red on a working machine and "
-            "green on a runner, which is `docs/backlog.md` entry 39's class",
+            "green on a runner, which is `docs/backlog.md` entry 35's class",
         )
 
 

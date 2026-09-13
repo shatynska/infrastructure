@@ -1311,7 +1311,7 @@ class TestARoleNothingConvergesAndNothingTestsWidensOnItsOwn(unittest.TestCase):
 
     `ansible/roles/tailscale/` is named here rather than built as a fixture, per
     tasks.md 1.5a: the tree contains this case NOW, and a fixture would let it
-    be read as hypothetical. `docs/backlog.md` entry 2 owns its having no
+    be read as hypothetical. `docs/backlog.md` entry 3 owns its having no
     scenario.
     """
 

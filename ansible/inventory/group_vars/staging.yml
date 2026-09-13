@@ -39,7 +39,7 @@ hardening_ssh_allowed_cidrs:
 # mirror obligation above is between this file and terraform.tfvars, and an
 # absent value mirrors nothing. The change that puts the platform stack on
 # staging opens 80/443 in both places together -- see docs/backlog.md entry
-# 30, expose-staging-on-the-web.
+# 17, expose-staging-on-the-web.
 hardening_web_allowed_cidrs: []
 
 # Operator identities allowed an unprivileged, interactive login on this

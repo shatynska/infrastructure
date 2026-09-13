@@ -56,7 +56,7 @@ provider "hcloud" {
   #     pipeline.yml declares HCLOUD_TOKEN_MAIN_PRODUCTION, and
   #     declaring `HCLOUD_TOKEN` is exactly what that file argues at
   #     length against. Correcting it is `docs/backlog.md` entry
-  #     70's work rather than a rename's.);
+  #     48's work rather than a rename's.);
   #   - locally, whatever the operator exports, which is the Read Only
   #     token and is never the Read & Write one.
   #

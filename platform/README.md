@@ -59,7 +59,7 @@ See `add-platform-monitoring`'s design.md for the full rationale — network pla
 
 You do not have to compute the value. The `.github/tests` suite recomputes it, fails the pull request when it disagrees, and names the value the label should hold — so this is a paste. Expect the edit to replace that service on the next deploy; that is the point. `apply-shipped-config-on-deploy`'s design.md carries the algorithm and the reasoning.
 
-One thing the label does **not** cover: a value the config interpolates from `.env`, such as Alertmanager's Slack webhook. Rotating that secret changes nothing the checksum can see, so the container is not replaced and keeps the old value — force a replacement by hand when you rotate one. `docs/backlog.md` entry 27 covers closing this properly.
+One thing the label does **not** cover: a value the config interpolates from `.env`, such as Alertmanager's Slack webhook. Rotating that secret changes nothing the checksum can see, so the container is not replaced and keeps the old value — force a replacement by hand when you rotate one. `docs/backlog.md` entry 12 covers closing this properly.
 
 ### One-time manual step: postgres-exporter's monitoring role
 

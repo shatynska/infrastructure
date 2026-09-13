@@ -13,7 +13,7 @@
 # .github/workflows/pre-commit-autoupdate.yml still installs it with a bare
 # `pip install pre-commit`. Bringing that onto this file is a one-line fix in a
 # workflow this change does not otherwise touch, and it is recorded in
-# docs/change-queue.md rather than folded in here.
+# docs/backlog.md entry 29 rather than folded in here.
 #
 # PyYAML: the CI-configuration test suite (.github/tests/) parses workflow YAML
 # with it. It previously reached this repository only transitively, via
