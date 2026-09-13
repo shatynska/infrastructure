@@ -756,3 +756,40 @@ Two routes do work, measured on run `34739844834`: the web interface streams a r
 **Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
 
 **Related, and deliberately separate.** Entry 81 covers the *name* of this same check diverging from what §7.1 prescribes, and the slug rule that decides which checks may be renamed at all. This entry is the same blind spot on a different field: the observer holds settings no committed file states, so nothing can detect either kind of drift. They are worth taking together; they are recorded apart because one is about naming and one is about timing, and 81 was closed to further additions when this was found.
+
+## 84. bring-the-workstation-onto-the-naming-scheme
+
+**Partly done on 2026-09-13, and what remains is the part that costs something. Recorded by `rename-the-github-environments`, which read every one of these files while establishing that three "unrecoverable" private halves were not gone.**
+
+`docs/naming-conventions.md`'s *The workstation* section calls the workstation "the only namespace shared between companies, and the only place the company appears as a literal", and gives the names under `shatynska` and under `fuperia`. The machine followed none of them. `ansible/inventory/group_vars/all.yml` sets `company: shatynska` and the converge templates the host's own name from it, so `shatynska` is the name — the two-column table is a worked example of a second company's clone, not an open choice.
+
+**Done on 2026-09-13**, by `mv` with the keypairs preserved, verified by logging in on the renamed key and reading back `shatynska-main-production` as the host's own name:
+
+| Was | Is |
+|---|---|
+| `~/.ssh/ops_claude` | `~/.ssh/shatynska-ops` |
+| `~/.ssh/ansible_ci_prod` | `~/.ssh/shatynska-ansible-ci-main-production` |
+| `~/.ssh/ansible_ci_staging` | `~/.ssh/shatynska-ansible-ci-main-staging` |
+| `~/.ssh/platform_deploy_key` | `~/.ssh/shatynska-platform` |
+| `~/.ssh/platform_deploy_key_staging` | `~/.ssh/shatynska-platform-staging` |
+| `~/.ssh/id_ed25519` | `~/.ssh/shatynska-root` |
+
+`~/.ssh/config`'s host block became `Host shatynska-main-production prod`, keeping the short alias alongside the scheme's name, and both its `IdentityFile` and the `github.com` block's follow the renames. Verified after the move: GitHub authentication, `git fetch` over SSH, and an operator login on the host, which answers to `shatynska-main-production`. The previous config is at `~/.ssh/config.bak-20260913`.
+
+**Every workstation key this scheme covers is now named correctly.** What is left is not a naming problem.
+
+**What remains, in rising order of cost.**
+
+**The checkout directory.** `~/projects/infrastructure` should be `~/projects/shatynska-infrastructure`. It is the most disruptive item and the least load-bearing — no second company's clone exists yet to collide with it — and it cannot be done from a session working inside the tree: a worktree records absolute paths, so moving the repository root breaks every worktree under it until the repair subcommand runs, and a shell whose working directory is inside the moved tree is left pointing at nothing. **Do it when no worktree is present**, which is the state that exists once a change has been archived and its tree removed. Molecule's namespace is derived from a working tree's absolute path, so a tree that survives such a move changes namespace and orphans whatever containers and loop devices the old one held.
+
+**The runbook carries the placeholder and not the principle.** Every `ssh-keygen` command in `docs/bootstrap-a-new-host.md` §0.3 already writes `~/.ssh/<company>-…`, so a reader who follows it literally produces correct names. What that section never does is *say why*: all of its explanatory prose is about **purposes** — never reuse one key for two purposes, each has a different holder and a different blast radius — and not one sentence explains the company segment. Nor does §0.3 cite `docs/naming-conventions.md`, though the runbook cites it nine times elsewhere, including twice to explain where a company prefix is **not** wanted ("No company prefix: one company per Hetzner account, so the account boundary already carries it"). The rule's negative half is stated in the runbook and its positive half is not, in the one section that depends on it. A reader of §0.3 therefore substitutes a placeholder without learning the rule, and never meets the checkout directory or the SSH alias at all, since those live only in `docs/naming-conventions.md`'s table. §0.3 owes a short paragraph saying `~/.ssh/` is the only namespace shared between companies and that this is why the company appears as a literal here and nowhere else, plus a pointer to *The workstation* for the full list — one document holding the values and one pointing at it, the form this repository already uses for the heartbeat configuration.
+
+**`shatynska-root` serves two purposes, and splitting it is now cheap.** Its public half is byte-identical to `ssh_public_key` in **both** `terraform/stacks/main-production/terraform.tfvars` and `terraform/stacks/main-staging/terraform.tfvars`, so it is `root` on both servers, and `~/.ssh/config` presents the same key to `github.com`. Serving both *stacks* is deliberate and `docs/bootstrap-a-new-host.md` §0.3 says so — "a purpose may span both stacks, and several do — the operator key most obviously". Serving GitHub **as well** is the cross-purpose reuse that same section forbids: "never reuse one key for two purposes; each has a different holder and a different blast radius".
+
+The file is named for the purpose it **keeps**, which is what makes the remainder cheap. Generate a dedicated GitHub key, add its public half to the GitHub account, and point `~/.ssh/config`'s `github.com` block at it. **Nothing reaches Hetzner**: the root key does not change, so no `terraform.tfvars` edit, no gated apply and no host touched. An earlier version of this entry assumed the opposite — that splitting meant generating a new *root* key and applying it through the pipeline — and that was the expensive reading of a cheap problem. `~/.ssh/config` carries a `TEMPORARY` comment on that block naming this entry, and deleting the comment is what finishes it.
+
+`~/.ssh/id_ed25519_everstake` is another employer's and is outside this scheme entirely.
+
+**One caution stands.** Do not let any of the remaining work become a rotation. These are the same keypairs whether or not the file holding one is renamed; `mv` preserves the key. A rename that regenerates instead would need every public half re-installed — `root`'s `authorized_keys` on two hosts by hand, `deploy_apps` in `group_vars/production.yml` by commit and converge — which is exactly the expensive work `rename-the-github-environments` established was not necessary.
+
+**A finding worth recording while it is in view, which is not this entry's to fix.** §0.3 instructs the operator to delete the local private half of the production platform deploy key and of each converge key once it is stored in GitHub. That was not done, and `rename-the-github-environments` depended on it not having been done: those three files are what made that change a re-entry rather than a credential rotation through hosts nothing automates. So the instruction is either wrong or unfollowed, and which one it is has not been decided. The safety argument for deleting them is real; so is the recovery argument against, and §0.3 currently makes only the first.
