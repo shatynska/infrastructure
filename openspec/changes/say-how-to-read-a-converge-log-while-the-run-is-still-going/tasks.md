@@ -45,6 +45,18 @@ The one command the passage names and does **not** instruct — `gh run view <ru
       **If the operator prefers not to raise a converge for this**, *this part alone* is waivable on the first class — *no observation can actually be made* — against the evidence that stands in its place: the historical measurement on run `34739844834`, where the refusal was met and the API route was what read staging's recap while production's job was in flight. The waiver is the operator's to give and does not extend to the mechanism above, which is observable here and is to be observed rather than argued about.
 - [ ] 3.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`, deleting `docs/change-queue.md` entry 82 in the same commit. Verify `openspec validate --archived` passes.
 
+## Ship record
+
+**3.1** Pull request #171, opened 2026-09-13 on a branch rebased onto the freshly fetched trunk at `0666d46`. Awaiting the operator's confirmation that it merged. Nothing here deploys: a docs-only change matches no path filter in `apply.yml`, `platform-deploy.yml` or `host-converge.yml`.
+
+**3.2, first part — the mechanism, observed on this change's own pull-request run, and it establishes more than the task expected.** Run `34757946920` (PR Validation), while `status` was `in_progress` with `discover` completed and `validate` still running:
+
+- `gh run view 34757946920 --log` → `run 34757946920 is still in progress; logs will be available when it is complete`.
+- `gh run view 34757946920 --job 103725497794 --log` → **the same message**, on a job that had already finished. That is `--job` failing to lift the refusal, re-measured today rather than taken from entry 82's record.
+- `gh api "repos/{owner}/{repo}/actions/jobs/103725497794/logs"` → 441 lines, served from inside the unfinished run.
+
+So the half this change's preamble called historical and unreproducible — that the jobs API works *while the run is unfinished* — has now been measured again, on a run this change raised by itself, at no cost to any host. What remains unobserved is only that it holds of a **converge** run in particular, which is the second part below and is a property of the job's contents rather than of the route.
+
 Opening the record's own pull request, and removing the branch and the working tree once it merges, happen after the commit that writes this file, so they are recorded in prose here rather than as tasks that could never be ticked in the file containing them.
 
 ## Not performed
