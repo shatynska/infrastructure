@@ -751,18 +751,6 @@ The disagreement is **factual, not normative**. The parenthetical is illustrativ
 
 **What it costs is the part to decide when it is proposed.** Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the requirement's parenthetical agrees with `terraform.tfvars`" — a cross-file assertion this repository has declined twice on its own merits, on the grounds that an assertion converts a silent staleness into a standing editing obligation. So this change should probably correct the prose and argue explicitly that the scenario it owes is not that assertion.
 
-## 48. assert-a-stack-s-versions-tf-names-its-own-read-only-secret
-
-**Not blocked, and this is what is left of a larger entry.** The factual error it was recorded for — both `versions.tf` provider comments stating prod's read-only secret name wrongly — was corrected on 2026-09-13 as a quick fix. What was not decided then is whether anything stops it recurring, and that is this entry.
-
-**Why the error lasted as long as it did.** Prod declares `read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION` in its own `pipeline.yml`, whose comment argues at length that the name must **not** be `HCLOUD_TOKEN` — every GitHub Environment defines that name as its stack's Read & Write token, and GitHub resolves an Environment-scoped secret ahead of a repository-scoped one, so a job declaring an `environment:` and reading `HCLOUD_TOKEN` resolves a write credential silently. The comment three lines away asserted the opposite. Two renames swept those exact lines and left it standing, each correctly treating a credential-name correction as unrelated scope. Nothing could see it, which is why it survived two readings by changes that were in the file.
-
-**The shape most likely to work is positive rather than negative.** Assert that each `terraform/stacks/<name>/versions.tf` contains, somewhere, the literal value that stack's own `pipeline.yml` declares as `read_only_secret`. Both sides are static reads of committed files, the suite already reads every `pipeline.yml`, and prod's `versions.tf` did not name `HCLOUD_TOKEN_MAIN_PRODUCTION` anywhere — so this would have caught it.
-
-**What to avoid, and it is the trap the earlier entry warned about.** The negative form — no `versions.tf` may say `HCLOUD_TOKEN` — is wrong, because both comments now discuss `HCLOUD_TOKEN` on purpose, as the name a stack may not use. A check written that way fires on correct prose, and a check that fires on correct prose gets weakened at the keyboard. Locating a claim inside a comment is harder than reading a declaration; the positive form sidesteps it by not needing to know which sentence the name appears in.
-
-Note the declaration side is already held: `.github/tests` asserts that no stack declares `HCLOUD_TOKEN` as its read-only secret. It is the prose beside the declaration that nothing reads.
-
 ## 49. separate-history-from-rationale-in-source-comments
 
 **No longer blocked.** It waited on the citation-form decision and on the sweep that followed it; both were delivered by `decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which also converted every citation in the comment blocks below. What remains here is the separation this change deliberately did not do: it changed citation *form* only, and left the prose around it alone.

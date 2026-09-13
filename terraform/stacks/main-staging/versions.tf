@@ -49,13 +49,14 @@ provider "hcloud" {
   #     Cloud Project requirement, openspec/specs/iac-state-management/spec.md);
   #   - every other CI job declares no `environment:` and resolves a
   #     repository-scoped Read Only token, read as
-  #     `secrets[<the name pipeline.yml declares>]` — for this stack
-  #     HCLOUD_TOKEN_MAIN_STAGING, and for prod
-  #     HCLOUD_TOKEN_MAIN_PRODUCTION. A repository secret holds one value,
-  #     which is why each stack needs a name of its own.
+  #     `secrets[<the name pipeline.yml declares>]`, and that declaration
+  #     is the only place the name is written — here and in every other
+  #     stack. A repository secret holds one value, which is why each
+  #     stack needs a name of its own.
   #
-  #     NEITHER IS `HCLOUD_TOKEN`, and that is deliberate rather than
-  #     incidental. Every stack's GitHub Environment defines
+  #     NO STACK'S MAY BE `HCLOUD_TOKEN`, which is a fact about GitHub
+  #     rather than about any one stack, so it is safe to state here and
+  #     is the reason this bullet exists. Every stack's GitHub Environment defines
   #     `HCLOUD_TOKEN` as that stack's Read & Write token, and GitHub
   #     resolves an Environment-scoped secret ahead of a
   #     repository-scoped one of the same name — so a job that declares
