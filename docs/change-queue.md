@@ -708,20 +708,6 @@ A citation in this repository names a requirement and, very often, a scenario in
 
 **What it must not do.** Re-slug a periodic-job check to tidy the list. `main-production-prune-host-images` and `main-staging-prune-host-images` are templated from `inventory_hostname`, so their slugs are derived rather than chosen, and changing one at the observer alone puts it permanently out of step with what the host pings.
 
-## 82. say-how-to-read-a-converge-log-while-the-run-is-still-going
-
-**Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, from following its own merge through §6.6.**
-
-`docs/bootstrap-a-new-host.md` §6.6 tells the operator to **"read staging's before approving production's — that is what makes staging the rehearsal rather than a second production."** Followed with the obvious command, that instruction cannot be carried out. `gh run view <run> --log` refuses while any job in the run is unfinished:
-
-    run 34739844834 is still in progress; logs will be available when it is complete
-
-and on a merge touching `ansible/`, both converges are jobs of **one** run — so the run is incomplete precisely until production's converge, the thing the reader is deciding whether to approve, has already finished. `--job <id>` does not lift the refusal; it is a property of the run, not of the job.
-
-Two routes do work, measured on run `34739844834`: the web interface streams a running job's log live, and `gh api repos/<owner>/<repo>/actions/jobs/<job id>/logs` serves a completed job's log from inside a still-running run. The second is what this change used to read staging's recap while production's job was in flight.
-
-**Why it is worth an entry rather than a sentence in passing.** §6.6's rehearsal instruction is the whole argument for having a staging host on the converge path at all, and an operator who reaches for the documented CLI gets a refusal that reads like a permissions or timing problem rather than like an unsupported command. The fix is small — name the working route where §6.6 gives the instruction — and until then the rehearsal is available only to someone who already knows it is.
-
 ## 83. reconcile-the-alertmanager-check-s-period-and-grace
 
 **Not blocked, and cheap. Recorded 2026-09-13 by the operator, who read §7.1 against the observer's own settings and could not make the two agree.**
