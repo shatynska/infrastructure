@@ -70,3 +70,29 @@ target_environment: staging
 # same value with the opposite spelling, and nothing in a value can tell a
 # reader which was meant. Prod may not set this false; staging may.
 destroy_policy_gate: false
+
+# Whether the shared platform stack is deployed to this stack's host.
+# OPTIONAL; absent means it is NOT. Read the production stack's declaration
+# for the polarity rule, for why the two optional fields default to opposite
+# values, and for why this field sits in a file beside a `terraform.tfvars`.
+#
+# THIS IS THE FIELD `deploy-the-platform-stack-per-environment` FLIPPED, and
+# the interval it closes is the reason the opt-in is declared rather than
+# derived. This host has authorised the `platform` deploy key since
+# 2026-09-10 -- `configure-the-staging-host` committed its public half and
+# converged the host the same evening -- and received no deploy in the three
+# days after, because it had no `PLATFORM_*` secrets, no ACME mailbox, no
+# dead-man's-switch check and no Slack target. "This host accepts the platform
+# deploy key" and "the platform pipeline deploys to this stack" were true at
+# different times. Deriving this from `deploy_apps` would have made them one
+# fact and would have had staging deploying from the moment its key was
+# committed, which is the state `add-a-staging-environment` deliberately
+# avoided in the analogous case of opening ports in front of a host with
+# nothing behind them.
+#
+# THIS STACK'S ENVIRONMENT REQUIRES NO REVIEWER, so the deploy proceeds on
+# merge with no approval prompt. That is a property of the Environment's
+# protection rules and not of the workflow -- see `github_environment` above,
+# which carries the reasoning for that setting and why it does not weaken the
+# confinement of this stack's deploy credential.
+deploys_platform: true

@@ -103,7 +103,9 @@ from typing import Iterable, Mapping
 from test_ci_configuration import (
     ARCHIVE_SEGMENT,
     CHANGE_PATH_PREFIX,
+    ROOT,
     TrackedFilesUnavailable,
+    load_yaml,
     tracked_files,
 )
 from test_the_external_service_names_are_retired import (
@@ -351,8 +353,8 @@ class TestTheProductionStackDeclaresTheEnvironmentNamedForIt(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# iac-platform-deploy-pipeline / Gated Deploy Reuses the Terraform Production
-# Environment
+# iac-platform-deploy-pipeline / Each Stack's Deploy Attaches to the
+# Environment Its Own Declaration Names
 #
 # "The Environment is named for the **stack** rather than for the environment
 # axis, per `docs/naming-conventions.md`."
@@ -360,10 +362,19 @@ class TestTheProductionStackDeclaresTheEnvironmentNamedForIt(unittest.TestCase):
 
 
 class TestEveryStacksGithubEnvironmentIsOnTheStackAxis(unittest.TestCase):
-    """SPECIFIED for the relation -- Gated Deploy Reuses the Terraform
-    Production Environment (openspec/specs/iac-platform-deploy-pipeline/spec.md):
-    "The Environment is named for the **stack** rather than for the environment
+    """SPECIFIED for the relation -- Each Stack's Deploy Attaches to the
+    Environment Its Own Declaration Names
+    (openspec/specs/iac-platform-deploy-pipeline/spec.md): "Each such GitHub
+    Environment is named for the **stack** rather than for the environment
     axis, per `docs/naming-conventions.md`."
+
+    The sentence moved requirements when
+    `deploy-the-platform-stack-per-environment` renamed the one that used to
+    carry it, and was carried forward deliberately rather than dropped -- that
+    change's delta says so at the removal. Its force also grew: while one
+    deploy attached to one Environment a name on the wrong axis was untidy,
+    and with a deploy row per stack two stacks of one environment would
+    collide on an environment-axis name.
 
     DERIVED for its extension to every stack. The requirement states the
     relation about the one Environment it is concerned with; that it holds of
@@ -408,55 +419,107 @@ class TestEveryStacksGithubEnvironmentIsOnTheStackAxis(unittest.TestCase):
         self.assertEqual([], offences, "; ".join(offences))
 
 
-class TestTheDeployGateNamesTheProductionStacksEnvironment(unittest.TestCase):
-    """SPECIFIED -- Gated Deploy Reuses the Terraform Production Environment
-    (openspec/specs/iac-platform-deploy-pipeline/spec.md): the deploy "SHALL
-    require manual approval via the same GitHub Environment protection rule
-    already used by the Terraform apply workflow for the production stack -- the
-    Environment that stack's own committed pipeline declaration names, which is
-    `main-production`", and its scenario "Same approvers gate both kinds of
-    production change": "both SHALL be gated by the same `main-production`
-    Environment's required reviewers".
+def production_declaration() -> dict:
+    """The production stack's own pipeline declaration, as a flat mapping.
 
-    Distinct from `TestTheDeployGateNamesTheEnvironmentAStackDeclares` in
-    `test_the_external_service_names_are_retired.py` rather than a restatement
-    of it. That class asks whether the gate names an Environment SOME stack
-    declares, deliberately without naming either side, which is what makes it
-    survive this change unedited. It is satisfied by a deploy gated on the
-    STAGING stack's Environment -- an ungated production deploy, since staging's
-    Environment deliberately requires no reviewer, and one that reads as
-    agreement to every comparison keyed on the names that are declared. Which
-    stack is what this class adds.
+    Read with the suite's shared YAML loader rather than by line: this file is
+    plain YAML carrying no Ansible tag, unlike the `group_vars` documents the
+    sibling modules have to read by hand.
+    """
+    path = ROOT / "terraform" / "stacks" / PRODUCTION_DIRECTORY / "pipeline.yml"
+    if not path.is_file():
+        return {}
+    return load_yaml(path) or {}
+
+
+class TestTheProductionStacksDeployResolvesToItsOwnEnvironment(unittest.TestCase):
+    """SPECIFIED -- Each Stack's Deploy Attaches to the Environment Its Own
+    Declaration Names (openspec/specs/iac-platform-deploy-pipeline/spec.md):
+    each opted-in stack is "attached to the GitHub Environment **that stack's**
+    declaration names -- the same Environment that stack's Terraform apply and
+    host converge attach to".
+
+    RE-POINTED by `deploy-the-platform-stack-per-environment`, which retired
+    what this class used to assert. It was
+    `TestTheDeployGateNamesTheProductionStacksEnvironment`, and it read one
+    literal Environment out of `platform-deploy.yml` and required the
+    production stack to declare it. That workflow now names no Environment at
+    all, so both of its assertions read the expression
+    `${{ matrix.stack.github_environment }}` and failed -- not because the
+    guarantee weakened but because the mechanism moved from a literal to a
+    resolution.
+
+    WHAT THIS CLASS ADDS TO ITS SIBLINGS IS STILL "WHICH STACK", which is why it
+    is re-pointed rather than deleted.
+    `TestTheDeployGateNamesTheEnvironmentAStackDeclares` in
+    `test_the_external_service_names_are_retired.py` asks whether the gate
+    reaches an Environment SOME stack declares, deliberately without naming
+    either side -- a question a deploy reaching staging's Environment alone
+    would satisfy. Under the old literal, "which stack" was answered by
+    comparing two names. Under a resolution it is answered one step earlier:
+    production's deploy row exists at all only because production's own
+    declaration opts in, and the Environment that row attaches to is the one
+    that same file declares. Both halves are a static read of one committed
+    file, which is this module's subject.
+
+    The reviewer half is out of reach here as it always was: whether
+    `main-production` requires an approver is a repository setting, and this
+    suite makes no network call.
     """
 
-    def test_the_deploy_gate_names_the_production_stacks_declared_environment(self) -> None:
-        """SPECIFIED -- see the class docstring."""
-        axes = declared_axes()
-        self.assertIn(
-            PRODUCTION_DIRECTORY,
-            axes,
-            f"there is no {PRODUCTION_DIRECTORY!r} stack directory, so this comparison "
-            "would read one side of itself",
-        )
-        offences = deploy_gate_disagreements(
-            platform_deploy_gated_environments(), axes, PRODUCTION_DIRECTORY
-        )
-        self.assertEqual([], offences, "; ".join(offences))
+    def setUp(self) -> None:
+        self.declared = production_declaration()
 
-    def test_the_environment_both_are_named_for_is_the_one_the_requirement_names(
-        self,
-    ) -> None:
-        """SPECIFIED -- "which is `main-production`". Asserted as well as the
-        equality above, because an equality between two committed files is
-        satisfied by any name typed into both, and this requirement now states
-        which name."""
-        gated = sorted(set(platform_deploy_gated_environments()))
+    def test_there_is_a_production_declaration_to_read(self) -> None:
+        """SPECIFIED -- guards both assertions below from passing over an absent
+        or empty file, which is what a renamed or deleted stack directory would
+        leave."""
+        self.assertTrue(
+            self.declared,
+            f"terraform/stacks/{PRODUCTION_DIRECTORY}/pipeline.yml is absent or "
+            "declares nothing, so the two assertions below would each read one side "
+            "of themselves",
+        )
+
+    def test_the_production_stack_declares_that_the_platform_stack_reaches_it(self) -> None:
+        """SPECIFIED -- "The shared platform stack SHALL be deployed to every
+        stack whose own committed pipeline declaration opts in, and to no
+        other." Production's deploy row exists only because of this field, so
+        this is where "which stack" is now answered.
+
+        Its absence would fail no other assertion in this suite: discovery would
+        emit one fewer row, the workflow would deploy to staging alone, and every
+        read comparing the gate against the declarations would still agree.
+        """
+        self.test_there_is_a_production_declaration_to_read()
+        self.assertIs(
+            True,
+            self.declared.get("deploys_platform"),
+            f"{PRODUCTION_DIRECTORY}'s declaration states `deploys_platform: "
+            f"{self.declared.get('deploys_platform')!r}` rather than `true`, so the "
+            "shared platform stack is deployed to every stack that opts in EXCEPT "
+            "production -- a state no other assertion in this suite would report, "
+            "because a smaller matrix is a valid matrix",
+        )
+
+    def test_the_environment_that_row_resolves_to_is_the_one_its_apply_uses(self) -> None:
+        """SPECIFIED -- "the same Environment that stack's Terraform apply and
+        host converge attach to", and the scenario "Same approvers gate both
+        kinds of change to one stack".
+
+        One field is read by both mechanisms, so they cannot name two
+        Environments -- which is what makes the approvers the same set rather
+        than two lists that happen to agree.
+        """
+        self.test_there_is_a_production_declaration_to_read()
         self.assertEqual(
-            [PRODUCTION_GITHUB_ENVIRONMENT],
-            gated,
-            f"the platform deploy gates on {gated} rather than on "
-            f"[{PRODUCTION_GITHUB_ENVIRONMENT!r}], which is the Environment this "
-            "requirement names and the one the production stack's apply attaches to",
+            PRODUCTION_GITHUB_ENVIRONMENT,
+            self.declared.get("github_environment"),
+            f"{PRODUCTION_DIRECTORY}'s declaration names "
+            f"{self.declared.get('github_environment')!r} as its GitHub Environment; "
+            "the platform deploy resolves this stack's row from this field, so it is "
+            "also the Environment that deploy attaches to and the one whose approvers "
+            "gate it",
         )
 
 
