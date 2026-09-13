@@ -29,21 +29,41 @@ Verification for a docs-only change is the static suite from the repository root
 
 **2.3 — every command §6.6's new passage prints was executed in the form it prints**, in this session, against run `34739844834`: the run lookup (`gh run list --workflow host-converge.yml --limit 1 --json databaseId -q '.[0].databaseId'`, which returned `34754451746`, the newest converge run); the job selection, which returned `103677602494` with the placeholder filled as `converge (main-staging)`; `gh api "repos/{owner}/{repo}/actions/jobs/$job/logs"`, 912 lines carrying the `converging`, `SUCCESS => { "msg": … }` and `PLAY RECAP` lines; and the fallback `gh run view "$run" --json jobs -q '.jobs[].name'`, which printed `discover`, `publish`, `converge (main-staging)`, `converge (main-production)`.
 
-The one command the passage names and does **not** instruct — `gh run view <run> --log` — was not re-run in its refusing form, and could not be: that needs a run in flight. It is quoted from entry 82's measurement and task 1.2 forbade claiming otherwise.
+The one command the passage names and does **not** instruct — `gh run view <run> --log` — was not re-run in its refusing form *at the time this section was written*, and task 1.2 forbade claiming otherwise. It was re-run later, on this change's own pull-request run while that run was still going; the Ship record below carries the measurement, and this paragraph is left as written so the order is legible: the sentence was published resting on entry 82's measurement, and only afterwards did a run in flight exist to check it against.
 
 **A claim in task 1.1 was wrong and the document says the measured thing instead.** The task asserted that a stack name matching nothing makes `gh` "exit **0** with no output". Measured on 2026-09-13: the `select` exits 0 with an empty `$job`, but the request that follows then asks for a job with no id and fails — `gh: Not Found (HTTP 404)`, exit 1. The failure is therefore *displaced* rather than silent, which is worse in the way this change cares about: a 404 reads as a missing log or a permissions problem, not as a mistyped stack name. §6.6 states it that way, with the fallback that distinguishes the two.
 
 ## 3. Ship
 
-- [ ] 3.1 Open the pull request once verification passes and the code review has cleared, and wait for the operator's confirmation that it merged. Nothing here deploys: a docs-only change matches no path filter in any workflow, so the merge converges nothing — which is also why it cannot produce its own confirmation.
-- [ ] 3.2 **The confirmation observation, in two parts, and only the second of them is waivable.**
+- [x] 3.1 Open the pull request once verification passes and the code review has cleared, and wait for the operator's confirmation that it merged. Nothing here deploys: a docs-only change matches no path filter in any workflow, so the merge converges nothing — which is also why it cannot produce its own confirmation.
+- [x] 3.2 **The confirmation observation, in two parts, and only the second of them is waivable.**
 
       **The mechanism, observed on this change's own pull-request run, and done before any waiver is considered.** `pr-validation.yml` chains `discover`, `plan` and `validate` with `needs:` (`needs: discover` and `needs: [discover, plan]`), so while `validate` runs the `discover` job is already finished inside an unfinished run — which is structurally the position staging's converge is in at §6.6. Against that run, while it is still going: `gh run view <run> --log` returns the refusal, and the block §6.6 now prints, with the job name substituted, returns the finished job's log. That is the mechanism the passage documents, observed on a run this change raises by itself, at no cost to any host. Record both outputs here.
 
       **The end-to-end scenario, which needs a converge nobody has a reason to raise for a docs change.** On a run whose `converge (<production stack>)` job is waiting for approval and whose `converge (<staging stack>)` job has finished, the same block returns staging's log and its `PLAY RECAP` is read *before* the approval is granted — the instruction this change exists to make executable, on the jobs it is written about. The state arises on the next merge touching `ansible/`, or on a dispatched `gh workflow run host-converge.yml --ref main` with no `-f stack=`. **Neither is this change's to trigger**: dispatching one converges the production host, which is the operator's decision and not a step a documentary change takes to prove itself. Ask, and record what the operator chooses.
 
       **If the operator prefers not to raise a converge for this**, *this part alone* is waivable on the first class — *no observation can actually be made* — against the evidence that stands in its place: the historical measurement on run `34739844834`, where the refusal was met and the API route was what read staging's recap while production's job was in flight. The waiver is the operator's to give and does not extend to the mechanism above, which is observable here and is to be observed rather than argued about.
-- [ ] 3.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`, deleting `docs/change-queue.md` entry 82 in the same commit. Verify `openspec validate --archived` passes.
+- [x] 3.3 Bring the branch back to the freshly fetched trunk and archive the record with `openspec archive`, deleting `docs/change-queue.md` entry 82 in the same commit. Verify `openspec validate --archived` passes.
+
+## Ship record
+
+**3.1** Pull request #171, opened 2026-09-13 on a branch rebased onto the freshly fetched trunk at `0666d46`, and **merged as `2db47a2` at 12:47:14Z on 2026-09-13**, which the operator confirmed. Nothing here deploys, and none is claimed: a docs-only change matches no path filter in `apply.yml`, `platform-deploy.yml` or `host-converge.yml`, so the merge raised no converge and no deploy to be healthy or otherwise.
+
+**3.2, first part — the mechanism, observed on this change's own pull-request run, and it establishes more than the task expected.** Run `34757946920` (PR Validation), while `status` was `in_progress` with `discover` completed and `validate` still running:
+
+- `gh run view 34757946920 --log` → `run 34757946920 is still in progress; logs will be available when it is complete`.
+- `gh run view 34757946920 --job 103725497794 --log` → **the same message**, on a job that had already finished. That is `--job` failing to lift the refusal, re-measured today rather than taken from entry 82's record.
+- `gh api "repos/{owner}/{repo}/actions/jobs/103725497794/logs"` → 441 lines, served from inside the unfinished run.
+
+So the half this change's preamble called historical and unreproducible — that the jobs API works *while the run is unfinished* — has now been measured again, on a run this change raised by itself, at no cost to any host. What remains unobserved is only that it holds of a **converge** run in particular, which is the second part below and is a property of the job's contents rather than of the route.
+
+**3.2, second part — waived by the operator on 2026-09-13, on the first waivable class: no observation can actually be made.** The end-to-end scenario needs a `converge (main-production)` job waiting for approval while `converge (main-staging)` has finished, and a docs-only change raises neither: its merge matches no path filter, so the only way to produce the state is to dispatch a converge of every stack — which converges the production host for the sake of demonstrating a documentary sentence. The operator was asked, with that cost stated, and waived it.
+
+The waiver covers **that scenario alone** and not the route, which was observed above. What stands in its place, and why the waiver is not a gap: entry 82's original measurement was made on exactly this state — run `34739844834`, where `gh api` read staging's recap while production's converge was in flight — and this session re-measured every part of the mechanism that does not depend on the jobs being converges. What is unobserved is a property of a converge job's *contents*, which §6.6's neighbouring paragraphs already document and this change does not touch.
+
+**No successor change is intended, so the waiver names none.** There is nothing outstanding to carry: the next merge touching `ansible/` will put an operator in exactly this position with the document already correct, which is the condition the change exists to create rather than a piece of work left undone.
+
+**3.3** Archived on 2026-09-13. `docs/change-queue.md` entry 82 is deleted in the same commit, as an entry is when its change is archived.
 
 Opening the record's own pull request, and removing the branch and the working tree once it merges, happen after the commit that writes this file, so they are recorded in prose here rather than as tasks that could never be ticked in the file containing them.
 
