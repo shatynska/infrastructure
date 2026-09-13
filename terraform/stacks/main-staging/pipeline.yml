@@ -9,7 +9,7 @@
 
 # The GitHub Environment this stack's apply job attaches to. REQUIRED.
 #
-# `staging` requires NO reviewer, which is the point of it: an approved
+# `main-staging` requires NO reviewer, which is the point of it: an approved
 # staging deploy is as slow as prod and stops being used. That is a property
 # of the Environment's protection rules -- repository settings, which no file
 # here can verify -- and not of the workflow.
@@ -18,11 +18,16 @@
 # confined to that job. Only the reviewer is dropped; the confinement is
 # independent of it. What bounds an unreviewed apply is that staging's Read &
 # Write token belongs to a Hetzner project holding staging alone.
-# NOT this stack's name: `docs/naming-conventions.md` calls for `main-staging`
-# here, and GitHub offers no way to rename a deployment Environment. Read the
-# production stack's declaration for the measurement and the price;
-# `docs/change-queue.md` entry 75 owns the move.
-github_environment: staging
+#
+# THIS STACK'S NAME, and no longer the environment's. `docs/naming-conventions.md`
+# calls for the stack here, and it took a re-creation to deliver: GitHub offers
+# no way to rename a deployment Environment -- no UI control, and the REST API
+# exposes only GET, PUT and DELETE with the name in the URL path (measured
+# 2026-09-12). So the Environment this names was created fresh and its secrets
+# re-entered by hand, which is why `target_environment` below and this field
+# NO LONGER SPELL THE SAME WORD. That divergence is the scheme working: a
+# second tenant's staging would collide on `staging` and cannot collide here.
+github_environment: main-staging
 
 # The repository secret holding this stack's read-only Hetzner token.
 # REQUIRED.
