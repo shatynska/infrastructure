@@ -127,11 +127,14 @@ from test_the_staging_github_environment_moves_first import (
 # Reviewed Plan* (openspec/specs/iac-cicd-pipeline/spec.md) says "The
 # `main-production` Environment SHALL require a reviewer", and its scenario
 # "Merge does not apply immediately" says the apply job "SHALL pause and wait for
-# a required reviewer to approve the `main-production` GitHub Environment". *Gated
-# Deploy Reuses the Terraform Production Environment*
-# (openspec/specs/iac-platform-deploy-pipeline/spec.md) names it a third time,
-# as "the Environment that stack's own committed pipeline declaration names,
-# which is `main-production`".
+# a required reviewer to approve the `main-production` GitHub Environment". *Each
+# Stack's Deploy Attaches to the Environment Its Own Declaration Names*
+# (openspec/specs/iac-platform-deploy-pipeline/spec.md) reaches it a third time,
+# though no longer by naming it: each deploy attaches to "the GitHub Environment
+# **that stack's** declaration names", and production's declaration names this
+# one. Its predecessor spelled `main-production` outright;
+# `deploy-the-platform-stack-per-environment` retired that requirement along
+# with the single deploy it described.
 #
 # The stack DIRECTORY is not renamed by this change and is carried here only to
 # say which declaration is production's.

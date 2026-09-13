@@ -212,29 +212,6 @@ The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves t
 
 **Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
 
-## 16. deploy-the-platform-stack-per-environment
-
-Recorded 2026-09-10 by `bootstrap-two-environments`, which needed to tell a company reader what their second server can and cannot have. Two of the three answers were already written down; this was the third and it was recorded nowhere.
-
-`.github/workflows/platform-deploy.yml` is single-environment by construction, in two places that must move together:
-
-- **`environment: main-production`** is a literal on the deploy job, where the Terraform pipeline reads its environment from each stack's own `pipeline.yml`. The workflow therefore cannot be pointed at a second stack at all. `.github/tests` now asserts that this literal equals the `github_environment` the production stack declares, which keeps the two from drifting but does not make the workflow multi-stack — that is still this entry's work.
-- **`PLATFORM_DEPLOY_HOST`** names one host, and the eight `PLATFORM_*` secrets around it are one set held in one GitHub Environment. A second environment needs its own values for every one of them — its own deploy host, its own Postgres credentials, its own Grafana password, its own ACME email.
-
-**Where this came from**, since the entry it was split out of no longer exists. It was recorded as a separate entry rather than a sixth bullet on the entry that held both halves of "configure the staging host". That entry's *host* half — a play that can target a second environment, an inventory that can see two Hetzner projects, `group_vars/staging.yml`, and the first local converge — was delivered by `configure-the-staging-host`, archived 2026-09-10, which deleted that entry with it. Its platform bullet said the stack has to reach the second host; **this** entry is the mechanism that would let it. The two were separable because a converged host is a prerequisite either way, and the host half was already large.
-
-What that change left here, so this entry does not re-derive it: staging's `deploy` account is already authorised for `platform` under a staging-only keypair, whose private half is in the operator's password manager and in no GitHub secret. `commerce-ops` is deliberately not authorised on staging — it has no staging deploy path in its own repository yet.
-
-The shape to copy is the one `make-the-pipeline-environment-agnostic` proved: the workflow reads what it needs from committed per-environment declarations and names no environment itself. `platform/` has no such declaration today, and whether it should reuse `terraform/stacks/<name>/pipeline.yml` or grow one of its own is the first decision this change makes.
-
-**Unblocked by a converged staging host, which `configure-the-staging-host` made reachable rather than made true.** That change landed the inventory, the play and staging's `group_vars` on 2026-09-10; the converge is operator work and happens after it. Check the host before starting here.
-
-Once converged, staging's `deploy` account is authorised for `platform` under a staging-only keypair, so this entry needs no converge of its own to begin -- **provided the operator supplied that keypair**, which is the same step the converge waits on. What was never left here is staging's `PLATFORM_*` secret set, which is this entry's to create in full.
-
-**Entry 17 is blocked on this one**, and the coupling is worth reading from this end too: 53 opens 80/443 on staging, and opening them before there is a stack behind them is the state `add-a-staging-environment` deliberately avoided. Do this first.
-
-**Staging's prune check will be red until this lands** -- from the converge that arms the timer, not from now. `main-staging-prune-host-images` does not exist until the unit's first activation pings it into being. Once it does, it reports failure every week, because a host with nothing deployed has an empty keep set, which the prune treats as a refusal rather than licence to remove everything. That was accepted deliberately and bounded by this entry; if it stays red long enough to be tuned out, that is the signal to revisit rather than to mute it.
-
 ## 17. expose-staging-on-the-web
 
 **The half of that same split entry which 16 does not claim.** Recorded 2026-09-10 by `configure-the-staging-host`, which took its host half and deleted it on archiving. Without this entry the work below would have gone with it, since entry 16's own text scopes itself to `platform-deploy.yml`'s `environment:` literal and the eight `PLATFORM_*` secrets and mentions neither ports nor DNS.
@@ -247,7 +224,15 @@ Staging is a configured host with no way in from the internet:
 
 **It must not undo what `add-a-staging-environment` shipped deliberately.** `web_allowed_cidrs = []` is not an oversight: it is a firewall that opens no port in front of a host with nothing behind it, and the intended order is that the change with something to put there opens them. That is this entry.
 
-**Blocked on `deploy-the-platform-stack-per-environment`, or at least pointless before it.** The undivided entry held both halves and got this ordering for free; splitting them loses it, so it is stated. Ports opened before the stack can reach staging is precisely the state the bullet above warns against. (This read "blocked on 29" until 2026-09-13, a number that named that entry under a numbering this file has since been through — the hazard its own header warns about. Cited by name from here on, which is what survives a renumbering.)
+**Its stated blocker is gone and a different one took its place, which is why this entry is re-scoped rather than freed.** It read "blocked on `deploy-the-platform-stack-per-environment`, or at least pointless before it", and that change archived on 2026-09-13: staging now runs the platform stack, verified by its image prune reporting `considered 8` where every earlier run had abandoned on an empty keep set. So the ordering that entry supplied is satisfied.
+
+What it did not supply is anything to serve. **Staging has the platform stack and no application.** `deploy_apps` in `ansible/inventory/group_vars/staging.yml` enumerates `platform` alone — `commerce-ops` is deliberately absent, having no staging deploy path in its own repository — so Traefik there routes nothing. Opening 80 and 443 today puts a reverse proxy with no backend on the public internet, which is the state the bullet above warns against, one layer further along. It would also issue no certificate: ACME is driven by router rules, and a host with no application declares none, so the third bullet cannot be performed at all.
+
+**So the trigger is an application reaching staging, not a date**, and taking this entry before then would mean writing a dummy router to have something for ACME to answer for — a contrivance that rehearses the mechanism against a case production will never run.
+
+**Do not delete this entry meanwhile.** Two things in it exist nowhere else: the DNS decision's revisit trigger, which `docs/bootstrap-a-new-host.md` §4.4 points *here* by name rather than restating, so deleting this orphans that pointer; and the two-layer firewall obligation, which is the one place saying `terraform.tfvars` and `group_vars` must open together. Both outlive the wait.
+
+**What is worth doing before then, and is not blocked:** deciding whether staging gets hostnames under the live zone at all, or a zone of its own. The NS-migration risk §4.4 records is about the zone carrying mail; a separate zone for staging carries none, and would let the migration question be answered once rather than weighed again each time.
 
 ## 18. refresh-staging-group-vars-banner
 
