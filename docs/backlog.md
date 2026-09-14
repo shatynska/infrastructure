@@ -116,7 +116,7 @@ Note the divergence this does **not** cover: on the production host, `commerce-o
 
 **Do first**: check whether any application is by then storing something in the shared instance that it would rather not lose, in which case the answer is that it should not have been (see the requirements above) and that is the thing to fix, not the upgrade.
 
-**And re-provision after it.** Discarding the volume discards every application database in the instance, which each application's classification tolerates and none can start without: before redeploying each, run `docs/bootstrap-a-new-host.md` §8.3's recipe for that host with `rotate=yes`. `commerce-ops` has such a database on both hosts, staging's since 2026-09-13.
+**And re-provision after it.** Discarding the volume discards every application database in the instance, which each application's classification tolerates and none can start without: before redeploying each, run `docs/bootstrap-a-new-host.md` §8.3's recipe for that host with `rotate=yes`. Since 2026-09-13 `commerce-ops` has such a database on the staging host; production's is unused and owed removal (`remove-commerce-ops-s-unused-production-database`).
 
 ## 11. remove-the-stale-test-hostname
 
@@ -264,12 +264,12 @@ Not blocked, and small. It touches one file and no mechanism.
 
 *No Store on This Host Holds Data Requiring Backup* classifies every store on this host as needing no backup, and states one exception: on the production host, `commerce-ops` keeps durable data in a PostgreSQL container of its own, on its own `app_db` network — staging's `commerce-ops` has none, its database being in staging's shared instance. On 2026-09-08 production's private database held 12 MB. Most of its rows are transient — roughly 17,000 across the `procrastinate_*` queue tables, which are exactly the non-durable class the shared instance exists for — but the part that matters is small and hand-curated: 358 `playbook_steps`, 35 `launch_journal_entries`, 26 `launch_clickup_tasks`, 11 `roles`, 8 `role_holders`, 7 `known_work`, 5 `products`. Nothing backs any of it up. The daily Hetzner snapshot covers the root disk the volume sits on, crash-consistently, restorable only by rolling the whole server back.
 
-The resolution divides the database, and `provision-commerce-ops-database-in-the-shared-instance` records the division in its design (decision 3): the `procrastinate_*` queue tables are non-durable and stay on the host, in the shared instance; the seven hand-curated tables above are durable and move to Supabase, which owns its own backups; any other table is unclassified until a change in this repository classifies it, and goes into the shared instance only after that.
+The resolution moves the whole database to Supabase, which owns its own backups — the hand-curated tables and the `procrastinate_*` queue tables alike. `provision-commerce-ops-database-in-the-shared-instance` first recorded a split, the queue staying in production's shared instance, and the operator withdrew it on 2026-09-14 (that change's design, decision 3): `commerce-ops` enqueues inside its domain transaction, so its queue cannot live in a second database. Staging is the other case: its whole `commerce-ops` database is in staging's shared instance under the rehearsal-data policy, and nothing there moves.
 
 **It ends in three steps, and this repository owns the first and the last.**
 
-1. Done by that change: a `commerce-ops` database and role in production's shared instance, the role's password in the `commerce-ops` repository's `production` Environment as `SHARED_POSTGRES_PASSWORD` — deliberately not `POSTGRES_PASSWORD`, which the private PostgreSQL still reads.
-2. In the `commerce-ops` repository, over which this one has no authority: point the durable tables at Supabase and the `procrastinate_*` tables at `postgres:5432` over `platform_edge` with that role, then remove its own PostgreSQL service, its volume and its `app_db` network from the production Compose file. Until that service is gone, the divergence stands whatever the shared instance holds.
+1. Here, already: nothing further is needed for Supabase. Production's shared instance holds a `commerce-ops` role and database, and the `commerce-ops` repository's `production` Environment a `SHARED_POSTGRES_PASSWORD`, provisioned before that decision and unused since — `remove-commerce-ops-s-unused-production-database` removes them, independently of this entry.
+2. In the `commerce-ops` repository, over which this one has no authority: point production's `DATABASE_URL` at Supabase's **session pooler** — `aws-1-eu-west-1.pooler.supabase.com:5432` with user `postgres.<ref>`, which answered `pg_isready` from a container on staging's `platform_edge` on 2026-09-14; Supabase's direct connection is IPv6-only and `platform_edge` has IPv6 disabled, and the transaction pooler on port 6543 cannot carry the worker's `LISTEN/NOTIFY`. Decide whether the hand-curated rows are migrated or production starts clean, put the Supabase project on a plan with backups — the Free plan has none — then remove its own PostgreSQL service, its volume and its `app_db` network from the production Compose file. Until that service is gone, the divergence stands.
 3. Here: delete the divergence paragraph from *No Store on This Host Holds Data Requiring Backup*. No change in this repository would otherwise prompt it, so a completed migration would quietly leave the specification describing a divergence that no longer exists. **Gate it on the host, not on the migration being reported done**: from a session on production, `docker ps --filter name=commerce-ops` shows no PostgreSQL container and `docker volume ls` no longer lists `commerce-ops_commerce_ops_pgdata`. A specification calling the divergence closed while that container runs is worse than one admitting it.
 
 ## 20. write-and-rehearse-the-rebuild-runbook
@@ -826,3 +826,19 @@ Not blocked.
 **What a design has to answer**, taken from what the manual recipe had to: where the password is generated and how it reaches the application's deploy without a command line, a log line or a file in this repository; what happens when the secret name is already taken; that a re-run is a rotation which the application picks up only on its next deploy; re-provisioning after a rebuild or a volume reset; and per-host independence, so that one leaked credential reaches one host.
 
 **Archiving it obliges a delta elsewhere.** The requirement's paragraph "One divergence is stated rather than hidden, as of 2026-09-13" says it is replaced when this mechanism lands, and nothing else would prompt that; stage 8.3's recipe then becomes whatever the mechanism makes of it.
+
+## 55. remove-commerce-ops-s-unused-production-database
+
+**Not blocked; recorded because it is a production write, which the change that found it does not make.** `provision-commerce-ops-database-in-the-shared-instance` provisioned a `commerce-ops` role and database in production's shared instance on 2026-09-14 and delivered their password to the `commerce-ops` repository's `production` Environment as `SHARED_POSTGRES_PASSWORD`. The same day the operator decided that production's `commerce-ops` keeps nothing in the shared instance — its whole database, queue included, moves to Supabase (`move-commerce-ops-durable-data-to-supabase`) — so nothing will read either.
+
+Removed by the operator, the way the recipe that created them is run. Check first, from a session on production, that nothing is connected: `SELECT count(*) FROM pg_stat_activity WHERE datname = 'commerce-ops'` returns `0`. Then:
+
+```sh
+ssh <operator>@<production host> 'docker exec -i platform-postgres-1 sh -c '\''psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'\' <<'SQL'
+DROP DATABASE "commerce-ops";
+DROP ROLE "commerce-ops";
+SQL
+gh secret delete SHARED_POSTGRES_PASSWORD --repo fuperia-it/commerce-ops --env production
+```
+
+Afterwards `\l` in production's `platform-postgres-1` no longer lists `commerce-ops`, and `gh secret list --env production` no longer lists `SHARED_POSTGRES_PASSWORD`. `POSTGRES_PASSWORD` stays: the private PostgreSQL reads it until `move-commerce-ops-durable-data-to-supabase` retires that container. Staging's database, role and secret are not touched.
