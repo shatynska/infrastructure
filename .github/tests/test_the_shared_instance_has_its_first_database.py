@@ -818,6 +818,47 @@ def rotate_offences(block: str) -> list[str]:
     return offences
 
 
+# Added at code review round 2: the repository and organisation listings round
+# 1 added to the recipe were protected by no test -- removing them, not feeding
+# them to the check, or merging all three into one `$(…)` (where `set -e` sees
+# only the last command's status) each left this module green -- and the
+# check of those two was conditioned on `rotate`, so `rotate=yes` let an
+# overriding Environment secret through.
+ENV_LISTING = re.compile(r"^\s*(?P<var>[A-Za-z_]\w*)=\$\(\s*gh\s+secret\s+list\b[^)]*--env\b")
+REPO_LISTING = re.compile(r"^\s*(?P<var>[A-Za-z_]\w*)=\$\(\s*gh\s+secret\s+list\b(?![^)]*--env\b)")
+ORG_LISTING = re.compile(r"^\s*(?P<var>[A-Za-z_]\w*)=\$\(\s*gh\s+api\b[^)]*organization-secrets")
+
+
+def listing_offences(block: str) -> list[str]:
+    lines = command_lines(block)
+    setting = next((index for index, line in lines if GH_SECRET_SET.search(line)), len(block.splitlines()))
+    before = [(index, line) for index, line in lines if index < setting]
+    offences: list[str] = []
+    found: dict[str, str] = {}
+    for label, pattern in (("Environment", ENV_LISTING), ("repository", REPO_LISTING), ("organisation", ORG_LISTING)):
+        hits = [(index, line, match) for index, line in before for match in [pattern.match(line)] if match]
+        if not hits:
+            offences.append(f"the {label} secret names are not read into a variable of their own before the secret is set")
+            continue
+        index, line, match = hits[0]
+        inside = line.split("$(", 1)[1]
+        if line.count("$(") != 1 or ";" in inside or "&&" in inside:
+            offences.append(
+                f"{index + 1}: the {label} listing shares its `$(…)` with another command, so `set -e` sees only the last one's failure"
+            )
+        found[label] = match.group("var")
+    for label, variable in found.items():
+        expansion = re.compile(r"\"\$\{?" + re.escape(variable) + r"\}?\"")
+        fed = [line for _, line in before if "grep" in line and expansion.search(line)]
+        if not fed:
+            offences.append(f"the {label} names (`${variable}`) are never fed to the name check")
+        elif label != "Environment" and all("rotate" in line for line in fed):
+            offences.append(
+                f"the check of the {label} names is conditioned on `rotate`, so `rotate=yes` lets an overriding Environment secret through"
+            )
+    return offences
+
+
 class RecipeMixin:
     def recipe(self) -> str:
         blocks = recipe_blocks(read_text(BOOTSTRAP))
@@ -949,11 +990,58 @@ class TestTheRecipeCannotRegressSilently(RecipeMixin, unittest.TestCase):
         offences = rotate_offences(self.recipe())
         self.assertEqual([], offences, "\n".join(offences))
 
+    def test_every_secret_name_listing_is_its_own_assignment_and_reaches_the_check(self) -> None:
+        offences = listing_offences(self.recipe())
+        self.assertEqual([], offences, "\n".join(offences))
+
+
+# The recipe as it stands after code review rounds 1 and 2. The independent
+# author's `CONFORMING_RECIPE_DOCUMENT` predates both and is left as written.
+CODE_REVIEW_RECIPE_DOCUMENT = r"""
+### 8.3 Database
+
+```sh
+(
+set -eu
+app=<app> secret=<SECRET> repo=<org>/<app> env=<environment> host=<operator>@<host> rotate=no
+env_names=$(gh secret list --repo "$repo" --env "$env" --json name --jq '.[].name')
+repo_names=$(gh secret list --repo "$repo" --json name --jq '.[].name')
+org_names=$(gh api --paginate "repos/$repo/actions/organization-secrets" --jq '.secrets[].name')
+if printf '%s\n' "$repo_names" "$org_names" | grep -qx "$secret"; then
+  echo "refusing: taken above the Environment" >&2; exit 1
+fi
+if printf '%s\n' "$env_names" | grep -qx "$secret"; then
+  [ "$rotate" = yes ] || { echo "refusing: already set" >&2; exit 1; }
+else
+  [ "$rotate" != yes ] || { echo "refusing: nothing to rotate" >&2; exit 1; }
+fi
+pw=$(openssl rand -hex 32)
+printf '%s' "$pw" | gh secret set "$secret" --repo "$repo" --env "$env"
+ssh "$host" 'docker exec -i platform-postgres-1 sh -c '\''psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'\' <<SQL
+SET log_statement = 'none';
+SET log_min_error_statement = 'panic';
+SET log_min_duration_statement = -1;
+SET log_min_duration_sample = -1;
+SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$app') AS create_role,
+       NOT EXISTS (SELECT FROM pg_database WHERE datname = '$app') AS create_database \gset
+\if :create_role
+CREATE ROLE "$app" WITH LOGIN PASSWORD '$pw';
+\else
+ALTER ROLE "$app" WITH LOGIN PASSWORD '$pw';
+\endif
+\if :create_database
+CREATE DATABASE "$app" OWNER "$app";
+\endif
+REVOKE CONNECT, TEMPORARY ON DATABASE "$app" FROM PUBLIC;
+SQL
+)
+```
+"""
+
 
 class TestTheCodeReviewDetectorsFire(unittest.TestCase):
     """ADDED AT CODE REVIEW. Each detector above runs over material written to
-    falsify it. The author's conforming fixture pins one log setting of four,
-    so it is completed here rather than edited."""
+    falsify it, starting from `CODE_REVIEW_RECIPE_DOCUMENT`."""
 
     MISSING_SETTINGS = (
         "SET log_min_error_statement = 'panic';\n"
@@ -962,9 +1050,7 @@ class TestTheCodeReviewDetectorsFire(unittest.TestCase):
     )
 
     def document(self) -> str:
-        anchor = "SET log_statement = 'none';\n"
-        self.assertIn(anchor, CONFORMING_RECIPE_DOCUMENT)
-        return CONFORMING_RECIPE_DOCUMENT.replace(anchor, anchor + self.MISSING_SETTINGS)
+        return CODE_REVIEW_RECIPE_DOCUMENT
 
     def recipe(self, document: str | None = None) -> str:
         blocks = recipe_blocks(self.document() if document is None else document)
@@ -983,6 +1069,7 @@ class TestTheCodeReviewDetectorsFire(unittest.TestCase):
         self.assertEqual([], quoted_delimiter_offences(recipe))
         self.assertEqual([], unpinned_log_settings(sql))
         self.assertEqual([], rotate_offences(recipe))
+        self.assertEqual([], listing_offences(recipe))
         self.assertEqual([], statements_not_over_standard_input(recipe))
         self.assertEqual([], password_on_command_lines(recipe))
         self.assertEqual([], refusal_offences(recipe))
@@ -1024,6 +1111,39 @@ class TestTheCodeReviewDetectorsFire(unittest.TestCase):
             "REVOKE CONNECT", "SET log_min_duration_sample = -1;\nREVOKE CONNECT"
         )
         self.assertEqual(1, len(unpinned_log_settings(standard_input_sql(moved))))
+
+    def test_the_repository_and_organisation_listings_removed_are_reported(self) -> None:
+        removed = self.replaced(
+            "repo_names=$(gh secret list --repo \"$repo\" --json name --jq '.[].name')\n"
+            "org_names=$(gh api --paginate \"repos/$repo/actions/organization-secrets\" --jq '.secrets[].name')\n",
+            "",
+        )
+        offences = listing_offences(removed)
+        self.assertTrue(any("repository" in offence for offence in offences), offences)
+        self.assertTrue(any("organisation" in offence for offence in offences), offences)
+
+    def test_a_listing_never_fed_to_the_check_is_reported(self) -> None:
+        unfed = self.replaced('"$repo_names" "$org_names"', '"$repo_names"')
+        offences = listing_offences(unfed)
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("organisation", offences[0])
+
+    def test_listings_merged_into_one_substitution_are_reported(self) -> None:
+        merged = self.replaced(
+            "env_names=$(gh secret list --repo \"$repo\" --env \"$env\" --json name --jq '.[].name')\n"
+            "repo_names=$(gh secret list --repo \"$repo\" --json name --jq '.[].name')\n",
+            "env_names=$(gh secret list --repo \"$repo\" --env \"$env\" --json name --jq '.[].name'; "
+            "gh secret list --repo \"$repo\" --json name --jq '.[].name')\n",
+        )
+        self.assertTrue(listing_offences(merged))
+
+    def test_the_repository_check_conditioned_on_rotate_is_reported(self) -> None:
+        conditioned = self.replaced(
+            'grep -qx "$secret"; then\n  echo "refusing: taken above',
+            'grep -qx "$secret" && [ "$rotate" != yes ]; then\n  echo "refusing: taken above',
+        )
+        offences = listing_offences(conditioned)
+        self.assertTrue(any("conditioned on `rotate`" in offence for offence in offences), offences)
 
     def test_rotate_read_from_the_shell_is_reported(self) -> None:
         self.assertTrue(rotate_offences(self.replaced(" rotate=no\n", "\n")))

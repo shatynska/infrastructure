@@ -966,8 +966,13 @@ app=<app> secret=<SECRET> repo=<org>/<app> env=<environment> host=<operator>@<ho
 env_names=$(gh secret list --repo "$repo" --env "$env" --json name --jq '.[].name')
 repo_names=$(gh secret list --repo "$repo" --json name --jq '.[].name')
 org_names=$(gh api --paginate "repos/$repo/actions/organization-secrets" --jq '.secrets[].name')
-if printf '%s\n' "$env_names" "$repo_names" "$org_names" | grep -qx "$secret" && [ "$rotate" != yes ]; then
-  echo "refusing: $secret is already set in $env, the repository or its organisation; set rotate=yes in this block only to rotate it" >&2; exit 1
+if printf '%s\n' "$repo_names" "$org_names" | grep -qx "$secret"; then
+  echo "refusing: $secret is a repository or organisation secret, which an Environment secret of that name would override; choose another name" >&2; exit 1
+fi
+if printf '%s\n' "$env_names" | grep -qx "$secret"; then
+  [ "$rotate" = yes ] || { echo "refusing: $secret is already set in $env; set rotate=yes in this block only to rotate it" >&2; exit 1; }
+else
+  [ "$rotate" != yes ] || { echo "refusing: rotate=yes, but $secret is not set in $env, so there is nothing to rotate; check the name" >&2; exit 1; }
 fi
 pw=$(openssl rand -hex 32)
 printf '%s' "$pw" | gh secret set "$secret" --repo "$repo" --env "$env"
@@ -996,13 +1001,13 @@ Expected output: `gh`'s confirmation that the secret was set, then `SET` four ti
 What each part is for:
 
 - **A subshell with `set -eu`**: a failing step ends the run before the next one, and the password disappears with the subshell. Paste it bare — wrapped in `if`, `&&` or `||`, `set -e` is suspended. Each secret listing is its own assignment for the same reason: several commands inside one `$(…)` would report only the last one's failure.
-- **The name check refuses** if `<SECRET>` is already set in that Environment, in the repository, or in the organisation for this repository — an Environment secret overrides a repository or organisation secret of the same name for that environment's jobs, so any of the three would be overwritten from the application's point of view, which is an outage whose old value GitHub cannot give back. `rotate=yes` on the assignment line is the only way past it, and means this run replaces that very secret. Keep it on that line rather than in your shell: a variable left set in the shell would switch the check off for the next paste.
+- **The name check refuses** if `<SECRET>` is already set in that Environment, in the repository, or in the organisation for this repository — an Environment secret overrides a repository or organisation secret of the same name for that environment's jobs, so any of the three would be overwritten from the application's point of view, which is an outage whose old value GitHub cannot give back. A name held by the repository or the organisation is refused outright: choose another. A name already in the Environment is refused unless `rotate=yes` is on the assignment line, meaning this run replaces that very secret — and `rotate=yes` is itself refused when the name is not in the Environment, so a mistyped or taken name cannot pass as a rotation. Keep it on that line rather than in your shell: a variable left set in the shell would switch the check off for the next paste. For a repository owned by a personal account rather than an organisation, GitHub answers the organisation listing with `404` and the block stops there, having changed nothing; with no organisation to override anything, make that line `org_names=` for that paste.
 - **The password reaches `gh` and `psql` only over standard input** — never a command line, so it is in no shell history and no process listing on either machine. A single `psql -c` would not work in any case: it sends several statements as one transaction, and `CREATE DATABASE` cannot run inside one. The here-document's delimiter is unquoted so that `$app` and `$pw` expand; quoted, the run would create a role literally named `$app` and still exit 0.
 - **Every log setting that writes statement text is off for the session**, so a failing `CREATE ROLE … PASSWORD` does not put the password into `docker logs`, which every `docker`-group account can read.
 - **Identifiers are double-quoted**, because an application name may carry a hyphen, which PostgreSQL otherwise parses as a subtraction.
 - **It converges**: it creates the role or resets its password, creates the database if absent, and revokes `CONNECT` and `TEMPORARY` from `PUBLIC` — which a new database otherwise grants to every role in the instance, so without it any other application's role could connect.
 
-**When it fails**, what it leaves depends on where. A secret-name read or `gh secret set` failed: the host is untouched; fix the cause and paste it again — and if it then refuses because the secret was set after all, paste it with `rotate=yes`. The host step failed on a first provisioning: the Environment holds a password no role has, which nothing uses yet; paste it again with `rotate=yes`. The host step failed on a rotation: the Environment is ahead of the role, and the application's next deploy would render a password the role rejects; paste it again with `rotate=yes` before that deploy.
+**When it fails**, what it leaves depends on where. A secret-name listing failed: nothing was set and the host is untouched; fix the cause and paste it again unchanged — if it then refuses, the name is taken, so choose another. `gh secret set` failed: the host is untouched; paste it again unchanged, and if it now refuses because the name is in the Environment after all, the set went through — paste it with `rotate=yes`. The host step failed on a first provisioning: the Environment holds a password no role has, which nothing uses yet; paste it again with `rotate=yes`. The host step failed on a rotation: the Environment is ahead of the role, and the application's next deploy would render a password the role rejects; paste it again with `rotate=yes` before that deploy.
 
 **Rotating** is the same block with `rotate=yes`. The application picks the new password up on its next deploy; connections it opens before then are refused.
 
