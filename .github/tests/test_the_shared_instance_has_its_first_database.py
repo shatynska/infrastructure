@@ -859,6 +859,73 @@ def listing_offences(block: str) -> list[str]:
     return offences
 
 
+# Added at code review round 3: with three refusal branches, the detectors
+# above each needed only one non-zero exit or one `rotate` test somewhere in
+# the block, so any single branch could be deleted, inverted or made to exit
+# 0 unseen; and the name comparison was case-sensitive, while GitHub's secret
+# names are not.
+GREP_NAME_CHECK = re.compile(r"\bgrep\s+-(?P<flags>[A-Za-z]+)\s")
+ROTATE_YES_OR_EXIT = re.compile(r"^\s*\[\s*\"\$rotate\"\s*=\s*yes\s*\]\s*\|\|.*\bexit\s+[1-9]")
+ROTATE_NOT_YES_OR_EXIT = re.compile(r"^\s*\[\s*\"\$rotate\"\s*!=\s*yes\s*\]\s*\|\|.*\bexit\s+[1-9]")
+
+
+def if_bodies(lines: list[tuple[int, str]], start: int) -> tuple[list[str], list[str]]:
+    """The then-body and else-body of the flat `if … else … fi` whose `if`
+    line is at position `start` of `lines`."""
+    then: list[str] = []
+    other: list[str] = []
+    current = then
+    for _, line in lines[start + 1:]:
+        word = line.strip()
+        if word == "else":
+            current = other
+            continue
+        if word == "fi":
+            break
+        current.append(line)
+    return then, other
+
+
+def refusal_branch_offences(block: str) -> list[str]:
+    lines = command_lines(block)
+
+    def checks(line: str, present: tuple[str, ...], absent: tuple[str, ...]) -> bool:
+        return (
+            line.lstrip().startswith("if ")
+            and "grep" in line
+            and all(f'"${name}"' in line for name in present)
+            and not any(f'"${name}"' in line for name in absent)
+        )
+
+    above = [p for p, (_, line) in enumerate(lines) if checks(line, ("repo_names", "org_names"), ("env_names",))]
+    env = [p for p, (_, line) in enumerate(lines) if checks(line, ("env_names",), ("repo_names", "org_names"))]
+    offences: list[str] = []
+    if not above:
+        offences.append("no `if` checks the repository and organisation names on their own")
+    else:
+        then, _ = if_bodies(lines, above[0])
+        if "rotate" in lines[above[0]][1] or any("rotate" in line for line in then):
+            offences.append("the repository and organisation refusal consults `rotate`")
+        if not any(NONZERO_EXIT.search(line) for line in then):
+            offences.append("the repository and organisation check does not exit non-zero")
+    if not env:
+        offences.append("no `if` checks the Environment names on their own")
+    else:
+        then, other = if_bodies(lines, env[0])
+        if not any(ROTATE_YES_OR_EXIT.match(line) for line in then):
+            offences.append('a name already in the Environment is not refused unless `rotate` is `yes` (`[ "$rotate" = yes ] || … exit 1`)')
+        if not any(ROTATE_NOT_YES_OR_EXIT.match(line) for line in other):
+            offences.append('`rotate=yes` for a name not in the Environment is not refused (`[ "$rotate" != yes ] || … exit 1`)')
+    for position in above[:1] + env[:1]:
+        index, line = lines[position]
+        flags = GREP_NAME_CHECK.search(line)
+        if flags is None or not {"i", "x"} <= set(flags.group("flags")):
+            offences.append(
+                f"{index + 1}: the name comparison is not a whole-line, case-insensitive match (`grep -ix`), while GitHub's secret names ignore case"
+            )
+    return offences
+
+
 class RecipeMixin:
     def recipe(self) -> str:
         blocks = recipe_blocks(read_text(BOOTSTRAP))
@@ -994,6 +1061,10 @@ class TestTheRecipeCannotRegressSilently(RecipeMixin, unittest.TestCase):
         offences = listing_offences(self.recipe())
         self.assertEqual([], offences, "\n".join(offences))
 
+    def test_each_refusal_branch_refuses_what_it_should(self) -> None:
+        offences = refusal_branch_offences(self.recipe())
+        self.assertEqual([], offences, "\n".join(offences))
+
 
 # The recipe as it stands after code review rounds 1 and 2. The independent
 # author's `CONFORMING_RECIPE_DOCUMENT` predates both and is left as written.
@@ -1007,10 +1078,10 @@ app=<app> secret=<SECRET> repo=<org>/<app> env=<environment> host=<operator>@<ho
 env_names=$(gh secret list --repo "$repo" --env "$env" --json name --jq '.[].name')
 repo_names=$(gh secret list --repo "$repo" --json name --jq '.[].name')
 org_names=$(gh api --paginate "repos/$repo/actions/organization-secrets" --jq '.secrets[].name')
-if printf '%s\n' "$repo_names" "$org_names" | grep -qx "$secret"; then
+if printf '%s\n' "$repo_names" "$org_names" | grep -qixF "$secret"; then
   echo "refusing: taken above the Environment" >&2; exit 1
 fi
-if printf '%s\n' "$env_names" | grep -qx "$secret"; then
+if printf '%s\n' "$env_names" | grep -qixF "$secret"; then
   [ "$rotate" = yes ] || { echo "refusing: already set" >&2; exit 1; }
 else
   [ "$rotate" != yes ] || { echo "refusing: nothing to rotate" >&2; exit 1; }
@@ -1070,6 +1141,7 @@ class TestTheCodeReviewDetectorsFire(unittest.TestCase):
         self.assertEqual([], unpinned_log_settings(sql))
         self.assertEqual([], rotate_offences(recipe))
         self.assertEqual([], listing_offences(recipe))
+        self.assertEqual([], refusal_branch_offences(recipe))
         self.assertEqual([], statements_not_over_standard_input(recipe))
         self.assertEqual([], password_on_command_lines(recipe))
         self.assertEqual([], refusal_offences(recipe))
@@ -1139,11 +1211,51 @@ class TestTheCodeReviewDetectorsFire(unittest.TestCase):
 
     def test_the_repository_check_conditioned_on_rotate_is_reported(self) -> None:
         conditioned = self.replaced(
-            'grep -qx "$secret"; then\n  echo "refusing: taken above',
-            'grep -qx "$secret" && [ "$rotate" != yes ]; then\n  echo "refusing: taken above',
+            'grep -qixF "$secret"; then\n  echo "refusing: taken above',
+            'grep -qixF "$secret" && [ "$rotate" != yes ]; then\n  echo "refusing: taken above',
         )
         offences = listing_offences(conditioned)
         self.assertTrue(any("conditioned on `rotate`" in offence for offence in offences), offences)
+
+    def test_the_repository_check_folded_into_the_environment_check_is_reported(self) -> None:
+        folded = self.replaced(
+            "if printf '%s\\n' \"$repo_names\" \"$org_names\" | grep -qixF \"$secret\"; then\n"
+            "  echo \"refusing: taken above the Environment\" >&2; exit 1\n"
+            "fi\n"
+            "if printf '%s\\n' \"$env_names\" | grep -qixF \"$secret\"; then",
+            "if printf '%s\\n' \"$env_names\" \"$repo_names\" \"$org_names\" | grep -qixF \"$secret\"; then",
+        )
+        offences = refusal_branch_offences(folded)
+        self.assertTrue(any("repository and organisation names on their own" in o for o in offences), offences)
+
+    def test_the_environment_guard_made_a_no_op_is_reported(self) -> None:
+        offences = refusal_branch_offences(self.replaced('  [ "$rotate" = yes ] || {', "  true || {"))
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("already in the Environment", offences[0])
+
+    def test_the_environment_guard_inverted_is_reported(self) -> None:
+        offences = refusal_branch_offences(self.replaced('  [ "$rotate" = yes ] || {', '  [ "$rotate" != yes ] || {'))
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("already in the Environment", offences[0])
+
+    def test_rotate_yes_for_an_absent_name_not_refused_is_reported(self) -> None:
+        offences = refusal_branch_offences(self.replaced('  [ "$rotate" != yes ] || {', "  true || {"))
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("not in the Environment", offences[0])
+
+    def test_the_repository_refusal_exiting_zero_is_reported(self) -> None:
+        offences = refusal_branch_offences(
+            self.replaced('taken above the Environment" >&2; exit 1', 'taken above the Environment" >&2; exit 0')
+        )
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("does not exit non-zero", offences[0])
+
+    def test_a_case_sensitive_name_comparison_is_reported(self) -> None:
+        offences = refusal_branch_offences(
+            self.replaced('"$org_names" | grep -qixF "$secret"', '"$org_names" | grep -qx "$secret"')
+        )
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("case-insensitive", offences[0])
 
     def test_rotate_read_from_the_shell_is_reported(self) -> None:
         self.assertTrue(rotate_offences(self.replaced(" rotate=no\n", "\n")))
