@@ -1,6 +1,6 @@
 ## Why
 
-`docs/backlog.md` entry 49. *Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". Neither stack's `terraform.tfvars` assigns a `labels` value — no stack passes `labels` to the `server` or `volume` module at all, so each module's own default applies. The only `labels` block under `terraform/stacks/main-production/` is a literal one inside `ssh_key.tf`, unrelated to the variable-file mechanism the requirement is describing. The row has been factually wrong since before `refresh-readme-accuracy` (archived 2026-09-08) first found it, and two changes have since touched this exact row without correcting it: that change deliberately left it disagreeing with the tree, and `rename-terraform-environments-to-stacks` (2026-09-11) rewrote the row's path without correcting its contents. It is small enough to be its own change now that no larger one has picked it up.
+`docs/backlog.md` entry 47. *Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". Neither stack's `terraform.tfvars` assigns a `labels` value — no stack passes `labels` to the `server` or `volume` module at all, so each module's own default applies. The only `labels` block under `terraform/stacks/main-production/` is a literal one inside `ssh_key.tf`, unrelated to the variable-file mechanism the requirement is describing. The row has been factually wrong since before `refresh-readme-accuracy` (archived 2026-09-08) first found it, and two changes have since touched this exact row without correcting it: that change deliberately left it disagreeing with the tree, and `rename-terraform-environments-to-stacks` (archived 2026-09-12) rewrote the row's path without correcting its contents. It is small enough to be its own change now that no larger one has picked it up.
 
 ## What Changes
 
@@ -26,4 +26,4 @@ None.
 
 **Tests**: none owed beyond confirming the existing suite stays green — see `design.md` for why the obvious cross-file assertion is not this change's to add.
 
-**Backlog**: entry 49 is deleted from `docs/backlog.md` at archive.
+**Backlog**: entry 47 is deleted from `docs/backlog.md` at archive.

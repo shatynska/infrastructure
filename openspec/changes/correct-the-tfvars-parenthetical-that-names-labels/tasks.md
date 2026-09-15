@@ -23,6 +23,6 @@ Verification commands referenced below, from this project's conventions:
 ## 3. Archive
 
 - [ ] 3.1 Merge this change's delta into `openspec/specs/iac-repo-foundations/spec.md` via `openspec archive`, and confirm the merged requirement's table row reads "server type, region, image, allowed CIDRs".
-- [ ] 3.2 Delete `docs/backlog.md` entry 49 (`correct-the-tfvars-parenthetical-that-names-labels`) in the archive commit.
+- [ ] 3.2 Delete `docs/backlog.md` entry 47 (`correct-the-tfvars-parenthetical-that-names-labels`) in the archive commit.
 
 Removing the branch and the working tree happens after this change's record pull request merges, which is after the commit that writes this file, so those steps are not tasks here — see `AGENTS.md`, "ship" and "Throughout".
