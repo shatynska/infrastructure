@@ -81,28 +81,45 @@ id_ed25519
 # pattern reaches them. Both documents above write each into ~/.ssh/; these
 # catch the relative-path slip that writes one here instead.
 #
-# `/*-platform` below matches the retired un-suffixed <company>-platform, which
-# no document generates any more. It is left rather than removed: it costs
-# nothing, and a workstation that still holds one from before the rename is
-# exactly the case this block exists for.
-#
-# THE PATTERNS BELOW DO NOT COVER THE WHOLE SCHEME, and the gap is recorded
-# rather than quietly widened: `/*-deploy` was written for the retired
-# <company>-<app>-deploy spelling and matches no <company>-<app>-<environment>;
-# `/*-platform-staging` matches one environment's platform key and nothing
-# matches the production one. docs/backlog.md carries the entry that decides
-# what the patterns should be -- widening one is a behaviour change, not a
-# comment fix, which is why this block says so instead.
-#
 # ANCHORED TO THE ROOT with a leading slash, deliberately. Unanchored, `*-ops`
 # would silently swallow a directory called `commerce-ops` added later, which
 # is the same class of accident this block exists to prevent. The slip lands in
 # the directory the command is run from, and that is this one.
+#
+# TWO PATTERNS PER PURPOSE WOULD GO STALE AGAIN, which is what happened: the
+# scheme renamed <company>-<app>-deploy to <company>-<app>-<environment> and
+# gave the platform key an environment suffix, and no pattern followed. So the
+# two purposes whose names END in an environment are covered by that suffix
+# rather than by a pattern each -- one per environment, not one per purpose --
+# and a third application needs no edit here, nor a fourth key purpose whose
+# name also ends in an environment. One that does not -- a <company>-backup --
+# is matched by nothing and fails the check below until a pattern is added,
+# which is the design rather than a hole in it. The set of environments is this
+# repository's own and small: the files in ansible/inventory/group_vars/ other
+# than all.yml.
+#
+# What that costs is a root-level path ending in `-staging` or `-production`,
+# which would be ignored silently. Nothing here is named that way -- a stack
+# directory lives under terraform/stacks/ -- and
+# .github/tests/test_the_bootstrap_documents_static_conventions.py fails the
+# build if a DIRECTORY at this root ever matches a pattern below. A root-level
+# file that matches is not reported, and must not be: that is the slip these
+# patterns exist to catch. The same module asserts the other direction: that
+# every `ssh-keygen -f` target either runbook prints is matched here. That
+# check, rather than a reader, is what keeps this block in step with the two
+# documents that generate keys.
 /*-ops
 /*-root
-/*-platform
-/*-platform-staging
 /*-ansible-ci-*
+/*-staging
+/*-production
+
+# Retired spellings, kept rather than removed: each costs nothing, and a
+# workstation still holding a key generated before the rename is exactly the
+# case this block exists for. `/*-platform` is the un-suffixed platform key and
+# `/*-deploy` the <company>-<app>-deploy application key; no document generates
+# either now.
+/*-platform
 /*-deploy
 
 # Public halves are not secret, and one being hidden would be its own defect.
