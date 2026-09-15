@@ -2,6 +2,8 @@
 
 Changes this project has identified and not yet opened. An entry is deleted when its change is archived. See `AGENTS.md`, "A second change surfacing".
 
+**An entry is also deleted when the operator takes it as a fix rather than a change**, which leaves no archived record to delete it at. Where that happens, the entry's reasoning is not lost with it: it moves into the file that owns the thing being changed, where the next person to touch that thing will read it, and the deleting pull request says so. Entry 10, `upgrade-the-shared-postgres-major`, was the first taken this way, on 2026-09-15 — its reasoning is now `platform/README.md`, *Upgrading the PostgreSQL major version*. This is a narrower door than it reads: the operator decides it per entry, and an entry whose reasoning has nowhere to go but a change record is not a candidate for it.
+
 An entry carries a number, the change's name, and — where it has one — what it waits on. Not everything here is blocked: where an entry is free to be taken, it says instead why it was recorded rather than folded into the change that found it, usually because it belongs to a different concern than the one that change was closing.
 
 Related entries tend to sit together and an entry another depends on tends to come first, but neither is a rule: a new entry is appended, so the order says nothing on its own. Where one entry actually waits on another, the entry says so.
