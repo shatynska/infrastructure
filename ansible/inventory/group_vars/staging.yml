@@ -29,26 +29,23 @@ ansible_user: root
 hardening_ssh_allowed_cidrs:
   - "176.104.184.0/24"
 
-# EMPTY, AND EMPTY ON PURPOSE -- mirroring web_allowed_cidrs = [] in
-# staging's terraform.tfvars, where it is likewise deliberate. Staging's
-# cloud firewall opens no web port at all, so UFW opens none either: for any
-# given port exactly one layer is the documented access gate, and neither is
-# left open in front of a host with nothing behind it.
+# OPEN, mirroring web_allowed_cidrs = ["0.0.0.0/0"] in staging's
+# terraform.tfvars, which opens 80 and 443 to the internet as production's
+# does. The two files agree so that neither layer is read as closed while the
+# other is open.
 #
-# Stated rather than omitted. The role defaults it to [] anyway, but the
-# mirror obligation above is between this file and terraform.tfvars, and an
-# absent value mirrors nothing.
+# Stated explicitly. The role defaults it to [], so omitting it would
+# silently leave this file disagreeing with terraform.tfvars.
 #
-# NARROWER THAN IT READS, and the sentence above it is the one to read with
-# care: this value does NOT decide what is reachable on 80/443. Traefik
-# PUBLISHES those ports, and a container-published port is DNAT'd and
-# traversed in FORWARD, never offered to UFW's INPUT chain -- so a tailnet
-# peer reaches them today and the cloud firewall is the whole of what refuses
-# from the internet. See docs/backlog.md's say-what-the-host-firewall-
-# actually-gates. What stands here is the mirror of terraform.tfvars, and
-# opening staging to the public web is still expose-staging-on-the-web in
-# that same file, which needs a DNS record too.
-hardening_web_allowed_cidrs: []
+# NARROWER THAN IT READS: this value does NOT decide what is reachable on
+# 80/443. Traefik PUBLISHES those ports, and a container-published port is
+# DNAT'd and traversed in FORWARD, never offered to UFW's INPUT chain -- so
+# the cloud firewall alone decides what reaches them from the internet, and a
+# tailnet peer reaches them whatever this says. See docs/backlog.md's
+# say-what-the-host-firewall-actually-gates. The mirror is kept all the same,
+# for every port UFW does gate.
+hardening_web_allowed_cidrs:
+  - "0.0.0.0/0"
 
 # Operator identities allowed an unprivileged, interactive login on this
 # host (add-ops-account). Safe to commit -- these are public keys, not

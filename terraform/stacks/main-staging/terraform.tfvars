@@ -32,11 +32,15 @@ ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMeSWD47lN9AUVvOF2/7llxkBY
 # staging than for prod.
 ssh_allowed_cidrs = ["176.104.184.0/24"]
 
-# Empty, and empty on purpose: staging runs nothing yet. This creates no web
-# rule at all, rather than opening 80/443 to the internet on a host with
-# nothing behind them. The change that deploys the platform stack to staging
-# opens them deliberately.
-web_allowed_cidrs = []
+# Open to the internet, as prod's is. Traefik is the only listener on 80/443,
+# and both have to be public rather than allowlisted: Let's Encrypt's
+# TLS-ALPN-01 challenge connects inbound to 443 from addresses it does not
+# publish, and the applications staging serves take webhooks from sources
+# with no stable allowlist either. With no application router, Traefik
+# answers 301 on 80 and 404 behind its default certificate on 443.
+#
+# Mirrored by hardening_web_allowed_cidrs in group_vars/staging.yml.
+web_allowed_cidrs = ["0.0.0.0/0"]
 
 server_enabled = true
 
