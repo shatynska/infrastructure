@@ -20,9 +20,15 @@ Verification commands referenced below, from this project's conventions:
 - [x] 2.2 Run `openspec validate --all` and confirm no other change in flight is broken by this one.
       **Performed 2026-09-15.** Totals: 10 passed, 0 failed (10 items); only pre-existing `[INFO]`-level length notices, no `[ERROR]`.
 
-## 3. Archive
+## 3. Confirm (waived)
 
-- [ ] 3.1 Merge this change's delta into `openspec/specs/iac-repo-foundations/spec.md` via `openspec archive`, and confirm the merged requirement's table row reads "server type, region, image, allowed CIDRs".
-- [ ] 3.2 Delete `docs/backlog.md` entry 49 (`correct-the-tfvars-parenthetical-that-names-labels`) in the archive commit.
+**`ship:confirm` is waived.** This change has no externally observable effect: it corrects one word in an illustrative example list inside a specification's `MODIFIED` delta, with no normative clause, no scenario and no code changed. This is the class `AGENTS.md` names as waivable — "no observation can actually be made … an internal cleanup with no externally observable effect" — and no successor is named because none is needed; there is nothing left for one to pick up. PR #211 merged as `5b42749c4532c042c9fdfcaf93bc23911c072d1c`; the operator confirmed the waiver in conversation and directed the archive to proceed.
+
+## 4. Archive
+
+- [x] 4.1 Merge this change's delta into `openspec/specs/iac-repo-foundations/spec.md` via `openspec archive`, and confirm the merged requirement's table row reads "server type, region, image, allowed CIDRs".
+      **Performed 2026-09-15.** `openspec archive correct-the-tfvars-parenthetical-that-names-labels --yes` (the `--yes` is for tasks 4.1/4.2 themselves, which cannot be ticked before the command that performs them runs). Merged row reads exactly "Non-secret stack configuration (server type, region, image, allowed CIDRs)".
+- [x] 4.2 Delete `docs/backlog.md` entry 49 (`correct-the-tfvars-parenthetical-that-names-labels`) in the archive commit.
+      **Performed 2026-09-15**, in this same commit.
 
 Removing the branch and the working tree happens after this change's record pull request merges, which is after the commit that writes this file, so those steps are not tasks here — see `AGENTS.md`, "ship" and "Throughout".

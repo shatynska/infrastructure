@@ -54,7 +54,7 @@ Variable files SHALL be split by sensitivity rather than excluded wholesale:
 
 | File | Tracked | Contents |
 |---|---|---|
-| `terraform/stacks/<name>/terraform.tfvars` | Committed | Non-secret stack configuration (server type, region, image, labels, allowed CIDRs) |
+| `terraform/stacks/<name>/terraform.tfvars` | Committed | Non-secret stack configuration (server type, region, image, allowed CIDRs) |
 | `*.secret.tfvars`, `secrets.auto.tfvars` | Ignored | Any values that must not enter version control |
 
 A blanket `*.tfvars` ignore rule SHALL NOT be used: CI runs `terraform plan` and `apply` from a clean checkout and requires the non-secret stack configuration to be present in the repository.
