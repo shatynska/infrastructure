@@ -12888,5 +12888,299 @@ class TestNoScenarioReadsAPathTheSuiteIsNoLongerTriggeredBy(unittest.TestCase):
             "this check exists to prevent",
         )
 
+# ---------------------------------------------------------------------------
+# The shared instance's data mount is coupled to its pinned major
+# ---------------------------------------------------------------------------
+#
+# From 18 the official PostgreSQL image declares `VOLUME /var/lib/postgresql`
+# and defaults `PGDATA` to `/var/lib/postgresql/<major>/docker`, so that an
+# upgrade can use `pg_upgrade --link` without crossing a mount boundary
+# (docker-library/postgres#1259). A volume mounted at the 17-and-earlier
+# `/var/lib/postgresql/data` makes 18 exit 1 -- against an EMPTY volume as
+# much as a populated one, so discarding the volume does not work around it.
+#
+# That makes the mount target a function of the pinned major, and nothing
+# else in this repository reads the two together. The failure it admits is the
+# expensive one: a major bump that edits `image:` alone passes every check
+# here, and is found by a red deploy on a host whose volume the upgrade
+# procedure has already discarded. `platform/README.md`'s "Upgrading the
+# PostgreSQL major version" states the coupling in prose; this asserts it.
+#
+# BOTH DIRECTIONS ARE ASSERTED, AND THE SECOND IS THE DANGEROUS ONE. Below 18
+# at the parent mount nothing refuses: PGDATA=/var/lib/postgresql/data falls
+# inside the mount, so a pin-back that moves the tag and not the mount
+# initialises an EMPTY cluster at <volume>/data and starts healthy, leaving
+# the previous major's data in <volume>/<major>/ where nothing reads it. A
+# database created under 18.6 was verified absent after such a pin-back to
+# 16.15 on 2026-09-15. So this arm is not a tidiness rule about matching
+# paths -- it is the only thing standing between an emergency pin-back and an
+# empty database every application connects to successfully.
+
+POSTGRES_SERVICE = "postgres"
+POSTGRES_DATA_VOLUME = "postgres_data"
+POSTGRES_PARENT_MOUNT_MAJOR = 18
+POSTGRES_PARENT_MOUNT = "/var/lib/postgresql"
+POSTGRES_LEGACY_MOUNT = "/var/lib/postgresql/data"
+
+
+def postgres_pinned_major(path: Path | None = None) -> int:
+    """The major version the shared instance's `image:` pins.
+
+    An image this cannot read a major out of is an assertion failure rather
+    than a skip: the mount check below would otherwise pass having compared
+    the mount against nothing.
+    """
+    images = dict(compose_service_images(path))
+    if POSTGRES_SERVICE not in images:
+        raise AssertionError(
+            f"the stack defines no service named {POSTGRES_SERVICE!r}, so the "
+            f"mount-to-major coupling cannot be read"
+        )
+    image = images[POSTGRES_SERVICE]
+    if image is None:
+        raise AssertionError(f"the {POSTGRES_SERVICE!r} service declares no image:")
+    _, tag, digest = parse_image_reference(image)
+    major, _, _ = tag.partition(".")
+    if not major.isdigit():
+        # A digest pin is a legitimate form -- `image_names_a_release` in this
+        # same suite accepts one -- and it is named separately here so the
+        # failure reads as this check's limitation rather than as a broken
+        # stack. Reading a major out of a digest means resolving it against a
+        # registry, which this suite may not do.
+        if digest and not tag:
+            raise AssertionError(
+                f"the {POSTGRES_SERVICE!r} service is pinned by digest ({image!r}). "
+                f"That is a valid pin, but the major cannot be read from it without a "
+                f"registry call, which this suite does not make -- so the mount-to-major "
+                f"coupling cannot be checked and is NOT being checked. Pin by tag as "
+                f"well, or extend this check, rather than leaving it silently unenforced"
+            )
+        raise AssertionError(
+            f"the {POSTGRES_SERVICE!r} service names {image!r}, whose tag does not "
+            f"begin with a major version, so the mount it requires cannot be derived"
+        )
+    return int(major)
+
+
+def postgres_data_mount_offences(path: Path | None = None) -> list[str]:
+    """Every way the shared instance's data mount disagrees with its major."""
+    major = postgres_pinned_major(path)
+    expected = (
+        POSTGRES_PARENT_MOUNT
+        if major >= POSTGRES_PARENT_MOUNT_MAJOR
+        else POSTGRES_LEGACY_MOUNT
+    )
+    definition = compose_services(path)[POSTGRES_SERVICE]
+    mounts = definition.get("volumes") if isinstance(definition, dict) else None
+    targets = []
+    for entry in mounts if isinstance(mounts, list) else []:
+        if isinstance(entry, str):
+            source, _, rest = entry.partition(":")
+            target, _, _ = rest.partition(":")
+            if source == POSTGRES_DATA_VOLUME:
+                targets.append(target)
+        elif isinstance(entry, dict) and entry.get("source") == POSTGRES_DATA_VOLUME:
+            targets.append(str(entry.get("target", "")))
+
+    offences = []
+    if not targets:
+        offences.append(
+            f"{POSTGRES_SERVICE} mounts no {POSTGRES_DATA_VOLUME!r}, so the instance "
+            f"either keeps its data in the container's writable layer or names it "
+            f"something this check cannot follow"
+        )
+    for target in targets:
+        if target.rstrip("/") != expected:
+            offences.append(
+                f"{POSTGRES_SERVICE} pins major {major} and mounts "
+                f"{POSTGRES_DATA_VOLUME} at {target!r}, but {major} requires "
+                f"{expected!r}"
+            )
+
+    # The coupling above holds only while PGDATA is the image's own default.
+    # Pinning it back to the old path also starts, and switches off the
+    # entrypoint's old-database detection -- which is what makes a forgotten
+    # volume discard refuse loudly instead of initialising an empty cluster
+    # beside the previous major's data.
+    #
+    # ONLY FROM 18. Below it `/var/lib/postgresql/data` IS the image's default,
+    # so an explicit PGDATA there overrides nothing and disables no detection
+    # -- the detection does not exist. Flagging it would fail a pin-back to a
+    # 17-or-earlier release for carrying a value that is simply correct, which
+    # is the emergency this check must not stand in the way of.
+    if major >= POSTGRES_PARENT_MOUNT_MAJOR:
+        if "PGDATA" in service_environment(POSTGRES_SERVICE, path):
+            offences.append(
+                f"{POSTGRES_SERVICE} pins major {major} and sets PGDATA, which "
+                f"overrides the image default the mount above is derived from, and "
+                f"switches off the entrypoint's old-database detection along with it"
+            )
+        # The check above reads the inline `environment:` block, which is where
+        # this stack declares everything. A PGDATA arriving through `env_file:`
+        # would do the same damage unseen, and following one means reading a
+        # file that is not committed. So the declaration itself is the offence,
+        # reported while the service has none rather than after it gains one.
+        elif definition.get("env_file"):
+            offences.append(
+                f"{POSTGRES_SERVICE} declares env_file, which can carry a PGDATA this "
+                f"check cannot see -- it reads the inline environment: block, and an "
+                f"env_file is not committed. Either keep PGDATA out of it and say so "
+                f"here, or extend this check to whatever renders that file"
+            )
+    return offences
+
+
+class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
+    """DERIVED -- `platform/docker-compose.yml`'s mount comment, and the
+    procedure in `platform/README.md` that rests on it."""
+
+    def compose_fixture(self, service: str) -> Path:
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = directory / "docker-compose.yml"
+        path.write_text(
+            "services:\n" + service + "volumes:\n  postgres_data:\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_the_committed_stack_mounts_where_its_major_requires(self) -> None:
+        offenders = postgres_data_mount_offences()
+        self.assertEqual(
+            [],
+            offenders,
+            "the shared PostgreSQL instance's data mount does not match the major "
+            f"it pins:\n  " + "\n  ".join(offenders) + "\n"
+            "From 18 the official image declares `VOLUME /var/lib/postgresql` and "
+            "defaults PGDATA to /var/lib/postgresql/<major>/docker; below 18 the "
+            "volume is /var/lib/postgresql/data. Mounted at the wrong one the "
+            "container exits 1 even against an empty volume, so the upgrade "
+            "procedure's volume discard does not rescue it. Move the mount in the "
+            "same commit as the pin -- see `platform/README.md`, "
+            '"Upgrading the PostgreSQL major version"',
+        )
+
+    def test_a_modern_major_at_the_legacy_mount_is_reported(self) -> None:
+        """FALSIFIED -- the shape this check exists for: a bump that edits
+        `image:` and leaves the mount where the previous major wanted it."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:18.6\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("/var/lib/postgresql/data", offenders[0])
+        self.assertIn("/var/lib/postgresql'", offenders[0])
+
+    def test_a_legacy_major_at_the_parent_mount_is_reported(self) -> None:
+        """FALSIFIED -- the converse arm, and the QUIET one. A pin-back to 16 or
+        17 that leaves the mount at the parent does not refuse: the image
+        default PGDATA=/var/lib/postgresql/data falls inside the mount, so it
+        initialises an EMPTY cluster at <volume>/data and starts healthy, with
+        the previous major's data sitting untouched in <volume>/<major>/ beside
+        it. Measured on 2026-09-15: a database created under 18.6 was absent
+        after pinning back to 16.15 at the same mount, and both directories
+        were present. So this arm guards the one direction nothing else
+        catches -- neither the entrypoint, nor the healthcheck, nor an
+        application, which connects successfully to an empty database."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:16.15\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("major 16", offenders[0])
+
+    def test_each_major_at_its_own_mount_is_accepted(self) -> None:
+        """DERIVED -- the converse half. Without it a check reporting every
+        stack would satisfy both falsifications above."""
+        for image, mount in (
+            ("postgres:18.6", "/var/lib/postgresql"),
+            ("postgres:16.15", "/var/lib/postgresql/data"),
+        ):
+            with self.subTest(image=image):
+                fixture = self.compose_fixture(
+                    f"  postgres:\n    image: {image}\n"
+                    f"    volumes:\n      - postgres_data:{mount}\n"
+                )
+                self.assertEqual([], postgres_data_mount_offences(fixture))
+
+    def test_pinning_pgdata_is_reported(self) -> None:
+        """FALSIFIED -- PGDATA set back to the old path starts, so nothing else
+        would catch it, and it disables the detection the procedure relies on."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:18.6\n"
+            "    environment:\n      PGDATA: /var/lib/postgresql/data\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("PGDATA", offenders[0])
+
+    def test_pgdata_at_a_legacy_major_is_accepted(self) -> None:
+        """DERIVED -- the converse of the one above, and the case that makes it
+        a rule about 18+ rather than a ban on the key. Below 18 that value is
+        the image's own default, so a pin-back carrying it must not fail."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:16.15\n"
+            "    environment:\n      PGDATA: /var/lib/postgresql/data\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+        )
+        self.assertEqual([], postgres_data_mount_offences(fixture))
+
+    def test_an_env_file_at_a_modern_major_is_reported(self) -> None:
+        """FALSIFIED -- PGDATA can arrive through env_file, where this check
+        cannot follow it, so the declaration is the offence."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:18.6\n"
+            "    env_file:\n      - .env\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("env_file", offenders[0])
+
+    def test_an_env_file_at_a_legacy_major_is_accepted(self) -> None:
+        """DERIVED -- the arm is about the detection 18+ has, so it must not
+        fire below it, where there is no detection to switch off."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:16.15\n"
+            "    env_file:\n      - .env\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+        )
+        self.assertEqual([], postgres_data_mount_offences(fixture))
+
+    def test_a_stack_mounting_no_data_volume_is_reported(self) -> None:
+        """FALSIFIED -- the non-vacuity guard. A service that mounts nothing
+        must fail rather than yield an empty offender list."""
+        fixture = self.compose_fixture("  postgres:\n    image: postgres:18.6\n")
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("mounts no", offenders[0])
+
+    def test_a_digest_pin_is_refused_as_this_checks_own_limitation(self) -> None:
+        """FALSIFIED -- a digest pin passes `image_names_a_release`, so without
+        this the two checks disagree about a legitimate form and the operator
+        reads a limitation of this one as a broken stack."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres@sha256:" + "0" * 64 + "\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        with self.assertRaises(AssertionError) as raised:
+            postgres_data_mount_offences(fixture)
+        self.assertIn("pinned by digest", str(raised.exception))
+        self.assertIn("NOT being checked", str(raised.exception))
+
+    def test_an_unreadable_major_fails_rather_than_passing(self) -> None:
+        """FALSIFIED -- an image whose tag names no major must raise, not
+        silently compare the mount against a default."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:latest\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        with self.assertRaises(AssertionError):
+            postgres_data_mount_offences(fixture)
+
+
 if __name__ == "__main__":
     unittest.main()

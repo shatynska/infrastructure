@@ -8,7 +8,7 @@ This is the complement to the reclamation `app-deploy` performs at deploy time (
 
 The union, over **every** application in `deploy_apps`, of the images that application's Compose file on the host references — rendered across every profile that file declares, not only the profiles active at the moment — unioned with the image of **every** container on the host, running or stopped.
 
-A single application's reference set is not authority over an image other applications also use, which is why `app-deploy` may not consider one. The union across every enumerated application is such an authority, and it is what lets this remove a shared base image superseded by a newer pin — `traefik:v3.2` against a live `v3.7.10`, `postgres:16` against a live `postgres:16.15` — that no single deploy could touch.
+A single application's reference set is not authority over an image other applications also use, which is why `app-deploy` may not consider one. The union across every enumerated application is such an authority, and it is what lets this remove a shared base image superseded by a newer pin — `traefik:v3.2` against a live `v3.7.10`, `postgres:16.15` against a live `postgres:18.6` — that no single deploy could touch.
 
 References are resolved to **image identities** before comparison, so a digest pin, a moving tag and a multiply-tagged image are each compared as the image they are rather than as the string that names them. An image outside the keep set is removed by each of its tags where it has tags, and by identity where it has none. Removal is never forced: the runtime's refusal to remove an image a container holds is the last backstop against a wrong keep set.
 

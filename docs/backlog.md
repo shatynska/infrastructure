@@ -2,6 +2,8 @@
 
 Changes this project has identified and not yet opened. An entry is deleted when its change is archived. See `AGENTS.md`, "A second change surfacing".
 
+**An entry is also deleted when the operator takes it as a fix rather than a change**, which leaves no archived record to delete it at. Where that happens, the entry's reasoning is not lost with it: it moves into the file that owns the thing being changed, where the next person to touch that thing will read it, and the deleting pull request says so. Entry 10, `upgrade-the-shared-postgres-major`, was the first taken this way, on 2026-09-15 — its reasoning is now `platform/README.md`, *Upgrading the PostgreSQL major version*. This is a narrower door than it reads: the operator decides it per entry, and an entry whose reasoning has nowhere to go but a change record is not a candidate for it.
+
 An entry carries a number, the change's name, and — where it has one — what it waits on. Not everything here is blocked: where an entry is free to be taken, it says instead why it was recorded rather than folded into the change that found it, usually because it belongs to a different concern than the one that change was closing.
 
 Related entries tend to sit together and an entry another depends on tends to come first, but neither is a rule: a new entry is appended, so the order says nothing on its own. Where one entry actually waits on another, the entry says so.
@@ -99,24 +101,6 @@ Worth deciding at the same time whether the threshold is a level (swap above som
 Logs are read by `docker logs` over SSH as `ops-claude`, per container, and are lost when a container is recreated -- which every deploy does. Alerts say *that* a container restarted; the reason is in the log that just went away.
 
 Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones. Traefik's access log was turned on to stdout on 2026-09-13 alongside the entrypoint-wide TLS defaults, so the HTTP traffic this would aggregate is now being written — and is now what shortens Traefik's own `docker logs` history, which is the argument for doing this rather than a detail of it.
-
-## 10. upgrade-the-shared-postgres-major
-
-**Not blocked; recorded rather than opened because it needs a maintenance window and a deliberate volume reset, neither of which a version-bump pull request can carry.** Recorded 2026-09-08, when Dependabot proposed it and the proposal was closed.
-
-`platform/docker-compose.yml` pins `postgres:16.15`. Dependabot's first run after `cover-platform-images-with-dependabot` landed proposed **18.6** (PR #91, closed unmerged). Taking that proposal as an ordinary bump does not work, and the reason is worth writing down once:
-
-PostgreSQL refuses to start against a `PGDATA` initialised by an earlier major version. It does not upgrade in place and it does not damage the directory -- it exits. So a merged bump reaches the host, `docker compose up -d --wait` blocks and then fails, the deploy job goes red, and the shared instance is down for every application on the host until someone intervenes. Loud, and not data loss.
-
-**What makes this cheap here, and why it is still not automatic.** The shared instance holds no durable data: *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) classifies `postgres_data` as non-durable by policy, and *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) admits no durable data into it at all. So the upgrade path is legitimately "stop the stack, discard the volume, redeploy, let the instance re-initialise" rather than a `pg_upgrade` or a dump-and-restore. That is a decision an operator takes in a chosen window, with the applications that use the instance told first -- not something that happens because a bot opened a pull request on a Tuesday.
-
-Note the divergence this does **not** cover: on the production host, `commerce-ops` runs its own PostgreSQL container with durable data in it (entry 19). Nothing here touches that one, and this entry must not be read as a template for it -- discarding *that* volume loses data.
-
-**No `ignore` stanza was added, deliberately.** `cover-platform-images-with-dependabot`'s design.md Decision 3 argued this: an `ignore` is permanent and silent, and would suppress the only signal this repository gets that its PostgreSQL major has reached end of life. Closing an individual pull request keeps the signal -- Dependabot will propose the next major release when one appears, and closing it again costs nothing. Expect a recurring, correctly-refused pull request; that is the design working, not noise.
-
-**Do first**: check whether any application is by then storing something in the shared instance that it would rather not lose, in which case the answer is that it should not have been (see the requirements above) and that is the thing to fix, not the upgrade.
-
-**And re-provision after it.** Discarding the volume discards every application database in the instance, which each application's classification tolerates and none can start without: before redeploying each, run the provisioning recipe in `docs/onboard-an-application.md` for that host with `rotate=yes`. Since 2026-09-13 `commerce-ops` has such a database on the staging host, and production's is reserved for its cutover. **Once `classify-commerce-ops-production-data-for-the-shared-instance` lands and production's data moves in, discarding production's volume deletes that application's production data for good** — tolerated by that classification, but tell the operator before the window, not after.
 
 ## 11. remove-the-stale-test-hostname
 
@@ -792,7 +776,7 @@ Not blocked.
 
 **What the change owes.** A MODIFIED delta on that requirement recording the policy — whose loss it treats as tolerable, which application and host it covers, and that it ends with the move to Supabase — in the shape of the staging rehearsal-data policy the requirement already carries, and a delta on *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`), whose store table and divergence paragraph it bears on. It merges before any production row lands in the shared instance, and the `commerce-ops` repository's production cutover waits on it.
 
-**What the operator accepted, and what it must not become.** The shared instance is treated as disposable: `upgrade-the-shared-postgres-major` plans to discard its volume, and a rebuild recreates it empty. Once `commerce-ops`'s production data is there, either deletes it for good, and that entry and the rebuild runbook have to say so where an operator reads them before acting. The classification names one application on one host and must not be read as permission for any other application's durable data.
+**What the operator accepted, and what it must not become.** The shared instance is treated as disposable: a PostgreSQL major upgrade discards its volume, and a rebuild recreates it empty. Once `commerce-ops`'s production data is there, either deletes it for good. `platform/README.md`'s *Upgrading the PostgreSQL major version* already says so, in the terms this entry has to meet — it tells the operator that production's database is empty and reserved for a cutover waiting on this change, and that from the moment this lands and the data moves in, discarding that volume deletes it for good. **This change owes the same sentence to the rebuild runbook**, which does not yet carry it, and owes that procedure a re-read to confirm it still says what is true once this lands. The classification names one application on one host and must not be read as permission for any other application's durable data.
 
 ## 56. record-the-hostname-scheme
 
@@ -823,3 +807,15 @@ Not blocked. It touches `docs/` and no mechanism.
 **Where the fix has to go is the inventory's group layout, not a filename.** The candidates, none costed here: `deploy_apps` moving to a per-stack or per-host vars file; a group per tenant-environment pair rather than per environment; or the entry gaining a host selector the role honours. Each changes what a converge reads, so each wants its own Molecule coverage, and the choice interacts with what `AGENTS.md` records about a source being named for its stack and a group for its axis.
 
 **Nothing reports it, which is the part worth keeping in view.** A second tenant would be onboarded by following `docs/onboard-an-application.md`, which would produce a key per environment as instructed, and the over-authorisation would be silent: both hosts would accept the key and both deploys would work. Take this before a second tenant exists rather than after, since afterwards the remedy is a re-key rather than a layout.
+
+## 60. alert-on-the-exporter-being-unable-to-read-postgres
+
+**Not blocked; recorded rather than opened, because the rule is one line and the question of what else shares this shape is not.** Found on 2026-09-15 while writing `platform/README.md`'s *Upgrading the PostgreSQL major version*, whose step 4 needed a check that postgres-exporter can reach the instance after its role is recreated.
+
+**`MetricsTargetDown` cannot catch a broken exporter credential, and `platform/README.md` claimed for months that it could.** That alert is `up == 0` — Prometheus's own scrape success — and postgres-exporter answers `/metrics` with HTTP 200 whether or not it can reach the database. Measured against the pinned `quay.io/prometheuscommunity/postgres-exporter:v0.20.1` with a deliberately wrong password: HTTP `200`, `pg_up 0`, `pg_exporter_last_scrape_error 1`, container `running` and its healthcheck — `wget --spider` against that same endpoint — satisfied. So `up` stays `1`, every alert stays silent, and PostgreSQL's metrics are simply absent.
+
+That is not hypothetical here. The `pgexporter` role lives in `postgres_data` and is recreated by hand after any volume reset or host rebuild, from a password pasted out of a GitHub Environment secret — the one step in this stack most likely to be got wrong, and the one with no automated check behind it.
+
+**What the change owes.** An alert on `pg_up == 0` for the `postgres-exporter` job, in `platform/docker-compose.yml`'s inline `prometheus_rules` config — the sibling `prometheus_config` holds only `global`, `alerting`, `rule_files` and `scrape_configs`, and a `groups:` block added there is not where Prometheus reads rules from. Remember the `platform.config-checksum` label, since editing either block without regenerating it deploys nothing. Give it a `for:` long enough to ride out a restart of the instance, which legitimately shows `pg_up 0` while it comes up.
+
+**The wider question, which is why this is an entry rather than a line.** `up` measures whether an exporter answered, never whether what it answered means anything, and every exporter in this stack is read through that one alert. cAdvisor and node-exporter have no equivalent of `pg_up` and the question does not arise for them; Traefik's metrics endpoint does answer independently of whether its providers are healthy. Worth deciding once whether each exporter needs a liveness signal of its own rather than adding them one incident at a time.
