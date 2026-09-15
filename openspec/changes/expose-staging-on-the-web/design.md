@@ -47,8 +47,12 @@ So the decline stands on its stated reason, and the trigger is rewritten. Mail m
 | Record | Value |
 |---|---|
 | `*.main-production.fincci.bike` A | `2.29.14.98` — production; `commerce-ops.main-production.fincci.bike` is routed under it |
+| `main-production.fincci.bike` A | `2.29.14.98` — a record of its own |
 | `*.main-staging.fincci.bike` A | `62.238.17.177` — staging |
-| `ops.fincci.bike` A | `2.29.14.98` — routed by `commerce-ops`'s production router beside its technical name, and the one `fincci.bike` record an address change must edit that the wildcard does not cover |
+| `main-staging.fincci.bike` A | `62.238.17.177` — a record of its own |
+| `ops.fincci.bike` A | `2.29.14.98` — routed by `commerce-ops`'s production router beside its technical name |
+
+The two bare server-name rows were added after code review found them (public resolution, 2026-09-15): a wildcard does not match the name it sits under, and there is no `*.fincci.bike` (a non-existent name returns NXDOMAIN), so each is a record an address change must edit. The plan's first DNS read had missed them.
 
 `shatynska.com`'s `fuperia` row is corrected to what was measured: it still resolves to production, and `commerce-ops`'s router no longer names it. Whether the record is still wanted is not this change's to decide, and is not decided here. §4.4's "This table is the project's only written record of the zone" becomes plural.
 

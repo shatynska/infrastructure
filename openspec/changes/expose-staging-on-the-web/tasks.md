@@ -45,3 +45,14 @@ No specification deltas, so no derived tests are owed (`proposal.md`, "Capabilit
 - The hits in the `hardening` role's defaults, its Molecule scenarios, `terraform/modules/server` and the production stack's files describe the role's, the module's or production's own values, not staging's.
 
 One hit found by the sweep was corrected: `say-what-the-host-firewall-actually-gates` introduced its 2026-09-13 measurement with staging's CIDRs in the present tense ("is `[]`"), and now says "was `[]` at the time".
+
+## Code review record
+
+One round of `ai-toolkit:change-code-reviewer`, on 2026-09-15, reviewed `4315b3c..f57e2d2`. It found the Terraform and Ansible changes correct. It probed public DNS, production's routers and staging's listeners, all read-only, and they matched what §4.4 records. It could not probe `sudo ufw status`, since `ops-claude` has no sudo, so stage 6's "each shows 80 and 443 allowed" was left unprobed. It raised four documentation findings, all fixed in the commit that follows:
+
+1. **Medium.** §4.4's `fincci.bike` table missed `main-staging.fincci.bike` and `main-production.fincci.bike`. Each is an A record of its own, because a wildcard does not match the name it sits under. Re-measured over `dns.google`: they resolve to `62.238.17.177` and `2.29.14.98`, and a non-existent name returns NXDOMAIN, so there is no `*.fincci.bike`. Both rows were added, the `ops` row's "the one record" claim was dropped, and design.md decision 4 was corrected to match.
+2. **Medium.** Appendix B's new DNS sentence contradicted the paragraph's own stale ending, which said a staging rebuild stops at 6.3 "having no stack to redeploy" and was already false against "then through stage 7". That ending was deleted, and the DNS sentence now names every staging row in §4.4.
+3. **Low.** The "Revisit when" paragraph had lost decision 4's address-change trigger. It is restored, and the cost sentence now says "every record pointing at that server".
+4. **Low.** `refresh-staging-group-vars-banner` credited this change with making "no DNS records" false. It now credits the operator, who created the records, which this change only recorded.
+
+The fixes were not re-reviewed: they are small documentation corrections, below AGENTS.md's bar of "substantial enough to warrant it". After them, `.github/tests` passed (1210 tests OK), `openspec validate --all` passed (11), and pre-commit passed over the edited files.

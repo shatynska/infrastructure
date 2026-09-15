@@ -428,14 +428,18 @@ In the DNS provider, point each server's hostnames at **that server's own addres
 | Record | Value |
 |---|---|
 | `*.main-production.fincci.bike` A | `2.29.14.98` — production; `commerce-ops.main-production.fincci.bike` is routed under it |
+| `main-production.fincci.bike` A | `2.29.14.98` — a record of its own: a wildcard does not match the name it sits under |
 | `*.main-staging.fincci.bike` A | `62.238.17.177` — staging |
-| `ops.fincci.bike` A | `2.29.14.98` — routed by `commerce-ops`'s production router beside its technical name, and the one record here an address change must edit that a wildcard does not cover |
+| `main-staging.fincci.bike` A | `62.238.17.177` — likewise its own record |
+| `ops.fincci.bike` A | `2.29.14.98` — routed by `commerce-ops`'s production router beside its technical name |
+
+There is no `*.fincci.bike`: an address change edits that server's wildcard, its bare server name and every alias pointing at it, in both tables.
 
 **These tables are the project's only written record of the two zones, and their value depends on being read against the zones rather than trusted.** `shatynska.com`'s was written on 2026-09-08 as "the records as read" and was already incomplete that day: the `test` row was missing and was added on 2026-09-09, by a change that found the record while reading Traefik's certificate metrics. Re-read the zones before relying on them.
 
 **Why the migration is declined rather than queued.** Both zones carry live mail. An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. That is a different risk class from the convenience the migration would buy. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
 
-**Revisit when** mail moves off either zone, or when `fincci.bike` names outside the server wildcards, such as `ops.fincci.bike`, become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to that server's wildcard and to any alias pointing at it, and these tables are the mitigation.
+**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when `fincci.bike` names outside the server wildcards, such as `ops.fincci.bike`, become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, and these tables are the mitigation.
 
 **Secrets created in this stage:** none. The two `.envrc` files hold the two read-only tokens and are gitignored.
 
@@ -1176,7 +1180,7 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 ## Appendix B. Rebuilding an existing host
 
-**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. Its DNS is a wildcard like production's, so 4.4 applies to it as well if the address changed; its certificates reissue on their own once its applications redeploy. Read what follows as the older shape — `server_enabled` toggled off and on in its own `terraform.tfvars`, its new address read, its host key re-recorded (4.3), a fresh tailnet auth key if the old one expired, then 6.3 — and stops there, having no stack to redeploy.
+**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. Its DNS points at its address as production's does, so 4.4 applies to it as well if the address changed — every staging row in 4.4's tables — and its certificates reissue on their own once its applications redeploy.
 
 An important consequence for staging specifically: its data volume is **not** wiped by a rebuild, and its `known_hosts` entry **is** invalidated. The second is the one that bites, because it presents as the converge failing at connection time rather than as a rebuild artefact.
 
