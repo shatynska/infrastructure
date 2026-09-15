@@ -28,6 +28,8 @@ This requirement binds when an application actually keeps data on this host. An 
 
 How a database and its role are provisioned inside the instance, and how its password reaches the application, SHALL be automated, and the trigger for that obligation is the first application given a database in this instance. Until that automation exists, each provisioning is performed by hand by an operator, by the recipe in `docs/onboard-an-application.md`, and this requirement obliges the provisioning rather than any particular mechanism for it.
 
+**This requirement names the document holding that recipe, and that naming SHALL be kept true.** A manual step is performed from the document, so a requirement naming a document that does not hold the recipe sends an operator to the wrong file at the moment they are provisioning a credential by hand. The document named here SHALL hold the recipe, and no other committed Markdown document outside `openspec/` SHALL hold a second copy of it: two copies of a procedure touching a credential drift, and both read as authoritative. The population is bounded that way because the other copies in this repository are deliberate and are not documents an operator would follow — change records under `openspec/` quote the recipe as history, and the test suite carries it as fixtures whose drift from the living recipe is itself a recorded decision.
+
 **One divergence is stated rather than hidden, as of 2026-09-13.** That trigger fired on 2026-09-13, when `commerce-ops` became the first application given a database in this instance, on the staging host. The obligation is due and is not met: that database, its role and its password are provisioned and delivered by hand, and the mechanism and its credential path are owed and not yet built. This requirement SHALL be read as unmet in that one respect, and a manual provisioning SHALL NOT be read as discharging it — for `commerce-ops` or for any application provisioned by hand after it. The mechanism is tracked in `docs/backlog.md` as `automate-per-application-database-provisioning`; the obligation is stated here as well, because a backlog entry is deleted when its change is archived. This paragraph is replaced when that mechanism lands, and not before.
 
 #### Scenario: A new application requests a database
@@ -58,6 +60,11 @@ How a database and its role are provisioned inside the instance, and how its pas
 - **WHEN** an application's database in the shared instance has been provisioned, or its password delivered, by hand
 - **THEN** this requirement SHALL state, dated, which application fired the trigger and that the mechanism and its credential path are owed
 - **AND** that manual provisioning SHALL NOT be read as discharging the obligation to automate it
+
+#### Scenario: The document this requirement names holds the recipe
+- **WHEN** this requirement names a committed document as holding the manual provisioning recipe
+- **THEN** that document SHALL hold it
+- **AND** no other committed Markdown document outside `openspec/` SHALL hold a second copy of it
 
 ### Requirement: Platform Stack Deployment Is Not Ansible's Responsibility
 The mechanism that starts, stops, or updates the `platform/` Compose stack SHALL be something other than Ansible content, consistent with the configuration-scope boundary stated in `iac-host-configuration`.
