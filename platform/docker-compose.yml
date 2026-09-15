@@ -246,9 +246,18 @@ services:
     healthcheck:
       # Only confirms the exporter's own HTTP server is up -- postgres_exporter
       # serves /metrics with HTTP 200 regardless of database connectivity, so
-      # this deliberately does NOT catch a bad DATA_SOURCE_NAME; that gap is
-      # covered by MetricsTargetDown instead (add-platform-service-healthchecks's
-      # design.md).
+      # this deliberately does NOT catch a bad DATA_SOURCE_NAME.
+      #
+      # NOR DOES ANYTHING ELSE, and this comment said otherwise until 2026-09-15.
+      # MetricsTargetDown is `up == 0` -- Prometheus's own scrape success -- and
+      # the 200 above is exactly what keeps `up` at 1. Measured against the
+      # pinned v0.20.1 with a wrong password: HTTP 200, pg_up 0,
+      # pg_exporter_last_scrape_error 1, container healthy, no alert. So a
+      # mistyped POSTGRES_EXPORTER_PASSWORD leaves PostgreSQL's metrics silently
+      # absent. pg_up is what would catch it and nothing alerts on it yet --
+      # docs/backlog.md `alert-on-the-exporter-being-unable-to-read-postgres`.
+      # Until that lands it is checked by hand, by the command in README.md's
+      # "Upgrading the PostgreSQL major version".
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9187/metrics"]
       interval: 15s
       timeout: 5s

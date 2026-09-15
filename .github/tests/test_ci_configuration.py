@@ -12979,11 +12979,19 @@ def postgres_data_mount_offences(path: Path | None = None) -> list[str]:
     # entrypoint's old-database detection -- which is what makes a forgotten
     # volume discard refuse loudly instead of initialising an empty cluster
     # beside the previous major's data.
-    if "PGDATA" in service_environment(POSTGRES_SERVICE, path):
+    #
+    # ONLY FROM 18. Below it `/var/lib/postgresql/data` IS the image's default,
+    # so an explicit PGDATA there overrides nothing and disables no detection
+    # -- the detection does not exist. Flagging it would fail a pin-back to a
+    # 17-or-earlier release for carrying a value that is simply correct, which
+    # is the emergency this check must not stand in the way of.
+    if major >= POSTGRES_PARENT_MOUNT_MAJOR and "PGDATA" in service_environment(
+        POSTGRES_SERVICE, path
+    ):
         offences.append(
-            f"{POSTGRES_SERVICE} sets PGDATA, which overrides the image default the "
-            f"mount above is derived from, and switches off the entrypoint's "
-            f"old-database detection along with it"
+            f"{POSTGRES_SERVICE} pins major {major} and sets PGDATA, which overrides "
+            f"the image default the mount above is derived from, and switches off "
+            f"the entrypoint's old-database detection along with it"
         )
     return offences
 
@@ -13066,6 +13074,17 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         offenders = postgres_data_mount_offences(fixture)
         self.assertEqual(1, len(offenders), offenders)
         self.assertIn("PGDATA", offenders[0])
+
+    def test_pgdata_at_a_legacy_major_is_accepted(self) -> None:
+        """DERIVED -- the converse of the one above, and the case that makes it
+        a rule about 18+ rather than a ban on the key. Below 18 that value is
+        the image's own default, so a pin-back carrying it must not fail."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:16.15\n"
+            "    environment:\n      PGDATA: /var/lib/postgresql/data\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+        )
+        self.assertEqual([], postgres_data_mount_offences(fixture))
 
     def test_a_stack_mounting_no_data_volume_is_reported(self) -> None:
         """FALSIFIED -- the non-vacuity guard. A service that mounts nothing

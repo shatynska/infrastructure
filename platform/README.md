@@ -70,12 +70,14 @@ Each step says where it runs. The on-host commands address the containers and th
 
    The `$POSTGRES_USER` is expanded **inside** the container deliberately: that variable is the instance's superuser name from this stack's own `.env`, and it exists in the container's environment and not in the shell you are typing into. Expanded outside, it is empty and `psql` tries to connect as your own account.
 
-2. **On the host — discard the database and its volume.** Only the `postgres` container — Traefik, Grafana and the rest keep serving. `postgres-exporter` does **not** go red: it keeps serving `/metrics` with HTTP 200 and reports `pg_up 0`, so its container stays healthy, its Prometheus target stays up, and nothing alerts for the length of the window. Nothing else mounts this volume, so removing that one container is what frees it:
+2. **On the host — discard the database and its volume.** Only the `postgres` container — Traefik, Grafana and the rest keep serving. `postgres-exporter` does **not** go red: it keeps serving `/metrics` with HTTP 200 and reports `pg_up 0`, so its container stays healthy, its Prometheus target stays up, and **no alert fires for the instance being gone**. Nothing else mounts this volume, so removing that one container is what frees it:
 
        docker rm -f platform-postgres-1
        docker volume rm platform_postgres_data
 
    **Check** `docker volume ls --filter name=platform_postgres_data` lists no volume. **On the production host, `commerce-ops-postgres-1` and `commerce-ops_commerce_ops_pgdata` are not this instance** — that is an application's own container, holding durable data, and nothing here touches it.
+
+   **The applications on top of it do alert, and those pages are the window rather than an incident.** An application answering `5xx` without its database trips `ApplicationHighErrorRate` after five minutes, and one whose container exits trips `ContainerRestartingOrOOMKilled` with no delay at all. Expect both in Slack from here until step 5 has redeployed the applications, say so to anyone else watching that channel, and do not let a second operator start triaging them. What would be a real signal is one of those alerts still firing once step 5 is done.
 
 3. **From a workstation — let the deploy carry the new major to that host.** Merging the pull request that changes the pin starts one `platform-deploy.yml` run covering every opted-in stack; a stack whose GitHub Environment has no reviewer deploys immediately, and one that has a reviewer waits in that run for an approval. So the merge is what reaches every ungated stack at once, and an approval is what reaches each reviewed one — which is why steps 1 and 2 come before the merge on all of the first kind and before the approval on each of the second, and why the ungated ones go first: their whole window can complete while a reviewed stack's deploy is still sitting unapproved and its data still on disk. A host whose window falls after that run is over is redeployed on its own, by a `workflow_dispatch` of that workflow from the default branch naming its stack.
 
