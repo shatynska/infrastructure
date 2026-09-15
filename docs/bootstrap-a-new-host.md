@@ -245,7 +245,7 @@ Terraform needs somewhere to keep its state file (the record of what it created)
    grep -rn 'shatynska' --exclude-dir=.git --exclude-dir=openspec .
    ```
 
-   The ones that matter: the `organization` in **both** `terraform/stacks/main-production/versions.tf` **and** `terraform/stacks/main-staging/versions.tf` (your HCP organisation from stage 2), `company` in `ansible/inventory/group_vars/all.yml`, `ghcr_pull_username` in **each** `ansible/inventory/group_vars/<environment>.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
+   The ones that matter: the `organization` in **both** `terraform/stacks/main-production/versions.tf` **and** `terraform/stacks/main-staging/versions.tf` (your HCP organisation from stage 2), `company` in `ansible/inventory/group_vars/all.yml`, `ghcr_pull_username` in **each** `ansible/inventory/group_vars/<environment>.yml` (stage 6), and the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`. The two clone URLs above are this template's own and stay as they are.
 
    Both `versions.tf` files carry it, and changing only production's is the easy miss: staging would then initialise against someone else's HCP organisation, and the error names a workspace rather than an organisation.
 
@@ -426,7 +426,7 @@ In the DNS provider, point each server's hostnames at **that server's own addres
 | `COMPANY_DOMAIN` MX | the mail provider's exchanger — not this repository's |
 | `COMPANY_DOMAIN` TXT | that provider's SPF record — likewise |
 
-**`BASE_DOMAIN` is the zone the servers sit under**, and carries one wildcard per server plus one record for each server's bare name:
+**`BASE_DOMAIN` is the zone the servers sit under**, and carries one wildcard per server plus one record for each server's bare name. It carries live mail and a site at its apex as well; neither is operated from this repository, so neither is given here — but both move with an NS migration:
 
 | Record | Value |
 |---|---|
@@ -438,11 +438,11 @@ In the DNS provider, point each server's hostnames at **that server's own addres
 
 There is no `*.BASE_DOMAIN`: an address change edits that server's wildcard, its bare server name and every alias pointing at it, in both tables.
 
-**These tables give each zone's shape and not its contents, and nothing in this repository records the records themselves.** That is deliberate — a zone names hosts and addresses this repository does not otherwise publish — and it has a cost, stated at the end of this section. Read the zones in the DNS provider rather than trusting anything written here about what they hold.
+**These tables give each zone's shape and not its contents, and the live values are held only by the DNS provider.** That is deliberate, and it has a cost stated at the end of this section. The repository is not empty of them — archived change records under `openspec/changes/archive/` transcribe what was read on the day each was written, and an archived record is never updated — so those are stale readings and not a register. Read the zones in the provider rather than trusting anything written here or there.
 
 **Why the migration is declined rather than queued.** An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
 
-**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when names outside the server wildcards become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, and since these tables hold no values it lives in no written record at all — so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, found by reading the zones and not by reading this.
+**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when names outside the server wildcards become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, and since these tables hold no values the only copies here are the archive's stale readings — so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, found by reading the zones and not by reading this.
 
 **Secrets created in this stage:** none. The two `.envrc` files hold the two read-only tokens and are gitignored.
 
@@ -456,7 +456,7 @@ You now have two servers, and **stage 6 configures both**. It is written once an
 
 **What still differs between the two, and it is no longer the deploy path:**
 
-- **Not its web exposure.** Staging opens 80 and 443 to the internet as production does, so an application routed there is public, not tailnet-only; §4.4 has its hostnames.
+- **Not its web exposure.** Staging opens 80 and 443 to the internet as production does, so an application routed there is public, not tailnet-only; §4.4 gives the shape of its hostnames.
 - **Its approval gate.** Production's deploy waits for a reviewer because `main-production` requires one; staging's does not, because `main-staging` requires none. That is a repository setting, not a difference in the workflow — nothing in `platform-deploy.yml` distinguishes them.
 - **Its Vault password and its deploy keypair**, both its own, for the reasons below.
 
@@ -1085,7 +1085,7 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 ## Appendix B. Rebuilding an existing host
 
-**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. Its DNS points at its address as production's does, so 4.4 applies to it as well if the address changed — every staging row in 4.4's tables — and its certificates reissue on their own once its applications redeploy.
+**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. Its DNS points at its address as production's does, so 4.4 applies to it as well if the address changed — its own rows in 4.4's tables, and any alias aimed at it — and its certificates reissue on their own once its applications redeploy.
 
 An important consequence for staging specifically: its data volume is **not** wiped by a rebuild, and its `known_hosts` entry **is** invalidated. The second is the one that bites, because it presents as the converge failing at connection time rather than as a rebuild artefact.
 
@@ -1097,7 +1097,7 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 
 ## Appendix C. What to change for a company deployment
 
-Recorded in detail in `docs/backlog.md`. Two of them — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; the database section of `docs/onboard-an-application.md` is that boundary. The one still to do before real data arrives is container resource limits, `docs/backlog.md` entry 6 — log rotation and swap were the other two and were delivered together by `bound-host-log-growth-and-add-swap`. The ones a company needs that this repository does not: a private repository in the company organisation, and an approver who is not the author. DNS as code was the third until the zone was read: it is served by a registrar carrying live MX and SPF, so managing it in Terraform means an NS migration that moves mail, and it is declined rather than queued — §4.4 records the zone, the reasoning and what would reopen it.
+Recorded in detail in `docs/backlog.md`. Two of them — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; the database section of `docs/onboard-an-application.md` is that boundary. The one still to do before real data arrives is container resource limits, `docs/backlog.md` entry 6 — log rotation and swap were the other two and were delivered together by `bound-host-log-growth-and-add-swap`. The ones a company needs that this repository does not: a private repository in the company organisation, and an approver who is not the author. DNS as code was the third until the zone was read: it is served by a registrar carrying live MX and SPF, so managing it in Terraform means an NS migration that moves mail, and it is declined rather than queued — §4.4 records the zone's shape, the reasoning and what would reopen it.
 
 **Two stacks are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per stack. Both are publicly reachable as well: staging runs the platform stack, opens 80 and 443 as production does, and has hostnames of its own under a wildcard (§4.4).
 

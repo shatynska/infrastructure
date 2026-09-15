@@ -86,7 +86,7 @@ An SSH key is not distinguished by rank. A second key here would be a deploy key
 
 ## The workstation
 
-The only namespace shared between companies, and the only place the company appears as a literal. Every name below carries the `<company>` segment, which is what lets a second company's set sit beside this one rather than collide with it.
+The only namespace shared between companies, and the only place the company name is spelled out on disk. Every name below carries the `<company>` segment, which is what lets a second company's set sit beside this one rather than collide with it.
 
 | What | Name |
 |---|---|
