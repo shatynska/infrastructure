@@ -802,18 +802,6 @@ A citation in this repository names a requirement and, very often, a scenario in
 
 **Do the check with the sweep, not after it.** `.github/tests/test_the_retired_requirement_names_are_gone.py` already reads every tracked file, already flattens each one so a title wrapped across a comment's line break is found, and already derives its subject from committed specifications. The scenario predicate is the inverse of its current one — a cited title that is **not** among the live scenario titles, rather than a name that **is** among the retired ones — so it needs a reader of its own rather than a second literal. Its false-positive risk is the thing to measure first: a quoted phrase that is not a citation at all looks exactly like a citation of a scenario that does not exist.
 
-## 49. correct-the-tfvars-parenthetical-that-names-labels
-
-**Not blocked, and small.** It waited three months as a correction to batch into whatever change next touched the requirement, and no such change came — which is what makes it an entry of its own.
-
-*Version Control Excludes State and Secrets* (`openspec/specs/iac-repo-foundations/spec.md`) describes `terraform/stacks/<name>/terraform.tfvars` as holding "server type, region, image, labels, allowed CIDRs". The file holds no labels; the only `labels` block under `terraform/stacks/main-production/` is in `ssh_key.tf`.
-
-The disagreement is **factual, not normative**. The parenthetical is illustrative, the requirement's normative content is that the file is committed and non-secret, and labels genuinely are non-secret environment configuration — simply set on the resource rather than passed through this file. Nothing is permitted or forbidden differently because of it, and no reader is misled about what the requirement demands. That is why it is cheap and low in priority, not why it should be left.
-
-**Two carriers have now gone past it.** `rename-terraform-environments-to-stacks` rewrote this very row on 2026-09-11, moving the `terraform.tfvars` path onto the new Terraform root and leaving `labels` where it stands; a vocabulary sweep is not a substantive modification of this requirement, and folding a factual correction into it would have been unrelated scope. Being walked past is not an argument for a third pass.
-
-**What it costs is the part to decide when it is proposed.** Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the requirement's parenthetical agrees with `terraform.tfvars`" — a cross-file assertion this repository has declined twice on its own merits, on the grounds that an assertion converts a silent staleness into a standing editing obligation. So this change should probably correct the prose and argue explicitly that the scenario it owes is not that assertion.
-
 ## 50. separate-history-from-rationale-in-source-comments
 
 **No longer blocked.** It waited on the citation-form decision and on the sweep that followed it; both were delivered by `decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which also converted every citation in the comment blocks below. What remains here is the separation this change deliberately did not do: it changed citation *form* only, and left the prose around it alone.
