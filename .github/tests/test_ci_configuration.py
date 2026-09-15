@@ -241,19 +241,226 @@ def terraform_lockfile_directories(root: Path | None = None) -> set[str]:
     return found
 
 
-def role_names() -> set[str]:
-    roles_dir = ROOT / "ansible" / "roles"
+# The Galaxy manifest, and the resolution of its `roles:` entries to the
+# directory names `ansible-galaxy` installs them under.
+#
+# Derived from the delta spec of the OpenSpec change
+# `pin-and-fix-molecule-suite`, which introduced these for the image-pinning
+# checks further down; see that change's design.md decision 3a for the
+# resolution rule and the failure polarity, and its test-plan.md for the
+# scenario-to-test mapping. The requirement they trace to is
+# `iac-cicd-pipeline`'s "Ansible Configuration Is Verified in Continuous
+# Integration and Gates the Merge" (openspec/specs/iac-cicd-pipeline/spec.md).
+#
+# They sit here rather than in that section because `role_names()` below rests
+# on them: this is the file's one notion of which directories under
+# `ansible/roles/` hold installed Galaxy content, and every check that needs
+# one reads it from here.
+
+GALAXY_MANIFEST = "ansible/requirements.yml"
+
+
+class ManifestNotUsable(AssertionError):
+    """The Galaxy manifest the exclusion is derived from could not be read, or
+    one of its entries could not be resolved to the directory name
+    `ansible-galaxy` installs it under.
+
+    An `AssertionError` subclass so that an unhandled one fails the calling
+    test rather than erroring it: the requirement is that the check FAIL
+    identifying the entry or the file, never that it yield an empty or partial
+    exclusion set (`pin-and-fix-molecule-suite`'s design.md decision 3a -- a
+    silently widened exclusion lets an unpinned scenario through, which is the
+    vacuous pass this capability forbids elsewhere).
+
+    That effect is uniform, and it is stated because it is easy to assume
+    otherwise: `TestCase.run` routes a raised exception by whether it is an
+    instance of `failureException`, never by which part of the test raised it.
+    So this is a FAILURE in `setUp` -- which several callers of the enumeration
+    below use -- exactly as it is inside a test method, and the message names
+    the manifest in both.
+    """
+
+
+def _role_name_from_source(source: str) -> str:
+    """A `src` resolved to the directory name, by `ansible-galaxy`'s own rule.
+
+    MIRRORS `RoleRequirement.repo_url_to_role_name`, ORDER INCLUDED, because
+    the only correct answer to "what directory does `ansible-galaxy` install
+    this under" is the one `ansible-galaxy` computes. An earlier version of
+    this function stripped a comma-separated version qualifier FIRST and the
+    `.git` suffix after, which reads more sensibly and is not what happens:
+    Ansible strips `.git` from the trailing path segment and only then splits
+    on the comma, so `…/ansible-role-docker.git,8.0.0` installs to
+    `ansible-role-docker.git` -- the suffix survives, because at the moment it
+    is tested for, the string still ends in the version.
+
+    A source carrying neither `://` nor `@` is returned unchanged, which is
+    Ansible's own first line and is why `geerlingguy.docker` resolves to
+    itself.
+    """
+    if "://" not in source and "@" not in source:
+        return source
+    trailing = source.split("/")[-1]
+    if trailing.endswith(".git"):
+        trailing = trailing[: -len(".git")]
+    if trailing.endswith(".tar.gz"):
+        trailing = trailing[: -len(".tar.gz")]
+    if "," in trailing:
+        trailing = trailing.split(",")[0]
+    return trailing
+
+
+def _galaxy_directory_name(entry: object, position: int) -> str:
+    """Resolve one `roles:` entry to the directory `ansible-galaxy` installs it
+    under (`pin-and-fix-molecule-suite`'s design.md decision 3a, corrected
+    against Ansible by `unify-the-two-role-exclusion-rules`).
+
+    THREE SPELLINGS NAME A ROLE, not two. `name:`, `src:`, and `role:` --
+    which `RoleRequirement.role_yaml_parse` accepts and rewrites to `name`,
+    and which this refused outright until the correction, failing the check on
+    a manifest `ansible-galaxy` reads without complaint. A refusal that fires
+    on a legitimate edit is the false-positive failure this suite is meant not
+    to produce.
+    """
+    if isinstance(entry, str):
+        # `role_yaml_parse`'s string branch: `src[,version[,name]]`, where an
+        # explicit third field wins and the comma is split BEFORE the name is
+        # derived -- which is why the string form does not carry the `.git`
+        # quirk that the `src:` mapping form does.
+        fields = entry.strip().split(",")
+        if len(fields) > 3:
+            raise ManifestNotUsable(
+                f"{GALAXY_MANIFEST} roles[{position}] is not a role line "
+                f"ansible-galaxy accepts -- `role_name[,version[,name]]` takes at "
+                f"most two commas: {entry!r}"
+            )
+        if len(fields) == 3 and fields[2].strip():
+            return fields[2].strip()
+        source: object = fields[0]
+    elif isinstance(entry, dict):
+        if entry.get("role"):
+            name = str(entry["role"])
+            if "," in name:
+                raise ManifestNotUsable(
+                    f"{GALAXY_MANIFEST} roles[{position}] uses the `role:` key with a "
+                    f"comma in it, which ansible-galaxy rejects as an old-style "
+                    f"requirement: {entry!r}"
+                )
+            return name
+        if entry.get("name"):
+            return str(entry["name"])
+        source = entry.get("src")
+    else:
+        source = None
+    if not isinstance(source, str) or not source.strip():
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} roles[{position}] gives none of `name`, `src` or "
+            f"`role`, so the directory ansible-galaxy installs it under cannot be "
+            f"named and the exclusion cannot be derived from it: {entry!r}"
+        )
+    source = source.strip()
+    # `role_yaml_parse` splits an `scm+url` source and names the role from the
+    # url half. Its github-specific `git+` prepend is a no-op for naming, since
+    # it partitions the prefix straight back off.
+    if "+" in source:
+        source = source.partition("+")[2]
+    basename = _role_name_from_source(source)
+    if not basename:
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} roles[{position}] has a `src` that resolves to no "
+            f"directory name: {entry!r}"
+        )
+    return basename
+
+
+def galaxy_role_directories(root: Path | None = None) -> set[str]:
+    """Directory names under `ansible/roles/` that hold installed Galaxy content,
+    derived from `ansible/requirements.yml` rather than from a hardcoded list."""
+    base = ROOT if root is None else root
+    manifest = base / GALAXY_MANIFEST
+    if not manifest.is_file():
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} does not exist, so the set of role directories to "
+            f"exclude from the pinning check cannot be derived; refusing to fall "
+            f"back to an empty exclusion set"
+        )
+    try:
+        parsed = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
+        # THE READ AND THE PARSE ARE BOTH IN SCOPE. `read_text` raises before
+        # `safe_load` sees anything -- `UnicodeDecodeError` on bytes that are
+        # not UTF-8, `OSError` on a file that cannot be opened -- and catching
+        # the parse alone let those escape raw. That was survivable while only
+        # the pinning checks reached here; `unify-the-two-role-exclusion-rules`
+        # put the whole suite's role enumeration on this function, and a raw
+        # `PermissionError` from underneath it is not the refusal this class
+        # promises. It is also the case the selector's own copy already
+        # covered, so narrowing here left the two implementations answering
+        # differently on the one input neither can read.
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} could not be read or parsed, so the exclusion "
+            f"cannot be derived from it: {error}"
+        ) from None
+    if not isinstance(parsed, dict):
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST} is not a mapping, so it declares no `roles:` list to "
+            f"derive the exclusion from"
+        )
+    entries = parsed.get("roles")
+    if entries is None:
+        return set()
+    if not isinstance(entries, list):
+        raise ManifestNotUsable(
+            f"{GALAXY_MANIFEST}'s `roles:` is not a list, so its entries cannot be "
+            f"resolved to directory names"
+        )
+    return {_galaxy_directory_name(entry, position) for position, entry in enumerate(entries)}
+
+
+def role_names(root: Path | None = None) -> set[str]:
+    """The directories under `ansible/roles/` that are THIS REPOSITORY'S OWN.
+
+    Installed Galaxy content is excluded, and the exclusion is derived from
+    `ansible/requirements.yml` -- the same rule the pinning checks below use,
+    and, since `unify-the-two-role-exclusion-rules`, the only rule this
+    repository holds for the question. It replaced a heuristic on the
+    directory NAME, which read the Galaxy `namespace.role` convention as
+    provenance and was wrong in both directions: content vendored under a
+    dotted name that nobody pinned was exempted from obligations that range
+    over this repository's roles, and a manifest entry given as a `src:`
+    resolves to a dotless basename that the heuristic claimed as ours while
+    `ansible-galaxy` was reinstalling it.
+
+    THE `startswith(".")` GUARD IS NOT THAT HEURISTIC and stays. It excludes
+    hidden directories -- `.git` and its like -- which no manifest would ever
+    name and which are not installed content.
+
+    A manifest that cannot be read raises `ManifestNotUsable` rather than
+    falling back to the name heuristic, to an empty exclusion, or to the raw
+    listing: each would answer silently a question this function cannot
+    answer, and they fail in opposite directions. The raise reaches every
+    caller as a test failure naming the file, in `setUp` as much as in a test
+    method -- see `ManifestNotUsable`.
+    """
+    base = ROOT if root is None else root
+    roles_dir = base / "ansible" / "roles"
     if not roles_dir.is_dir():
         return set()
+    installed = galaxy_role_directories(base)
     return {
         entry.name
         for entry in roles_dir.iterdir()
-        if entry.is_dir() and not entry.name.startswith(".") and "." not in entry.name
+        if entry.is_dir() and not entry.name.startswith(".") and entry.name not in installed
     }
 
 
-def roles_with_molecule_scenarios() -> set[str]:
-    return {name for name in role_names() if (ROOT / "ansible" / "roles" / name / "molecule").is_dir()}
+def roles_with_molecule_scenarios(root: Path | None = None) -> set[str]:
+    base = ROOT if root is None else root
+    return {
+        name
+        for name in role_names(base)
+        if (base / "ansible" / "roles" / name / "molecule").is_dir()
+    }
 
 
 # --------------------------------------------------------------------------
@@ -973,85 +1180,13 @@ class TestToolchainIsInstalledFromPinnedManifests(unittest.TestCase):
 # test-plan.md for the scenario-to-test mapping, the baseline, and the
 # scenarios deliberately left uncovered.
 
-GALAXY_MANIFEST = "ansible/requirements.yml"
 SCENARIO_GLOB = "ansible/roles/*/molecule/*/molecule.yml"
 CONTENT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
-
-class ManifestNotUsable(AssertionError):
-    """The Galaxy manifest the exclusion is derived from could not be read, or
-    one of its entries could not be resolved to the directory name
-    `ansible-galaxy` installs it under.
-
-    An `AssertionError` subclass so that an unhandled one fails the calling
-    test rather than erroring it: the requirement is that the check FAIL
-    identifying the entry or the file, never that it yield an empty or partial
-    exclusion set (design.md decision 3a -- a silently widened exclusion lets an
-    unpinned scenario through, which is the vacuous pass this capability
-    forbids elsewhere).
-    """
-
-
-def _galaxy_directory_name(entry: object, position: int) -> str:
-    """Resolve one `roles:` entry to the directory `ansible-galaxy` installs it
-    under: `name` where given, else the `src` basename with any version
-    qualifier and `.git` suffix stripped (design.md decision 3a)."""
-    source: object = None
-    if isinstance(entry, str):
-        source = entry
-    elif isinstance(entry, dict):
-        if entry.get("name"):
-            return str(entry["name"])
-        source = entry.get("src")
-    if not isinstance(source, str) or not source.strip():
-        raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST} roles[{position}] gives neither a `name` nor a `src`, "
-            f"so the directory ansible-galaxy installs it under cannot be named and "
-            f"the exclusion cannot be derived from it: {entry!r}"
-        )
-    basename = source.split(",")[0].strip().rstrip("/").rsplit("/", 1)[-1]
-    if basename.endswith(".git"):
-        basename = basename[: -len(".git")]
-    if not basename:
-        raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST} roles[{position}] has a `src` that resolves to no "
-            f"directory name: {entry!r}"
-        )
-    return basename
-
-
-def galaxy_role_directories(root: Path | None = None) -> set[str]:
-    """Directory names under `ansible/roles/` that hold installed Galaxy content,
-    derived from `ansible/requirements.yml` rather than from a hardcoded list."""
-    base = ROOT if root is None else root
-    manifest = base / GALAXY_MANIFEST
-    if not manifest.is_file():
-        raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST} does not exist, so the set of role directories to "
-            f"exclude from the pinning check cannot be derived; refusing to fall "
-            f"back to an empty exclusion set"
-        )
-    try:
-        parsed = yaml.safe_load(manifest.read_text(encoding="utf-8"))
-    except yaml.YAMLError as error:
-        raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST} could not be parsed, so the exclusion cannot be "
-            f"derived from it: {error}"
-        ) from None
-    if not isinstance(parsed, dict):
-        raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST} is not a mapping, so it declares no `roles:` list to "
-            f"derive the exclusion from"
-        )
-    entries = parsed.get("roles")
-    if entries is None:
-        return set()
-    if not isinstance(entries, list):
-        raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST}'s `roles:` is not a list, so its entries cannot be "
-            f"resolved to directory names"
-        )
-    return {_galaxy_directory_name(entry, position) for position, entry in enumerate(entries)}
+# `GALAXY_MANIFEST` and the manifest resolution this section introduced now
+# live in "Repository access helpers" at the top of this file. They moved
+# because the file's general role enumeration came to rest on them and they
+# had outgrown this section, not because anything about them changed.
 
 
 def authored_scenario_files(root: Path | None = None) -> list[Path]:
@@ -1228,19 +1363,22 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
         drop out of discovery. `roles_with_molecule_scenarios()` computes the
         role set from directory names independently of the glob above.
 
-        `roles_with_molecule_scenarios()` rests on `role_names()`, which excludes
-        a directory whose name contains a `.` -- the older, weaker of this file's
-        two notions of "installed content". Subtracting the manifest-derived set
-        as well keeps this assertion on the same rule the pinning checks use, so
-        a Galaxy entry resolving to a dotless directory name (`ansible-role-docker`,
-        say) cannot make it fail. Neither `role_names()` nor any test resting on
-        it is touched."""
+        Both sides now rest on one rule. `roles_with_molecule_scenarios()` is
+        built on `role_names()`, which derives its exclusion from
+        `ansible/requirements.yml`, and `authored_scenario_files()` derives its
+        own from the same manifest -- so the two agree about installed Galaxy
+        content by construction rather than by compensation. This assertion
+        used to subtract `galaxy_role_directories()` here to reach that state,
+        because the enumeration underneath read the directory name instead;
+        `unify-the-two-role-exclusion-rules` removed the reason and the
+        subtraction with it. A dead subtraction would read as a live guard, and
+        would keep this test green if the enumeration were ever reverted to the
+        name heuristic -- hiding the regression it looks like it is guarding
+        against."""
         discovered_roles = {
             path.relative_to(ROOT).parts[2] for path in authored_scenario_files()
         }
-        missing = sorted(
-            roles_with_molecule_scenarios() - galaxy_role_directories() - discovered_roles
-        )
+        missing = sorted(roles_with_molecule_scenarios() - discovered_roles)
         self.assertEqual(
             [],
             missing,
@@ -1379,38 +1517,222 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
         self.assertIn(GALAXY_MANIFEST, str(raised.exception))
 
     def test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name(self) -> None:
-        """DERIVED -- design.md decision 3a states the resolution rule (`name`
-        where given, else the `src` basename with any `.git` suffix and version
-        qualifier stripped). The delta spec requires only that the exclusion be
-        derived from the manifest, so the exact resolution is design-level, not
-        SHALL text.
+        """DERIVED -- design.md decision 3a states that a `src:` entry resolves
+        to the directory `ansible-galaxy` installs it under. The delta spec
+        requires only that the exclusion be derived from the manifest, so the
+        exact resolution is design-level, not SHALL text.
 
-        Recorded as derived because it constrains the implementation beyond what
-        a scenario states: today's manifest has one entry, in `name` form, so
-        nothing in the repository exercises this path yet.
+        THE RESOLUTION IS ANSIBLE'S, QUIRK INCLUDED, and this test was wrong
+        about it until `unify-the-two-role-exclusion-rules` checked the
+        expected values against `RoleRequirement.repo_url_to_role_name` rather
+        than against a reading of what the rule ought to be.
+        `repo_url_to_role_name` strips `.git` from the trailing path segment
+        and only THEN splits on the comma -- so where a version qualifier
+        follows, the string does not end in `.git` at the moment that suffix is
+        tested for, and it survives into the directory name. The two forms
+        below therefore resolve differently, and both are asserted: naming a
+        directory that is never created is how a genuinely installed role stops
+        being excluded.
+
+        Still derived, and still unexercised by the repository itself: today's
+        manifest has one entry, in `name:` form.
         """
-        root = self.scratch_tree(
-            {
-                ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE),
-                ("docker", "default"): scenario_document(PINNED_IMAGE),
-            },
+        scenarios = {
+            ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE),
+            ("docker", "default"): scenario_document(PINNED_IMAGE),
+        }
+        qualified = self.scratch_tree(
+            scenarios,
             manifest=(
                 "roles:\n"
                 "  - src: https://github.com/geerlingguy/ansible-role-docker.git,8.0.0\n"
             ),
         )
         self.assertEqual(
+            {"ansible-role-docker.git"},
+            galaxy_role_directories(qualified),
+            "a `src` carrying a comma-separated version did not resolve the way "
+            "ansible-galaxy resolves it -- the `.git` suffix survives, because the "
+            "comma is split off after it is tested for",
+        )
+        separate = self.scratch_tree(
+            scenarios,
+            manifest=(
+                "roles:\n"
+                "  - src: https://github.com/geerlingguy/ansible-role-docker.git\n"
+                '    version: "8.0.0"\n'
+            ),
+        )
+        self.assertEqual(
             {"ansible-role-docker"},
-            galaxy_role_directories(root),
-            "a `src`-only entry did not resolve to the directory name ansible-galaxy "
-            "installs it under",
+            galaxy_role_directories(separate),
+            "a `src` with the version given as its own key did not resolve to the "
+            "basename with `.git` stripped",
         )
         self.assertEqual(
             {"geerlingguy.docker", "docker"},
-            {path.relative_to(root).parts[2] for path in authored_scenario_files(root)},
+            {path.relative_to(root).parts[2] for root in (qualified,) for path in authored_scenario_files(root)},
             "resolving a `src`-only entry excluded a directory the manifest does not "
             "install to",
         )
+
+
+class TestTheRoleEnumerationIsDerivedFromThePinnedManifest(
+    ScenarioTreeFixtureMixin, unittest.TestCase
+):
+    """The enumeration every check in this repository shares -- `role_names()`
+    and the `roles_with_molecule_scenarios()` built on it -- and the rule by
+    which it decides a directory under `ansible/roles/` is this repository's
+    own rather than installed Galaxy content.
+
+    Derived from the OpenSpec change `unify-the-two-role-exclusion-rules`,
+    which replaced a heuristic on the directory NAME (any name carrying a `.`)
+    with the manifest-derived exclusion the pinning checks above already used.
+
+    EVERY CASE HERE IS A FIXTURE, and that is the finding rather than a
+    preference. This repository pins one Galaxy role, `geerlingguy.docker`,
+    whose directory name is dotted AND named in the manifest -- so the two
+    rules return the same set for every directory that exists here, and a test
+    reading the real tree passes identically against either. The cases that
+    separate them cannot be built on `ROOT` at all.
+    """
+
+    def test_a_dotted_directory_the_manifest_does_not_name_is_this_repositorys_own(
+        self,
+    ) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        1. No scenario states it: the specification requires the enumeration be
+        SHARED and does not say which rule it uses, so this constrains the
+        implementation beyond what any scenario says.
+
+        The direction the replaced rule got wrong in the way that matters.
+        Content vendored under a dotted name that nobody pinned is not
+        installed Galaxy content -- it is content this repository is carrying,
+        and the pinning obligation is exactly what should reach it. The name
+        heuristic exempted it silently.
+        """
+        root = self.scratch_tree(
+            {
+                ("ours", "default"): scenario_document(PINNED_IMAGE),
+                ("vendor.theirs", "default"): scenario_document(PINNED_IMAGE),
+            }
+        )
+        self.assertEqual(
+            {"ours", "vendor.theirs"},
+            role_names(root),
+            "a dotted directory that `ansible/requirements.yml` does not name was "
+            "excluded from this repository's own roles. Nothing installed it: it is "
+            "vendored content, and exempting it from the obligations that range over "
+            "this repository's roles is what deriving the exclusion from the manifest "
+            "exists to stop",
+        )
+
+    def test_a_dotless_directory_the_manifest_names_is_not_this_repositorys_own(
+        self,
+    ) -> None:
+        """DERIVED -- as above, in the other direction.
+
+        The manifest spelling is the one
+        `test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name`
+        asserts for this form, deliberately: the two tests are then about the
+        same resolution rather than about two inventions. The version is given
+        as its own key rather than after a comma, because only that form
+        resolves to a DOTLESS basename -- with the comma, `.git` survives into
+        the directory name and the case stops being the one this test is
+        about. An earlier version of this fixture used the comma and asserted a
+        directory `ansible-galaxy` would never create.
+        """
+        root = self.scratch_tree(
+            {
+                ("ours", "default"): scenario_document(PINNED_IMAGE),
+                ("ansible-role-docker", "default"): scenario_document(PINNED_IMAGE),
+            },
+            manifest=(
+                "roles:\n"
+                "  - src: https://github.com/geerlingguy/ansible-role-docker.git\n"
+                '    version: "8.0.0"\n'
+            ),
+        )
+        self.assertEqual(
+            {"ours"},
+            role_names(root),
+            "a directory the manifest installs to was counted as one of this "
+            "repository's own because its name carries no dot. The manifest is what "
+            "says what is installed; the shape of the name says nothing",
+        )
+
+    def test_the_enumeration_is_the_same_provisioned_or_not(self) -> None:
+        """SPECIFIED -- "so that installed Galaxy content cannot make the check
+        report one result on a provisioned developer machine and another on a
+        runner that has installed nothing" ("The Molecule Matrix Runs the Roles
+        a Pull Request Owes", openspec/specs/iac-cicd-pipeline/spec.md), read
+        over the enumeration those checks share.
+
+        THIS TEST CANNOT DISCRIMINATE between the rule this change installed
+        and the one it replaced, and it is not evidence that the change works.
+        It holds under both on any tree whose Galaxy role is dotted and pinned,
+        which is every tree either rule has been run against. It is here
+        because the property is worth asserting, not because it establishes
+        the rule -- the two tests above are what do that.
+
+        Asserting it on the real tree is impossible: that tree is provisioned
+        or it is not, never both.
+        """
+        own = {("docker", "default"): scenario_document(PINNED_IMAGE)}
+        runner = self.scratch_tree(own)
+        provisioned = self.scratch_tree(
+            {**own, ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE)}
+        )
+        self.assertEqual(
+            role_names(runner),
+            role_names(provisioned),
+            "the role enumeration returned a different set on a provisioned tree than "
+            "on one that has installed nothing",
+        )
+
+    def test_a_manifest_that_cannot_be_read_fails_the_enumeration(self) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        3: the enumeration propagates `ManifestNotUsable` rather than falling
+        back to the name heuristic, to an empty exclusion, or to the raw
+        directory listing.
+
+        Each fallback answers silently a question the file cannot answer, and
+        they fail in opposite directions -- an empty exclusion and the raw
+        listing both hold installed Galaxy content to this repository's
+        obligations, while falling back to the heuristic reinstates the rule
+        that was removed at the moment nobody is watching.
+
+        The message names the file because that is what tells an operator
+        their working tree is unprovisioned rather than their code broken.
+        """
+        root = self.scratch_tree(
+            {("docker", "default"): scenario_document(PINNED_IMAGE)}, manifest=None
+        )
+        with self.assertRaises(ManifestNotUsable) as raised:
+            role_names(root)
+        self.assertIn(GALAXY_MANIFEST, str(raised.exception))
+
+    def test_a_manifest_that_is_not_utf8_fails_the_enumeration_too(self) -> None:
+        """DERIVED -- as above, for the way the manifest stops being readable
+        BEFORE the parser is reached.
+
+        `read_text` raises `UnicodeDecodeError` on bytes that are not UTF-8 and
+        `OSError` on a file that cannot be opened, so a `yaml.YAMLError`-only
+        guard lets both escape as themselves. That was survivable while this
+        function was read by the pinning checks alone; it is not now that the
+        whole suite's role enumeration rests on it, and the selector's own copy
+        already refused these -- so the narrow guard left the two
+        implementations answering differently on an input neither can read,
+        which is the divergence this class exists to prevent.
+
+        Bytes rather than permissions, deliberately: `chmod` proves nothing on
+        a runner that happens to be root, where an unreadable file is readable.
+        """
+        root = self.scratch_tree({("docker", "default"): scenario_document(PINNED_IMAGE)})
+        (root / GALAXY_MANIFEST).write_bytes(b"roles:\n  - name: \xff\xfe\n")
+        with self.assertRaises(ManifestNotUsable) as raised:
+            role_names(root)
+        self.assertIn(GALAXY_MANIFEST, str(raised.exception))
 
 
 class TestMoleculeScenarioImagesArePinnedByDigest(

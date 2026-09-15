@@ -36,10 +36,14 @@ Why the role enumeration is imported rather than globbed
 provisioned working tree and not in continuous integration, and that role's own
 scenario carries a literal `cache_valid_time` -- so a check drawn that way would
 disagree with itself between the two, which is worse than no check at all.
-`role_names()` excludes a dotted directory name and `galaxy_role_directories()`
-derives the installed set from `ansible/requirements.yml`, which is committed
-content; subtracting the second from the first is the enumeration this file
-uses everywhere.
+`role_names()` derives its exclusion from `ansible/requirements.yml`, which is
+committed content, so it answers the same way in both places; it is the
+enumeration this file uses everywhere. This file used to subtract
+`galaxy_role_directories()` from it as well, because `role_names()` then
+excluded a dotted directory NAME rather than reading the manifest -- a rule
+that missed vendored content nobody pinned and claimed installed content whose
+directory name carries no dot. `unify-the-two-role-exclusion-rules` put one
+rule underneath both, and the subtraction went with the reason for it.
 
 What no assertion here establishes
 ----------------------------------
@@ -87,7 +91,6 @@ import yaml
 
 from test_ci_configuration import (
     ROOT,
-    galaxy_role_directories,
     role_names,
 )
 
@@ -156,8 +159,13 @@ class AnsibleContentUnusable(AssertionError):
 
 def own_role_names() -> set[str]:
     """This repository's own roles: every role directory, less the Galaxy-installed
-    ones derived from the pinned manifest."""
-    return role_names() - galaxy_role_directories()
+    ones derived from the pinned manifest.
+
+    That is what `role_names()` now returns on its own, so this is a name for
+    the enumeration rather than a narrowing of it -- kept because the call
+    sites below read better for saying whose roles they mean.
+    """
+    return role_names()
 
 
 def own_role_task_files() -> list[Path]:
