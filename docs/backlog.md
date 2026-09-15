@@ -808,6 +808,8 @@ Not blocked. It touches `docs/` and no mechanism.
 
 That is not hypothetical here. The `pgexporter` role lives in `postgres_data` and is recreated by hand after any volume reset or host rebuild, from a password pasted out of a GitHub Environment secret — the one step in this stack most likely to be got wrong, and the one with no automated check behind it.
 
+**It stopped being hypothetical the day after this entry was written, and the case was worse than the one argued above.** On 2026-09-15, checking `pg_up` by hand during the PostgreSQL 18 upgrade found **both** hosts reporting `pg_up 0`, for an unknown period before that. The cause was not a mistyped password but `DATA_SOURCE_NAME` building a URL around one containing `#`, which discarded the host — corrected the same day by splitting the exporter's connection settings, in the pull request that also filed `give-each-stack-its-own-exporter-password` and `render-the-env-file-so-a-secret-survives-it`. What this entry is about survived the fix: **nothing reported the outage**, on either host, for however long it lasted. Both containers were `healthy`, both Prometheus targets were `up`, and the operator found it only by running a command this repository had documented three days earlier. That is the evidence for this entry rather than an argument for it.
+
 **What the change owes.** An alert on `pg_up == 0` for the `postgres-exporter` job, in `platform/docker-compose.yml`'s inline `prometheus_rules` config — the sibling `prometheus_config` holds only `global`, `alerting`, `rule_files` and `scrape_configs`, and a `groups:` block added there is not where Prometheus reads rules from. Remember the `platform.config-checksum` label, since editing either block without regenerating it deploys nothing. Give it a `for:` long enough to ride out a restart of the instance, which legitimately shows `pg_up 0` while it comes up.
 
 **The wider question, which is why this is an entry rather than a line.** `up` measures whether an exporter answered, never whether what it answered means anything, and every exporter in this stack is read through that one alert. cAdvisor and node-exporter have no equivalent of `pg_up` and the question does not arise for them; Traefik's metrics endpoint does answer independently of whether its providers are healthy. Worth deciding once whether each exporter needs a liveness signal of its own rather than adding them one incident at a time.
@@ -839,7 +841,64 @@ Removing it needs one of two things, and both are changes to **what the run remo
 
 **Neither host is known to carry such an image**, so this is not urgent. What makes it worth keeping is that the condition is now legible: when `refused` reads non-zero for this reason on a real host, this entry is what it points at.
 
-## 63. say-which-stage-the-staging-prune-failure-belongs-to
+## 63. give-each-stack-its-own-exporter-password
+
+**Not blocked; recorded rather than fixed here, because closing it means rotating a secret in two GitHub Environments and only the operator can do that.** Found 2026-09-15 while reading why `pg_up` was 0 on both hosts, by the fix that split the exporter's connection settings.
+
+**Both stacks hold the same `PLATFORM_POSTGRES_EXPORTER_PASSWORD`.** The evidence is in the two exporters' own error output, read minutes apart: the parse error from the staging host and the one from the production host quote the same password prefix. Nothing was compared that should not have been — each host reported its own value and the values matched.
+
+`platform/README.md` says the opposite in as many words, in the manual role-creation step: "using a password matching whatever is stored in that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD` secret — each stack has its own instance, its own role and its own password". So this is a divergence from what this repository states, not an undecided question.
+
+**What it costs.** The exporter role is `pg_monitor` — read-only on statistics views, no table data — so a shared password is not a path to either database's contents. What it defeats is the property every other per-stack credential here has: that one leaked value reaches one host. It also makes the two roles indistinguishable when one is rotated, since the rotation that fixes one stack silently breaks the other's role until that host's role is recreated too.
+
+**What the change owes.** A fresh value generated per stack, set in each Environment, and each host's `pgexporter` role recreated to match — the order matters, since the secret reaching the host before the role is recreated leaves the exporter unable to connect, which is the state this entry was found in and which nothing alerts on (`alert-on-the-exporter-being-unable-to-read-postgres`). Worth doing in the same window as `alert-on-the-exporter-being-unable-to-read-postgres`'s alert, so the rotation is observable rather than confirmed by hand.
+
+**One value to rotate regardless of when this is taken**: the password that was live on 2026-09-15 appeared in an operator's terminal while this was diagnosed, so it is no longer only in the two Environments that hold it.
+
+## 64. render-the-env-file-so-a-secret-survives-it
+
+**Not blocked. Recorded rather than folded into the fix that found it — which makes the exporter read its password as a value, where this is the layer below, corrupting that value before any service sees it.** Found 2026-09-15.
+
+**The corrupting layer is bash, not Compose.** This was first written the other way round and the correction matters, because the two layers want different fixes. `.github/workflows/platform-deploy.yml`'s *Render .env from secrets* step writes each line as `echo "NAME=${{ secrets.X }}"`, and GitHub Actions substitutes the secret's **raw text into the script** before any shell runs. So the secret becomes part of a double-quoted shell word, and bash expands it there — before `.env` exists, and whatever Compose's parser would later have done. Measured on 2026-09-15:
+
+| Secret as stored | Rendered line | Reaching the container |
+|---|---|---|
+| `ab$c#d` | `A=ab#d` | `ab#d` — `$c` expanded to nothing |
+| `"abc"def` | `C=abcdef` | `abcdef` — quotes consumed by the shell, not by Compose |
+| ``x`id -u`y`` | `D=x1000y` | `x1000y` — **a command ran** |
+
+Nothing fails: the service starts with the wrong credential, and for postgres-exporter that means HTTP 200, `pg_up 0`, a healthy container and no alert — the silence `alert-on-the-exporter-being-unable-to-read-postgres` is about.
+
+**The third row is not the same kind of problem as the first two, and it is why this entry is worth more than its symptom.** A secret containing a backtick or `$(…)` is not merely corrupted, it is **executed**, by the shell of the deploy job — which at that moment holds that stack's tailnet OAuth client and its `PLATFORM_DEPLOY_SSH_KEY`. Nothing here is reachable by an outside party: the only values that land in these Environments are ones the operator puts there. It is a foot-gun rather than an attack surface, and it is the reason the fix is "stop the value passing through a shell word" rather than "quote it better".
+
+**It reaches seven secrets, which is not all nine `PLATFORM_*` ones** — the count is worth stating exactly, because sizing this fix or the rotation in `give-each-stack-its-own-exporter-password` against the wrong one includes an SSH private key that is not affected. The render loop writes `ACME_EMAIL`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_EXPORTER_PASSWORD`, `SLACK_WEBHOOK_URL`, `DEADMANSWITCH_URL` and `GRAFANA_ADMIN_PASSWORD`. `PLATFORM_DEPLOY_HOST` and `PLATFORM_DEPLOY_SSH_KEY` never enter `.env` at all. (`GRAFANA_BIND_ADDRESS` is written by the same loop but comes from a step output rather than a secret.)
+
+**What the change owes, and the remedy that does NOT work.** Re-quoting inside the double-quoted word does nothing: `echo "NAME='${{ secrets.X }}'"` renders `ab$c#d` as `NAME='ab#d'`, measured. The secret must not reach a shell word at all. Pass each one through the step's `env:` block and have the script read it indirectly — `printf '%s=%s\n' "$NAME" "$VALUE"` over variables, never interpolation into the script text. Measured with the same three inputs, each survives verbatim, command substitution included. Then assert it in `.github/tests`: that this step interpolates no `${{ secrets.* }}` into its `run:` body, which is a static read of a committed file and the only layer where this is visible at all.
+
+**This repository's own generation commands cannot produce any of these characters, which bounds the exposure without closing it.** `docs/bootstrap-a-new-host.md` §0 generates these with `openssl rand -base64 32`, whose alphabet is `A-Za-z0-9+/=`, and `docs/onboard-an-application.md` uses `openssl rand -hex 32`. So a secret generated as documented is safe today, and what this entry guards against is a value chosen any other way — a password typed by hand, one carried over from elsewhere, or a `SLACK_WEBHOOK_URL` or `DEADMANSWITCH_URL` pasted from a third-party console, none of which this repository generates at all.
+
+**Worth pairing with `give-each-stack-its-own-exporter-password`**, which rotates the exporter password: a rotation is the moment a `$` would first be noticed, and the safest order is to close this first so the new value cannot be corrupted on its way in. Until then, generate these with the documented commands — which is a narrower instruction than "avoid `$`", and the right one, since the backtick case is not something a human would think to avoid.
+
+**The URL half of this shape also exists outside this repository, where neither that fix nor the check `assert-no-secret-is-built-into-a-url` owes would reach.** The correction was to `platform/docker-compose.yml`, and the check is scoped to that file; `provision-commerce-ops-database-in-the-shared-instance` records that the `commerce-ops` repository builds `DATABASE_URL` as `commerce_ops:${POSTGRES_PASSWORD}@postgres:5432/commerce_ops`, which is the same construction with the same failure — a `#` in that password would take its host with it, and that application's deploy would come up pointing nowhere. That repository is outside this one's authority, so this is worth raising there rather than fixing here, and it is recorded because nothing else would carry it across the boundary.
+
+## 65. assert-no-secret-is-built-into-a-url
+
+**Not blocked. Split out of the fix that motivated it, deliberately, and the reason is the entry's main content.** Recorded 2026-09-15.
+
+`platform/docker-compose.yml` built postgres-exporter's `DATA_SOURCE_NAME` by interpolating a password into a URL, and a `#` in that password discarded the host — see `alert-on-the-exporter-being-unable-to-read-postgres` for what the outage looked like and why nothing reported it. The three-line correction is merged. What is owed is the check that stops the shape returning, in `.github/tests`: a static read of a committed file, which is that suite's stated subject.
+
+**What the check has to decide is narrower than it first looks, and the draft written alongside the fix got it wrong in three different arms on three consecutive review rounds** — which is why it is here rather than merged with the fix. The rule is not "a secret near a URL". It is: a secret-bearing variable appearing **inside** a URL, within its own whitespace-delimited word. The cases that must be separated:
+
+- **An offence**: a scheme (`postgresql://u:${P}@h`), a `user:secret@host` authority with no scheme (which `DATA_SOURCE_URI` accepts), a query parameter (`?sslmode=disable&password=${P}`), a path segment of a scheme-less authority (`host:5432/${P}/x`), and text concatenated onto a secret that is itself a URL (`${SLACK_WEBHOOK_URL}/extra`).
+- **Not an offence**: a value that is nothing but the secret, which is what Alertmanager's `api_url` is — there the secret *is* the URL and nothing it contains can move a boundary. Nor a non-secret host in a URL, nor a secret sharing a value with an unrelated URL (`-Dapi.key=${K} -Dendpoint=https://…`), nor a filesystem path (`/var/lib/${P}/data`), nor Compose's `$$` escape.
+
+**The defect that recurred, named so it is not made a fourth time**: each arm reads the text either side of the secret, and that text must be taken from the **quote-stripped** neighbourhood rather than anchored to the start of the raw word. Quoting is idiomatic inside a `configs:` block and `--flag=value` is idiomatic in a `command:`, so an anchored arm passes every wrapped form while its unwrapped twin is caught — and a test exercising only the bare form sees nothing wrong. Three arms were fixed for this one at a time.
+
+**Two things it must read that are easy to miss.** Which names count as secrets should be read from `platform-deploy.yml`'s render step rather than guessed from keywords: `DEADMANSWITCH_URL` is a bearer credential and no word in its name says so. And the scan must cover `command:`, `entrypoint:`, `labels:` and `healthcheck.test` as well as `environment:` and the inline `configs:` — Traefik's `${ACME_EMAIL}` is reached only through `command:`, so a check reading `environment:` alone would call the file clean while examining six of its seven secret-bearing interpolations.
+
+**And it must not be able to pass having read nothing.** Seven such interpolations exist today; assert a floor, or moving them into `env_file:` satisfies the check silently.
+
+## 66. say-which-stage-the-staging-prune-failure-belongs-to
 
 **Not blocked, small, and it misled a reader on the day it was found.** Recorded 2026-09-15 by `report-refused-removals-in-the-host-prune`, whose own confirmation step predicted the wrong result from it.
 
