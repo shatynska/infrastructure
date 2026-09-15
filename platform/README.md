@@ -142,6 +142,14 @@ GRANT pg_monitor TO pgexporter;
 
 `pg_monitor` is Postgres's own built-in predefined role: read-only access to the statistics views postgres-exporter's standard collectors query, no table data access, no superuser.
 
+**That each stack's password is its own is a claim nothing checks**, and it was false until 2026-09-15 — both stacks held one value, found only because two hosts' error output quoted the same prefix. Compare them without printing either, from a session on each host:
+
+```sh
+docker exec platform-postgres-exporter-1 printenv DATA_SOURCE_PASS | tr -d '\n' | sha256sum | cut -c1-16
+```
+
+Two different digests is the pass. Worth running after any rotation, since a rotation is the moment one stack's value is most easily pasted into both.
+
 **`#`, `@`, `/`, `?` and `:` are safe in this password. `$` and a leading quote are not, and the next paragraph says why that is still true.** Until 2026-09-15 the first four were not either: the exporter was given a single `DATA_SOURCE_NAME` URL with the password interpolated into it, so any of them silently changed what the URL meant rather than failing — `#` discarded the host, the port and the database after it. Both hosts ran that way with a password containing `#`, reporting `pg_up 0` while their containers stayed healthy and their Prometheus targets stayed up. The exporter now takes `DATA_SOURCE_URI`, `DATA_SOURCE_USER` and `DATA_SOURCE_PASS` separately, so the password reaches it as a value rather than as part of a URL.
 
 **`$` and a leading quote are still not safe, and the reason is worth reading before you generate one.** There are **two** layers between a GitHub secret and the container, and each mangles a value differently:

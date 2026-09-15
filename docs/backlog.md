@@ -816,7 +816,7 @@ Not blocked. It touches `docs/` and no mechanism.
 
 That is not hypothetical here. The `pgexporter` role lives in `postgres_data` and is recreated by hand after any volume reset or host rebuild, from a password pasted out of a GitHub Environment secret — the one step in this stack most likely to be got wrong, and the one with no automated check behind it.
 
-**It stopped being hypothetical the day after this entry was written, and the case was worse than the one argued above.** On 2026-09-15, checking `pg_up` by hand during the PostgreSQL 18 upgrade found **both** hosts reporting `pg_up 0`, for an unknown period before that. The cause was not a mistyped password but `DATA_SOURCE_NAME` building a URL around one containing `#`, which discarded the host — corrected the same day by splitting the exporter's connection settings, in the pull request that also filed `give-each-stack-its-own-exporter-password`. What this entry is about survived the fix: **nothing reported the outage**, on either host, for however long it lasted. Both containers were `healthy`, both Prometheus targets were `up`, and the operator found it only by running a command this repository had documented three days earlier. That is the evidence for this entry rather than an argument for it.
+**It stopped being hypothetical the day after this entry was written, and the case was worse than the one argued above.** On 2026-09-15, checking `pg_up` by hand during the PostgreSQL 18 upgrade found **both** hosts reporting `pg_up 0`, for an unknown period before that. The cause was not a mistyped password but `DATA_SOURCE_NAME` building a URL around one containing `#`, which discarded the host — corrected the same day by splitting the exporter's connection settings. A second finding from the same reading — that both stacks held the *same* exporter password — was rotated out the same day. What this entry is about survived the fix: **nothing reported the outage**, on either host, for however long it lasted. Both containers were `healthy`, both Prometheus targets were `up`, and the operator found it only by running a command this repository had documented three days earlier. That is the evidence for this entry rather than an argument for it.
 
 **What the change owes.** An alert on `pg_up == 0` for the `postgres-exporter` job, in `platform/docker-compose.yml`'s inline `prometheus_rules` config — the sibling `prometheus_config` holds only `global`, `alerting`, `rule_files` and `scrape_configs`, and a `groups:` block added there is not where Prometheus reads rules from. Remember the `platform.config-checksum` label, since editing either block without regenerating it deploys nothing. Give it a `for:` long enough to ride out a restart of the instance, which legitimately shows `pg_up 0` while it comes up.
 
@@ -848,20 +848,6 @@ Removing it needs one of two things, and both are changes to **what the run remo
 - Removing through each of the image's repository references in turn, the way a tagged image is already removed through each of its tags. That is the shape the requirement's own *Removal SHALL NOT be forced* clause implies, and it is probably right — but it makes a digest reference something the run drops, where today the run only ever drops tags, and the pre-removal re-check that guards a re-pointed tag has no counterpart for a digest.
 
 **Neither host is known to carry such an image**, so this is not urgent. What makes it worth keeping is that the condition is now legible: when `refused` reads non-zero for this reason on a real host, this entry is what it points at.
-
-## 63. give-each-stack-its-own-exporter-password
-
-**Not blocked; recorded rather than fixed here, because closing it means rotating a secret in two GitHub Environments and only the operator can do that.** Found 2026-09-15 while reading why `pg_up` was 0 on both hosts, by the fix that split the exporter's connection settings.
-
-**Both stacks hold the same `PLATFORM_POSTGRES_EXPORTER_PASSWORD`.** The evidence is in the two exporters' own error output, read minutes apart: the parse error from the staging host and the one from the production host quote the same password prefix. Nothing was compared that should not have been — each host reported its own value and the values matched.
-
-`platform/README.md` says the opposite in as many words, in the manual role-creation step: "using a password matching whatever is stored in that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD` secret — each stack has its own instance, its own role and its own password". So this is a divergence from what this repository states, not an undecided question.
-
-**What it costs.** The exporter role is `pg_monitor` — read-only on statistics views, no table data — so a shared password is not a path to either database's contents. What it defeats is the property every other per-stack credential here has: that one leaked value reaches one host. It also makes the two roles indistinguishable when one is rotated, since the rotation that fixes one stack silently breaks the other's role until that host's role is recreated too.
-
-**What the change owes.** A fresh value generated per stack, set in each Environment, and each host's `pgexporter` role recreated to match — the order matters, since the secret reaching the host before the role is recreated leaves the exporter unable to connect, which is the state this entry was found in and which nothing alerts on (`alert-on-the-exporter-being-unable-to-read-postgres`). Worth doing in the same window as `alert-on-the-exporter-being-unable-to-read-postgres`'s alert, so the rotation is observable rather than confirmed by hand.
-
-**One value to rotate regardless of when this is taken**: the password that was live on 2026-09-15 appeared in an operator's terminal while this was diagnosed, so it is no longer only in the two Environments that hold it.
 
 ## 64. render-the-env-file-so-a-secret-survives-it
 
