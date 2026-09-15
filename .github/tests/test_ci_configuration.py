@@ -1449,6 +1449,139 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
         )
 
 
+class TestTheRoleEnumerationIsDerivedFromThePinnedManifest(
+    ScenarioTreeFixtureMixin, unittest.TestCase
+):
+    """The enumeration every check in this repository shares -- `role_names()`
+    and the `roles_with_molecule_scenarios()` built on it -- and the rule by
+    which it decides a directory under `ansible/roles/` is this repository's
+    own rather than installed Galaxy content.
+
+    Derived from the OpenSpec change `unify-the-two-role-exclusion-rules`,
+    which replaced a heuristic on the directory NAME (any name carrying a `.`)
+    with the manifest-derived exclusion the pinning checks above already used.
+
+    EVERY CASE HERE IS A FIXTURE, and that is the finding rather than a
+    preference. This repository pins one Galaxy role, `geerlingguy.docker`,
+    whose directory name is dotted AND named in the manifest -- so the two
+    rules return the same set for every directory that exists here, and a test
+    reading the real tree passes identically against either. The cases that
+    separate them cannot be built on `ROOT` at all.
+    """
+
+    def test_a_dotted_directory_the_manifest_does_not_name_is_this_repositorys_own(
+        self,
+    ) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        1. No scenario states it: the specification requires the enumeration be
+        SHARED and does not say which rule it uses, so this constrains the
+        implementation beyond what any scenario says.
+
+        The direction the replaced rule got wrong in the way that matters.
+        Content vendored under a dotted name that nobody pinned is not
+        installed Galaxy content -- it is content this repository is carrying,
+        and the pinning obligation is exactly what should reach it. The name
+        heuristic exempted it silently.
+        """
+        root = self.scratch_tree(
+            {
+                ("ours", "default"): scenario_document(PINNED_IMAGE),
+                ("vendor.theirs", "default"): scenario_document(PINNED_IMAGE),
+            }
+        )
+        self.assertEqual(
+            {"ours", "vendor.theirs"},
+            role_names(root),
+            "a dotted directory that `ansible/requirements.yml` does not name was "
+            "excluded from this repository's own roles. Nothing installed it: it is "
+            "vendored content, and exempting it from the obligations that range over "
+            "this repository's roles is what deriving the exclusion from the manifest "
+            "exists to stop",
+        )
+
+    def test_a_dotless_directory_the_manifest_names_is_not_this_repositorys_own(
+        self,
+    ) -> None:
+        """DERIVED -- as above, in the other direction.
+
+        The manifest spelling is the one
+        `test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name`
+        already uses, deliberately: the two tests are then about the same
+        resolution rather than about two inventions. A `src:`-only entry
+        resolves to a bare basename carrying no dot, so the replaced rule
+        classified a directory `ansible-galaxy` was actively reinstalling as
+        one of this repository's own.
+        """
+        root = self.scratch_tree(
+            {
+                ("ours", "default"): scenario_document(PINNED_IMAGE),
+                ("ansible-role-docker", "default"): scenario_document(PINNED_IMAGE),
+            },
+            manifest=(
+                "roles:\n"
+                "  - src: https://github.com/geerlingguy/ansible-role-docker.git,8.0.0\n"
+            ),
+        )
+        self.assertEqual(
+            {"ours"},
+            role_names(root),
+            "a directory the manifest installs to was counted as one of this "
+            "repository's own because its name carries no dot. The manifest is what "
+            "says what is installed; the shape of the name says nothing",
+        )
+
+    def test_the_enumeration_is_the_same_provisioned_or_not(self) -> None:
+        """SPECIFIED -- "so that installed Galaxy content cannot make the check
+        report one result on a provisioned developer machine and another on a
+        runner that has installed nothing" ("The Molecule Matrix Runs the Roles
+        a Pull Request Owes", openspec/specs/iac-cicd-pipeline/spec.md), read
+        over the enumeration those checks share.
+
+        THIS TEST CANNOT DISCRIMINATE between the rule this change installed
+        and the one it replaced, and it is not evidence that the change works.
+        It holds under both on any tree whose Galaxy role is dotted and pinned,
+        which is every tree either rule has been run against. It is here
+        because the property is worth asserting, not because it establishes
+        the rule -- the two tests above are what do that.
+
+        Asserting it on the real tree is impossible: that tree is provisioned
+        or it is not, never both.
+        """
+        own = {("docker", "default"): scenario_document(PINNED_IMAGE)}
+        runner = self.scratch_tree(own)
+        provisioned = self.scratch_tree(
+            {**own, ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE)}
+        )
+        self.assertEqual(
+            role_names(runner),
+            role_names(provisioned),
+            "the role enumeration returned a different set on a provisioned tree than "
+            "on one that has installed nothing",
+        )
+
+    def test_a_manifest_that_cannot_be_read_fails_the_enumeration(self) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        3: the enumeration propagates `ManifestNotUsable` rather than falling
+        back to the name heuristic, to an empty exclusion, or to the raw
+        directory listing.
+
+        Each fallback answers silently a question the file cannot answer, and
+        they fail in opposite directions -- an empty exclusion and the raw
+        listing both hold installed Galaxy content to this repository's
+        obligations, while falling back to the heuristic reinstates the rule
+        that was removed at the moment nobody is watching.
+
+        The message names the file because that is what tells an operator
+        their working tree is unprovisioned rather than their code broken.
+        """
+        root = self.scratch_tree(
+            {("docker", "default"): scenario_document(PINNED_IMAGE)}, manifest=None
+        )
+        with self.assertRaises(ManifestNotUsable) as raised:
+            role_names(root)
+        self.assertIn(GALAXY_MANIFEST, str(raised.exception))
+
+
 class TestMoleculeScenarioImagesArePinnedByDigest(
     ScenarioTreeFixtureMixin, unittest.TestCase
 ):
