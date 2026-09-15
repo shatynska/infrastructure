@@ -119,13 +119,34 @@ services:
     # major reaches the host -- README.md, "Upgrading the PostgreSQL major
     # version", is that procedure, and editing the major below without it is
     # the mistake it exists to prevent.
+    #
+    # A major can also move where the image expects its data, which is a
+    # second thing to check and not a restatement of the first: see the
+    # mount below, whose path is coupled to this tag.
     image: postgres:18.6
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # THE MOUNT POINT IS THE PARENT, NOT `data`, AND THIS IS COUPLED TO THE
+      # MAJOR ABOVE. From 18 the official image declares `VOLUME
+      # /var/lib/postgresql` and defaults `PGDATA` to
+      # /var/lib/postgresql/<major>/docker, so that an upgrade can use
+      # `pg_upgrade --link` without crossing a mount boundary
+      # (docker-library/postgres#1259). Mounted at the 17-and-earlier
+      # `/var/lib/postgresql/data`, the entrypoint refuses and the container
+      # exits 1 -- against an empty volume as much as a populated one, so a
+      # discarded volume does not avoid it.
+      #
+      # Mounting the parent is also what keeps a forgotten discard LOUD. The
+      # entrypoint's old-database detection runs only while PGDATA is its own
+      # default, and it scans /var/lib/postgresql, .../data and
+      # .../*/docker for a PG_VERSION: an earlier major's directory inside
+      # this volume is found and named, and the container refuses rather than
+      # initialising an empty cluster beside it. Pinning PGDATA back to the
+      # old path would start just as well and switch that detection off.
+      - postgres_data:/var/lib/postgresql
     networks:
       - platform_edge
       # add-platform-monitoring: a private link to postgres-exporter only

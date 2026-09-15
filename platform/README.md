@@ -49,40 +49,46 @@ A non-relational store — a Redis cache, a queue file, an uploads directory —
 
 **A major bump is an operator's window, never an ordinary pull request.** PostgreSQL refuses to start against a `PGDATA` initialised by an earlier major. It does not upgrade in place and it does not damage the directory — it exits. So a bump merged on its own reaches the host, `docker compose up -d --wait` blocks and then fails, the deploy job goes red, and the shared instance is down for every application on that host until someone intervenes. Loud, and not data loss.
 
+**A major can also move where the image expects its data, and that is a second thing to check rather than a restatement of the first.** From 18 the official image declares `VOLUME /var/lib/postgresql` and defaults `PGDATA` to `/var/lib/postgresql/<major>/docker`, so the 16-to-18 bump had to move the mount point with it — a volume mounted at the older `/var/lib/postgresql/data` makes 18 exit 1 whether it holds an earlier cluster, holds nothing, or was recreated empty a second earlier. **Read the image's `PGDATA` and `VOLUME` before planning the window**, and ship any mount change in the same pull request as the pin, because discarding the volume does not work around this one:
+
+    docker image inspect postgres:<new major>.<minor> --format '{{json .Config.Env}} {{json .Config.Volumes}}'
+
 **What makes the upgrade cheap here is the scoping above.** Nothing in this instance is durable — that is what *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) between them guarantee — so the upgrade path is "discard the volume and let the instance re-initialise" rather than a `pg_upgrade` or a dump and restore. What it costs instead is re-provisioning, because discarding the volume discards every role and database in it.
 
 **Do this first, before anything else.** Read what the instance holds and confirm that every database in it is one whose loss the party that owns it accepts. Two answers pass: data that is non-durable under the requirements above, and data a recorded classification admits as tolerable to lose. Anything else is a breach of those requirements, and it is the breach that is the thing to fix — not the upgrade.
 
 Where a classification is what admits the data, tell the operator before the window rather than after. On the production host a database is already provisioned for `commerce-ops` and stands empty, reserved for a cutover that waits on a specification change classifying that application's production data as tolerable to lose; from the moment that lands and the data moves in, discarding production's volume deletes it for good.
 
-Then, **per host**, in this order. Each step is run from a session on that host except where it says otherwise.
+Then, **per host**, in this order, and **take the unreviewed stack first** — step 3 explains why that ordering is free. A stack whose deploy waits for a reviewer is the one whose volume you discard last, after you have watched the instance come up healthy on the new major somewhere else. That is the only protection against an image-level incompatibility like the one above: found on staging it costs a re-plan, found on production it is found with production's data already gone.
 
-The commands address the containers and the volume directly rather than through `docker compose`, and that is deliberate: `/opt/platform` is `deploy:deploy` mode `0750`, so an operator account cannot read the Compose file that `docker compose` would need, while membership of the `docker` group — which an operator account here has — is enough for every command below.
+Each step says where it runs. The on-host commands address the containers and the volume directly rather than through `docker compose`, and that is deliberate: `/opt/platform` is `deploy:deploy` mode `0750` and `ansible/roles/ops_user` grants an operator account the `docker` group and never `deploy`, so it cannot read the Compose file `docker compose` would need — and `docker` group membership is enough for every command below.
 
-1. **Tell the applications that use the instance**, and agree the window with whoever runs them. `\l` in the instance lists who they are:
+1. **On the host — tell the applications that use the instance**, and agree the window with whoever runs them. `\l` in the instance lists who they are:
 
        ssh <host>
        docker exec platform-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "\l"'
 
    The `$POSTGRES_USER` is expanded **inside** the container deliberately: that variable is the instance's superuser name from this stack's own `.env`, and it exists in the container's environment and not in the shell you are typing into. Expanded outside, it is empty and `psql` tries to connect as your own account.
 
-2. **Discard the database and its volume.** Only the `postgres` container — Traefik, Grafana and the rest keep serving, and `postgres-exporter` goes red for the length of the window, which is expected. Nothing else mounts this volume, so removing that one container is what frees it:
+2. **On the host — discard the database and its volume.** Only the `postgres` container — Traefik, Grafana and the rest keep serving, and `postgres-exporter` goes red for the length of the window, which is expected. Nothing else mounts this volume, so removing that one container is what frees it:
 
        docker rm -f platform-postgres-1
        docker volume rm platform_postgres_data
 
    **Check** `docker volume ls --filter name=platform_postgres_data` lists no volume. **On the production host, `commerce-ops-postgres-1` and `commerce-ops_commerce_ops_pgdata` are not this instance** — that is an application's own container, holding durable data, and nothing here touches it.
 
-3. **Let the deploy carry the new major to that host.** Merging the pull request that changes the pin starts one `platform-deploy.yml` run covering every opted-in stack; a stack whose GitHub Environment has no reviewer deploys immediately, and one that has a reviewer waits in that run for an approval. So the merge is what reaches an unreviewed stack, and the approval is what reaches a reviewed one — which is why step 2 comes before the merge on the first and before the approval on the second. A host whose window falls after that run is over is redeployed on its own, by a `workflow_dispatch` of that workflow from the default branch naming its stack.
+3. **From a workstation — let the deploy carry the new major to that host.** Merging the pull request that changes the pin starts one `platform-deploy.yml` run covering every opted-in stack; a stack whose GitHub Environment has no reviewer deploys immediately, and one that has a reviewer waits in that run for an approval. So the merge is what reaches an unreviewed stack, and the approval is what reaches a reviewed one — which is why step 2 comes before the merge on the first and before the approval on the second, and why the unreviewed stack goes first: its whole window can complete while the reviewed stack's deploy is still sitting unapproved and its data still on disk. A host whose window falls after that run is over is redeployed on its own, by a `workflow_dispatch` of that workflow from the default branch naming its stack.
 
-   **Check** the instance comes back on the new major:
+   **Check**, on the host, that the instance came back on the new major. `docker ps` without `-a` is not the check: after a failed upgrade the container is precisely not running, and the filter prints an empty table and exits 0, which reads like output you have not scrolled to.
 
-       docker ps --filter name=platform-postgres-1 --format '{{.Image}}\t{{.Status}}'
+       docker ps -a --filter name=platform-postgres-1 --format '{{.Image}}\t{{.Status}}'
        docker exec platform-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "select version()"'
 
-4. **Recreate postgres-exporter's role.** It lives in the volume that was just discarded, so it is gone — run "One manual step per stack: postgres-exporter's monitoring role" below, with that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD`. **Check** `MetricsTargetDown` stops firing for the `postgres-exporter` job.
+   If it exited, `docker logs platform-postgres-1` says why, and the entrypoint's refusals name what they found. **Stop here rather than continuing to the next host.**
 
-5. **Re-provision every application database, then redeploy that application.** Each is gone with the volume, which each application's classification tolerates and none can start without. Run the recipe in `docs/onboard-an-application.md` for that host, per application, with `rotate=yes` — the password is generated fresh and delivered to that application's Environment, so only that application's **next deploy** picks it up. Trigger that deploy from the application's own repository; nothing here can. **Check** per application that it comes up and that `\l` in the instance lists its database owned by its own role.
+4. **On the host — recreate postgres-exporter's role.** It lives in the volume that was just discarded, so it is gone — run "One manual step per stack: postgres-exporter's monitoring role" below, with that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD`. **Check** `MetricsTargetDown` stops firing for the `postgres-exporter` job.
+
+5. **From a workstation — re-provision every application database, then redeploy that application.** Each is gone with the volume, which each application's classification tolerates and none can start without. Run the recipe in `docs/onboard-an-application.md` for that host, per application, with `rotate=yes`. **That block is a workstation paste, not an on-host one** — it calls `gh` and then reaches the host over `ssh` itself, so pasted into a session on the host it aborts at the first `gh` under `set -eu`, having changed nothing. The password is generated fresh and delivered to that application's Environment, so only that application's **next deploy** picks it up. Trigger that deploy from the application's own repository; nothing here can. **Check** per application that it comes up and that `\l` in the instance lists its database owned by its own role.
 
 **Dependabot will propose the next major, and closing that proposal is the design working.** No `ignore` stanza is configured for this image, deliberately: an `ignore` is permanent and silent, and would suppress the only signal this repository gets that its PostgreSQL major has reached end of life. Closing an individual pull request keeps the signal and costs nothing — so expect a recurring, correctly-refused pull request rather than noise. `cover-platform-images-with-dependabot`'s design.md, decision 3, is where that was argued.
 
