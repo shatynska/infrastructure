@@ -197,7 +197,7 @@ The bootstrap is done. `main-production` is provisioned from `terraform/stacks/m
 
 **Two servers now run**, one per stack and each named for its stack: `main-production` on a `cx33` (4 vCPU / 8 GB) and `main-staging` on a `cx23` (2 vCPU), each with its own 10 GB volume named `main`, in separate Hetzner projects. Two bills, two hosts to patch and converge, two tailnet members to keep track of — staging costs roughly half what production does and is not free in either money or attention.
 
-What staging is *not*, yet: configured. It carries no Ansible group variables, no platform stack and no DNS records, so it is a provisioned host rather than a place applications deploy to. `docs/backlog.md` records that half.
+**Staging is configured too**, which is newer than the paragraphs above it and replaces a sentence here that said the opposite: `ansible/inventory/group_vars/staging.yml` carries its group variables, `ansible/playbooks/host-baseline.yml` has converged it, `platform/`'s Compose stack runs on it, and `main-staging.fincci.bike` and `*.main-staging.fincci.bike` resolve to it — `docs/bootstrap-a-new-host.md` §4.4 transcribes every record this repository's hosts serve. So it is a host applications deploy onto rather than a provisioned one waiting to become one: `platform` reaches it through the same `platform-deploy.yml` production uses, and `commerce-ops` is authorised on it by a `deploy_apps` entry whose first deploy is still outstanding in that application's own repository.
 
 Adding the stack after it changed **no file under `.github/workflows/`** — `pr-validation.yml`, `apply.yml` and `drift.yml` discover `terraform/stacks/*/` and run per stack. What adding one does still take is everything outside those files:
 

@@ -168,11 +168,15 @@
     # required inputs in a second place that nothing keeps in step with the
     # roles, buying an earlier refusal at the cost of a new drift class. Do not
     # read the guard play above as this fix: it is about NO host resolving at
-    # all, which is upstream of every role. Reachable on purpose today --
-    # staging's group_vars leaves `deploy_apps` unset deliberately. Revisit when
-    # a partially-converged host actually costs something, or when a third
-    # requirement comes to rest on the play-scope half; two do already, the
-    # other being *Platform Data Volume Is Mounted at a Fixed Host Path*.
+    # all, which is upstream of every role. NO LIVE CASE TODAY -- this sentence
+    # used to name staging, whose group_vars left `deploy_apps` unset
+    # deliberately; it is supplied there now, and every environment this
+    # repository has supplies it. The next case is the next environment's
+    # group_vars written from scratch, which is where that file's own comment
+    # now sends whoever writes one. Revisit when a partially-converged host
+    # actually costs something, or when a third requirement comes to rest on
+    # the play-scope half; two do already, the other being *Platform Data
+    # Volume Is Mounted at a Fixed Host Path*.
     # Running after all five means this role
     # never writes 4 GiB and swaps it on ahead of a refusal that was going to
     # happen anyway. An earlier placement did exactly that for `ops_user`'s and

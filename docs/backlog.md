@@ -196,24 +196,6 @@ The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves t
 
 **Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
 
-## 18. refresh-staging-group-vars-banner
-
-**The name is now narrower than the entry.** It spans three files rather than the one it is named for, and it keeps the name anyway: an archived change's proposal cites it, and a backlog name is the citation this repository's own rule says is stable. Read the name as where this started, not as its scope.
-
-Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, which sends a reader to that file for evidence and meets a banner saying the opposite of what the file now is.
-
-`ansible/inventory/group_vars/staging.yml` opens its lower half with
-
-    # THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET CONVERGED.
-
-and closes it with "this file's state is PENDING the operator, not finished. Until it is completed there is no converged staging host, no prune timer and no `staging-server-prune-host-images` check." (That check is `main-staging-prune-host-images` since `rename-the-stacks-and-their-resources` renamed the server; the quotation is left as the file wrote it.) All three values it lists as missing were supplied in PR #130, and the host converged the same evening -- `configure-the-staging-host`'s archived task list records the run and the checks that followed it.
-
-The banner was correct when written and is the kind of text that goes stale silently: nothing fails, and a reader who trusts it draws a wrong conclusion about the environment.
-
-**Two more of the same class, found by `onboard-commerce-ops-to-staging` and left here rather than fixed in passing.** `README.md`'s "What staging is *not*, yet: configured. It carries no Ansible group variables, no platform stack and no DNS records" — two of those three have been false since PR #130 and the platform deploy, the third since the operator created staging's DNS records, which `expose-staging-on-the-web` recorded in `docs/bootstrap-a-new-host.md` §4.4, and it is the statement of staging's status a newcomer reads first. And `ansible/playbooks/host-baseline.yml`'s "Reachable on purpose today — staging's `group_vars` leaves `deploy_apps` unset deliberately", which is the live-case justification for declining the play-scope required-input guard, so a reviewer weighing that gap reads evidence that no longer exists. Take all three together: they are one sweep, and each is a sentence saying staging is less finished than it is. What replaces it is not just deletion — the paragraphs under it explain *which* absence refuses a converge and which is tolerated, and that reasoning is worth keeping in some form for whoever writes the next environment's `group_vars` from scratch.
-
-Not blocked, and small. It touches one file and no mechanism.
-
 ## 19. move-commerce-ops-durable-data-to-supabase
 
 **Not blocked, and its middle step is not this repository's to do — recorded because `openspec/specs/iac-safety-hardening/spec.md` names it as a divergence and nothing else tracks it.**
@@ -823,17 +805,6 @@ Not blocked. It touches `docs/` and no mechanism.
 **Where the fix has to go is the inventory's group layout, not a filename.** The candidates, none costed here: `deploy_apps` moving to a per-stack or per-host vars file; a group per tenant-environment pair rather than per environment; or the entry gaining a host selector the role honours. Each changes what a converge reads, so each wants its own Molecule coverage, and the choice interacts with what `AGENTS.md` records about a source being named for its stack and a group for its axis.
 
 **Nothing reports it, which is the part worth keeping in view.** A second tenant would be onboarded by following `docs/onboard-an-application.md`, which would produce a key per environment as instructed, and the over-authorisation would be silent: both hosts would accept the key and both deploys would work. Take this before a second tenant exists rather than after, since afterwards the remedy is a re-key rather than a layout.
-
-## 59. cover-the-live-key-names-in-the-private-key-block
-
-**Not blocked, small, and it predates the change that measured it.** Recorded 2026-09-15 by `record-how-an-application-is-onboarded`, which corrected the block's *comment* and deliberately left its patterns alone: widening one is a behaviour change rather than a correction, and it wanted a decision of its own.
-
-`.gitignore`'s private-key block is the layer that catches a passphrase-less key generated into the checkout without depending on anything being installed — gitleaks is a pre-commit hook and the hazard exists before `pre-commit install` has run. Its root-anchored patterns do not match the names this repository's own documents now tell an operator to generate:
-
-- `/*-deploy` was written for the retired `<company>-<app>-deploy` spelling. An application deploy key is `<company>-<app>-<environment>` — `shatynska-commerce-ops-staging` — and matches **nothing** in the block. It is also the most frequently generated key of the set, one per application per environment.
-- `/*-platform-staging` matches `<company>-platform-staging` and nothing matches `<company>-platform-production`. One environment's platform key is covered and the other is not, which is harder to notice than neither being covered.
-
-**What the change owes is a decision rather than a wider glob.** The block's own comment explains why every pattern is anchored to the root and why none may be unanchored: `*-ops` unanchored would swallow a directory named `commerce-ops`. A pattern per key purpose keeps that property and goes stale again at the next purpose; a broader one risks ignoring a real file. Worth pairing with the question of whether `.github/tests` should assert that every `ssh-keygen -f` target either document prints is matched by the block — a static read of two committed files and the thing that would keep this in step, which is what neither the comment nor a pattern does today.
 
 ## 60. alert-on-the-exporter-being-unable-to-read-postgres
 
