@@ -28,9 +28,6 @@ module "server" {
 
   # delete_protection = true is a prod-specific choice, not the module
   # default consumers should inherit blindly. See design.md Decision 7.
-  # (Was temporarily false to allow the prod-server-lifecycle-toggle
-  # change's decommission — restored now that the server is being
-  # recreated.)
   delete_protection = true
   backups           = true
 }

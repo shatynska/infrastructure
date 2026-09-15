@@ -6,30 +6,28 @@
 #   ansible-galaxy collection install -r ansible/requirements.yml
 #   ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
 # Two commands, and `-p` on the second — see README.md's local setup step 5.
+# Every pin below was confirmed to resolve against the Galaxy API on
+# 2026-09-08. Four of them used to carry a caveat saying the version had been
+# chosen without network access and should be confirmed; that confirmation has
+# happened, and the caveat was deleted on 2026-09-15 rather than left to invite
+# the next reader to redo it. Three are behind by at least a major version --
+# `docs/backlog.md`'s `catch-up-the-drifted-galaxy-pins` is that migration, and
+# it is a migration rather than a bump, which is why the pins still stand here.
 collections:
   - name: hetzner.hcloud
     version: "7.0.0"
-  # Needed by the hardening role for community.general.ufw. Pinned per
-  # convention, but this exact version was chosen without the ability to
-  # query Galaxy from this environment (no network access) -- confirm it
-  # resolves, or bump to whichever exact version does, before relying on
-  # this file in CI or locally. See bootstrap-ansible-host-baseline's
-  # test-manifest.md for the same caveat on the pinned Molecule versions.
+  # Needed by the hardening role for community.general.ufw.
   - name: community.general
     version: "9.5.0"
   # Needed by deploy_user for ansible.posix.authorized_key's key_options
   # (per-key restrict,command= forced-command entries -- add-per-app-
   # deploy-keys), and by swap for ansible.posix.mount and ansible.posix.sysctl
   # (the boot-time swap record and the swap-tendency file -- the change
-  # bound-host-log-growth-and-add-swap). Pinned per convention; chosen
-  # without the ability to query Galaxy from this environment (no network
-  # access) -- confirm it resolves, or bump to whichever exact version does,
-  # before relying on this file in CI or locally.
+  # bound-host-log-growth-and-add-swap).
   - name: ansible.posix
     version: "1.6.2"
   # Needed by deploy_user for community.docker.docker_login (GHCR pull
-  # authentication -- add-per-app-deploy-keys). Same unverified-pin caveat
-  # as ansible.posix above.
+  # authentication -- add-per-app-deploy-keys).
   - name: community.docker
     version: "4.1.0"
 

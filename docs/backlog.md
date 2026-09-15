@@ -683,11 +683,10 @@ The rule makes the assertion crisp rather than heuristic: under "one line per pa
 
 Not blocked. One new module in `.github/tests`, whose constraints it fits: a static read of committed files, no network, no credential, no container.
 
-## 43. three-deferred-ci-items
+## 43. two-deferred-ci-items
 
-All three noticed during `close-ci-verification-gaps`, none of them a verification gap. The entry was recorded naming two and a third was appended without the name being corrected; the bullets are what it covers.
+Noticed during `close-ci-verification-gaps`, neither a verification gap. A third was here until 2026-09-15, when the operator took it as a fix: `.github/workflows/pre-commit-autoupdate.yml` installed `pre-commit` with a bare `pip install` and now installs from `.github/requirements-ci.txt`, which pins it. The reasoning moved into that manifest's own header, where the next person to read the pin will meet it — the point being narrower than ordinary pinning, since an autoupdate resolving a different `pre-commit` could rewrite `.pre-commit-config.yaml` differently from what any check had exercised.
 
-- **`.github/workflows/pre-commit-autoupdate.yml` installs `pre-commit` unpinned** (`pip install pre-commit`). That change created `.github/requirements-ci.txt`, which pins it; bringing this workflow onto the same file is a one-line fix in a workflow that change did not otherwise touch.
 - **The destroy-policy gate's inspection logic is inline workflow shell.** Moving it into a version-controlled script with executable fixtures would make the highest-consequence logic in this repository reviewable and testable as code — `design.md` Decision 5 of that change names this as considered and deferred on merit-vs-scope grounds, not as rejected. Four fixtures already exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are described in that change's `tasks.md` 1.1; the structural tests in `.github/tests/test_ci_configuration.py` currently assert the routes are closed, not that each is reached.
 - **`actionlint` is named as a verification means but nothing installs it.** Three tasks in `close-ci-verification-gaps` cite it, and it was run manually from a scratch install. Adding it to `.pre-commit-config.yaml` would close that permanently — but it exits non-zero on two pre-existing `SC2016:info` findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the job-summary step — both single-quoted literal markdown in an `echo`, and both intentional). So landing the hook means dispositioning those two first, by fixing or ignoring them. That is the same trap this change refused to lay for the next person when `ansible-lint` failed on pre-existing violations, and it wants its own decision rather than being folded in.
 
@@ -717,7 +716,7 @@ This is the most drifted manifest in the repository, and it is the one no tool w
 
 Four majors is a migration rather than a version bump, which is why this is an entry and not a rider on anything. The collections are used by the hardening role (`community.general.ufw`), `deploy_user` (`ansible.posix.authorized_key`'s `key_options`, `community.docker.docker_login`) and the dynamic inventory. Molecule is the check that would catch a break, and `molecule test --all` per role is the gate this change has to pass -- read the SCENARIO RECAP rather than the exit code, per the note in `AGENTS.md`.
 
-**Also delete the stale caveat while here.** Four of the five pins carry a comment saying the version "was chosen without the ability to query Galaxy from this environment (no network access) -- confirm it resolves". All five were confirmed against the Galaxy API on 2026-09-08 and every one resolves. The comment is now false where it is not merely stale, and it invites the next reader to re-do work that has been done.
+**The stale caveat that used to sit here was taken as a fix on 2026-09-15.** Four of the five pins carried a comment saying the version "was chosen without the ability to query Galaxy from this environment (no network access) -- confirm it resolves", when all five had been confirmed against the Galaxy API on 2026-09-08 and every one resolved. Those four comments are gone and the confirmation is recorded in `ansible/requirements.yml`'s own header, which is where a reader meets the pins. What is left here is the migration, which is not a comment edit.
 
 ## 46. cover-the-unwatched-manifests-and-settle-the-watcher
 
@@ -823,8 +822,9 @@ Source comments in this repository currently mix three kinds of text with no way
 
 Only the first kind survives archiving. Concrete instances of the other two (the `platform/docker-compose.yml` header, formerly listed first, was removed by `fix-volume-discovery-and-consistency`, which was editing that file anyway):
 
-- `terraform/stacks/main-production/ssh_key.tf` — a `moved` block that documents its own removal condition ("Safe to delete once the next apply has run") from a change archived 2026-08-18.
-- `terraform/stacks/main-production/main.tf` — explains a value the file no longer holds.
+**Both instances this entry named were taken as fixes on 2026-09-15**, and are recorded here rather than deleted with them, because what is left of the entry is the general pass and a reader should know the examples are spent. `terraform/stacks/main-production/ssh_key.tf` carried a `moved` block whose own comment gave its removal condition — "Safe to delete once the next apply has run", from a change archived 2026-08-18, with many applies since — so the block and its comment went together; a `moved` block is read at plan time only, and once the move is in state its removal plans as no change. `terraform/stacks/main-production/main.tf` carried a parenthetical explaining that `delete_protection` "was temporarily false" during a decommission, which is history git already owns; the sentence stating why the value is prod-specific stayed.
+
+What remains is the pass itself, which needs instances of its own found rather than these two.
 
 The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-13; it was 48 against 90 when this entry was written, so the ratio has worsened rather than held. This is a style question with a real maintenance cost, not a cosmetic one.
 
