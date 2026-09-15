@@ -1222,6 +1222,14 @@
         echo "CARRIES-MORE-THAN-THE-IDENTITY $(printf '%s\n' "$named" \
           | awk -v a="$full" -v b="$short12" -v p="$prefix" -v q="$fallback" '
               function drop(s, lit,   i) {
+                # An empty literal would HANG rather than fail: index(s, "")
+                # is 1, the reconstruction returns s unchanged, and the loop
+                # never advances. Both callers pass hardcoded non-empty shell
+                # constants, so this cannot fire today -- it is here because a
+                # hung Molecule run is a far worse failure than a red one, and
+                # a later author sourcing either literal from a variable would
+                # get the red.
+                if (lit == "") return s
                 i = index(s, lit)
                 while (i > 0) {
                   s = substr(s, 1, i - 1) substr(s, i + length(lit))

@@ -46,7 +46,7 @@ This comes first and is not the implementer's to write. The change carries speci
 - [x] 5.3 Run `python3 -m unittest discover --start-directory .github/tests` from the repository root and confirm it is green — this change asserts nothing there, and the point is that it broke nothing
 - [x] 5.4 Run `pre-commit run --all-files` and confirm it is clean
 - [x] 5.5 Run `openspec validate --all` and confirm the change resolves
-- [ ] 5.6 Commit the implementation, then dispatch the change's code review over the committed diff and act on its findings
+- [x] 5.6 Commit the implementation, then dispatch the change's code review over the committed diff and act on its findings
 
 ## 6. Ship
 
