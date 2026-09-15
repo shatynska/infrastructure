@@ -12939,9 +12939,22 @@ def postgres_pinned_major(path: Path | None = None) -> int:
     image = images[POSTGRES_SERVICE]
     if image is None:
         raise AssertionError(f"the {POSTGRES_SERVICE!r} service declares no image:")
-    _, tag, _ = parse_image_reference(image)
+    _, tag, digest = parse_image_reference(image)
     major, _, _ = tag.partition(".")
     if not major.isdigit():
+        # A digest pin is a legitimate form -- `image_names_a_release` in this
+        # same suite accepts one -- and it is named separately here so the
+        # failure reads as this check's limitation rather than as a broken
+        # stack. Reading a major out of a digest means resolving it against a
+        # registry, which this suite may not do.
+        if digest and not tag:
+            raise AssertionError(
+                f"the {POSTGRES_SERVICE!r} service is pinned by digest ({image!r}). "
+                f"That is a valid pin, but the major cannot be read from it without a "
+                f"registry call, which this suite does not make -- so the mount-to-major "
+                f"coupling cannot be checked and is NOT being checked. Pin by tag as "
+                f"well, or extend this check, rather than leaving it silently unenforced"
+            )
         raise AssertionError(
             f"the {POSTGRES_SERVICE!r} service names {image!r}, whose tag does not "
             f"begin with a major version, so the mount it requires cannot be derived"
@@ -13111,6 +13124,19 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         offenders = postgres_data_mount_offences(fixture)
         self.assertEqual(1, len(offenders), offenders)
         self.assertIn("mounts no", offenders[0])
+
+    def test_a_digest_pin_is_refused_as_this_checks_own_limitation(self) -> None:
+        """FALSIFIED -- a digest pin passes `image_names_a_release`, so without
+        this the two checks disagree about a legitimate form and the operator
+        reads a limitation of this one as a broken stack."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres@sha256:" + "0" * 64 + "\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        with self.assertRaises(AssertionError) as raised:
+            postgres_data_mount_offences(fixture)
+        self.assertIn("pinned by digest", str(raised.exception))
+        self.assertIn("NOT being checked", str(raised.exception))
 
     def test_an_unreadable_major_fails_rather_than_passing(self) -> None:
         """FALSIFIED -- an image whose tag names no major must raise, not
