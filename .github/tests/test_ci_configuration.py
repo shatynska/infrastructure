@@ -13280,6 +13280,10 @@ SECRET_TOKENS = frozenset(
 # lookbehind keeps it out.
 INTERPOLATION = re.compile(r"(?<!\$)\$(?:\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|([A-Za-z_][A-Za-z0-9_]*))")
 URL_SHAPED = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+# A scheme-less authority followed by a path: `host/…` or `host:5432/…`. What
+# `DATA_SOURCE_URI` itself is, and deliberately not a leading `/`, so an
+# ordinary filesystem path is not read as a URL.
+AUTHORITY_PATH = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]*(?::\d+)?/")
 # The characters that carry structure in a URL. A secret touching one of these
 # can move a boundary; a secret with whitespace either side of it cannot.
 # `#` is in the set because it is the character this whole check exists for --
@@ -13382,7 +13386,15 @@ def _scan(path, note_secret, note_offence) -> None:
             # content-dependent in the same way as the rest -- a webhook URL
             # ending in a query string puts that `/extra` inside the query.
             appended = before == "" and after[:1] in frozenset("/?#&")
-            if not (userinfo or query or appended):
+            # A path segment of a scheme-less authority: `host[:port]/…/<secret>`.
+            # DATA_SOURCE_URI is scheme-less by design, so this is inside the
+            # shape this check claims to cover. Anchored on a host-looking
+            # authority so an ordinary filesystem path -- `/etc/${THING}/x` --
+            # is not swept in.
+            path = (
+                before.endswith("/") or after.startswith("/")
+            ) and AUTHORITY_PATH.match(token) is not None
+            if not (userinfo or query or appended or path):
                 continue
             note_offence(offence(name, where))
 
@@ -13409,6 +13421,19 @@ def _scan(path, note_secret, note_offence) -> None:
         # `--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}`. A
         # check reading `environment:` alone would call the file clean while
         # the same defect sat one key away.
+        # `healthcheck.test` is included because this stack's healthchecks are
+        # the only other place it already writes URLs -- postgres-exporter's own
+        # names `http://localhost:9187/metrics` -- which makes it the likeliest
+        # place a credentialed URL would next be written.
+        healthcheck = definition.get("healthcheck")
+        if isinstance(healthcheck, dict):
+            test = healthcheck.get("test")
+            if isinstance(test, str):
+                inspect(f"service {name}, healthcheck.test", test)
+            elif isinstance(test, list):
+                for index, entry in enumerate(test):
+                    inspect(f"service {name}, healthcheck.test[{index}]", str(entry))
+
         for key in ("command", "entrypoint", "labels"):
             block = definition.get(key)
             if isinstance(block, str):
@@ -13644,9 +13669,18 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
             secret_env_names(unknown)
         self.assertIn("does reference repository secrets", str(raised.exception))
 
-    def test_the_quoted_rendering_entry_62_proposes_is_read(self) -> None:
-        """DERIVED -- the converse, so the widened pattern is known to accept
-        the shape that is expected to land rather than merely to fail loudly."""
+    def test_a_quoted_rendering_is_still_read(self) -> None:
+        """DERIVED -- the converse, so the widened pattern is known to accept a
+        differently-quoted rendering rather than merely to fail loudly.
+
+        THIS SPELLING IS NOT A RECOMMENDATION. Quoting inside the double-quoted
+        word does not fix what `docs/backlog.md`
+        `render-the-env-file-so-a-secret-survives-it` is about: the secret is
+        substituted into the script as raw text, so bash has already expanded
+        it -- `ab$c#d` renders as `'ab#d'`, measured. That entry's remedy is to
+        keep the secret out of a shell word entirely, via the step's `env:`.
+        What is asserted here is only that this pattern still reads a name when
+        the rendering changes shape."""
         directory = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, directory, True)
         quoted = directory / "platform-deploy.yml"
@@ -13656,6 +13690,36 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(frozenset({"POSTGRES_PASSWORD"}), secret_env_names(quoted))
+
+    def test_a_healthcheck_is_read(self) -> None:
+        """FALSIFIED -- healthchecks are the only other place this stack
+        already writes URLs, so a credentialed one would most likely appear
+        there next."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    healthcheck:\n"
+            '      test: ["CMD", "wget", "http://u:${POSTGRES_EXPORTER_PASSWORD}'
+            '@h:9187/m"]\n'
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_secret_in_a_scheme_less_path_is_reported(self) -> None:
+        """FALSIFIED -- DATA_SOURCE_URI is scheme-less by design, so a secret
+        in one of its path segments carries no `://`, no `@` and no `?`."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            "      DATA_SOURCE_URI: example.test/${POSTGRES_EXPORTER_PASSWORD}/x\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_filesystem_path_is_not_a_url(self) -> None:
+        """DERIVED -- the converse of the arm above: an absolute path is not an
+        authority, and reporting one would be the noise that gets a check
+        widened away."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            "      STORE: /var/lib/${DB_PASSWORD}/data\n"
+        )
+        self.assertEqual([], secrets_interpolated_into_urls(fixture))
 
     def test_a_secret_in_a_query_parameter_is_reported(self) -> None:
         """FALSIFIED -- the shipped DATA_SOURCE_URI already ends in a query
