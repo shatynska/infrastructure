@@ -885,18 +885,6 @@ Nothing fails: the service starts with the wrong credential, and for postgres-ex
 
 **And it must not be able to pass having read nothing.** Seven such interpolations exist today; assert a floor, or moving them into `env_file:` satisfies the check silently.
 
-## 66. say-which-stage-the-staging-prune-failure-belongs-to
-
-**Not blocked, small, and it misled a reader on the day it was found.** Recorded 2026-09-15 by `report-refused-removals-in-the-host-prune`, whose own confirmation step predicted the wrong result from it.
-
-`docs/bootstrap-a-new-host.md` §6.5 is headed *"Staging's prune fails, and that is the expected state"* and opens "On staging, the run above will not say `considered N, removed M, refused R`. It will report that the run was **abandoned** because the keep set is empty". Read as a stage-ordered bootstrap step it is correct and stays correct: a host that has not yet reached stage 7 has nothing deployed, so its keep set is empty and its prune abandons. Read as a statement about **staging**, which is what its heading and its first three words invite, it has been false since 2026-09-13, when `deploy-the-platform-stack-per-environment` put the platform stack on that host. Staging's prune has completed ever since — `considered 8, removed 0` that same evening, `considered 11, removed 2, refused 0` on 2026-09-15.
-
-The section is internally coherent: it goes on to say the check "does not go green by itself when the stack arrives" and shows the transition. The defect is only that it is written about a **named host** rather than about a **stage**, and the named host has moved on. Every later reader consulting it about staging gets an answer that was true once.
-
-**What the change owes** is a rewrite in terms of the stage rather than the tenant — a host that has not yet had the platform stack deployed to it — keeping the transition block, which is the useful part. Worth checking at the same time whether `main-staging-prune-host-images` at the observer still carries a description written when its red state was expected, since that description has the same shape and the same staleness.
-
-Small, but it is the kind of staleness nothing detects: the text was correct when written, is correct as a procedure, and is wrong only as a claim about the host it names.
-
 ## 61. make-a-shared-instance-reset-visible-to-its-applications
 
 **Not blocked. Recorded 2026-09-15 from an incident, by the session that triaged it, and not folded into entry 54 because it is the half of the problem that survives entry 54 being built.**
