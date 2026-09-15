@@ -1123,7 +1123,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         "terraform {{\n"
         "  # the {workspace} workspace, named in a comment\n"
         "  cloud {{\n"
-        '    organization = "shatynska"\n'
+        '    organization = "company"\n'
         "\n"
         "    workspaces {{\n"
         '      name = "{workspace}"\n'

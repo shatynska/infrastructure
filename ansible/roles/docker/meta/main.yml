@@ -17,9 +17,9 @@
 # role, not a defect in the new Molecule, so it is fixed here rather than by
 # reconsidering the pin.
 galaxy_info:
-  namespace: shatynska
+  namespace: company
   role_name: docker
-  author: shatynska
+  author: company
   description: >-
     Installs the container runtime by depending on the pinned external
     geerlingguy.docker role.

@@ -7,7 +7,7 @@
 # `group_vars/all.yml`: a scenario reading the real inventory would assert the
 # value this repository happens to hold, and the requirement is about the name
 # being DERIVED from that variable, not about its value. `acme` is deliberately
-# not `shatynska` for the same reason.
+# not the value this repository holds, for the same reason.
 #
 # THE LENGTH GUARD BELOW IS A RIG CHECK, NOT AN ASSERTION ABOUT THE ROLE.
 # `inventory_hostname` under Molecule is this scenario's instance name, which

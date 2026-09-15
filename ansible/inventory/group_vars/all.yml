@@ -10,7 +10,7 @@
 #
 # WHERE IT IS READ, and why the host ends up with two names rather than one:
 # the `hostname` role sets the host's own name to `{{ company }}-{{
-# inventory_hostname }}` -- `shatynska-main-production` -- while the name the
+# inventory_hostname }}` -- `<company>-main-production` -- while the name the
 # host reports to the tailnet stays `{{ inventory_hostname }}` alone. That
 # divergence is the naming rule doing its job. `inventory_hostname` lives
 # inside a repository belonging to one company; the host's own name is read on

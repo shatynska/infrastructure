@@ -12,7 +12,7 @@ Cloud-init sets a host's name once, at creation, from the name the provisioning 
 
 | Name | Value | Set by |
 |---|---|---|
-| The host's own name | `shatynska-main-production` | this role |
+| The host's own name | `<company>-main-production` | this role |
 | The name it reports to the tailnet | `main-production` | the `tailscale` role's pin |
 | The tailnet **machine** name | `main-production` | the Tailscale interface — nothing in this repository |
 

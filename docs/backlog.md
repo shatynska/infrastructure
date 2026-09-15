@@ -767,7 +767,7 @@ Not blocked.
 
 ## 56. record-the-hostname-scheme
 
-**Recorded 2026-09-14 by `expose-staging-on-the-web`, which wrote down the DNS the scheme produces and not the scheme.** The public names this repository's hosts serve follow `<service>.<server>.<base domain>` — `commerce-ops.main-production.fincci.bike`, `commerce-ops.main-staging.fincci.bike` — resolved by one wildcard `A` record per server, with a short alias such as `ops.fincci.bike` as a record of its own. The rule was decided in the `commerce-ops` repository, whose `deploy-commerce-ops-to-staging` handoff names `docs/naming-conventions.md` here as its home. That file names servers, stacks, keys and the OS hostname, and not the public names under them.
+**Recorded 2026-09-14 by `expose-staging-on-the-web`, which wrote down the DNS the scheme produces and not the scheme.** The public names this repository's hosts serve follow `<service>.<server>.BASE_DOMAIN` — `<app>.main-production.BASE_DOMAIN`, `<app>.main-staging.BASE_DOMAIN` — resolved by one wildcard `A` record per server, with a short alias directly under `BASE_DOMAIN` as a record of its own. The rule was decided in the `commerce-ops` repository, whose `deploy-commerce-ops-to-staging` handoff names `docs/naming-conventions.md` here as its home. That file names servers, stacks, keys and the OS hostname, and not the public names under them.
 
 **What the entry owes:** the rule; where the base domain comes from; and how it composes with the `<company>` segment and the stack name that file already rules on, since a company-owned base domain is a naming axis `<company>` does not yet cover. `docs/bootstrap-a-new-host.md` §4.4 describes the wildcard shape and should point at the rule rather than restate it.
 
