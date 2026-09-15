@@ -50,7 +50,7 @@ This comes first and is not the implementer's to write. The change carries speci
 
 ## 6. Ship
 
-- [ ] 6.1 Open the pull request, let continuous integration run, and wait for the operator's confirmation that it merged and that the converge is healthy
+- [x] 6.1 Open the pull request, let continuous integration run, and wait for the operator's confirmation that it merged and that the converge is healthy
 - [ ] 6.2 Confirm the effect on a host: trigger one activation of `prune-host-images.service` by hand after the converge reaches it and read the journal. **The observation is per host, because the two hosts are not in the same state and only one of them prints counts at all.** On production, whose keep set is satisfied, the confirmation is the three-count line with the third field present and reading `refused 0` — the field existing and reading zero is exactly what could not be distinguished from its absence before. On staging the run abandons on an empty keep set, prints its abandon condition and exits non-zero — `docs/bootstrap-a-new-host.md` §6.5 documents that as the expected state — so the confirmation there is that the abandon line is **unchanged**, which is what this change promised. Propose both to the operator and wait for their confirmation rather than inferring either
 - [ ] 6.3 Archive: bring the branch back to the freshly fetched trunk, commit the specification record, delete `docs/backlog.md` entry 5, and open the record's own pull request
 
