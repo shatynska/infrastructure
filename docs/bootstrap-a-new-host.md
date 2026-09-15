@@ -949,15 +949,24 @@ docker exec -it platform-postgres-1 psql -U <PLATFORM_POSTGRES_USER> -c \
   "CREATE ROLE pgexporter WITH LOGIN PASSWORD '<PLATFORM_POSTGRES_EXPORTER_PASSWORD>'; GRANT pg_monitor TO pgexporter;"
 ```
 
-Until this is done the `MetricsTargetDown` alert fires for `postgres-exporter`, which is the intended signal that the step is missing.
+**Nothing tells you if you skip this step or mistype the password, so confirm it by hand.** This document said until 2026-09-15 that `MetricsTargetDown` fires until the role exists, and it does not: that alert is `up == 0`, and postgres-exporter serves `/metrics` with HTTP 200 whether or not it can reach the database. Measured against the pinned `v0.20.1` with a wrong password: HTTP `200`, `pg_up 0`, `pg_exporter_last_scrape_error 1`, container healthy, no alert. So the failure this step exists to prevent is silent, and the stack runs with PostgreSQL's metrics simply absent. `docs/backlog.md` `alert-on-the-exporter-being-unable-to-read-postgres` is the alert that would close it.
 
-**Confirm it cleared, and do it from inside the container.** Only Traefik (80, 443) and Grafana (the tailnet address, 3000) publish a host port — every other service in this stack is reachable on the Docker network alone, so `curl localhost:9090` on the host returns nothing at all. That silence looks like a broken Prometheus and is not:
+**Confirm the exporter can actually read the instance:**
+
+```sh
+docker exec platform-postgres-exporter-1 wget -qO- http://localhost:9187/metrics \
+  | grep -E '^pg_up |^pg_exporter_last_scrape_error '
+```
+
+`pg_up 1` and `pg_exporter_last_scrape_error 0` is the pass. Anything else means the role or its password is wrong, and this is the only place it will be noticed.
+
+**Then confirm the targets are scraped at all, and do it from inside the container.** Only Traefik (80, 443) and Grafana (the tailnet address, 3000) publish a host port — every other service in this stack is reachable on the Docker network alone, so `curl localhost:9090` on the host returns nothing at all. That silence looks like a broken Prometheus and is not:
 
 ```sh
 docker exec platform-prometheus-1 wget -qO- "http://localhost:9090/api/v1/targets?state=active"
 ```
 
-All five active targets should report `"health":"up"` — `prometheus`, `node-exporter`, `cadvisor`, `traefik` and `postgres-exporter`. The last is the one this step fixes; it is also the only one whose failure means a credential rather than a dead container, since its container is healthy either way.
+All five active targets should report `"health":"up"` — `prometheus`, `node-exporter`, `cadvisor`, `traefik` and `postgres-exporter`. **This does not confirm the role**, for the reason above: postgres-exporter's target reports `up` with the credential wrong, so this check answers whether the container is being scraped and the `pg_up` check answers whether the scrape means anything. Both are needed.
 
 **The heartbeat.** Nothing to run; confirm in the heartbeat service that this host's own check is receiving pings every couple of minutes. Give it the period and grace Appendix A records — a check created by its first ping carries the observer's default until corrected.
 
