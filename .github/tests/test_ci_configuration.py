@@ -13200,9 +13200,39 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
 # Alertmanager's Slack webhook is, and no boundary can be shifted by its
 # contents.
 
-SECRET_VARIABLE = re.compile(r"(?:PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL)")
-INTERPOLATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}")
+# Matched on `_`-separated tokens rather than as substrings, so DATA_SOURCE_PASS
+# and API_KEY are secrets while KEYCLOAK_HOST and PASSTHROUGH_URL are not. The
+# first two are what a substring set keyed on PASSWORD|SECRET|TOKEN missed --
+# DATA_SOURCE_PASS being the name this stack itself now uses for the password.
+SECRET_TOKENS = frozenset(
+    {
+        "PASS",
+        "PASSWORD",
+        "PASSWD",
+        "PWD",
+        "SECRET",
+        "SECRETS",
+        "TOKEN",
+        "CREDENTIAL",
+        "CREDENTIALS",
+        "KEY",
+        "APIKEY",
+        "AUTH",
+    }
+)
+# Both forms Compose accepts, `${VAR}` and bare `$VAR` -- the original defect
+# written without braces is the same defect. `$$` is Compose's escape for a
+# literal `$`, so a `$$`-prefixed name is not an interpolation at all and the
+# lookbehind keeps it out.
+INTERPOLATION = re.compile(r"(?<!\$)\$(?:\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|([A-Za-z_][A-Za-z0-9_]*))")
 URL_SHAPED = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+# The characters that carry structure in a URL. A secret touching one of these
+# can move a boundary; a secret with whitespace either side of it cannot.
+URL_STRUCTURE = frozenset(":/@?&=")
+
+
+def names_a_secret(name: str) -> bool:
+    return bool(SECRET_TOKENS & set(re.split(r"[^A-Za-z0-9]+", name.upper())))
 
 
 def secrets_interpolated_into_urls(path: Path | None = None) -> list[str]:
@@ -13210,13 +13240,32 @@ def secrets_interpolated_into_urls(path: Path | None = None) -> list[str]:
     offences = []
 
     def inspect(where: str, value: str) -> None:
-        if not URL_SHAPED.search(value):
-            return
         for match in INTERPOLATION.finditer(value):
-            name = match.group(1)
-            if not SECRET_VARIABLE.search(name.upper()):
+            name = match.group(1) or match.group(2)
+            if not names_a_secret(name):
                 continue
+            # The whole value being the secret is the opposite case: there the
+            # secret IS the URL and nothing it contains can move a boundary.
             if match.group(0) == value.strip():
+                continue
+            before = value[: match.start()]
+            after = value[match.end() :]
+            # ADJACENCY IS WHAT SEPARATES THE TWO CASES, and it is checked
+            # rather than "is there a URL on this line", because in a config
+            # block a line carries its own YAML key and often a comment -- so a
+            # `://` anywhere on the line is not evidence that THIS secret sits
+            # inside a URL. `api_url: ${SLACK_WEBHOOK_SECRET}  # https://...`
+            # has whitespace on both sides of the secret and is not an offence.
+            touching = (before[-1:] in URL_STRUCTURE and before[-1:] != "") or (
+                after[:1] in URL_STRUCTURE and after[:1] != ""
+            )
+            if not touching:
+                continue
+            # A scheme anywhere, or the userinfo sandwich `:<secret>@`, which is
+            # a URL authority with no scheme -- the shape a relapse of this very
+            # fix would take, since DATA_SOURCE_URI accepts one.
+            userinfo = before.endswith(":") and "@" in after
+            if not (URL_SHAPED.search(value) or userinfo):
                 continue
             offences.append(
                 f"{where}: builds a URL around ${{{name}}}. That value is a secret, "
@@ -13320,6 +13369,71 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
             "      TARGET: https://${GRAFANA_HOST}:3000/api\n"
         )
         self.assertEqual([], secrets_interpolated_into_urls(fixture))
+
+    def test_an_authority_with_no_scheme_is_reported(self) -> None:
+        """FALSIFIED -- the likeliest relapse of the change this check ships
+        with: DATA_SOURCE_URI accepts a bare `user:pass@host` authority, which
+        carries no `://` for a scheme-keyed check to find."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            "      DATA_SOURCE_URI: pgexporter:${POSTGRES_EXPORTER_PASSWORD}"
+            "@postgres:5432/postgres\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_the_bare_dollar_form_is_reported(self) -> None:
+        """FALSIFIED -- Compose accepts `$VAR` as well as `${VAR}`, so the
+        original defect minus its braces is the original defect."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            "      DATA_SOURCE_NAME: postgresql://u:$POSTGRES_EXPORTER_PASSWORD@h:5432/d\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_the_names_this_stack_uses_are_recognised_as_secrets(self) -> None:
+        """FALSIFIED -- a substring set keyed on PASSWORD|SECRET|TOKEN misses
+        DATA_SOURCE_PASS, the name this very change introduces, and API_KEY."""
+        for name in ("DATA_SOURCE_PASS", "API_KEY", "DB_PWD", "BASIC_AUTH"):
+            with self.subTest(name=name):
+                fixture = self.compose_fixture(
+                    "services:\n  e:\n    image: e:1\n    environment:\n"
+                    f"      URL: https://u:${{{name}}}@example.test/x\n"
+                )
+                self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_name_merely_containing_a_secret_word_is_not_a_secret(self) -> None:
+        """DERIVED -- token matching, not substring: KEYCLOAK_HOST holds `KEY`
+        and is a host. Without this the wider set above becomes noise."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            "      URL: https://${KEYCLOAK_HOST}:8080/realms\n"
+        )
+        self.assertEqual([], secrets_interpolated_into_urls(fixture))
+
+    def test_the_compose_escape_is_not_an_interpolation(self) -> None:
+        """DERIVED -- `$$` is Compose's escape for a literal `$`, so `$${VAR}`
+        reaches the container as text and interpolates nothing."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            '      NOTE: "see https://x/$${MY_PASSWORD}"\n'
+        )
+        self.assertEqual([], secrets_interpolated_into_urls(fixture))
+
+    def test_a_whole_secret_in_a_config_line_is_accepted(self) -> None:
+        """DERIVED -- in a config block the line carries its own YAML key, so
+        the secret is never the whole string and a line-wide search for `://`
+        finds any comment beside it. Adjacency is what distinguishes them:
+        Alertmanager's api_url is this shape."""
+        for line in (
+            "      api_url: ${SLACK_WEBHOOK_SECRET}\n",
+            "      api_url: ${SLACK_WEBHOOK_SECRET}  # https://api.slack.com/webhooks\n",
+        ):
+            with self.subTest(line=line.strip()):
+                fixture = self.compose_fixture(
+                    "services:\n  a:\n    image: a:1\n"
+                    "configs:\n  c:\n    content: |\n" + line
+                )
+                self.assertEqual([], secrets_interpolated_into_urls(fixture))
 
     def test_a_config_block_is_read(self) -> None:
         """FALSIFIED -- the same defect inside an inline config, which is where

@@ -835,3 +835,20 @@ That is not hypothetical here. The `pgexporter` role lives in `postgres_data` an
 **What the change owes.** A fresh value generated per stack, set in each Environment, and each host's `pgexporter` role recreated to match — the order matters, since the secret reaching the host before the role is recreated leaves the exporter unable to connect, which is the state this entry was found in and which nothing alerts on (entry 60). Worth doing in the same window as entry 60's alert, so the rotation is observable rather than confirmed by hand.
 
 **One value to rotate regardless of when this is taken**: the password that was live on 2026-09-15 appeared in an operator's terminal while this was diagnosed, so it is no longer only in the two Environments that hold it.
+
+## 62. render-the-env-file-so-a-secret-survives-it
+
+**Not blocked. Recorded rather than folded into `fix-the-exporter-dsn-interpolation`, which found it: that change makes the exporter read its password as a value, and this is the layer below, where the value is corrupted before any service sees it.** Found 2026-09-15.
+
+`.github/workflows/platform-deploy.yml`'s *Render .env from secrets* step writes each line as an unquoted `echo "NAME=${{ secrets.X }}"`. Compose's dotenv parser then reads that file, and for an **unquoted** value it expands `$…` and honours a wrapping quote. Measured with `docker compose config` on 2026-09-15:
+
+| Secret as stored | As the container receives it |
+|---|---|
+| `ab$c#d` | `ab#d` |
+| `"abc"def` | `abc` |
+
+So a password containing `$` arrives truncated or altered, and one beginning with a quote arrives stripped. Nothing fails: the service starts with the wrong credential, and for postgres-exporter that means HTTP 200, `pg_up 0`, a healthy container and no alert — the silence entry 60 is about. **This reaches all nine `PLATFORM_*` secrets**, not the exporter's alone; the Grafana admin password, the Slack webhook and the two Postgres passwords are rendered by the same loop.
+
+**What the change owes.** A rendering that is literal — single-quoted values with embedded single quotes escaped, or a form Compose's parser reads verbatim — and a `.github/tests` assertion over the workflow that the rendering is of that form, since the failure is invisible at every other layer. Check what Compose's parser actually does with the chosen form rather than reasoning about it: the behaviour differs between the Go and Python implementations and has changed across versions, which is why this entry names a measurement and its date.
+
+**Worth pairing with entry 61**, which rotates the exporter password: a rotation is the moment a `$` would first be noticed, and the safest order is to close this first so the new value cannot be corrupted on its way in. Until then, generate these passwords without `$` and without a leading quote — a constraint `docs/bootstrap-a-new-host.md` §0 should carry if this is not taken soon, since that is where they are generated.
