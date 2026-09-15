@@ -13200,10 +13200,41 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
 # Alertmanager's Slack webhook is, and no boundary can be shifted by its
 # contents.
 
-# Matched on `_`-separated tokens rather than as substrings, so DATA_SOURCE_PASS
-# and API_KEY are secrets while KEYCLOAK_HOST and PASSTHROUGH_URL are not. The
-# first two are what a substring set keyed on PASSWORD|SECRET|TOKEN missed --
-# DATA_SOURCE_PASS being the name this stack itself now uses for the password.
+# WHICH NAMES ARE SECRETS IS READ FROM THE DEPLOY, NOT GUESSED. Every name the
+# render step writes into `.env` from a GitHub secret is one, which is how
+# SLACK_WEBHOOK_URL and DEADMANSWITCH_URL are classified: both are bearer
+# credentials whose whole value is a URL, and no keyword in either name says so.
+# A set of keywords alone had them wrong, and had them wrong silently.
+ENV_NAME_FROM_SECRET = re.compile(
+    r"""echo\s+"([A-Za-z_][A-Za-z0-9_]*)=\$\{\{\s*secrets\."""
+)
+
+
+@functools.lru_cache(maxsize=None)
+def secret_env_names(path: Path | None = None) -> frozenset:
+    """The `.env` names the platform deploy renders from a GitHub secret.
+
+    An empty result is a failure rather than an empty set: the check below
+    would pass having classified nothing as secret, which is the vacuous pass
+    this suite forbids elsewhere.
+    """
+    target = (
+        ROOT / ".github" / "workflows" / "platform-deploy.yml" if path is None else path
+    )
+    names = frozenset(ENV_NAME_FROM_SECRET.findall(target.read_text(encoding="utf-8")))
+    if not names:
+        raise AssertionError(
+            f"{target} renders no `.env` name from a GitHub secret, so no variable "
+            f"can be classified as secret-bearing and every URL check below would "
+            f"pass having examined nothing"
+        )
+    return names
+
+
+# The keyword half, for a variable the deploy does not render -- a name
+# introduced in the stack itself, or one arriving another way. Matched on
+# `_`-separated tokens rather than as substrings, so DATA_SOURCE_PASS and
+# API_KEY are secrets while KEYCLOAK_HOST is a host.
 SECRET_TOKENS = frozenset(
     {
         "PASS",
@@ -13218,6 +13249,7 @@ SECRET_TOKENS = frozenset(
         "KEY",
         "APIKEY",
         "AUTH",
+        "WEBHOOK",
     }
 )
 # Both forms Compose accepts, `${VAR}` and bare `$VAR` -- the original defect
@@ -13232,42 +13264,77 @@ URL_STRUCTURE = frozenset(":/@?&=")
 
 
 def names_a_secret(name: str) -> bool:
+    if name in secret_env_names():
+        return True
     return bool(SECRET_TOKENS & set(re.split(r"[^A-Za-z0-9]+", name.upper())))
+
+
+def secret_interpolations(path: Path | None = None) -> list[str]:
+    """Every secret-bearing interpolation the scan below actually examined.
+
+    Reported so a green result can be told apart from one that read nothing:
+    moving a secret into `env_file:`, `command:` or `entrypoint:` -- none of
+    which this reads -- would otherwise satisfy the check silently.
+    """
+    seen = []
+    _scan(path, seen.append, lambda *_: None)
+    return seen
 
 
 def secrets_interpolated_into_urls(path: Path | None = None) -> list[str]:
     """Every place the stack builds a URL around a secret-bearing variable."""
     offences = []
+    _scan(path, lambda _name: None, lambda offence: offences.append(offence))
+    return offences
 
+
+def _scan(path, note_secret, note_offence) -> None:
     def inspect(where: str, value: str) -> None:
         for match in INTERPOLATION.finditer(value):
             name = match.group(1) or match.group(2)
             if not names_a_secret(name):
                 continue
-            # The whole value being the secret is the opposite case: there the
-            # secret IS the URL and nothing it contains can move a boundary.
-            if match.group(0) == value.strip():
+            note_secret(f"{where}: ${{{name}}}")
+            # THE SECRET'S OWN WHITESPACE-DELIMITED TOKEN IS THE SCOPE, not the
+            # whole value and not the whole line. A value can hold a URL
+            # somewhere and a secret somewhere else -- `-Dapi.key=${API_KEY}
+            # -Dendpoint=https://…` is two tokens and no defect -- and a config
+            # line always carries its own YAML key and often a trailing comment
+            # naming a documentation URL. Scoping locally is what lets the same
+            # rule serve both without a special case for either.
+            left = match.start()
+            while left > 0 and not value[left - 1].isspace():
+                left -= 1
+            right = match.end()
+            while right < len(value) and not value[right].isspace():
+                right += 1
+            token = value[left:right]
+            before = value[left : match.start()]
+            after = value[match.end() : right]
+            # The secret standing alone in its token is the opposite case: the
+            # secret IS the value, as Alertmanager's api_url is, and nothing it
+            # contains can move a boundary.
+            if token == match.group(0):
                 continue
-            before = value[: match.start()]
-            after = value[match.end() :]
-            # ADJACENCY IS WHAT SEPARATES THE TWO CASES, and it is checked
-            # rather than "is there a URL on this line", because in a config
-            # block a line carries its own YAML key and often a comment -- so a
-            # `://` anywhere on the line is not evidence that THIS secret sits
-            # inside a URL. `api_url: ${SLACK_WEBHOOK_SECRET}  # https://...`
-            # has whitespace on both sides of the secret and is not an offence.
-            touching = (before[-1:] in URL_STRUCTURE and before[-1:] != "") or (
-                after[:1] in URL_STRUCTURE and after[:1] != ""
-            )
+            touching = before[-1:] in URL_STRUCTURE or after[:1] in URL_STRUCTURE
             if not touching:
                 continue
-            # A scheme anywhere, or the userinfo sandwich `:<secret>@`, which is
-            # a URL authority with no scheme -- the shape a relapse of this very
-            # fix would take, since DATA_SOURCE_URI accepts one.
-            userinfo = before.endswith(":") and "@" in after
-            if not (URL_SHAPED.search(value) or userinfo):
+            # Three shapes, because a URI need not carry a scheme. `postgres:
+            # 5432/postgres?sslmode=disable` is the value this stack ships, so
+            # a relapse would most likely append `&password=${…}` to it or put
+            # the secret in front of an `@` -- neither has a `://`.
+            userinfo = "@" in after and (before.endswith(":") or before == "")
+            query = "?" in token and (
+                before.endswith(("=", "&", "?")) or after.startswith(("&", "?"))
+            )
+            # A fourth shape, for the secrets whose whole value is a URL: text
+            # concatenated directly onto one. `${SLACK_WEBHOOK_URL}/extra` is
+            # content-dependent in the same way as the rest -- a webhook URL
+            # ending in a query string puts that `/extra` inside the query.
+            appended = before == "" and after[:1] in frozenset("/?#&")
+            if not (URL_SHAPED.search(token) or userinfo or query or appended):
                 continue
-            offences.append(
+            note_offence(
                 f"{where}: builds a URL around ${{{name}}}. That value is a secret, "
                 f"so it may contain `#`, `@`, `/`, `?` or `:`, each of which moves a "
                 f"boundary in the URL rather than failing -- `#` discards everything "
@@ -13305,7 +13372,6 @@ def secrets_interpolated_into_urls(path: Path | None = None) -> list[str]:
             continue
         for number, line in enumerate(content.splitlines(), start=1):
             inspect(f"config {name}, line {number}", line)
-    return offences
 
 
 class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
@@ -13419,14 +13485,95 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
         )
         self.assertEqual([], secrets_interpolated_into_urls(fixture))
 
+    def test_the_stacks_own_url_valued_credentials_are_secrets(self) -> None:
+        """FALSIFIED -- SLACK_WEBHOOK_URL and DEADMANSWITCH_URL are bearer
+        credentials whose whole value is a URL, and no keyword in either name
+        says so. They are the stack's only secret-bearing URLs, so a check that
+        does not classify them exempts exactly the values it exists for."""
+        for name in ("SLACK_WEBHOOK_URL", "DEADMANSWITCH_URL"):
+            with self.subTest(name=name):
+                self.assertTrue(names_a_secret(name))
+                fixture = self.compose_fixture(
+                    "services:\n  a:\n    image: a:1\n    environment:\n"
+                    f"      PING: ${{{name}}}?status=ok\n"
+                )
+                self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_text_appended_to_a_url_valued_secret_is_reported(self) -> None:
+        """FALSIFIED -- concatenation onto a secret that IS a URL. Content
+        dependent like the rest: a webhook URL ending in a query string puts
+        the appended path inside that query rather than after it."""
+        fixture = self.compose_fixture(
+            "services:\n  a:\n    image: a:1\n"
+            "configs:\n  c:\n    content: |\n"
+            "      api_url: ${SLACK_WEBHOOK_URL}/extra\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_secret_in_a_query_parameter_is_reported(self) -> None:
+        """FALSIFIED -- the shipped DATA_SOURCE_URI already ends in a query
+        string and carries no scheme, so appending `&password=${…}` is the
+        cheapest relapse there is."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            "      DATA_SOURCE_URI: postgres:5432/postgres?sslmode=disable"
+            "&password=${POSTGRES_EXPORTER_PASSWORD}\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_secret_before_the_at_sign_is_reported(self) -> None:
+        """FALSIFIED -- with no user part there is no `:` before the secret, so
+        a userinfo rule keyed on one would pass it."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n    environment:\n"
+            "      DATA_SOURCE_URI: ${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/d\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_secret_and_a_url_in_different_words_is_accepted(self) -> None:
+        """DERIVED -- the noise case. A value-wide search for `://` reports a
+        secret that merely shares a value with a URL, which fails the required
+        check for something correct and is how a check gets widened away."""
+        fixture = self.compose_fixture(
+            "services:\n  a:\n    image: a:1\n    environment:\n"
+            "      JAVA_OPTS: -Dapi.key=${API_KEY} -Dendpoint=https://example.test/x\n"
+        )
+        self.assertEqual([], secrets_interpolated_into_urls(fixture))
+
+    def test_the_scan_examined_something_secret_bearing(self) -> None:
+        """DERIVED -- without this, `[] == offenders` is satisfied as well by a
+        stack whose secrets have moved into `env_file:`, `command:` or
+        `entrypoint:`, none of which this reads. Six exist today; the floor is
+        below that so removing one service does not fail the build, but far
+        enough above zero to catch a wholesale move."""
+        seen = secret_interpolations()
+        self.assertGreaterEqual(
+            len(seen),
+            4,
+            "the URL check examined almost no secret-bearing interpolation, so "
+            "its green result establishes little. Either the stack's secrets "
+            "have moved somewhere this does not read -- env_file:, command:, "
+            f"entrypoint: -- or the deploy renders fewer. Examined: {seen}",
+        )
+
+    def test_the_secret_names_come_from_the_deploy(self) -> None:
+        """DERIVED -- a workflow rendering no secret must fail rather than
+        classify nothing as secret and pass everything below it."""
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        empty = directory / "platform-deploy.yml"
+        empty.write_text("on: push\njobs: {}\n", encoding="utf-8")
+        with self.assertRaises(AssertionError):
+            secret_env_names(empty)
+
     def test_a_whole_secret_in_a_config_line_is_accepted(self) -> None:
         """DERIVED -- in a config block the line carries its own YAML key, so
         the secret is never the whole string and a line-wide search for `://`
-        finds any comment beside it. Adjacency is what distinguishes them:
-        Alertmanager's api_url is this shape."""
+        finds any comment beside it. Scoping to the secret's own word is what
+        distinguishes them: Alertmanager's api_url is this shape."""
         for line in (
-            "      api_url: ${SLACK_WEBHOOK_SECRET}\n",
-            "      api_url: ${SLACK_WEBHOOK_SECRET}  # https://api.slack.com/webhooks\n",
+            "      api_url: ${SLACK_WEBHOOK_URL}\n",
+            "      api_url: ${SLACK_WEBHOOK_URL}  # https://api.slack.com/webhooks\n",
         ):
             with self.subTest(line=line.strip()):
                 fixture = self.compose_fixture(

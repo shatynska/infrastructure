@@ -847,7 +847,9 @@ That is not hypothetical here. The `pgexporter` role lives in `postgres_data` an
 | `ab$c#d` | `ab#d` |
 | `"abc"def` | `abc` |
 
-So a password containing `$` arrives truncated or altered, and one beginning with a quote arrives stripped. Nothing fails: the service starts with the wrong credential, and for postgres-exporter that means HTTP 200, `pg_up 0`, a healthy container and no alert — the silence entry 60 is about. **This reaches all nine `PLATFORM_*` secrets**, not the exporter's alone; the Grafana admin password, the Slack webhook and the two Postgres passwords are rendered by the same loop.
+So a password containing `$` arrives truncated or altered, and one beginning with a quote arrives stripped. Nothing fails: the service starts with the wrong credential, and for postgres-exporter that means HTTP 200, `pg_up 0`, a healthy container and no alert — the silence entry 60 is about.
+
+**It reaches seven secrets, which is not all nine `PLATFORM_*` ones** — the count is worth stating exactly, because sizing this fix or the rotation in entry 61 against the wrong one includes an SSH private key that is not affected. The render loop writes `ACME_EMAIL`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_EXPORTER_PASSWORD`, `SLACK_WEBHOOK_URL`, `DEADMANSWITCH_URL` and `GRAFANA_ADMIN_PASSWORD`. `PLATFORM_DEPLOY_HOST` and `PLATFORM_DEPLOY_SSH_KEY` never enter `.env` or Compose's parser at all. (`GRAFANA_BIND_ADDRESS` is written by the same loop but comes from a step output rather than a secret.)
 
 **What the change owes.** A rendering that is literal — single-quoted values with embedded single quotes escaped, or a form Compose's parser reads verbatim — and a `.github/tests` assertion over the workflow that the rendering is of that form, since the failure is invisible at every other layer. Check what Compose's parser actually does with the chosen form rather than reasoning about it: the behaviour differs between the Go and Python implementations and has changed across versions, which is why this entry names a measurement and its date.
 
