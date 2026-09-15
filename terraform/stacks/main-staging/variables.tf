@@ -29,7 +29,7 @@ variable "ssh_allowed_cidrs" {
 }
 
 variable "web_allowed_cidrs" {
-  description = "Source CIDRs allowed to reach the staging server over HTTP/HTTPS. Empty by default (no web rule), and empty is what staging ships with until a change puts something behind those ports."
+  description = "Source CIDRs allowed to reach the staging server over HTTP/HTTPS. Empty by default (no web rule); terraform.tfvars sets the value staging runs with."
   type        = list(string)
   default     = []
 }

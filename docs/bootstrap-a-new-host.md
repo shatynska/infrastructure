@@ -8,13 +8,13 @@ What you will have at the end:
 - **The production server** configured (Docker, host firewall, a private network, restricted deploy accounts) by Ansible.
 - A shared platform stack **on each server that asks for it**: Traefik with automatic TLS, PostgreSQL, Prometheus, Alertmanager, Grafana, alerts to Slack, and an external heartbeat. One definition in `platform/`, deployed once per stack, with each stack's credentials and alert targets its own.
 - A path for any application repository to deploy itself **to the production host** from its own GitHub Actions workflow.
-- **A staging server running the same platform stack, but unreachable from the internet** — stage 6 converges it alongside production and stage 7 deploys to it. What it does not have is a **public DNS name**, an open web port or a certificate: its cloud firewall and its UFW both open nothing on 80 and 443, deliberately, and `docs/backlog.md`'s staging-web-exposure entry is what opens them. (It does have a host name of its own — the converge sets that on every host; this is about DNS and a certificate.) Traefik runs there and binds both ports on the host; both firewall layers refuse inbound traffic to them, and no certificate is requested, because ACME is driven by router rules and staging has no application yet. "From here on, two hosts" says what else differs. That is the honest end state today; it is not an oversight in this procedure.
+- **A staging server running the same platform stack, reachable from the internet** — stage 6 converges it alongside production and stage 7 deploys to it. Its cloud firewall opens 80 and 443 as production's does, and its **public DNS names** sit under a wildcard of its own (§4.4). (It also has a host name of its own — the converge sets that on every host; this is about DNS.) A certificate follows an application rather than the host: ACME is driven by router rules, so Traefik requests one only once an application's router names a hostname, and until then answers with its default certificate. "From here on, two hosts" says what else differs.
 
 **Two servers is a standing cost**, not a one-off configuration: two instances and two volumes billed monthly, two hosts to patch and rebuild, two token pairs to rotate. Staging is roughly half production's bill. Decide you want that before stage 1, because the decisions that follow are shaped by it and are awkward to unpick afterwards. If you want one stack, this document still works: delete the second directory under `terraform/stacks/`, skip its secrets, and read every "two" below as "one" — including §0.4's table, which says so in its own terms.
 
 **How to read this.** Stages are in dependency order; do not skip ahead. Each stage ends with a **Secrets created in this stage** table and a **Check** list. `<angle brackets>` are placeholders you replace. "Operator" means the person doing this. Commands are run from the repository root unless a `cd` is shown. The reasoning behind most decisions is in `openspec/specs/` and in the archived changes under `openspec/changes/archive/`; this document only says what to do.
 
-**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. The second stack adds perhaps an hour of console work in stages 1 to 3, **a second converge in stage 6 and a second run of stage 7** — both run once per stack. Stage 9 is production's alone, its web exposure being what staging does not have. Stage 8 is repeated per application.
+**Time.** Roughly one working day for stages 0 to 7 if nothing goes wrong, mostly waiting on approvals and DNS. The second stack adds perhaps an hour of console work in stages 1 to 3, **a second converge in stage 6 and a second run of stage 7** — both run once per stack. Stage 8 is repeated per application.
 
 ## Before you edit this document
 
@@ -42,7 +42,7 @@ Nothing here touches a server. It is the shopping list.
 | Tailscale | A private network between both servers, CI runners and operators | The company; the free plan is enough for now |
 | Slack | Alert delivery | The company workspace |
 | A heartbeat service (Healthchecks.io or similar) | Noticing when the whole host or its alerting dies | The company |
-| A DNS provider | Pointing hostnames at the **production** server (§4.4 says why not staging) | Wherever the company's domain already lives |
+| A DNS provider | Pointing each server's hostnames at it (§4.4) | Wherever the company's domain already lives |
 | A GitHub App, created in stage 3.2 | Opening the weekly hook-update pull request as an identity that is not the workflow's own token | The company organisation, installed on this repository alone |
 
 Use a shared company password manager for every credential in this document. Several values below exist in exactly one place after they are created, and the password manager is that place.
@@ -168,7 +168,7 @@ You will write these into each stack's `terraform.tfvars` in stage 3. Decide the
 | `volume_name` | Keep it identical across stacks. Names are unique per project, so a project each frees the name. It is **not** the mount path and does not have to resemble one — the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>` — but both stacks mounting at the same path is what lets `platform/docker-compose.yml` stay unparameterised | `main` | `main` |
 | `name` | The server's own name, which becomes its `inventory_hostname` and its tailnet machine name. **Give it the stack's own name**, which makes it differ between stacks by construction — two hosts sharing one name merge in any inventory that reads both projects, and share a single `<inventory_hostname>-prune-host-images` heartbeat check, where the live host's weekly success masks the other's dead timer | `main-production` | `main-staging` |
 | `ssh_allowed_cidrs` | The public IP ranges allowed to reach SSH. Must not be `0.0.0.0/0`. If everyone will use Tailscale, see `docs/backlog.md` entry 1 for closing public SSH entirely | one ISP `/24` | The same |
-| `web_allowed_cidrs` | `["0.0.0.0/0"]` for a public web host | `["0.0.0.0/0"]` | `[]` — no web rule at all, until something is deployed there. See stage 5 |
+| `web_allowed_cidrs` | `["0.0.0.0/0"]` for a public web host | `["0.0.0.0/0"]` | The same. Its applications take certificates and webhooks from the internet as production's do |
 
 **Secrets created in this stage:** four Hetzner tokens, held in the password manager until stage 3.
 
@@ -407,26 +407,39 @@ ssh -i ~/.ssh/<company>-root root@<prod ipv4>
 
 ### 4.4 DNS
 
-In the DNS provider, create an `A` record per hostname an application will serve, **pointing at the production address**. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now.
+In the DNS provider, point each server's hostnames at **that server's own address**. The shape in use is one wildcard `A` record per server, `*.<server>.<base domain>`, so an application's hostname under it resolves with no record of its own; a name outside a wildcard, such as a short alias, takes an `A` record of its own. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now.
 
-**Do not point a hostname at the staging server.** It ships with `web_allowed_cidrs = []`, so its cloud firewall opens neither 80 nor 443 and nothing answers there; a record aimed at it produces a hostname that times out and a certificate that never issues, with no error naming the cause. Staging gets its own hostnames from the change that deploys something to it, which also opens those ports deliberately.
+**Staging takes hostnames too.** Its cloud firewall opens 80 and 443 as production's does, so a name aimed at it answers; the certificate for a name issues once an application's router names it.
 
-**There is no Terraform for DNS, deliberately, and this is where the zone is written down.** `shatynska.com` is served by `ns15`/`ns25`/`ns35.inhostedns.*` — the nameservers of ukraine.com.ua, neither Hetzner DNS nor Cloudflare — so managing the records in Terraform means moving the nameservers, not adding a provider. The zone as read on 2026-09-08, corrected on 2026-09-09:
+**There is no Terraform for DNS, deliberately, and this is where the zone is written down.** `shatynska.com` is served by `ns15`/`ns25`/`ns35.inhostedns.*` — the nameservers of ukraine.com.ua, neither Hetzner DNS nor Cloudflare — so managing the records in Terraform means moving the nameservers, not adding a provider. The zone as read on 2026-09-08, corrected on 2026-09-09 and 2026-09-14:
 
 | Record | Value |
 |---|---|
 | `shatynska.com` A | `2.29.14.98` — the prod host |
 | `www` A | `2.29.14.98` |
-| `fuperia` A | `2.29.14.98` — the name commerce-ops routes, and what Traefik holds a certificate for |
+| `fuperia` A | `2.29.14.98` — not routed: `commerce-ops`'s production router does not name it (read 2026-09-14) |
 | `test` A | `2.29.14.98` — a throwaway smoke test's leftover; `docs/backlog.md` entry 11 covers removing it, and the certificate Traefik still renews for it |
+| `staging` A | `62.238.17.177` — the staging host; nothing routes it |
 | `shatynska.com` MX | `mx.ukraine.com.ua` |
 | `shatynska.com` TXT | `v=spf1 include:_spf.ukraine.com.ua ~all` |
 
-**This table is the project's only written record of the zone, and its value depends on being read against the zone rather than trusted.** It was written on 2026-09-08 as "the records as read" and was already incomplete that day: the `test` row was missing and was added on 2026-09-09, by a change that found the record while reading Traefik's certificate metrics. Re-read the zone before relying on it.
+`fincci.bike` is served by `dns1`/`dns2.registrar-servers.com` — Namecheap's DNS. It too carries live mail (`MX 0 email.fincci.bike`), and a site at its apex; neither is operated from this repository, so neither is transcribed. The records this repository's hosts serve, as read on 2026-09-14:
 
-**Why the migration is declined rather than queued.** The zone carries live mail. An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. That is a different risk class from the convenience the migration would buy. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
+| Record | Value |
+|---|---|
+| `*.main-production.fincci.bike` A | `2.29.14.98` — production; `commerce-ops.main-production.fincci.bike` is routed under it |
+| `main-production.fincci.bike` A | `2.29.14.98` — a record of its own: a wildcard does not match the name it sits under |
+| `*.main-staging.fincci.bike` A | `62.238.17.177` — staging |
+| `main-staging.fincci.bike` A | `62.238.17.177` — likewise its own record |
+| `ops.fincci.bike` A | `2.29.14.98` — routed by `commerce-ops`'s production router beside its technical name |
 
-**Revisit when** staging acquires its hostnames — `docs/backlog.md` entry 17, which is the first time the manual edit would be made twice — or when mail moves off this zone, or when a second hostname makes the manual edits frequent enough to be worth the risk. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, so a rebuild (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit, and this table is the mitigation.
+There is no `*.fincci.bike`: an address change edits that server's wildcard, its bare server name and every alias pointing at it, in both tables.
+
+**These tables are the project's only written record of the two zones, and their value depends on being read against the zones rather than trusted.** `shatynska.com`'s was written on 2026-09-08 as "the records as read" and was already incomplete that day: the `test` row was missing and was added on 2026-09-09, by a change that found the record while reading Traefik's certificate metrics. Re-read the zones before relying on them.
+
+**Why the migration is declined rather than queued.** Both zones carry live mail. An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. That is a different risk class from the convenience the migration would buy. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
+
+**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when `fincci.bike` names outside the server wildcards, such as `ops.fincci.bike`, become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, and these tables are the mitigation.
 
 **Secrets created in this stage:** none. The two `.envrc` files hold the two read-only tokens and are gitignored.
 
@@ -440,7 +453,7 @@ You now have two servers, and **stage 6 configures both**. It is written once an
 
 **What still differs between the two, and it is no longer the deploy path:**
 
-- **Staging has no way in from the internet.** Its cloud firewall opens no web port (`web_allowed_cidrs = []`, mirrored in its `group_vars`), it has no **public DNS name** and no certificate. That is `docs/backlog.md`'s staging-web-exposure entry, and it is deliberate: the ports open when there is something to reach through them, and the stack arriving is what makes that true. Traefik runs there and binds 80 and 443 on the host; both firewall layers refuse inbound traffic to them, and no certificate is requested because ACME is driven by router rules and staging has no application. Inert, not broken.
+- **Not its web exposure.** Staging opens 80 and 443 to the internet as production does, so an application routed there is public, not tailnet-only; §4.4 has its hostnames.
 - **Its approval gate.** Production's deploy waits for a reviewer because `main-production` requires one; staging's does not, because `main-staging` requires none. That is a repository setting, not a difference in the workflow — nothing in `platform-deploy.yml` distinguishes them.
 - **Its Vault password and its deploy keypair**, both its own, for the reasons below.
 
@@ -556,7 +569,7 @@ Edit `ansible/inventory/group_vars/<environment>.yml` — production's and stagi
 | Variable | Set to |
 |---|---|
 | `hardening_ssh_allowed_cidrs` | Exactly the `ssh_allowed_cidrs` list from **that stack's** `terraform.tfvars`. They are kept in sync by hand; a mismatch makes the host firewall block what the cloud firewall allows. |
-| `hardening_web_allowed_cidrs` | Exactly `web_allowed_cidrs` from that stack's `terraform.tfvars`. Production's is `["0.0.0.0/0"]`; **staging's is `[]`**, and stays `[]` until the change that puts something behind those ports opens them in both files together. |
+| `hardening_web_allowed_cidrs` | Exactly `web_allowed_cidrs` from that stack's `terraform.tfvars` — `["0.0.0.0/0"]` for both stacks. |
 | `deploy_apps` | One entry: `name: platform`, `public_key:` the `.pub` of that stack's platform deploy key. **Each stack gets its own keypair** — one leaked private half must not deploy to both. Applications are added here in stage 8. |
 | `ops_user_accounts` | One entry: `name: ops-<you>`, `public_key:` the `.pub` of your operator inspection key |
 | `platform_data_volume_subdirs` | Leave as is |
@@ -739,7 +752,7 @@ So the IP is the more durable of the two, and the name's advantage is only that 
 
 **Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main` is mounted and holds `prometheus/` and `grafana/`, and `/etc/fstab` names that path and no other (the path matching the volume's name is a convenience; the two are independent, which is what lets a second stack in one project part them); and `hostname` returns `<company>-<stack>`, e.g. `shatynska-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
 
-The web ports are where the two differ, and the difference is the check: **production shows 80 and 443, staging shows neither.** Staging carries `web_allowed_cidrs = []` at both layers, so a staging host with UFW rules for 80/443 means its `group_vars` has drifted from its `terraform.tfvars`.
+The web ports are the same on both: **each shows 80 and 443 allowed.** A host without them means its `group_vars` has drifted from its `terraform.tfvars`. That checks the mirror and not reachability: UFW never sees Traefik's published ports (`docs/backlog.md`'s `say-what-the-host-firewall-actually-gates`).
 
 **Then prove the prune reports.** Its timer is weekly, so nothing reaches the heartbeat service until it fires — and a reporter that cannot reach the observer leaves a *successful* unit behind by design, so a green `systemctl status` is not evidence. Trigger one activation and read what it says:
 
@@ -1167,7 +1180,7 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 ## Appendix B. Rebuilding an existing host
 
-**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. What staging has no need to rebuild is a DNS record or a certificate, having neither. Read what follows as the older shape — `server_enabled` toggled off and on in its own `terraform.tfvars`, its new address read, its host key re-recorded (4.3), a fresh tailnet auth key if the old one expired, then 6.3 — and stops there, having no stack to redeploy.
+**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. Its DNS points at its address as production's does, so 4.4 applies to it as well if the address changed — every staging row in 4.4's tables — and its certificates reissue on their own once its applications redeploy.
 
 An important consequence for staging specifically: its data volume is **not** wiped by a rebuild, and its `known_hosts` entry **is** invalidated. The second is the one that bites, because it presents as the converge failing at connection time rather than as a rebuild artefact.
 
@@ -1181,7 +1194,7 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 
 Recorded in detail in `docs/backlog.md`. Two of them — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; §8.3 above is that boundary. The one still to do before real data arrives is container resource limits, `docs/backlog.md` entry 6 — log rotation and swap were the other two and were delivered together by `bound-host-log-growth-and-add-swap`. The ones a company needs that this repository does not: a private repository in the company organisation, and an approver who is not the author. DNS as code was the third until the zone was read: it is served by a registrar carrying live MX and SPF, so managing it in Terraform means an NS migration that moves mail, and it is declined rather than queued — §4.4 records the zone, the reasoning and what would reopen it.
 
-**Two stacks are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per stack. What a company still gets that this repository does not is a **publicly reachable** second host: staging runs the platform stack once `deploy-the-platform-stack-per-environment` lands, but has no hostname, no certificate and no open web port until `docs/backlog.md`'s staging-web-exposure entry does. (Cited by name rather than by number: this file has been renumbered before, and a number written elsewhere may no longer name the entry it was written for.)
+**Two stacks are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per stack. Both are publicly reachable as well: staging runs the platform stack, opens 80 and 443 as production does, and has hostnames of its own under a wildcard (§4.4).
 
 **Renaming a server moves the slug its pings address, and there are two ways to meet that — one of which loses everything the check knows.** The slug is templated from `inventory_hostname`, so on the day a server is renamed its reporter starts addressing a new one.
 
