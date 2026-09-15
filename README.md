@@ -27,7 +27,7 @@ git ls-files | grep / | sed 's|/.*||' | sort -u
 - `platform/` — the shared Compose stack that every application on the host depends on, deployed by a mechanism other than Ansible: reverse proxy, shared PostgreSQL instance, and the monitoring services (Prometheus, Alertmanager, Grafana and three exporters).
 - `.github/` — the pipeline: workflows, the CI-configuration test suite under `.github/tests/`, `dependabot.yml`, and the pinned CI dependencies.
 - `openspec/` — this repository's specifications (`openspec/specs/`) and the record of every change made to it.
-- `docs/` — `backlog.md`, changes identified and not yet opened; `bootstrap-a-new-host.md`, the runbook that stands a pair of hosts up from nothing; `naming-conventions.md`, the naming scheme in force.
+- `docs/` — `backlog.md`, changes identified and not yet opened; `bootstrap-a-new-host.md`, the runbook that stands a pair of hosts up from nothing; `onboard-an-application.md`, what adding one service to a host that already exists takes; `naming-conventions.md`, the naming scheme in force.
 - `.claude/` — coding-agent tooling: the OpenSpec slash commands and skills under `commands/` and `skills/` are committed. Working trees live under `.claude/worktrees/` and are not.
 
 ## Local setup
