@@ -13182,5 +13182,134 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
             postgres_data_mount_offences(fixture)
 
 
+# ---------------------------------------------------------------------------
+# No expression is interpolated into a shell body
+# ---------------------------------------------------------------------------
+#
+# GitHub substitutes a `${{ … }}` expression into a `run:` body as TEXT, before
+# any shell parses it. So the value becomes part of the script rather than an
+# argument to it, and the shell then reads whatever punctuation it contains.
+#
+# For a SECRET that silently corrupts or executes. Measured against
+# `echo "NAME=<secret>"`: `ab$c#d` renders `ab#d`, `"abc"def` renders `abcdef`,
+# and ``x`id -u`y`` renders `x1000y` -- a command ran, in a job holding a
+# stack's tailnet OAuth client and its deploy SSH key. Re-quoting does not fix
+# it: `echo "N='<secret>'"` still renders `ab$c#d` as `'ab#d'`. A corrupted
+# credential is not loud -- the service starts and reports healthy, which
+# postgres-exporter did for an unknown period.
+#
+# For `inputs` or `github.event.*` it is the classic script injection: those
+# values are chosen by whoever triggers the workflow.
+#
+# The fix for both is the same and is what this asserts: the value reaches the
+# script through a step's `env:` block, where it is an environment variable the
+# shell never parses. `host-converge.yml` was already written this way; this
+# generalises it rather than inventing it.
+
+SHELL_INTERPOLATION = re.compile(r"\$\{\{\s*(secrets\.|inputs\.|github\.event\b|env\.)")
+
+
+def expressions_interpolated_into_shell(root: Path | None = None) -> list[str]:
+    """Every `run:` body carrying an expression that should come via `env:`."""
+    base = WORKFLOWS if root is None else root
+    paths = sorted(
+        path for path in base.iterdir() if path.suffix in (".yml", ".yaml") and path.is_file()
+    )
+    if not paths:
+        raise AssertionError(
+            f"{base} holds no workflow, so this check would pass having read nothing"
+        )
+    offences = []
+    for path in paths:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        jobs = document.get("jobs") if isinstance(document, dict) else None
+        for job, spec in sorted((jobs or {}).items()):
+            if not isinstance(spec, dict):
+                continue
+            for index, step in enumerate(spec.get("steps") or []):
+                if not isinstance(step, dict):
+                    continue
+                body = step.get("run")
+                if not isinstance(body, str):
+                    continue
+                for match in SHELL_INTERPOLATION.finditer(body):
+                    offences.append(
+                        f"{path.name}, job {job}, step {step.get('name', index)}: "
+                        f"interpolates {match.group(0).strip()}… into its `run:` body. "
+                        f"GitHub substitutes that as text before the shell parses the "
+                        f"line, so the value is read as script -- a secret containing "
+                        f"a backtick is executed, one containing `$` is mangled, and "
+                        f"neither fails loudly. Pass it through the step's `env:` and "
+                        f"read it as a variable"
+                    )
+    return offences
+
+
+class TestNoExpressionIsInterpolatedIntoAShellBody(unittest.TestCase):
+    """DERIVED -- `docs/backlog.md`
+    `render-the-env-file-so-a-secret-survives-it`, and the shape
+    `host-converge.yml`'s converge-credentials step already used."""
+
+    def workflow_fixture(self, body: str) -> Path:
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        (directory / "w.yml").write_text(body, encoding="utf-8")
+        return directory
+
+    def test_no_committed_workflow_interpolates_one(self) -> None:
+        offenders = expressions_interpolated_into_shell()
+        self.assertEqual(
+            [],
+            offenders,
+            "these workflows put an expression into a shell body:\n  "
+            + "\n  ".join(offenders),
+        )
+
+    def test_a_secret_in_a_run_body_is_reported(self) -> None:
+        """FALSIFIED -- the shape this stack's deploy used until 2026-09-15."""
+        directory = self.workflow_fixture(
+            "jobs:\n  d:\n    steps:\n      - name: render\n"
+            '        run: echo "P=${{ secrets.PLATFORM_POSTGRES_PASSWORD }}"\n'
+        )
+        offenders = expressions_interpolated_into_shell(directory)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("secrets.", offenders[0])
+
+    def test_a_workflow_input_in_a_run_body_is_reported(self) -> None:
+        """FALSIFIED -- script injection: a `workflow_dispatch` input is chosen
+        by whoever triggers the run."""
+        directory = self.workflow_fixture(
+            "jobs:\n  d:\n    steps:\n      - name: pick\n"
+            '        run: echo "stack=${{ inputs.stack }}"\n'
+        )
+        self.assertEqual(1, len(expressions_interpolated_into_shell(directory)))
+
+    def test_an_env_block_is_accepted(self) -> None:
+        """DERIVED -- the converse, and the whole point: the same secret reached
+        through `env:` is an environment variable the shell never parses."""
+        directory = self.workflow_fixture(
+            "jobs:\n  d:\n    steps:\n      - name: render\n"
+            "        env:\n          P: ${{ secrets.PLATFORM_POSTGRES_PASSWORD }}\n"
+            "        run: printf 'P=%s\\n' \"$P\"\n"
+        )
+        self.assertEqual([], expressions_interpolated_into_shell(directory))
+
+    def test_a_non_sensitive_expression_is_accepted(self) -> None:
+        """DERIVED -- `github.ref` and friends are not attacker-chosen and are
+        used inline across this repository; reporting them would be noise."""
+        directory = self.workflow_fixture(
+            "jobs:\n  d:\n    steps:\n      - name: say\n"
+            '        run: echo "ref=${{ github.ref }}"\n'
+        )
+        self.assertEqual([], expressions_interpolated_into_shell(directory))
+
+    def test_an_empty_workflow_directory_fails(self) -> None:
+        """DERIVED -- the non-vacuity guard this suite applies elsewhere."""
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        with self.assertRaises(AssertionError):
+            expressions_interpolated_into_shell(directory)
+
+
 if __name__ == "__main__":
     unittest.main()
