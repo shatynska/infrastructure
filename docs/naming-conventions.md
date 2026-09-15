@@ -106,6 +106,8 @@ The only namespace shared between companies, and the only place the company name
 
 **Pin every alias to an explicit `HostName`.** A bare alias resolved by MagicDNS follows whichever tailnet profile is active, so `ssh main-production` with two tailnets is a command whose destination depends on a setting you cannot see in it.
 
+**Point the `HostName` at the host's tailnet address, and keep the public one as a comment rather than as a second alias.** A tailnet peer is an authenticated device of the operator's own; the public path works only while the workstation also sits inside the `/24` in that stack's `ssh_allowed_cidrs`, which is a fact about where you are rather than about who you are. The public address is still the fallback — it is what remains when a converge wedges `tailscaled`, and `docs/backlog.md`'s `close-public-ssh-and-manage-sshd-explicitly` is the entry weighing whether to keep it — so record it beside the entry it belongs to and paste it into `HostName` for as long as it is needed. As an alias it would instead be a path taken by habit, on a host that cannot tell you which one you used.
+
 ## Growth
 
 | What arrives | What it costs |
