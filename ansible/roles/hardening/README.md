@@ -9,7 +9,7 @@ UFW (default-deny incoming, SSH always allowed, HTTP/HTTPS opt-in) and fail2ban 
 - Cloud firewall (what's reachable from the internet at all): that environment's `terraform/stacks/<environment>/terraform.tfvars`'s `ssh_allowed_cidrs` and `web_allowed_cidrs`.
 - Host firewall (defense-in-depth on top of whatever the cloud layer already allows): that environment's `ansible/inventory/group_vars/<environment>.yml`'s `hardening_ssh_allowed_cidrs` and `hardening_web_allowed_cidrs`.
 
-The pair is per environment, and both environments must be checked: prod's `web_allowed_cidrs` is `["0.0.0.0/0"]` and staging's is `[]`, so a change made to one environment's pair says nothing about the other's.
+The pair is per environment, and both environments must be checked: prod's and staging's `web_allowed_cidrs` are both `["0.0.0.0/0"]` today, but each is its own stack's value, so a change made to one environment's pair says nothing about the other's.
 
 Whenever either side's CIDR list changes, check the other. Leaving UFW stricter than the cloud firewall silently blocks traffic the cloud layer already permits (this happened once already — see `bootstrap-ansible-host-baseline`'s design.md, Context section for the `web_allowed_cidrs` correction that prompted this note). Leaving UFW looser than the cloud firewall doesn't expose anything new (the cloud layer still blocks it first), but defeats the point of having host-level defense-in-depth at all.
 
