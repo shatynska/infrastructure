@@ -231,6 +231,23 @@ class TestTheDocumentIsReadAtAll(unittest.TestCase):
                     "it should carry is missing",
                 )
 
+    def test_every_document_declaring_sections_carries_a_reference(self) -> None:
+        """The both-forms floor below is the bootstrap document's, and stays
+        there: the onboarding document carries the `§` form only, so requiring
+        both of it would assert a convention it does not follow. What matters
+        per document is that the sweep over it has something to resolve --
+        otherwise a document whose references were rewritten into prose reports
+        clean having resolved none, which is this class's whole subject."""
+        for document, _ in DOCUMENTS_DECLARING_SECTIONS:
+            with self.subTest(document=document.relative_to(ROOT)):
+                text = read_text(document)
+                self.assertTrue(
+                    any(pattern.search(text) for _, pattern in REFERENCE_FORMS),
+                    f"{document.relative_to(ROOT)} carries no cross-reference in "
+                    "any form, so resolving its references against its own "
+                    "headings establishes nothing",
+                )
+
     def test_the_document_carries_cross_references_in_both_forms(self) -> None:
         for form, pattern in REFERENCE_FORMS:
             with self.subTest(form=form):
