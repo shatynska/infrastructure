@@ -102,16 +102,24 @@ services:
       start_period: 10s
 
   postgres:
-    # Exact release, not the `16` series tag: PostgreSQL's release version is
-    # MAJOR.MINOR, so `16` is repointed at every new release and the version
+    # Exact release, not the `18` series tag: PostgreSQL's release version is
+    # MAJOR.MINOR, so `18` is repointed at every new release and the version
     # actually running would be a function of when the last deploy happened
-    # rather than of what is committed. 16.15 is what this host is running --
-    # read from platform-postgres-1 on 2026-09-07, when `16` and `16.15` also
-    # resolved to the identical manifest -- so this pin is a restart on the
-    # same version, not an upgrade. (Docker Hub does rebuild an official tag
-    # in place for base-OS patches, so it is not guaranteed to be the identical
-    # image; the server version is what is pinned.)
-    image: postgres:16.15
+    # rather than of what is committed. (Docker Hub does rebuild an official
+    # tag in place for base-OS patches, so an exact tag is not guaranteed to
+    # be the identical image; the server version is what is pinned.)
+    #
+    # CHANGING THE MAJOR HERE IS NOT AN ORDINARY BUMP, AND MERGING ONE WITHOUT
+    # THE WINDOW IT NEEDS TAKES THE INSTANCE DOWN FOR EVERY APPLICATION ON THE
+    # HOST. PostgreSQL refuses to start against a PGDATA initialised by an
+    # earlier major: it does not upgrade in place and it does not damage the
+    # directory -- it exits, `up -d --wait` blocks and then fails, and the
+    # deploy job goes red with the instance gone. The volume is discarded
+    # deliberately, by an operator, before the deploy that carries the new
+    # major reaches the host -- README.md, "Upgrading the PostgreSQL major
+    # version", is that procedure, and editing the major below without it is
+    # the mistake it exists to prevent.
+    image: postgres:18.6
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}

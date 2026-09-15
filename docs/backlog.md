@@ -100,24 +100,6 @@ Logs are read by `docker logs` over SSH as `ops-claude`, per container, and are 
 
 Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones. Traefik's access log was turned on to stdout on 2026-09-13 alongside the entrypoint-wide TLS defaults, so the HTTP traffic this would aggregate is now being written — and is now what shortens Traefik's own `docker logs` history, which is the argument for doing this rather than a detail of it.
 
-## 10. upgrade-the-shared-postgres-major
-
-**Not blocked; recorded rather than opened because it needs a maintenance window and a deliberate volume reset, neither of which a version-bump pull request can carry.** Recorded 2026-09-08, when Dependabot proposed it and the proposal was closed.
-
-`platform/docker-compose.yml` pins `postgres:16.15`. Dependabot's first run after `cover-platform-images-with-dependabot` landed proposed **18.6** (PR #91, closed unmerged). Taking that proposal as an ordinary bump does not work, and the reason is worth writing down once:
-
-PostgreSQL refuses to start against a `PGDATA` initialised by an earlier major version. It does not upgrade in place and it does not damage the directory -- it exits. So a merged bump reaches the host, `docker compose up -d --wait` blocks and then fails, the deploy job goes red, and the shared instance is down for every application on the host until someone intervenes. Loud, and not data loss.
-
-**What makes this cheap here, and why it is still not automatic.** The shared instance holds no durable data: *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) classifies `postgres_data` as non-durable by policy, and *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) admits no durable data into it at all. So the upgrade path is legitimately "stop the stack, discard the volume, redeploy, let the instance re-initialise" rather than a `pg_upgrade` or a dump-and-restore. That is a decision an operator takes in a chosen window, with the applications that use the instance told first -- not something that happens because a bot opened a pull request on a Tuesday.
-
-Note the divergence this does **not** cover: on the production host, `commerce-ops` runs its own PostgreSQL container with durable data in it (entry 19). Nothing here touches that one, and this entry must not be read as a template for it -- discarding *that* volume loses data.
-
-**No `ignore` stanza was added, deliberately.** `cover-platform-images-with-dependabot`'s design.md Decision 3 argued this: an `ignore` is permanent and silent, and would suppress the only signal this repository gets that its PostgreSQL major has reached end of life. Closing an individual pull request keeps the signal -- Dependabot will propose the next major release when one appears, and closing it again costs nothing. Expect a recurring, correctly-refused pull request; that is the design working, not noise.
-
-**Do first**: check whether any application is by then storing something in the shared instance that it would rather not lose, in which case the answer is that it should not have been (see the requirements above) and that is the thing to fix, not the upgrade.
-
-**And re-provision after it.** Discarding the volume discards every application database in the instance, which each application's classification tolerates and none can start without: before redeploying each, run the provisioning recipe in `docs/onboard-an-application.md` for that host with `rotate=yes`. Since 2026-09-13 `commerce-ops` has such a database on the staging host, and production's is reserved for its cutover. **Once `classify-commerce-ops-production-data-for-the-shared-instance` lands and production's data moves in, discarding production's volume deletes that application's production data for good** — tolerated by that classification, but tell the operator before the window, not after.
-
 ## 11. remove-the-stale-test-hostname
 
 **Not blocked; small, and recorded rather than folded into `alert-on-certificate-expiry`, which found it while reading Traefik's certificate metrics on 2026-09-09.**
@@ -810,7 +792,7 @@ Not blocked.
 
 **What the change owes.** A MODIFIED delta on that requirement recording the policy — whose loss it treats as tolerable, which application and host it covers, and that it ends with the move to Supabase — in the shape of the staging rehearsal-data policy the requirement already carries, and a delta on *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`), whose store table and divergence paragraph it bears on. It merges before any production row lands in the shared instance, and the `commerce-ops` repository's production cutover waits on it.
 
-**What the operator accepted, and what it must not become.** The shared instance is treated as disposable: `upgrade-the-shared-postgres-major` plans to discard its volume, and a rebuild recreates it empty. Once `commerce-ops`'s production data is there, either deletes it for good, and that entry and the rebuild runbook have to say so where an operator reads them before acting. The classification names one application on one host and must not be read as permission for any other application's durable data.
+**What the operator accepted, and what it must not become.** The shared instance is treated as disposable: a PostgreSQL major upgrade discards its volume, and a rebuild recreates it empty. Once `commerce-ops`'s production data is there, either deletes it for good. `platform/README.md`'s *Upgrading the PostgreSQL major version* already says so, in the terms this entry has to meet — it tells the operator that production's database is empty and reserved for a cutover waiting on this change, and that from the moment this lands and the data moves in, discarding that volume deletes it for good. **This change owes the same sentence to the rebuild runbook**, which does not yet carry it, and owes that procedure a re-read to confirm it still says what is true once this lands. The classification names one application on one host and must not be read as permission for any other application's durable data.
 
 ## 56. record-the-hostname-scheme
 
