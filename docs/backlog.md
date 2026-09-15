@@ -819,3 +819,13 @@ Not blocked.
 **What the entry owes:** the rule; where the base domain comes from; and how it composes with the `<company>` segment and the stack name that file already rules on, since a company-owned base domain is a naming axis `<company>` does not yet cover. `docs/bootstrap-a-new-host.md` §4.4 describes the wildcard shape and should point at the rule rather than restate it.
 
 Not blocked. It touches `docs/` and no mechanism.
+
+## 57. quieten-the-certificate-expiry-guard-on-a-host-serving-nothing
+
+**Recorded 2026-09-15 by the operator and this session, from the host rather than from the rules.** `CertificateExpiryNotObserved` has been firing on staging since 2026-09-13 17:01 UTC, which is the hour the platform stack first reached that host. Measured two ways: `amtool alert` inside `platform-alertmanager-1`, and Prometheus's own `/api/v1/alerts`, where it carries `activeAt` `2026-09-13T16:46:46Z` against the rule's `for: 15m`. It predates `expose-staging-on-the-web` by two days, so opening staging's web ports neither caused it nor cleared it.
+
+**The alert is correct, and on this host it is noise.** Its expression in `platform/docker-compose.yml` is `absent(traefik_tls_certs_not_after{cn!=""}) or count(traefik_tls_certs_not_after{cn=""}) > 0`, and it exists to stop `TLSCertificateExpiringSoon` from silently watching nothing — the reasoning is in the change `alert-on-certificate-expiry`. Staging publishes no such series because it holds no certificate: Traefik requests one per router, no container there carries a router label, and `/letsencrypt/acme.json` is 0 bytes. It reaches Slack, since the routing tree sends every alert but `Watchdog` to that receiver (`amtool config routes test severity=warning alertname=CertificateExpiryNotObserved` returns `slack`).
+
+**The design content is telling two silences apart**, which is why this is an entry rather than a one-line fix. Suppressing the alert wherever no certificate exists also suppresses the case it was written for: a Traefik that served certificates and now serves none. A fix therefore needs a series that says the host is *meant* to serve one — a router count, or a per-stack expectation — so that a host with nothing routed is quiet while a host that lost its certificates still alarms.
+
+**Not blocked, and it may close itself.** An application reaching staging clears it: the `commerce-ops` repository's `deploy-commerce-ops-to-staging` is the deploy that would. If that lands first, what survives is the general case, which the next empty host meets on its first day — a second staging, or any new stack whose platform deploy precedes its first application.
