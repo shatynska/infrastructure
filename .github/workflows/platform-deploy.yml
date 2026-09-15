@@ -444,6 +444,8 @@ jobs:
       # writing a bad address into .env.
       - name: Resolve Grafana's tailnet bind address
         id: grafana_bind
+        env:
+          DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
         run: |
           set -euo pipefail
           # A ValueError from IPv4Address is an uncaught exception, which
@@ -453,7 +455,7 @@ jobs:
           is_ipv4() {
             python3 -c "import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])" "$1" 2>/dev/null
           }
-          value="${{ secrets.PLATFORM_DEPLOY_HOST }}"
+          value="$DEPLOY_HOST"
           if is_ipv4 "$value"; then
             resolved="$value"
           else
@@ -470,18 +472,66 @@ jobs:
       # so neither host receives the other's database credential, dashboard
       # credential or alert targets. See Platform Secrets Rendered from CI at
       # Deploy Time.
+      # EVERY VALUE REACHES THE SHELL THROUGH `env:`, NEVER INTERPOLATED INTO
+      # THE SCRIPT. An expression written into a `run:` body is substituted as
+      # TEXT before bash parses the line, so the secret becomes part of a
+      # double-quoted shell word and bash expands it there -- the same reason
+      # host-converge.yml's "Set up the converge credentials" step is written
+      # this way, which is the shape copied here.
+      #
+      # This is not theoretical, and the three measurements are kept because
+      # each fails differently and silently. With `echo "NAME=<secret>"`:
+      #
+      #   ab$c#d      renders  ab#d       -- `$c` expanded to nothing
+      #   "abc"def    renders  abcdef     -- the shell ate the quotes
+      #   x`id -u`y   renders  x1000y     -- A COMMAND RAN
+      #
+      # The third is the one that matters most and is the least obvious: a
+      # secret carrying a backtick or `$(…)` is executed by this job's shell,
+      # which at that moment holds this stack's tailnet OAuth client and the
+      # deploy key below. Nothing outside can reach it, since only the operator
+      # writes these Environments -- so it is a foot-gun rather than an attack
+      # surface, and the fix is to stop the value being shell at all rather
+      # than to quote it better. RE-QUOTING DOES NOT WORK: `echo "N='<secret>'"`
+      # still renders ab$c#d as 'ab#d', measured.
+      #
+      # The first two corrupt instead, and a corrupted credential is not loud:
+      # the service starts, reports healthy, and fails only at whatever it
+      # needed the credential for. postgres-exporter spent an unknown period in
+      # exactly that state -- see docs/backlog.md
+      # `alert-on-the-exporter-being-unable-to-read-postgres`.
+      #
+      # THIS STEP CLOSES THE SHELL AND NOT THE PARSER BELOW IT. Compose reads
+      # the file this writes, and its own dotenv parser expands `$` in a value
+      # whatever is written here -- measured from inside a container, a secret
+      # stored as `ab$c#d` still reaches the service as `ab#d`. So the backtick
+      # case is genuinely shut and the `$` case is not. Do not read the `env:`
+      # block below as making these secrets safe to contain any character:
+      # docs/backlog.md `render-the-env-file-so-a-secret-survives-it` is the
+      # remaining half, and until it lands these are generated with the
+      # `openssl rand` commands, whose alphabets avoid the problem.
       - name: Render .env from secrets
+        env:
+          ACME_EMAIL: ${{ secrets.PLATFORM_ACME_EMAIL }}
+          POSTGRES_USER: ${{ secrets.PLATFORM_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.PLATFORM_POSTGRES_PASSWORD }}
+          POSTGRES_EXPORTER_PASSWORD: ${{ secrets.PLATFORM_POSTGRES_EXPORTER_PASSWORD }}
+          SLACK_WEBHOOK_URL: ${{ secrets.PLATFORM_SLACK_WEBHOOK_URL }}
+          DEADMANSWITCH_URL: ${{ secrets.PLATFORM_DEADMANSWITCH_URL }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.PLATFORM_GRAFANA_ADMIN_PASSWORD }}
+          GRAFANA_BIND_ADDRESS: ${{ steps.grafana_bind.outputs.address }}
         run: |
+          set -euo pipefail
           umask 077
           {
-            echo "ACME_EMAIL=${{ secrets.PLATFORM_ACME_EMAIL }}"
-            echo "POSTGRES_USER=${{ secrets.PLATFORM_POSTGRES_USER }}"
-            echo "POSTGRES_PASSWORD=${{ secrets.PLATFORM_POSTGRES_PASSWORD }}"
-            echo "POSTGRES_EXPORTER_PASSWORD=${{ secrets.PLATFORM_POSTGRES_EXPORTER_PASSWORD }}"
-            echo "SLACK_WEBHOOK_URL=${{ secrets.PLATFORM_SLACK_WEBHOOK_URL }}"
-            echo "DEADMANSWITCH_URL=${{ secrets.PLATFORM_DEADMANSWITCH_URL }}"
-            echo "GRAFANA_ADMIN_PASSWORD=${{ secrets.PLATFORM_GRAFANA_ADMIN_PASSWORD }}"
-            echo "GRAFANA_BIND_ADDRESS=${{ steps.grafana_bind.outputs.address }}"
+            printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL"
+            printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'POSTGRES_EXPORTER_PASSWORD=%s\n' "$POSTGRES_EXPORTER_PASSWORD"
+            printf 'SLACK_WEBHOOK_URL=%s\n' "$SLACK_WEBHOOK_URL"
+            printf 'DEADMANSWITCH_URL=%s\n' "$DEADMANSWITCH_URL"
+            printf 'GRAFANA_ADMIN_PASSWORD=%s\n' "$GRAFANA_ADMIN_PASSWORD"
+            printf 'GRAFANA_BIND_ADDRESS=%s\n' "$GRAFANA_BIND_ADDRESS"
           } >platform/.env
 
       # ssh-keyscan below is trust-on-first-use on EVERY run, which verifies
@@ -509,13 +559,26 @@ jobs:
       # content-layer trust boundary depends on this key being unreadable by
       # any job that has not attached to this Environment -- which the
       # discover and diff jobs above, declaring none, cannot.
+      #
+      # THESE TWO GO THROUGH `env:` FOR THE REASON THE RENDER STEP ABOVE GIVES,
+      # and they are worth naming separately because the entry that found this
+      # said they were unaffected. That was true of the `.env` file, which
+      # neither of them enters -- and wrong about the shell, which both of them
+      # were interpolated into. A private key is PEM base64 and a host is a
+      # tailnet address, so neither can hold a `$` or a backtick today; the
+      # point is that nothing made that a property rather than a coincidence,
+      # and this key is the most valuable secret this job holds.
       - name: Set up the deploy SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.PLATFORM_DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
         run: |
+          set -euo pipefail
           umask 077
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.PLATFORM_DEPLOY_SSH_KEY }}" >~/.ssh/platform_deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KEY" >~/.ssh/platform_deploy_key
           chmod 600 ~/.ssh/platform_deploy_key
-          ssh-keyscan -H "${{ secrets.PLATFORM_DEPLOY_HOST }}" >>~/.ssh/known_hosts
+          ssh-keyscan -H "$DEPLOY_HOST" >>~/.ssh/known_hosts
 
       # One SSH session carries both the content and the trigger: this
       # key's `authorized_keys` entry is now restricted to the forced
@@ -535,6 +598,16 @@ jobs:
       # this step (and therefore this job) on a partial deploy -- no
       # separate post-deploy health check is added here.
       - name: Deliver docker-compose.yml and .env, and trigger the deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+        # DELIBERATELY NO `set -o pipefail` HERE, unlike the two steps above
+        # that gained one with their `env:` blocks -- the asymmetry is the sort
+        # that reads as an oversight. GitHub runs `bash -e {0}`, so `-e` is on
+        # and `pipefail` is not: a `tar` failure in this pipeline is masked and
+        # the step's status is `ssh`'s alone. That is worth closing and is NOT
+        # closed here, because turning it on changes when a deploy fails, which
+        # belongs to a change about the deploy rather than to one about how a
+        # secret is rendered.
         run: |
           tar -czf - -C platform docker-compose.yml .env | \
-            ssh -i ~/.ssh/platform_deploy_key "deploy@${{ secrets.PLATFORM_DEPLOY_HOST }}"
+            ssh -i ~/.ssh/platform_deploy_key "deploy@$DEPLOY_HOST"
