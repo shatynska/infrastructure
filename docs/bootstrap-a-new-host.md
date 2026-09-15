@@ -410,39 +410,39 @@ ssh -i ~/.ssh/<company>-root root@<prod ipv4>
 
 ### 4.4 DNS
 
-In the DNS provider, point each server's hostnames at **that server's own address**. The shape in use is one wildcard `A` record per server, `*.<server>.<base domain>`, so an application's hostname under it resolves with no record of its own; a name outside a wildcard, such as a short alias, takes an `A` record of its own. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now.
+In the DNS provider, point each server's hostnames at **that server's own address**. The shape in use is one wildcard `A` record per server, `*.<server>.BASE_DOMAIN`, so an application's hostname under it resolves with no record of its own; a name outside a wildcard, such as a short alias, takes an `A` record of its own. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now.
 
 **Staging takes hostnames too.** Its cloud firewall opens 80 and 443 as production's does, so a name aimed at it answers; the certificate for a name issues once an application's router names it.
 
-**There is no Terraform for DNS, deliberately, and this is where the zone is written down.** `shatynska.com` is served by `ns15`/`ns25`/`ns35.inhostedns.*` — the nameservers of ukraine.com.ua, neither Hetzner DNS nor Cloudflare — so managing the records in Terraform means moving the nameservers, not adding a provider. The zone as read on 2026-09-08, corrected on 2026-09-09 and 2026-09-14:
+**There is no Terraform for DNS, deliberately.** Both zones are served by third-party nameservers — neither Hetzner DNS nor Cloudflare — so managing the records in Terraform means moving the nameservers, not adding a provider. Both also carry live mail that is not operated from this repository, which is what makes that move a different risk class from the convenience it would buy.
+
+**`COMPANY_DOMAIN` is the company's own web domain**, and carries its apex, a `www` name, any short alias, and the mail:
 
 | Record | Value |
 |---|---|
-| `shatynska.com` A | `2.29.14.98` — the prod host |
-| `www` A | `2.29.14.98` |
-| `fuperia` A | `2.29.14.98` — not routed: `commerce-ops`'s production router does not name it (read 2026-09-14) |
-| `test` A | `2.29.14.98` — a throwaway smoke test's leftover; `docs/backlog.md` entry 11 covers removing it, and the certificate Traefik still renews for it |
-| `staging` A | `62.238.17.177` — the staging host; nothing routes it |
-| `shatynska.com` MX | `mx.ukraine.com.ua` |
-| `shatynska.com` TXT | `v=spf1 include:_spf.ukraine.com.ua ~all` |
+| `COMPANY_DOMAIN` A | `<main-production-server-ip>` |
+| `www` A | `<main-production-server-ip>` |
+| `<alias>` A | the server the alias is aimed at. An alias resolves whether or not an application's router names it, so a name here is not evidence that anything serves it |
+| `COMPANY_DOMAIN` MX | the mail provider's exchanger — not this repository's |
+| `COMPANY_DOMAIN` TXT | that provider's SPF record — likewise |
 
-`fincci.bike` is served by `dns1`/`dns2.registrar-servers.com` — Namecheap's DNS. It too carries live mail (`MX 0 email.fincci.bike`), and a site at its apex; neither is operated from this repository, so neither is transcribed. The records this repository's hosts serve, as read on 2026-09-14:
+**`BASE_DOMAIN` is the zone the servers sit under**, and carries one wildcard per server plus one record for each server's bare name:
 
 | Record | Value |
 |---|---|
-| `*.main-production.fincci.bike` A | `2.29.14.98` — production; `commerce-ops.main-production.fincci.bike` is routed under it |
-| `main-production.fincci.bike` A | `2.29.14.98` — a record of its own: a wildcard does not match the name it sits under |
-| `*.main-staging.fincci.bike` A | `62.238.17.177` — staging |
-| `main-staging.fincci.bike` A | `62.238.17.177` — likewise its own record |
-| `ops.fincci.bike` A | `2.29.14.98` — routed by `commerce-ops`'s production router beside its technical name |
+| `*.main-production.BASE_DOMAIN` A | `<main-production-server-ip>` — an application resolves under it as `<app>.main-production.BASE_DOMAIN`, with no record of its own |
+| `main-production.BASE_DOMAIN` A | `<main-production-server-ip>` — a record of its own: a wildcard does not match the name it sits under |
+| `*.main-staging.BASE_DOMAIN` A | `<main-staging-server-ip>` |
+| `main-staging.BASE_DOMAIN` A | `<main-staging-server-ip>` — likewise its own record |
+| `<alias>.BASE_DOMAIN` A | the server whose router names the alias, beside the application's technical name |
 
-There is no `*.fincci.bike`: an address change edits that server's wildcard, its bare server name and every alias pointing at it, in both tables.
+There is no `*.BASE_DOMAIN`: an address change edits that server's wildcard, its bare server name and every alias pointing at it, in both tables.
 
-**These tables are the project's only written record of the two zones, and their value depends on being read against the zones rather than trusted.** `shatynska.com`'s was written on 2026-09-08 as "the records as read" and was already incomplete that day: the `test` row was missing and was added on 2026-09-09, by a change that found the record while reading Traefik's certificate metrics. Re-read the zones before relying on them.
+**These tables give each zone's shape and not its contents, and nothing in this repository records the records themselves.** That is deliberate — a zone names hosts and addresses this repository does not otherwise publish — and it has a cost, stated at the end of this section. Read the zones in the DNS provider rather than trusting anything written here about what they hold.
 
-**Why the migration is declined rather than queued.** Both zones carry live mail. An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. That is a different risk class from the convenience the migration would buy. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
+**Why the migration is declined rather than queued.** An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
 
-**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when `fincci.bike` names outside the server wildcards, such as `ops.fincci.bike`, become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, and these tables are the mitigation.
+**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when names outside the server wildcards become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, and since these tables hold no values it lives in no written record at all — so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, found by reading the zones and not by reading this.
 
 **Secrets created in this stage:** none. The two `.envrc` files hold the two read-only tokens and are gitignored.
 
@@ -537,7 +537,7 @@ Each application repository will need the same two OAuth values in stage 8; one 
 
 **Check:** your workstation is the one machine in Machines; the policy file saved with `tag:ci` in `tagOwners`; the auth key and the OAuth client's two values are in the password manager. **After stage 6.3, not now:** each server's **machine name is the server's own name** — `main-production` and `main-staging`. That is what the converge job looks the host up by: it asks `tailscaled` for the peer of that name and maps the answer, rather than trusting DNS. A name that does not match is a converge that cannot find its host.
 
-**The machine name is not the same field as the name the host reports, and only one of them is this repository's to set.** The `tailscale` role pins what the host reports, to `{{ inventory_hostname }}`, so that the host's own name — which carries the company, `shatynska-main-production` — never drives it. The *machine* name is assigned when the host first joins and is changed in the Tailscale interface and nowhere else. A rename of either therefore has two halves: a commit for the first, and a click for the second.
+**The machine name is not the same field as the name the host reports, and only one of them is this repository's to set.** The `tailscale` role pins what the host reports, to `{{ inventory_hostname }}`, so that the host's own name — which carries the company, `<company>-main-production` — never drives it. The *machine* name is assigned when the host first joins and is changed in the Tailscale interface and nowhere else. A rename of either therefore has two halves: a commit for the first, and a click for the second.
 
 ## Stage 6. Ansible: configure the host
 
@@ -660,7 +660,7 @@ ansible-playbook playbooks/host-baseline.yml \
   -e tailscale_auth_key=<tskey-auth-... from stage 5>
 ```
 
-**`company` must be right before this run, and nothing checks it for you.** The play's `hostname` role gives the host its own name, `<company>-<inventory_hostname>` — `shatynska-main-production` on the repository this was cloned from. It reads `company` from `ansible/inventory/group_vars/all.yml`, which is the single file a clone changes (§3.1 lists it among the things to edit). The role asserts the variable by name and refuses before touching the host if it is unset, so the failure you would get is loud — but it cannot tell that the value is *someone else's company*, and a host named for the repository you cloned from is a thing you find out months later on a shell prompt. Check it now, not after the converge.
+**`company` must be right before this run, and nothing checks it for you.** The play's `hostname` role gives the host its own name, `<company>-<inventory_hostname>`, so a clone that has not changed `company` names its host for the company it was cloned from. It reads `company` from `ansible/inventory/group_vars/all.yml`, which is the single file a clone changes (§3.1 lists it among the things to edit). The role asserts the variable by name and refuses before touching the host if it is unset, so the failure you would get is loud — but it cannot tell that the value is *someone else's company*, and a host named for the repository you cloned from is a thing you find out months later on a shell prompt. Check it now, not after the converge.
 
 **Do not add `--limit`.** The stack already selects the host set, there is nothing to narrow, and a limit filters the guard play's `localhost` out — so a run that reaches no host would exit 0 again, which is the failure the guard exists to end. `--tags` is safe — the guard is tagged `always` — with the single exception of `--skip-tags always`, which names that tag and switches the guard off.
 
@@ -753,7 +753,7 @@ The usual causes, in rough order: the key was already consumed, because it was g
 
 So the IP is the more durable of the two, and the name's advantage is only that it reads as a name. Whichever you choose, **it is not a value that maintains itself**: the rename case actually occurred — `rename-the-stacks-and-their-resources` renamed both servers and had to update this secret as a named step — and the rebuild case is Appendix B's. Nothing in this repository can check it, and nothing fails until the next merge touching `platform/`, which then fails looking like a network problem. Put it in the password manager entry beside the value, so the next person changing either one knows this exists.
 
-**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main` is mounted and holds `prometheus/` and `grafana/`, and `/etc/fstab` names that path and no other (the path matching the volume's name is a convenience; the two are independent, which is what lets a second stack in one project part them); and `hostname` returns `<company>-<stack>`, e.g. `shatynska-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
+**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main` is mounted and holds `prometheus/` and `grafana/`, and `/etc/fstab` names that path and no other (the path matching the volume's name is a convenience; the two are independent, which is what lets a second stack in one project part them); and `hostname` returns `<company>-<stack>`, e.g. `<company>-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
 
 The web ports are the same on both: **each shows 80 and 443 allowed.** A host without them means its `group_vars` has drifted from its `terraform.tfvars`. That checks the mirror and not reachability: UFW never sees Traefik's published ports (`docs/backlog.md`'s `say-what-the-host-firewall-actually-gates`).
 
