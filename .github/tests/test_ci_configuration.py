@@ -13201,10 +13201,12 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
 # contents.
 
 # WHICH NAMES ARE SECRETS IS READ FROM THE DEPLOY, NOT GUESSED. Every name the
-# render step writes into `.env` from a GitHub secret is one, which is how
-# SLACK_WEBHOOK_URL and DEADMANSWITCH_URL are classified: both are bearer
-# credentials whose whole value is a URL, and no keyword in either name says so.
-# A set of keywords alone had them wrong, and had them wrong silently.
+# render step writes into `.env` from a GitHub secret is one. DEADMANSWITCH_URL
+# is what makes that load-bearing: it is a bearer credential whose whole value
+# is a URL, and no keyword in it says so -- no set of keywords would have it
+# without naming that service. (SLACK_WEBHOOK_URL is a weaker witness, since
+# `WEBHOOK` is in the keyword set below and would catch it either way.) A
+# keyword set alone had DEADMANSWITCH_URL wrong, and had it wrong silently.
 # Tolerant of how the value is wrapped, because the rendering is expected to
 # change: `docs/backlog.md` `render-the-env-file-so-a-secret-survives-it` fixes
 # an unquoted `echo` that lets Compose's dotenv parser expand a `$` in the
@@ -13311,6 +13313,16 @@ def secrets_interpolated_into_urls(path: Path | None = None) -> list[str]:
     return offences
 
 
+def offence(name: str, where: str) -> str:
+    return (
+        f"{where}: builds a URL around ${{{name}}}. That value is a secret, "
+        f"so it may contain `#`, `@`, `/`, `?` or `:`, each of which moves a "
+        f"boundary in the URL rather than failing -- `#` discards everything "
+        f"after it, host included. Pass the secret as a value of its own "
+        f"instead, the way postgres-exporter's DATA_SOURCE_PASS does"
+    )
+
+
 def _scan(path, note_secret, note_offence) -> None:
     def inspect(where: str, value: str) -> None:
         for match in INTERPOLATION.finditer(value):
@@ -13344,6 +13356,16 @@ def _scan(path, note_secret, note_offence) -> None:
             # contains can move a boundary.
             if token == match.group(0):
                 continue
+            # A scheme in the secret's own word is evidence enough on its own.
+            # Gating this on adjacency cost real coverage and bought nothing:
+            # `https://api.example.test/hook${API_TOKEN}` was missed while
+            # `.../hook/${API_TOKEN}` was reported, the only difference being a
+            # `/`, and both break identically on a `#` in the value. The noise
+            # case adjacency was added for -- a secret sharing a value with an
+            # unrelated URL -- is already excluded by the word scoping above.
+            if URL_SHAPED.search(token):
+                note_offence(offence(name, where))
+                continue
             touching = before[-1:] in URL_STRUCTURE or after[:1] in URL_STRUCTURE
             if not touching:
                 continue
@@ -13360,15 +13382,9 @@ def _scan(path, note_secret, note_offence) -> None:
             # content-dependent in the same way as the rest -- a webhook URL
             # ending in a query string puts that `/extra` inside the query.
             appended = before == "" and after[:1] in frozenset("/?#&")
-            if not (URL_SHAPED.search(token) or userinfo or query or appended):
+            if not (userinfo or query or appended):
                 continue
-            note_offence(
-                f"{where}: builds a URL around ${{{name}}}. That value is a secret, "
-                f"so it may contain `#`, `@`, `/`, `?` or `:`, each of which moves a "
-                f"boundary in the URL rather than failing -- `#` discards everything "
-                f"after it, host included. Pass the secret as a value of its own "
-                f"instead, the way postgres-exporter's DATA_SOURCE_PASS does"
-            )
+            note_offence(offence(name, where))
 
     for name, definition in sorted(compose_services(path).items()):
         if not isinstance(definition, dict):
@@ -13529,11 +13545,23 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
         )
         self.assertEqual([], secrets_interpolated_into_urls(fixture))
 
+    def test_a_credential_no_keyword_would_catch_is_classified(self) -> None:
+        """FALSIFIED, and the one that pins the deploy-derived set.
+        DEADMANSWITCH_URL is a bearer credential whose whole value is a URL and
+        whose name holds no secret keyword -- asserted here, so that removing
+        the deploy-derived half fails rather than passing on a keyword."""
+        self.assertFalse(
+            SECRET_TOKENS & set(re.split(r"[^A-Za-z0-9]+", "DEADMANSWITCH_URL")),
+            "DEADMANSWITCH_URL now matches a keyword, so this test no longer "
+            "establishes that names are read from the deploy. Pick another name "
+            "the keyword set does not reach, or assert the derivation directly",
+        )
+        self.assertIn("DEADMANSWITCH_URL", secret_env_names())
+
     def test_the_stacks_own_url_valued_credentials_are_secrets(self) -> None:
-        """FALSIFIED -- SLACK_WEBHOOK_URL and DEADMANSWITCH_URL are bearer
-        credentials whose whole value is a URL, and no keyword in either name
-        says so. They are the stack's only secret-bearing URLs, so a check that
-        does not classify them exempts exactly the values it exists for."""
+        """FALSIFIED -- both are bearer credentials whose whole value is a URL,
+        and they are the stack's only secret-bearing URLs, so a check that does
+        not classify them exempts exactly the values it exists for."""
         for name in ("SLACK_WEBHOOK_URL", "DEADMANSWITCH_URL"):
             with self.subTest(name=name):
                 self.assertTrue(names_a_secret(name))
@@ -13661,18 +13689,18 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
 
     def test_the_scan_examined_something_secret_bearing(self) -> None:
         """DERIVED -- without this, `[] == offenders` is satisfied as well by a
-        stack whose secrets have moved into `env_file:`, `command:` or
-        `entrypoint:`, none of which this reads. Six exist today; the floor is
-        below that so removing one service does not fail the build, but far
-        enough above zero to catch a wholesale move."""
+        stack whose secrets have moved into `env_file:`, which this does not
+        read. Seven exist today; the floor is below that so removing a service
+        does not fail the build, but far enough above zero to catch a wholesale
+        move."""
         seen = secret_interpolations()
         self.assertGreaterEqual(
             len(seen),
             4,
             "the URL check examined almost no secret-bearing interpolation, so "
             "its green result establishes little. Either the stack's secrets "
-            "have moved somewhere this does not read -- env_file:, command:, "
-            f"entrypoint: -- or the deploy renders fewer. Examined: {seen}",
+            "have moved somewhere this does not read -- env_file: -- or the "
+            f"deploy renders fewer. Examined: {seen}",
         )
 
     def test_the_secret_names_come_from_the_deploy(self) -> None:
