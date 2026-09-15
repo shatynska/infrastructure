@@ -23,7 +23,7 @@ Two behaviours of `psql` were checked on staging with statements that change not
 
 The recipe's workstation-side control flow (decision 5) was run on 2026-09-13 with `gh`, `ssh` and `openssl` stubbed, against six cases, and re-run in full after `rotate` moved into the block: the Environment absent (`gh secret list` fails) stops with nothing set and no `ssh`; the secret name already present without `rotate=yes` refuses with nothing set and no `ssh`; `gh secret set` failing stops before `ssh`; the name absent proceeds; the name present with `rotate=yes` proceeds; and the name present with `rotate=no` in the block, while both `ROTATE=yes` and `rotate=yes` were exported in the calling shell, refuses — a value left set in the shell does not reach the check. In the two that proceed, the here-document reaching `ssh` carried the expanded application name and password and left `\gset`, `\if` and `:create_role` literal.
 
-`platform/docker-compose.yml`'s exporter connects as `pgexporter` to database `postgres` alone (`DATA_SOURCE_URI`, with `DATA_SOURCE_USER` and `DATA_SOURCE_PASS` beside it — a single `DATA_SOURCE_NAME` until `fix-the-exporter-dsn-interpolation` split it) and sets no database auto-discovery.
+`platform/docker-compose.yml`'s exporter connects as `pgexporter` to database `postgres` alone (`DATA_SOURCE_NAME`) and sets no database auto-discovery.
 
 ## Goals / Non-Goals
 
