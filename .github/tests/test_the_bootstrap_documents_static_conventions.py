@@ -157,7 +157,7 @@ BLOCK_CLOSING = "!*.pub"
 # pattern's leading `*` eats, so no spelling of it bears on suffix matching.
 GROUP_VARS = ROOT / "ansible" / "inventory" / "group_vars"
 STACKS = ROOT / "terraform" / "stacks"
-SAMPLE_COMPANIES = ("acme", "shatynska")
+SAMPLE_COMPANIES = ("acme", "company")
 SAMPLE_APPLICATIONS = ("app", "commerce-ops")
 
 # A placeholder in a printed path: `<company>`, `<app>`, `<environment>`,

@@ -5,9 +5,9 @@
 # it will install it locally, and without these two keys it refuses the whole
 # scenario. The `docker` role's own meta/main.yml carries the full diagnosis.
 galaxy_info:
-  namespace: shatynska
+  namespace: company
   role_name: swap
-  author: shatynska
+  author: company
   description: >-
     Gives the host a swap file and a swap-tendency policy that survive a
     reboot, without making swap a routine memory tier.

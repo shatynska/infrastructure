@@ -5,9 +5,9 @@
 # it will install it locally, and without these two keys it refuses the whole
 # scenario. It is not a step towards publishing this role anywhere.
 galaxy_info:
-  namespace: shatynska
+  namespace: company
   role_name: image_prune
-  author: shatynska
+  author: company
   description: >-
     Installs a scheduled unit that removes local container images no
     enumerated application and no container still references.

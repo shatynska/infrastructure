@@ -245,7 +245,7 @@ Terraform needs somewhere to keep its state file (the record of what it created)
    grep -rn 'shatynska' --exclude-dir=.git --exclude-dir=openspec .
    ```
 
-   The ones that matter: the `organization` in **both** `terraform/stacks/main-production/versions.tf` **and** `terraform/stacks/main-staging/versions.tf` (your HCP organisation from stage 2), `company` in `ansible/inventory/group_vars/all.yml`, `ghcr_pull_username` in **each** `ansible/inventory/group_vars/<environment>.yml` (stage 6), the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`, and prose in `README.md`.
+   The ones that matter: the `organization` in **both** `terraform/stacks/main-production/versions.tf` **and** `terraform/stacks/main-staging/versions.tf` (your HCP organisation from stage 2), `company` in `ansible/inventory/group_vars/all.yml`, `ghcr_pull_username` in **each** `ansible/inventory/group_vars/<environment>.yml` (stage 6), and the `Documentation=` URL in `ansible/roles/image_prune/tasks/main.yml`. The two clone URLs above are this template's own and stay as they are.
 
    Both `versions.tf` files carry it, and changing only production's is the easy miss: staging would then initialise against someone else's HCP organisation, and the error names a workspace rather than an organisation.
 
@@ -410,39 +410,39 @@ ssh -i ~/.ssh/<company>-root root@<prod ipv4>
 
 ### 4.4 DNS
 
-In the DNS provider, point each server's hostnames at **that server's own address**. The shape in use is one wildcard `A` record per server, `*.<server>.<base domain>`, so an application's hostname under it resolves with no record of its own; a name outside a wildcard, such as a short alias, takes an `A` record of its own. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now.
+In the DNS provider, point each server's hostnames at **that server's own address**. The shape in use is one wildcard `A` record per server, `*.<server>.BASE_DOMAIN`, so an application's hostname under it resolves with no record of its own; a name outside a wildcard, such as a short alias, takes an `A` record of its own. Nothing needs them until an application is routed in stage 8, but they take time to propagate, so create them now.
 
 **Staging takes hostnames too.** Its cloud firewall opens 80 and 443 as production's does, so a name aimed at it answers; the certificate for a name issues once an application's router names it.
 
-**There is no Terraform for DNS, deliberately, and this is where the zone is written down.** `shatynska.com` is served by `ns15`/`ns25`/`ns35.inhostedns.*` — the nameservers of ukraine.com.ua, neither Hetzner DNS nor Cloudflare — so managing the records in Terraform means moving the nameservers, not adding a provider. The zone as read on 2026-09-08, corrected on 2026-09-09 and 2026-09-14:
+**There is no Terraform for DNS, deliberately.** Both zones are served by third-party nameservers — neither Hetzner DNS nor Cloudflare — so managing the records in Terraform means moving the nameservers, not adding a provider. Both also carry live mail that is not operated from this repository, which is what makes that move a different risk class from the convenience it would buy.
+
+**`COMPANY_DOMAIN` is the company's own web domain**, and carries its apex, a `www` name, any short alias, and the mail:
 
 | Record | Value |
 |---|---|
-| `shatynska.com` A | `2.29.14.98` — the prod host |
-| `www` A | `2.29.14.98` |
-| `fuperia` A | `2.29.14.98` — not routed: `commerce-ops`'s production router does not name it (read 2026-09-14) |
-| `test` A | `2.29.14.98` — a throwaway smoke test's leftover; `docs/backlog.md` entry 11 covers removing it, and the certificate Traefik still renews for it |
-| `staging` A | `62.238.17.177` — the staging host; nothing routes it |
-| `shatynska.com` MX | `mx.ukraine.com.ua` |
-| `shatynska.com` TXT | `v=spf1 include:_spf.ukraine.com.ua ~all` |
+| `COMPANY_DOMAIN` A | `<main-production-server-ip>` |
+| `www` A | `<main-production-server-ip>` |
+| `<alias>` A | the server the alias is aimed at. An alias resolves whether or not an application's router names it, so a name here is not evidence that anything serves it |
+| `COMPANY_DOMAIN` MX | the mail provider's exchanger — not this repository's |
+| `COMPANY_DOMAIN` TXT | that provider's SPF record — likewise |
 
-`fincci.bike` is served by `dns1`/`dns2.registrar-servers.com` — Namecheap's DNS. It too carries live mail (`MX 0 email.fincci.bike`), and a site at its apex; neither is operated from this repository, so neither is transcribed. The records this repository's hosts serve, as read on 2026-09-14:
+**`BASE_DOMAIN` is the zone the servers sit under**, and carries one wildcard per server plus one record for each server's bare name. It carries live mail and a site at its apex as well; neither is operated from this repository, so neither is given here — but both move with an NS migration:
 
 | Record | Value |
 |---|---|
-| `*.main-production.fincci.bike` A | `2.29.14.98` — production; `commerce-ops.main-production.fincci.bike` is routed under it |
-| `main-production.fincci.bike` A | `2.29.14.98` — a record of its own: a wildcard does not match the name it sits under |
-| `*.main-staging.fincci.bike` A | `62.238.17.177` — staging |
-| `main-staging.fincci.bike` A | `62.238.17.177` — likewise its own record |
-| `ops.fincci.bike` A | `2.29.14.98` — routed by `commerce-ops`'s production router beside its technical name |
+| `*.main-production.BASE_DOMAIN` A | `<main-production-server-ip>` — an application resolves under it as `<app>.main-production.BASE_DOMAIN`, with no record of its own |
+| `main-production.BASE_DOMAIN` A | `<main-production-server-ip>` — a record of its own: a wildcard does not match the name it sits under |
+| `*.main-staging.BASE_DOMAIN` A | `<main-staging-server-ip>` |
+| `main-staging.BASE_DOMAIN` A | `<main-staging-server-ip>` — likewise its own record |
+| `<alias>.BASE_DOMAIN` A | the server whose router names the alias, beside the application's technical name |
 
-There is no `*.fincci.bike`: an address change edits that server's wildcard, its bare server name and every alias pointing at it, in both tables.
+There is no `*.BASE_DOMAIN`: an address change edits that server's wildcard, its bare server name and every alias pointing at it, in both tables.
 
-**These tables are the project's only written record of the two zones, and their value depends on being read against the zones rather than trusted.** `shatynska.com`'s was written on 2026-09-08 as "the records as read" and was already incomplete that day: the `test` row was missing and was added on 2026-09-09, by a change that found the record while reading Traefik's certificate metrics. Re-read the zones before relying on them.
+**These tables give each zone's shape and not its contents, and the live values are held only by the DNS provider.** That is deliberate, and it has a cost stated at the end of this section. The repository is not empty of them — archived change records under `openspec/changes/archive/` transcribe what was read on the day each was written, and an archived record is never updated — so those are stale readings and not a register. Read the zones in the provider rather than trusting anything written here or there.
 
-**Why the migration is declined rather than queued.** Both zones carry live mail. An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. That is a different risk class from the convenience the migration would buy. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
+**Why the migration is declined rather than queued.** An NS migration moves the MX and SPF records with it, and a transcription error there stops mail rather than a web service — a failure that is silent to every check this repository has, because nothing here monitors mail. Cloudflare and Hetzner DNS were the two candidates considered; neither was chosen, and that choice is still open.
 
-**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when `fincci.bike` names outside the server wildcards, such as `ops.fincci.bike`, become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, and these tables are the mitigation.
+**Revisit when** mail moves off either zone, when a server's address changes — the moment its records are edited by hand — or when names outside the server wildcards become frequent enough that the manual edits recur. A new application hostname is not itself a trigger: under a server's wildcard it costs no edit. What the deferral costs meanwhile is real and worth stating: DNS is the one piece of the running system that lives in no repository, and since these tables hold no values the only copies here are the archive's stale readings — so a rebuild that changes a server's address (`docs/backlog.md` entry 20) or an IPv4 change is followed by a manual edit to every record pointing at that server, found by reading the zones and not by reading this.
 
 **Secrets created in this stage:** none. The two `.envrc` files hold the two read-only tokens and are gitignored.
 
@@ -456,7 +456,7 @@ You now have two servers, and **stage 6 configures both**. It is written once an
 
 **What still differs between the two, and it is no longer the deploy path:**
 
-- **Not its web exposure.** Staging opens 80 and 443 to the internet as production does, so an application routed there is public, not tailnet-only; §4.4 has its hostnames.
+- **Not its web exposure.** Staging opens 80 and 443 to the internet as production does, so an application routed there is public, not tailnet-only; §4.4 gives the shape of its hostnames.
 - **Its approval gate.** Production's deploy waits for a reviewer because `main-production` requires one; staging's does not, because `main-staging` requires none. That is a repository setting, not a difference in the workflow — nothing in `platform-deploy.yml` distinguishes them.
 - **Its Vault password and its deploy keypair**, both its own, for the reasons below.
 
@@ -537,7 +537,7 @@ Each application repository will need the same two OAuth values in stage 8; one 
 
 **Check:** your workstation is the one machine in Machines; the policy file saved with `tag:ci` in `tagOwners`; the auth key and the OAuth client's two values are in the password manager. **After stage 6.3, not now:** each server's **machine name is the server's own name** — `main-production` and `main-staging`. That is what the converge job looks the host up by: it asks `tailscaled` for the peer of that name and maps the answer, rather than trusting DNS. A name that does not match is a converge that cannot find its host.
 
-**The machine name is not the same field as the name the host reports, and only one of them is this repository's to set.** The `tailscale` role pins what the host reports, to `{{ inventory_hostname }}`, so that the host's own name — which carries the company, `shatynska-main-production` — never drives it. The *machine* name is assigned when the host first joins and is changed in the Tailscale interface and nowhere else. A rename of either therefore has two halves: a commit for the first, and a click for the second.
+**The machine name is not the same field as the name the host reports, and only one of them is this repository's to set.** The `tailscale` role pins what the host reports, to `{{ inventory_hostname }}`, so that the host's own name — which carries the company, `<company>-main-production` — never drives it. The *machine* name is assigned when the host first joins and is changed in the Tailscale interface and nowhere else. A rename of either therefore has two halves: a commit for the first, and a click for the second.
 
 ## Stage 6. Ansible: configure the host
 
@@ -660,7 +660,7 @@ ansible-playbook playbooks/host-baseline.yml \
   -e tailscale_auth_key=<tskey-auth-... from stage 5>
 ```
 
-**`company` must be right before this run, and nothing checks it for you.** The play's `hostname` role gives the host its own name, `<company>-<inventory_hostname>` — `shatynska-main-production` on the repository this was cloned from. It reads `company` from `ansible/inventory/group_vars/all.yml`, which is the single file a clone changes (§3.1 lists it among the things to edit). The role asserts the variable by name and refuses before touching the host if it is unset, so the failure you would get is loud — but it cannot tell that the value is *someone else's company*, and a host named for the repository you cloned from is a thing you find out months later on a shell prompt. Check it now, not after the converge.
+**`company` must be right before this run, and nothing checks it for you.** The play's `hostname` role gives the host its own name, `<company>-<inventory_hostname>`, so a clone that has not changed `company` names its host for the company it was cloned from. It reads `company` from `ansible/inventory/group_vars/all.yml`, which is the single file a clone changes (§3.1 lists it among the things to edit). The role asserts the variable by name and refuses before touching the host if it is unset, so the failure you would get is loud — but it cannot tell that the value is *someone else's company*, and a host named for the repository you cloned from is a thing you find out months later on a shell prompt. Check it now, not after the converge.
 
 **Do not add `--limit`.** The stack already selects the host set, there is nothing to narrow, and a limit filters the guard play's `localhost` out — so a run that reaches no host would exit 0 again, which is the failure the guard exists to end. `--tags` is safe — the guard is tagged `always` — with the single exception of `--skip-tags always`, which names that tag and switches the guard off.
 
@@ -753,7 +753,7 @@ The usual causes, in rough order: the key was already consumed, because it was g
 
 So the IP is the more durable of the two, and the name's advantage is only that it reads as a name. Whichever you choose, **it is not a value that maintains itself**: the rename case actually occurred — `rename-the-stacks-and-their-resources` renamed both servers and had to update this secret as a named step — and the rebuild case is Appendix B's. Nothing in this repository can check it, and nothing fails until the next merge touching `platform/`, which then fails looking like a network problem. Put it in the password manager entry beside the value, so the next person changing either one knows this exists.
 
-**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main` is mounted and holds `prometheus/` and `grafana/`, and `/etc/fstab` names that path and no other (the path matching the volume's name is a convenience; the two are independent, which is what lets a second stack in one project part them); and `hostname` returns `<company>-<stack>`, e.g. `shatynska-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
+**Check**, on each host you have converged: `sudo ufw status` as root shows default deny with 22 and the tailnet rules; `tailscale status --json` on the server reports `"BackendState": "Running"` (plain `tailscale status` prints the peer table, not that word); `systemctl list-timers` shows `prune-host-images.timer`; `/mnt/main` is mounted and holds `prometheus/` and `grafana/`, and `/etc/fstab` names that path and no other (the path matching the volume's name is a convenience; the two are independent, which is what lets a second stack in one project part them); and `hostname` returns `<company>-<stack>`, e.g. `<company>-main-production`, while `tailscale status --json` reports `Self.HostName` as the stack's name alone.
 
 The web ports are the same on both: **each shows 80 and 443 allowed.** A host without them means its `group_vars` has drifted from its `terraform.tfvars`. That checks the mirror and not reachability: UFW never sees Traefik's published ports (`docs/backlog.md`'s `say-what-the-host-firewall-actually-gates`).
 
@@ -779,13 +779,15 @@ The journal should carry `prune-host-images: considered N, removed M, refused R`
 
 A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service — `main-production-prune-host-images` and `main-staging-prune-host-images`, one per host and distinctly named because the two servers are named differently on purpose. **Give each the period and grace from Appendix A now.** A check created by its own first ping carries the *observer's* default period, not the unit's weekly one, so until you correct it the observer will call a perfectly healthy weekly job overdue within a day.
 
-### 6.5 Staging's prune fails, and that is the expected state
+### 6.5 Until stage 7 reaches this host, its prune fails, and that is the expected state
 
-On staging, the run above will not say `considered N, removed M, refused R`. It will report that the run was **abandoned** because the keep set is empty, exit non-zero, and ping `/fail`. Nothing is wrong.
+**This describes a stage, not a host.** It is true of any host between its first converge and its first platform deploy — the position you are in right now, whichever stack you are bootstrapping. Once stage 7 has reached that host the prune completes instead, and the completed line below is what it should say from then on. A host already past stage 7 reporting `considered N, removed M, refused R` is not a regression against this section; it is this section's own next paragraph.
+
+Until then, the run above will not say `considered N, removed M, refused R`. It will report that the run was **abandoned** because the keep set is empty, exit non-zero, and ping `/fail`. Nothing is wrong.
 
 The prune protects images that a deployed application references or a running container holds. On a host where nothing is deployed there are neither, so an empty keep set is the honest answer — and the role treats it as a refusal rather than proceeding, because proceeding would mean `docker image prune -a`, weekly, reporting success. That guard is doing exactly what it exists to do.
 
-So `main-staging-prune-host-images` is red from the moment it exists until the platform stack reaches it. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
+So that host's `<inventory_hostname>-prune-host-images` check is red from the moment it exists until the platform stack reaches it. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
 
 **It does not go green by itself when the stack arrives, and this is the step everyone misses.** The check reflects the last *activation*, and the timer is weekly — so a stack deployed on Saturday leaves a red check until the following Saturday, with nothing wrong. Trigger one activation by hand after stage 7 reaches that host:
 
@@ -1087,7 +1089,7 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 ## Appendix B. Rebuilding an existing host
 
-**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. Its DNS points at its address as production's does, so 4.4 applies to it as well if the address changed — every staging row in 4.4's tables — and its certificates reissue on their own once its applications redeploy.
+**This covers either host.** It is written for production, which carries the applications; staging is rebuilt the same way through stage 6 and then through stage 7, its platform stack redeployed by the dispatch the sequence below names. Its DNS points at its address as production's does, so 4.4 applies to it as well if the address changed — its own rows in 4.4's tables, and any alias aimed at it — and its certificates reissue on their own once its applications redeploy.
 
 An important consequence for staging specifically: its data volume is **not** wiped by a rebuild, and its `known_hosts` entry **is** invalidated. The second is the one that bites, because it presents as the converge failing at connection time rather than as a rebuild artefact.
 
@@ -1099,7 +1101,7 @@ The same stages, in this order, skipping what still exists: 4.2 (with `server_en
 
 ## Appendix C. What to change for a company deployment
 
-Recorded in detail in `docs/backlog.md`. Two of them — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; the database section of `docs/onboard-an-application.md` is that boundary. The one still to do before real data arrives is container resource limits, `docs/backlog.md` entry 6 — log rotation and swap were the other two and were delivered together by `bound-host-log-growth-and-add-swap`. The ones a company needs that this repository does not: a private repository in the company organisation, and an approver who is not the author. DNS as code was the third until the zone was read: it is served by a registrar carrying live MX and SPF, so managing it in Terraform means an NS migration that moves mail, and it is declined rather than queued — §4.4 records the zone, the reasoning and what would reopen it.
+Recorded in detail in `docs/backlog.md`. Two of them — logical off-host database backups, and a decided database model — were resolved together by `scope-the-shared-database-to-non-durable-data`, which found that the shared instance holds no application data and that what this host needed was a stated boundary rather than a backup pipeline; the database section of `docs/onboard-an-application.md` is that boundary. The one still to do before real data arrives is container resource limits, `docs/backlog.md` entry 6 — log rotation and swap were the other two and were delivered together by `bound-host-log-growth-and-add-swap`. The ones a company needs that this repository does not: a private repository in the company organisation, and an approver who is not the author. DNS as code was the third until the zone was read: it is served by a registrar carrying live MX and SPF, so managing it in Terraform means an NS migration that moves mail, and it is declined rather than queued — §4.4 records the zone's shape, the reasoning and what would reopen it.
 
 **Two stacks are no longer among them.** This document now stands both up, in stages 1 to 4, because deciding the count late is what costs — the Hetzner project layout, the workspace names and the read-only secret names are all stage 1 to 3 decisions, and revisiting them against a running production system is the expensive order. Both hosts are configured too: stage 6 runs once per stack. Both are publicly reachable as well: staging runs the platform stack, opens 80 and 443 as production does, and has hostnames of its own under a wildcard (§4.4).
 

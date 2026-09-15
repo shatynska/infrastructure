@@ -11,7 +11,7 @@
 # host answered to `main-server` and would have kept answering to it forever.
 #
 # THE TWO NAMES, and why they differ. This sets the host's OWN name, which
-# carries the company: `shatynska-main-production`. The name the host reports
+# carries the company: `<company>-main-production`. The name the host reports
 # to the tailnet is `inventory_hostname` alone -- `main-production` -- and is
 # pinned by the `tailscale` role. The company's namespace is the workstation,
 # which serves more than one company; the tailnet belongs to one company and
