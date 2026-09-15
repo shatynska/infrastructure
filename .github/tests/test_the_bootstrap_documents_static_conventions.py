@@ -39,18 +39,21 @@ commit whose author has no reason to read the rows they break. Recorded by
 
 The two checks have different scopes, deliberately
 --------------------------------------------------
-The **reference** check reads `docs/bootstrap-a-new-host.md` alone. Other
-committed files cite its sections -- archived change records name several -- and
-a repository-wide reference check would eventually go red on an archived record,
-which this repository may correct only to make it say what actually happened. So
-that sweep stops at the document that owns the headings. It follows that a
-pointer from this document to another one must be written in prose rather than
-as `§N.N`, which would be resolved against the wrong document's headings.
+The **reference** check reads each document in `DOCUMENTS_DECLARING_SECTIONS`,
+resolving that document's references against **its own** headings. What it must
+never become is a repository-wide sweep: other committed files cite these
+documents' sections -- archived change records name several -- and a sweep
+reaching those would eventually go red on an archived record, which this
+repository may correct only to make it say what actually happened. A document
+that numbers and cites its own sections is a different case and carries none of
+that exposure, which is why the onboarding document joined the list in the
+commit that numbered it. It follows that a pointer from one of these documents
+to another must be written in prose rather than as `§N.N`, which is resolved
+against the citing document's own headings.
 
 The **key-target** check reads every document in `KEY_GENERATING_DOCUMENTS`. It
-resolves nothing against a set of headings, so it carries none of that risk, and
-scoping it to one document would mean a command losing its only check by being
-moved to where it is run.
+resolves nothing against a set of headings at all, so scoping it to one document
+would only mean a command losing its check by being moved to where it is run.
 
 What this deliberately does not attempt
 ---------------------------------------
@@ -90,6 +93,14 @@ ONBOARDING = ROOT / "docs" / "onboard-an-application.md"
 # the table and lost the command -- the most frequently run of the two, since it
 # repeats per application per environment.
 KEY_GENERATING_DOCUMENTS = (BOOTSTRAP, ONBOARDING)
+
+# Each document that numbers its own sections and cites them, with the floor
+# under how many that document declares. The floor is per document because it
+# guards against the headings ceasing to parse, and what counts as implausibly
+# few differs: the bootstrap runbook carries dozens, the onboarding document a
+# handful. Both resolve their own references against their own headings, which
+# is why widening this reaches no archived record.
+DOCUMENTS_DECLARING_SECTIONS = ((BOOTSTRAP, 20), (ONBOARDING, 5))
 
 # The directory the document requires every generated private half to land in.
 # One accepted spelling rather than several: an on-host absolute path such as
@@ -177,16 +188,19 @@ class TestTheDocumentIsReadAtAll(unittest.TestCase):
         self.text = read_text(BOOTSTRAP)
 
     def test_the_document_declares_the_sections_it_is_written_in(self) -> None:
-        declared = declared_sections(self.text)
-        self.assertGreaterEqual(
-            len(declared),
-            20,
-            f"{BOOTSTRAP.relative_to(ROOT)} declares {len(declared)} numbered "
-            "section(s). The reference check resolves against that set, so a "
-            "document whose headings stopped parsing would report every "
-            "reference as unresolved -- or, if the references stopped parsing "
-            "too, report a clean sweep having read nothing",
-        )
+        for document, floor in DOCUMENTS_DECLARING_SECTIONS:
+            with self.subTest(document=document.relative_to(ROOT)):
+                declared = declared_sections(read_text(document))
+                self.assertGreaterEqual(
+                    len(declared),
+                    floor,
+                    f"{document.relative_to(ROOT)} declares {len(declared)} "
+                    "numbered section(s). The reference check resolves against "
+                    "that set, so a document whose headings stopped parsing "
+                    "would report every reference as unresolved -- or, if the "
+                    "references stopped parsing too, report a clean sweep "
+                    "having read nothing",
+                )
 
     def test_the_document_carries_the_key_generation_commands(self) -> None:
         self.assertGreaterEqual(
@@ -254,15 +268,20 @@ class TestEveryCrossReferenceResolves(unittest.TestCase):
     """A reference to a section is a reference to a heading that exists."""
 
     def test_no_cross_reference_names_a_section_the_document_does_not_have(self) -> None:
-        offences = unresolved_references(read_text(BOOTSTRAP))
-        self.assertEqual(
-            offences,
-            [],
-            f"{len(offences)} cross-reference(s) in "
-            f"{BOOTSTRAP.relative_to(ROOT)} name a section no heading declares. "
-            "A section was inserted, renumbered or removed without its "
-            "references following:\n  " + "\n  ".join(offences),
-        )
+        for document, _ in DOCUMENTS_DECLARING_SECTIONS:
+            with self.subTest(document=document.relative_to(ROOT)):
+                offences = unresolved_references(read_text(document))
+                self.assertEqual(
+                    offences,
+                    [],
+                    f"{len(offences)} cross-reference(s) in "
+                    f"{document.relative_to(ROOT)} name a section no heading "
+                    "declares. A section was inserted, renumbered or removed "
+                    "without its references following, or a pointer to another "
+                    "document was written as `§N.N` -- which resolves against "
+                    "this document's headings, so it must be prose:\n  "
+                    + "\n  ".join(offences),
+                )
 
 
 # The repository's own document satisfies both conventions, so a check run only

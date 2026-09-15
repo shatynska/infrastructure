@@ -969,7 +969,7 @@ All five active targets should report `"health":"up"` — `prometheus`, `node-ex
 
 ## Stage 8. Onboarding an application
 
-Repeat this for every service. The procedure is `docs/onboard-an-application.md`, a document of its own because it is read once per application rather than once per server -- out of order, years apart, by someone who is not bootstrapping anything. Everything this stage used to carry is in it, including the database recipe and the reasoning beside it.
+Repeat this for every service. The procedure is `docs/onboard-an-application.md`, a document of its own because it is read once per application rather than once per server — out of order, years apart, by someone who is not bootstrapping anything. Everything this stage used to carry is in it, including the database recipe and the reasoning beside it.
 
 Three things a reader of this sequence wants at this point, each stated in full there:
 

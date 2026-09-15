@@ -81,6 +81,11 @@ id_ed25519
 # pattern reaches them. Both documents above write each into ~/.ssh/; these
 # catch the relative-path slip that writes one here instead.
 #
+# `/*-platform` below matches the retired un-suffixed <company>-platform, which
+# no document generates any more. It is left rather than removed: it costs
+# nothing, and a workstation that still holds one from before the rename is
+# exactly the case this block exists for.
+#
 # THE PATTERNS BELOW DO NOT COVER THE WHOLE SCHEME, and the gap is recorded
 # rather than quietly widened: `/*-deploy` was written for the retired
 # <company>-<app>-deploy spelling and matches no <company>-<app>-<environment>;

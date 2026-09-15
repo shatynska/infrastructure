@@ -45,6 +45,8 @@ Passphrase-less, because continuous integration cannot type one. One key per app
 
 **Check:** `ssh-keygen -lf ~/.ssh/<company>-<app>-<environment>.pub` prints a fingerprint. Keep it — §2.2 commits the public half and §4.2 stores the private one, and the fingerprint is how you tell two of these apart afterwards. The comment is a label for a human reading the file and nothing reads it mechanically.
 
+**The comment convention, and the two committed entries that predate it.** An application's key carries `<app>-deploy-<environment>` and the platform's carries `deploy@platform-<environment>`, so a `group_vars` entry says which cell it authorises. Production's two entries are older than the second host and carry no environment segment at all — `deploy@platform` and `commerce-ops-deploy` in `ansible/inventory/group_vars/production.yml`, against `deploy@platform-staging` and `commerce-ops-deploy-staging` in `staging.yml`. They are left as they are: rewriting a committed comment converges both hosts to change a label nothing reads, and a key is identified by the fingerprint above. Read production's two as legacy rather than as a second convention.
+
 ### 2.2 Add the entry, and let a converge install it
 
 Add to `deploy_apps` in `ansible/inventory/group_vars/<environment>.yml`:
@@ -160,7 +162,7 @@ Create it before §3.2, which refuses to store a password in an Environment that
 
 ### 4.2 The secrets, per Environment
 
-The whole table repeats per Environment, and every row takes that target's own values:
+The whole table repeats per Environment, and every row after the first takes that target's own values:
 
 | Name | Value from |
 |---|---|
@@ -170,7 +172,7 @@ The whole table repeats per Environment, and every row takes that target's own v
 | The shared-instance database password, under the name §3.2 gave it — `SHARED_POSTGRES_PASSWORD` for `commerce-ops` | Written by §3.2's recipe, with that target's own independently generated value — never set by hand here, and never under a name the Environment already holds |
 | The application's own settings | Whatever the application needs |
 
-**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<environment>` must print the fingerprint of the public half you committed in §2.2.
+**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<environment>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance.
 
 ### 4.3 Anything it persists has to say why it needs no backup
 
