@@ -500,6 +500,16 @@ jobs:
       # needed the credential for. postgres-exporter spent an unknown period in
       # exactly that state -- see docs/backlog.md
       # `alert-on-the-exporter-being-unable-to-read-postgres`.
+      #
+      # THIS STEP CLOSES THE SHELL AND NOT THE PARSER BELOW IT. Compose reads
+      # the file this writes, and its own dotenv parser expands `$` in a value
+      # whatever is written here -- measured from inside a container, a secret
+      # stored as `ab$c#d` still reaches the service as `ab#d`. So the backtick
+      # case is genuinely shut and the `$` case is not. Do not read the `env:`
+      # block below as making these secrets safe to contain any character:
+      # docs/backlog.md `render-the-env-file-so-a-secret-survives-it` is the
+      # remaining half, and until it lands these are generated with the
+      # `openssl rand` commands, whose alphabets avoid the problem.
       - name: Render .env from secrets
         env:
           ACME_EMAIL: ${{ secrets.PLATFORM_ACME_EMAIL }}
@@ -590,6 +600,14 @@ jobs:
       - name: Deliver docker-compose.yml and .env, and trigger the deploy
         env:
           DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+        # DELIBERATELY NO `set -o pipefail` HERE, unlike the two steps above
+        # that gained one with their `env:` blocks -- the asymmetry is the sort
+        # that reads as an oversight. GitHub runs `bash -e {0}`, so `-e` is on
+        # and `pipefail` is not: a `tar` failure in this pipeline is masked and
+        # the step's status is `ssh`'s alone. That is worth closing and is NOT
+        # closed here, because turning it on changes when a deploy fails, which
+        # belongs to a change about the deploy rather than to one about how a
+        # secret is rendered.
         run: |
           tar -czf - -C platform docker-compose.yml .env | \
             ssh -i ~/.ssh/platform_deploy_key "deploy@$DEPLOY_HOST"

@@ -13206,49 +13206,85 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
 # shell never parses. `host-converge.yml` was already written this way; this
 # generalises it rather than inventing it.
 
-SHELL_INTERPOLATION = re.compile(r"\$\{\{\s*(secrets\.|inputs\.|github\.event\b|env\.)")
+# `steps.*.outputs` and `needs.*.outputs` carry values DERIVED from secrets and
+# from inputs -- this workflow's Grafana bind address is resolved from
+# PLATFORM_DEPLOY_HOST that way -- so a check omitting them would pass a later
+# edit that put the derived value back inline. `github.head_ref` is GitHub's
+# own canonical script-injection example: a branch name, chosen by whoever
+# opened the pull request.
+SHELL_INTERPOLATION = re.compile(
+    r"\$\{\{\s*("
+    r"secrets\.|inputs\.|env\.|"
+    r"github\.event\b|github\.head_ref\b|"
+    r"steps\.[A-Za-z0-9_-]+\.outputs\b|needs\.[A-Za-z0-9_-]+\.outputs\b"
+    r")"
+)
+
+
+SHELL_BODY_FLOOR = 10
+
+
+def shell_bodies(root: Path | None = None) -> list[tuple[str, str, object, str]]:
+    """Every `run:` body under `.github/`, with where it came from.
+
+    Composite actions are read as well as workflows: `runs.steps[].run` is the
+    same hazard, and a tree that moved its scripts there would otherwise
+    satisfy the check below having examined nothing.
+    """
+    base = (WORKFLOWS.parent if root is None else root)
+    found = []
+    for path in sorted(base.rglob("*.yml")) + sorted(base.rglob("*.yaml")):
+        if not path.is_file():
+            continue
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            continue
+        if not isinstance(document, dict):
+            continue
+        groups = []
+        jobs = document.get("jobs")
+        if isinstance(jobs, dict):
+            groups += [(job, spec.get("steps")) for job, spec in sorted(jobs.items())
+                       if isinstance(spec, dict)]
+        runs = document.get("runs")
+        if isinstance(runs, dict):
+            groups.append(("runs", runs.get("steps")))
+        for job, steps in groups:
+            for index, step in enumerate(steps or []):
+                if isinstance(step, dict) and isinstance(step.get("run"), str):
+                    found.append((path.name, job, step.get("name", index), step["run"]))
+    return found
 
 
 def expressions_interpolated_into_shell(root: Path | None = None) -> list[str]:
     """Every `run:` body carrying an expression that should come via `env:`."""
-    base = WORKFLOWS if root is None else root
-    paths = sorted(
-        path for path in base.iterdir() if path.suffix in (".yml", ".yaml") and path.is_file()
-    )
-    if not paths:
+    bodies = shell_bodies(root)
+    if not bodies:
         raise AssertionError(
-            f"{base} holds no workflow, so this check would pass having read nothing"
+            f"found no `run:` body at all under "
+            f"{WORKFLOWS.parent if root is None else root}, so this check would pass "
+            f"having examined nothing. Either the scripts have moved somewhere this "
+            f"does not read, or the tree is not what this expects"
         )
     offences = []
-    for path in paths:
-        document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        jobs = document.get("jobs") if isinstance(document, dict) else None
-        for job, spec in sorted((jobs or {}).items()):
-            if not isinstance(spec, dict):
-                continue
-            for index, step in enumerate(spec.get("steps") or []):
-                if not isinstance(step, dict):
-                    continue
-                body = step.get("run")
-                if not isinstance(body, str):
-                    continue
-                for match in SHELL_INTERPOLATION.finditer(body):
-                    offences.append(
-                        f"{path.name}, job {job}, step {step.get('name', index)}: "
-                        f"interpolates {match.group(0).strip()}… into its `run:` body. "
-                        f"GitHub substitutes that as text before the shell parses the "
-                        f"line, so the value is read as script -- a secret containing "
-                        f"a backtick is executed, one containing `$` is mangled, and "
-                        f"neither fails loudly. Pass it through the step's `env:` and "
-                        f"read it as a variable"
-                    )
+    for name, job, step, body in bodies:
+        for match in SHELL_INTERPOLATION.finditer(body):
+            offences.append(
+                f"{name}, job {job}, step {step}: interpolates "
+                f"{match.group(0).strip()}… into its `run:` body. GitHub substitutes "
+                f"that as text before the shell parses the line, so the value is read "
+                f"as script -- a secret containing a backtick is executed, one "
+                f"containing `$` is mangled, and neither fails loudly. Pass it "
+                f"through the step's `env:` and read it as a variable"
+            )
     return offences
 
 
 class TestNoExpressionIsInterpolatedIntoAShellBody(unittest.TestCase):
-    """DERIVED -- `docs/backlog.md`
-    `render-the-env-file-so-a-secret-survives-it`, and the shape
-    `host-converge.yml`'s converge-credentials step already used."""
+    """DERIVED -- the shape `host-converge.yml`'s converge-credentials step
+    already used, and whose comment already gave the reason: an expression in a
+    shell body is substituted as text before bash parses the line."""
 
     def workflow_fixture(self, body: str) -> Path:
         directory = Path(tempfile.mkdtemp())
@@ -13264,6 +13300,54 @@ class TestNoExpressionIsInterpolatedIntoAShellBody(unittest.TestCase):
             "these workflows put an expression into a shell body:\n  "
             + "\n  ".join(offenders),
         )
+
+    def test_the_sweep_examined_a_plausible_number_of_shell_bodies(self) -> None:
+        """DERIVED -- an empty-directory guard only catches an empty directory.
+        A green result must also mean something was read: without this, moving
+        every script into a composite action this did not read, or into a file
+        suffix it does not glob, satisfies the check silently."""
+        bodies = shell_bodies()
+        self.assertGreaterEqual(
+            len(bodies),
+            SHELL_BODY_FLOOR,
+            f"examined only {len(bodies)} `run:` bodies under .github/, which is too "
+            f"few for this repository -- the check's green result establishes little. "
+            f"Either the scripts have moved somewhere this does not read, or the "
+            f"floor needs revisiting deliberately",
+        )
+
+    def test_a_composite_action_is_read(self) -> None:
+        """FALSIFIED -- `runs.steps[].run` in a composite action is the same
+        hazard, and a sweep reading only `jobs:` would pass over it."""
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        nested = directory / "actions" / "thing"
+        nested.mkdir(parents=True)
+        (nested / "action.yml").write_text(
+            "runs:\n  using: composite\n  steps:\n    - name: leak\n"
+            '      run: echo "P=${{ secrets.PLATFORM_POSTGRES_PASSWORD }}"\n',
+            encoding="utf-8",
+        )
+        self.assertEqual(1, len(expressions_interpolated_into_shell(directory)))
+
+    def test_a_derived_step_output_is_reported(self) -> None:
+        """FALSIFIED -- this workflow's Grafana bind address is resolved FROM
+        PLATFORM_DEPLOY_HOST into a step output, so a check omitting step
+        outputs would pass an edit putting the derived value back inline."""
+        directory = self.workflow_fixture(
+            "jobs:\n  d:\n    steps:\n      - name: use\n"
+            '        run: echo "a=${{ steps.grafana_bind.outputs.address }}"\n'
+        )
+        self.assertEqual(1, len(expressions_interpolated_into_shell(directory)))
+
+    def test_the_branch_name_injection_vector_is_reported(self) -> None:
+        """FALSIFIED -- `github.head_ref` is GitHub's own canonical script
+        injection example: a branch name chosen by whoever opened the PR."""
+        directory = self.workflow_fixture(
+            "jobs:\n  d:\n    steps:\n      - name: use\n"
+            '        run: echo "branch=${{ github.head_ref }}"\n'
+        )
+        self.assertEqual(1, len(expressions_interpolated_into_shell(directory)))
 
     def test_a_secret_in_a_run_body_is_reported(self) -> None:
         """FALSIFIED -- the shape this stack's deploy used until 2026-09-15."""

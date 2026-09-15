@@ -863,6 +863,28 @@ Removing it needs one of two things, and both are changes to **what the run remo
 
 **One value to rotate regardless of when this is taken**: the password that was live on 2026-09-15 appeared in an operator's terminal while this was diagnosed, so it is no longer only in the two Environments that hold it.
 
+## 64. render-the-env-file-so-a-secret-survives-it
+
+**Not blocked. Narrowed rather than closed**: the pull request that fixed the shell layer on 2026-09-15 deleted this entry as done, and was wrong to — there are two layers, and only one of them is shut.
+
+**Layer one, closed.** `platform-deploy.yml` rendered `.env` with `echo "NAME=${{ secrets.X }}"`. GitHub substitutes a secret's raw text into the `run:` body, so bash read it as script: `ab$c#d` rendered `ab#d`, `"abc"def` rendered `abcdef`, and ``x`id -u`y`` rendered `x1000y` — **a command ran**, in a job holding that stack's tailnet OAuth client and deploy SSH key. Every value now reaches that script through the step's `env:` block, and `.github/tests` refuses any workflow that interpolates a secret, a workflow input or a `github.event` value into a `run:` body.
+
+**Layer two, open, and it is what this entry now is.** Compose's own `.env` parser expands `$` inside the value. Measured **from inside a running container** on 2026-09-15, against a `.env` rendered exactly as the fixed workflow now renders it:
+
+| Secret as stored | What the container process receives |
+|---|---|
+| `ab$c#d` | `ab#d` — `$c` expanded to nothing |
+| `"abc"def` | `abc` — leading quote consumed, remainder dropped |
+| `A1+b/c=` | `A1+b/c=` — intact, and this is what `openssl rand -base64` produces |
+
+A wrong credential here is silent: the service starts, reports healthy, and fails only at whatever needed the credential — which postgres-exporter did for an unknown period (`alert-on-the-exporter-being-unable-to-read-postgres`). It reaches the seven secrets the render step writes.
+
+**Two remedies were tried and neither is established.** Single-quoting the rendered line does not stop the expansion — measured, same `ab#d`. Escaping `$` as `$$`, Compose's documented escape, was attempted and **not** measured cleanly, because the test harness's own `$$` expanded to the shell's PID; treat it as unverified rather than as ruled out. It is the first thing to try, and it needs a real measurement.
+
+**Measure from inside a container, not with `docker compose config`.** That command escapes a literal `$` as `$$` in its own output, so it reports a value that looks corrupted when it is not, and vice versa. Reading it instead of the container is how this entry's first diagnosis went wrong — twice, in opposite directions: once blaming Compose alone, then bash alone. It is both.
+
+**Until it closes**, generate these with the `openssl rand` commands `docs/bootstrap-a-new-host.md` §0 gives, whose alphabets contain neither character. That instruction is also in `platform/README.md`, beside the manual role step that pastes one.
+
 ## 65. assert-no-secret-is-built-into-a-url
 
 **Not blocked. Split out of the fix that motivated it, deliberately, and the reason is the entry's main content.** Recorded 2026-09-15.
