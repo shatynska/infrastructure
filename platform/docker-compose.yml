@@ -237,7 +237,27 @@ services:
       # `pgexporter` is a fixed, non-secret role name (documented in
       # README.md's manual role-creation step below); only its password is
       # a secret.
-      DATA_SOURCE_NAME: postgresql://pgexporter:${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/postgres?sslmode=disable
+      #
+      # THE PASSWORD IS PASSED AS ITS OWN VALUE AND NEVER INTERPOLATED INTO A
+      # URL, and that is the whole point of these three variables rather than
+      # the single DATA_SOURCE_NAME this used to carry. A password is a
+      # generated string, so it may hold any of the characters a URL gives
+      # meaning to -- `#`, `@`, `/`, `?`, `:` -- and each one silently changes
+      # what the URL parses as rather than failing to parse it as a password.
+      # `#` is the worst of them: it begins a fragment, so everything after it,
+      # host and port and database included, is discarded.
+      #
+      # This is not hypothetical. Both hosts ran for an unknown period with a
+      # password containing `#`, so the exporter had no host to connect to,
+      # reported `pg_up 0`, and was found on 2026-09-15 only by reading that
+      # metric during a PostgreSQL upgrade -- the container was `healthy` and
+      # its Prometheus target was `up` throughout, because the exporter serves
+      # /metrics with HTTP 200 whether or not it can reach a database. Measured
+      # both ways against v0.20.1 with a password carrying `#/?@`: the URL form
+      # gives pg_up 0, this form gives pg_up 1.
+      DATA_SOURCE_URI: postgres:5432/postgres?sslmode=disable
+      DATA_SOURCE_USER: pgexporter
+      DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_PASSWORD}
     networks:
       # Reaches Postgres over the private link, is scraped by Prometheus
       # over platform_monitoring -- never platform_edge (design.md).
@@ -246,7 +266,7 @@ services:
     healthcheck:
       # Only confirms the exporter's own HTTP server is up -- postgres_exporter
       # serves /metrics with HTTP 200 regardless of database connectivity, so
-      # this deliberately does NOT catch a bad DATA_SOURCE_NAME.
+      # this deliberately does NOT catch an unusable connection setting.
       #
       # NOR DOES ANYTHING ELSE, and this comment said otherwise until 2026-09-15.
       # MetricsTargetDown is `up == 0` -- Prometheus's own scrape success -- and
