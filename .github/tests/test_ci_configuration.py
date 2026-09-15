@@ -13182,5 +13182,157 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
             postgres_data_mount_offences(fixture)
 
 
+# ---------------------------------------------------------------------------
+# No secret is interpolated into the middle of a URL
+# ---------------------------------------------------------------------------
+#
+# A generated password may hold any of the characters a URL gives meaning to.
+# Embedded in one, `#` begins a fragment and discards the host, port and
+# database after it; `@`, `/`, `?` and `:` each shift a boundary instead. The
+# result parses -- as something else -- so nothing raises and the service
+# starts. postgres-exporter ran this way on both hosts for an unknown period,
+# serving /metrics with HTTP 200 and `pg_up 0`, its container healthy and its
+# Prometheus target up the whole time.
+#
+# What is caught is a secret-bearing variable appearing INSIDE a longer string
+# that also looks like a URL. A value that is nothing but `${SOME_URL}` is the
+# opposite case and is not an offence: there the whole secret is the URL, as
+# Alertmanager's Slack webhook is, and no boundary can be shifted by its
+# contents.
+
+SECRET_VARIABLE = re.compile(r"(?:PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIAL)")
+INTERPOLATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}")
+URL_SHAPED = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def secrets_interpolated_into_urls(path: Path | None = None) -> list[str]:
+    """Every place the stack builds a URL around a secret-bearing variable."""
+    offences = []
+
+    def inspect(where: str, value: str) -> None:
+        if not URL_SHAPED.search(value):
+            return
+        for match in INTERPOLATION.finditer(value):
+            name = match.group(1)
+            if not SECRET_VARIABLE.search(name.upper()):
+                continue
+            if match.group(0) == value.strip():
+                continue
+            offences.append(
+                f"{where}: builds a URL around ${{{name}}}. That value is a secret, "
+                f"so it may contain `#`, `@`, `/`, `?` or `:`, each of which moves a "
+                f"boundary in the URL rather than failing -- `#` discards everything "
+                f"after it, host included. Pass the secret as a value of its own "
+                f"instead, the way postgres-exporter's DATA_SOURCE_PASS does"
+            )
+
+    for name, definition in sorted(compose_services(path).items()):
+        if not isinstance(definition, dict):
+            continue
+        environment = definition.get("environment")
+        pairs = (
+            environment.items()
+            if isinstance(environment, dict)
+            else (
+                (str(entry).partition("=")[0], str(entry).partition("=")[2])
+                for entry in environment
+            )
+            if isinstance(environment, list)
+            else ()
+        )
+        for key, value in pairs:
+            if value is not None:
+                inspect(f"service {name}, {key}", str(value))
+
+    # The inline `configs:` blocks interpolate too, and a password embedded in
+    # a URL there fails the same way -- Alertmanager's routing is built this
+    # way, so this is not a hypothetical surface.
+    target = PLATFORM_COMPOSE if path is None else path
+    document = yaml.safe_load(target.read_text(encoding="utf-8"))
+    configs = document.get("configs") if isinstance(document, dict) else None
+    for name, block in sorted((configs or {}).items()):
+        content = block.get("content") if isinstance(block, dict) else None
+        if not isinstance(content, str):
+            continue
+        for number, line in enumerate(content.splitlines(), start=1):
+            inspect(f"config {name}, line {number}", line)
+    return offences
+
+
+class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
+    """DERIVED -- the defect measured on both hosts on 2026-09-15, where
+    postgres-exporter's DATA_SOURCE_NAME carried a password containing `#`."""
+
+    def compose_fixture(self, body: str) -> Path:
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = directory / "docker-compose.yml"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_the_committed_stack_builds_no_url_around_a_secret(self) -> None:
+        offenders = secrets_interpolated_into_urls()
+        self.assertEqual(
+            [],
+            offenders,
+            "the shared stack builds a URL around a secret:\n  "
+            + "\n  ".join(offenders)
+            + "\nA service given one of these starts and reports healthy, so "
+            "nothing else in this repository will tell you",
+        )
+
+    def test_a_password_inside_a_url_is_reported(self) -> None:
+        """FALSIFIED -- the exact shape that was live on both hosts."""
+        fixture = self.compose_fixture(
+            "services:\n  exporter:\n    image: e:1\n    environment:\n"
+            "      DATA_SOURCE_NAME: postgresql://u:${POSTGRES_EXPORTER_PASSWORD}"
+            "@postgres:5432/postgres\n"
+        )
+        offenders = secrets_interpolated_into_urls(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("POSTGRES_EXPORTER_PASSWORD", offenders[0])
+
+    def test_the_list_form_of_environment_is_read(self) -> None:
+        """DERIVED -- Compose accepts `KEY=value` list entries, and a check
+        reading only the mapping form would pass over a stack using them."""
+        fixture = self.compose_fixture(
+            "services:\n  exporter:\n    image: e:1\n    environment:\n"
+            "      - DATA_SOURCE_NAME=postgresql://u:${DB_PASSWORD}@h:5432/d\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_secret_that_is_the_whole_url_is_accepted(self) -> None:
+        """DERIVED -- the converse, and the reason this is not a ban on secrets
+        near URLs. Alertmanager's Slack webhook is one of these: the secret IS
+        the URL, so nothing its contents hold can move a boundary."""
+        fixture = self.compose_fixture(
+            "services:\n  a:\n    image: a:1\n    environment:\n"
+            "      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}\n"
+            "      SOME_TOKEN: ${SOME_TOKEN}\n"
+        )
+        self.assertEqual([], secrets_interpolated_into_urls(fixture))
+
+    def test_a_non_secret_inside_a_url_is_accepted(self) -> None:
+        """DERIVED -- a host or a port interpolated into a URL is ordinary and
+        must not be reported, or the check would be noise and get widened away."""
+        fixture = self.compose_fixture(
+            "services:\n  a:\n    image: a:1\n    environment:\n"
+            "      TARGET: https://${GRAFANA_HOST}:3000/api\n"
+        )
+        self.assertEqual([], secrets_interpolated_into_urls(fixture))
+
+    def test_a_config_block_is_read(self) -> None:
+        """FALSIFIED -- the same defect inside an inline config, which is where
+        this stack builds its Alertmanager routing."""
+        fixture = self.compose_fixture(
+            "services:\n  a:\n    image: a:1\n"
+            "configs:\n  c:\n    content: |\n"
+            "      url: https://user:${API_TOKEN}@example.test/hook\n"
+        )
+        offenders = secrets_interpolated_into_urls(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("config c", offenders[0])
+
+
 if __name__ == "__main__":
     unittest.main()

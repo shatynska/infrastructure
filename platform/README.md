@@ -142,6 +142,8 @@ GRANT pg_monitor TO pgexporter;
 
 `pg_monitor` is Postgres's own built-in predefined role: read-only access to the statistics views postgres-exporter's standard collectors query, no table data access, no superuser.
 
+**The password may contain any character**, including `#`, `@`, `/` and `?`. That is worth saying because it was not true until 2026-09-15: the exporter was given a single `DATA_SOURCE_NAME` URL with the password interpolated into it, so a password holding any of those silently changed what the URL meant rather than failing — `#` discarded the host, the port and the database after it. Both hosts ran that way with a password containing `#`, reporting `pg_up 0` while their containers stayed healthy and their Prometheus targets stayed up. The exporter now takes `DATA_SOURCE_URI`, `DATA_SOURCE_USER` and `DATA_SOURCE_PASS` separately, so the password is never parsed as anything but itself, and `.github/tests` fails the build if a secret is built into a URL again.
+
 **If this role is ever missing or its password out of sync — after rebuilding the shared instance, or after the volume reset above — nothing tells you.** `MetricsTargetDown` does not, whatever an earlier reading of it suggested: it is `up == 0`, and postgres-exporter serves `/metrics` with HTTP 200 and `pg_up 0` when it cannot connect, so its target stays up and no alert fires while PostgreSQL's metrics are absent. Verified against `v0.20.1` on 2026-09-15. `pg_up` is what would catch it and nothing alerts on it yet — `docs/backlog.md` `alert-on-the-exporter-being-unable-to-read-postgres` is that gap. Until it lands, this is checked by hand, with the command in *Upgrading the PostgreSQL major version* above.
 
 ### One manual step per stack: dead-man's-switch registration
