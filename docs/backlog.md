@@ -823,3 +823,17 @@ Not blocked. It touches `docs/` and no mechanism.
 **Where the fix has to go is the inventory's group layout, not a filename.** The candidates, none costed here: `deploy_apps` moving to a per-stack or per-host vars file; a group per tenant-environment pair rather than per environment; or the entry gaining a host selector the role honours. Each changes what a converge reads, so each wants its own Molecule coverage, and the choice interacts with what `AGENTS.md` records about a source being named for its stack and a group for its axis.
 
 **Nothing reports it, which is the part worth keeping in view.** A second tenant would be onboarded by following `docs/onboard-an-application.md`, which would produce a key per environment as instructed, and the over-authorisation would be silent: both hosts would accept the key and both deploys would work. Take this before a second tenant exists rather than after, since afterwards the remedy is a re-key rather than a layout.
+
+## 59. cache-galaxy-content-in-the-converge-jobs
+
+**Not blocked. Recorded 2026-09-15 from an observed run rather than from reading the workflow: `refresh-staging-group-vars-banner`'s merge converge (run 34985703898) spent 9m00s on production's `Install Galaxy content` and 10m01s on staging's, against 2m39s for the same step nine hours earlier.**
+
+`.github/workflows/host-converge.yml`'s `Install Galaxy content` step runs `ansible-galaxy collection install -r requirements.yml` and `ansible-galaxy role install -r requirements.yml -p roles` with nothing caching either between runs. Every converge job downloads the whole of `ansible/requirements.yml`'s pinned content from galaxy.ansible.com afresh, and the workflow matrixes over stacks — so one merge touching `ansible/` pays that download once per stack, concurrently, from runners that share no state.
+
+**What the observation adds to what reading the file already shows.** That there is no cache is visible in the workflow; what the run showed is the size of the exposure. Both jobs slowed together and by a similar factor, which is the signature of the registry rather than of a runner, and neither failed — so the cost of an upstream slow spell is paid in wall-clock on every converge and is invisible afterwards, the run having gone green. Seven minutes per job on this occasion, roughly doubling a converge that is otherwise about five minutes of actual play.
+
+`actions/cache` keyed on a hash of `ansible/requirements.yml` is the obvious shape, and the pinning rule is what makes it safe: every collection and role in that file is pinned to an exact version, so the key changes exactly when the content does and a hit can never serve a different version than a miss would have fetched. A floating range would make the same cache a correctness problem, which is worth stating because the two decisions are coupled.
+
+**Two things to settle rather than assume.** Whether the cache covers the `-p roles` install as well as the collection path, which lands in a different directory and would otherwise leave half the step uncached; and whether `platform-deploy.yml` and `ansible-verify.yml` install the same content and should share the key — the verify workflow's Molecule runs need the same collections, and `AGENTS.md`'s Molecule section already treats collections as shared read-only content rather than per-tree state, which is the same argument one layer up.
+
+Not urgent: it costs time, never correctness, and the step has never failed. Worth taking the next time anything else opens that workflow.
