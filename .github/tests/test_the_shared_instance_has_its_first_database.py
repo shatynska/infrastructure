@@ -23,8 +23,10 @@ What this file reads, and why each is a static read
   requirement SHALL state.
 - **`docs/backlog.md`**, for the entry that requirement says the mechanism is
   tracked under.
-- **The recipe in `docs/bootstrap-a-new-host.md`**, which the requirement names
-  as how each provisioning is performed until the mechanism exists. What it
+- **The recipe in `docs/onboard-an-application.md`**, which the requirement names
+  as how each provisioning is performed until the mechanism exists. It was in
+  `docs/bootstrap-a-new-host.md` when this module was written and moved with the
+  procedure; `RECIPE_DOCUMENT` follows it, and no assertion below changed. What it
   asserts of the recipe is a NECESSARY condition of the scenario "A new
   application requests a database" -- an isolated role, a password generated
   per run and never on a command line -- and never the scenario itself, whose
@@ -99,7 +101,12 @@ CHANGE_NAME = "provision-commerce-ops-database-in-the-shared-instance"
 # The application the delta names as having fired the trigger.
 APPLICATION = "commerce-ops"
 
-BOOTSTRAP = ROOT / "docs" / "bootstrap-a-new-host.md"
+# The document holding the manual provisioning recipe. It was
+# `docs/bootstrap-a-new-host.md` until `record-how-an-application-is-onboarded`
+# moved the procedure to a document read once per application rather than once
+# per server; the requirement names the new one, and every assertion below is
+# unchanged -- what moved is the file they read, never what they check of it.
+RECIPE_DOCUMENT = ROOT / "docs" / "onboard-an-application.md"
 BACKLOG = ROOT / "docs" / "backlog.md"
 
 REQUIREMENT_HEADING = re.compile(r"^###\s+Requirement:\s*(?P<name>.+?)\s*$")
@@ -928,11 +935,11 @@ def refusal_branch_offences(block: str) -> list[str]:
 
 class RecipeMixin:
     def recipe(self) -> str:
-        blocks = recipe_blocks(read_text(BOOTSTRAP))
+        blocks = recipe_blocks(read_text(RECIPE_DOCUMENT))
         self.assertEqual(  # type: ignore[attr-defined]
             1,
             len(blocks),
-            f"{BOOTSTRAP.relative_to(ROOT)} carries {len(blocks)} fenced block(s) "
+            f"{RECIPE_DOCUMENT.relative_to(ROOT)} carries {len(blocks)} fenced block(s) "
             "carrying `CREATE DATABASE`, at line(s) "
             f"{[start for start, _ in blocks]}; the recipe is one block pasted whole, "
             "so that one shell holds the password for both the secret and the host",

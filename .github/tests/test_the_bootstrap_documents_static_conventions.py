@@ -1,4 +1,4 @@
-"""Two conventions `docs/bootstrap-a-new-host.md` holds, asserted statically.
+"""Two conventions this repository's operator runbooks hold, asserted statically.
 
 WRITTEN AS A FIX RATHER THAN AS A CHANGE, and that is worth stating rather than
 leaving to be inferred. Nothing here specifies new behaviour: both conventions
@@ -10,18 +10,23 @@ quoted where it is asserted.
 
 The two conventions, and why neither survives without a check:
 
-- **Every `ssh-keygen -f` in the document writes under `~/.ssh/`.** The document
-  says so in §0.3 -- *"Every private half above is generated into `~/.ssh/`, and
-  none into the repository"* -- and the reason it says so is that these are
-  passphrase-less keys and §4.2 runs `git add -A`. A relative path puts a
-  private key in the repository root, one routine commit from being published.
-  Three of the five key rows carried one; two of those were found only by
-  sweeping after a reviewer reported the third. `.gitignore` carries a
-  private-key block covering both the conventional names and this scheme's
-  extension-less ones, which bounds the consequence -- but that block is a list
-  of names nothing keeps in step with the document, and this check is what
-  catches a further key purpose added later under a name the block does not
-  match.
+- **Every `ssh-keygen -f` in either document writes under `~/.ssh/`.**
+  `docs/bootstrap-a-new-host.md` §0.3 says so -- *"Every private half above is
+  generated into `~/.ssh/`, and none into the repository"* -- and the reason it
+  says so is that these are passphrase-less keys and §4.2 runs `git add -A`. A
+  relative path puts a private key in the repository root, one routine commit
+  from being published. Three of the five key rows carried one; two of those
+  were found only by sweeping after a reviewer reported the third.
+  `docs/onboard-an-application.md` generates one more, per application per
+  environment, and is read here for that reason: the rule is a property of the
+  command, not of the document that first stated it.
+
+  `.gitignore` carries a private-key block covering the conventional names and
+  part of this scheme's extension-less ones, which bounds the consequence -- but
+  that block is a list of names nothing keeps in step with either document, it
+  is measurably incomplete today (its own comment says which spellings it
+  misses), and this check is what catches a further key purpose added later
+  under a name it does not match.
 
 - **Every cross-reference to a numbered section resolves to a heading that
   exists.** The document carries dozens, in two forms -- `§6.6` and the prose
@@ -32,13 +37,20 @@ hands: correct when written, correct when reviewed, and wrong only later, in a
 commit whose author has no reason to read the rows they break. Recorded by
 `prepare-two-servers-from-the-start`, whose code review identified both.
 
-Scoped to the one document, deliberately
-----------------------------------------
-Other committed files cite this document's sections -- `.gitignore`'s
-private-key block names §0.3, and archived change records name several. A
-repository-wide reference check would eventually go red on an archived record,
-which this repository may correct only to make it say what actually happened.
-So the sweep stops at the document that owns the headings.
+The two checks have different scopes, deliberately
+--------------------------------------------------
+The **reference** check reads `docs/bootstrap-a-new-host.md` alone. Other
+committed files cite its sections -- archived change records name several -- and
+a repository-wide reference check would eventually go red on an archived record,
+which this repository may correct only to make it say what actually happened. So
+that sweep stops at the document that owns the headings. It follows that a
+pointer from this document to another one must be written in prose rather than
+as `§N.N`, which would be resolved against the wrong document's headings.
+
+The **key-target** check reads every document in `KEY_GENERATING_DOCUMENTS`. It
+resolves nothing against a set of headings, so it carries none of that risk, and
+scoping it to one document would mean a command losing its only check by being
+moved to where it is run.
 
 What this deliberately does not attempt
 ---------------------------------------
@@ -50,8 +62,8 @@ document, along with the second-run and re-derivation habits.
 Named appendices (*Appendix A*, *Appendix B*) are not covered. They carry no
 number, so there is nothing to resolve and nothing to renumber them.
 
-These assertions live in this suite because they are a static read of one
-committed file, which is what its row in AGENTS.md's testing table describes.
+These assertions live in this suite because they are a static read of committed
+files, which is what its row in AGENTS.md's testing table describes.
 They add no import beyond the standard library, spawn no subprocess, and need no
 network call, credential, container runtime or Terraform binary.
 """
@@ -64,6 +76,20 @@ import unittest
 from test_ci_configuration import ROOT, read_text
 
 BOOTSTRAP = ROOT / "docs" / "bootstrap-a-new-host.md"
+ONBOARDING = ROOT / "docs" / "onboard-an-application.md"
+
+# Every document that tells an operator to generate a key. The key-target check
+# below reads all of them; the cross-reference check reads BOOTSTRAP alone, for
+# the reason the docstring gives. The two scopes differ deliberately: a section
+# number resolves within the document that declares it, while `~/.ssh/` is a
+# property of every `ssh-keygen` this repository prints, wherever it prints it.
+#
+# `record-how-an-application-is-onboarded` moved the application deploy key's
+# invocation out of the bootstrap document's §0.3 and into the onboarding
+# document, where it is run. A check scoped to one document would have followed
+# the table and lost the command -- the most frequently run of the two, since it
+# repeats per application per environment.
+KEY_GENERATING_DOCUMENTS = (BOOTSTRAP, ONBOARDING)
 
 # The directory the document requires every generated private half to land in.
 # One accepted spelling rather than several: an on-host absolute path such as
@@ -166,11 +192,30 @@ class TestTheDocumentIsReadAtAll(unittest.TestCase):
         self.assertGreaterEqual(
             len(KEYGEN.findall(self.text)),
             6,
-            f"{BOOTSTRAP.relative_to(ROOT)} carries fewer `ssh-keygen` "
-            "invocations than §0.3's key table has rows. Either the table moved "
-            "-- in which case this module follows it -- or the matcher stopped "
-            "matching, which would make the check below pass having read nothing",
+            f"{BOOTSTRAP.relative_to(ROOT)} carries fewer than six `ssh-keygen` "
+            "invocations. The figure is a floor under the whole document -- its "
+            "key table, its verify-before-storing steps and its appendices -- "
+            "not a count of that table's rows, which is why moving one row out "
+            "of §0.3 does not move it. Either the commands went, or the matcher "
+            "stopped matching, which would make the check below pass having "
+            "read nothing",
         )
+
+    def test_every_key_generating_document_is_read(self) -> None:
+        """The floor above is one document's. Without this, a second document
+        that stopped being read -- renamed, moved, or never written -- would
+        leave the check below sweeping it for nothing and reporting clean."""
+        for document in KEY_GENERATING_DOCUMENTS:
+            with self.subTest(document=document.relative_to(ROOT)):
+                self.assertTrue(
+                    KEYGEN.search(read_text(document)),
+                    f"{document.relative_to(ROOT)} carries no `ssh-keygen` at "
+                    "all, so sweeping it for a key written outside "
+                    f"`{REQUIRED_KEY_DIRECTORY}` establishes nothing. It is "
+                    "listed as a document that generates keys; either it no "
+                    "longer does, and belongs out of that list, or the command "
+                    "it should carry is missing",
+                )
 
     def test_the_document_carries_cross_references_in_both_forms(self) -> None:
         for form, pattern in REFERENCE_FORMS:
@@ -185,20 +230,24 @@ class TestTheDocumentIsReadAtAll(unittest.TestCase):
 
 class TestEveryGeneratedKeyLandsInTheSshDirectory(unittest.TestCase):
     """§0.3: *Every private half above is generated into `~/.ssh/`, and none
-    into the repository.*"""
+    into the repository.* Held over every document that generates one, not only
+    the one that states the rule."""
 
     def test_no_ssh_keygen_writes_outside_the_ssh_directory(self) -> None:
-        offences = keys_generated_outside_the_ssh_directory(read_text(BOOTSTRAP))
-        self.assertEqual(
-            offences,
-            [],
-            f"{len(offences)} `ssh-keygen` invocation(s) in "
-            f"{BOOTSTRAP.relative_to(ROOT)} write a private key somewhere other "
-            f"than `{REQUIRED_KEY_DIRECTORY}`. A relative path lands in the "
-            "repository root, where §4.2's `git add -A` can commit a "
-            "passphrase-less private key. Write the target out in full:\n  "
-            + "\n  ".join(offences),
-        )
+        for document in KEY_GENERATING_DOCUMENTS:
+            with self.subTest(document=document.relative_to(ROOT)):
+                offences = keys_generated_outside_the_ssh_directory(read_text(document))
+                self.assertEqual(
+                    offences,
+                    [],
+                    f"{len(offences)} `ssh-keygen` invocation(s) in "
+                    f"{document.relative_to(ROOT)} write a private key somewhere "
+                    f"other than `{REQUIRED_KEY_DIRECTORY}`. A relative path lands "
+                    "in whichever directory the command is run from, which for an "
+                    "operator following either document is a checkout -- where "
+                    "§4.2's `git add -A` can commit a passphrase-less private key. "
+                    "Write the target out in full:\n  " + "\n  ".join(offences),
+                )
 
 
 class TestEveryCrossReferenceResolves(unittest.TestCase):

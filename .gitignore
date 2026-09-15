@@ -60,11 +60,13 @@ node_modules/
 # Private keys. None is ever committed, and nothing else here says so.
 #
 # The hazard is specific rather than general: docs/bootstrap-a-new-host.md
-# stage 0.3 generates six passphrase-less keypairs, stage 4.2 runs `git add -A`
+# stage 0.3 generates passphrase-less keypairs, stage 4.2 runs `git add -A`
 # from this directory, and those two steps are most of a working day apart.
-# gitleaks catches the content at commit time -- but it is a pre-commit hook,
-# and stage 0 runs before `pre-commit install` necessarily has. This is the
-# layer that does not depend on having installed anything.
+# docs/onboard-an-application.md generates one more, per application per
+# environment, on its own occasion. gitleaks catches the content at commit time
+# -- but it is a pre-commit hook, and stage 0 runs before `pre-commit install`
+# necessarily has. This is the layer that does not depend on having installed
+# anything.
 #
 # Conventional names, anywhere in the tree:
 *.pem
@@ -74,10 +76,18 @@ id_ecdsa
 id_ed25519
 
 # And this repository's own scheme, which produces names with NO extension --
-# <company>-ops, <company>-root, <company>-platform, <company>-platform-staging,
-# <company>-ansible-ci-<stack>, <company>-<app>-deploy -- so no suffix pattern
-# reaches them. §0.3 writes each into ~/.ssh/; these catch the relative-path
-# slip that writes one here instead.
+# <company>-ops, <company>-root, <company>-platform-<environment>,
+# <company>-ansible-ci-<stack>, <company>-<app>-<environment> -- so no suffix
+# pattern reaches them. Both documents above write each into ~/.ssh/; these
+# catch the relative-path slip that writes one here instead.
+#
+# THE PATTERNS BELOW DO NOT COVER THE WHOLE SCHEME, and the gap is recorded
+# rather than quietly widened: `/*-deploy` was written for the retired
+# <company>-<app>-deploy spelling and matches no <company>-<app>-<environment>;
+# `/*-platform-staging` matches one environment's platform key and nothing
+# matches the production one. docs/backlog.md carries the entry that decides
+# what the patterns should be -- widening one is a behaviour change, not a
+# comment fix, which is why this block says so instead.
 #
 # ANCHORED TO THE ROOT with a leading slash, deliberately. Unanchored, `*-ops`
 # would silently swallow a directory called `commerce-ops` added later, which
