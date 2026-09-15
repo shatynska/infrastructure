@@ -12905,6 +12905,16 @@ class TestNoScenarioReadsAPathTheSuiteIsNoLongerTriggeredBy(unittest.TestCase):
 # here, and is found by a red deploy on a host whose volume the upgrade
 # procedure has already discarded. `platform/README.md`'s "Upgrading the
 # PostgreSQL major version" states the coupling in prose; this asserts it.
+#
+# BOTH DIRECTIONS ARE ASSERTED, AND THE SECOND IS THE DANGEROUS ONE. Below 18
+# at the parent mount nothing refuses: PGDATA=/var/lib/postgresql/data falls
+# inside the mount, so a pin-back that moves the tag and not the mount
+# initialises an EMPTY cluster at <volume>/data and starts healthy, leaving
+# the previous major's data in <volume>/<major>/ where nothing reads it. A
+# database created under 18.6 was verified absent after such a pin-back to
+# 16.15 on 2026-09-15. So this arm is not a tidiness rule about matching
+# paths -- it is the only thing standing between an emergency pin-back and an
+# empty database every application connects to successfully.
 
 POSTGRES_SERVICE = "postgres"
 POSTGRES_DATA_VOLUME = "postgres_data"
@@ -13039,8 +13049,16 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         self.assertIn("/var/lib/postgresql'", offenders[0])
 
     def test_a_legacy_major_at_the_parent_mount_is_reported(self) -> None:
-        """FALSIFIED -- the converse, so the check is a coupling rather than a
-        one-way preference for the newer path."""
+        """FALSIFIED -- the converse arm, and the QUIET one. A pin-back to 16 or
+        17 that leaves the mount at the parent does not refuse: the image
+        default PGDATA=/var/lib/postgresql/data falls inside the mount, so it
+        initialises an EMPTY cluster at <volume>/data and starts healthy, with
+        the previous major's data sitting untouched in <volume>/<major>/ beside
+        it. Measured on 2026-09-15: a database created under 18.6 was absent
+        after pinning back to 16.15 at the same mount, and both directories
+        were present. So this arm guards the one direction nothing else
+        catches -- neither the entrypoint, nor the healthcheck, nor an
+        application, which connects successfully to an empty database."""
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:16.15\n"
             "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
