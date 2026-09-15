@@ -256,6 +256,12 @@ One interval is accepted. Where a change introduces a **new** capability, archiv
 
 Run `pre-commit install --hook-type pre-commit --hook-type commit-msg` once per clone (see README's Local setup). It runs `terraform fmt`, `tflint`, `terraform validate`, `gitleaks`, `ansible-lint`, and `ansible-playbook --syntax-check` on `git commit`, and `commitlint` (Conventional Commits) on the commit message.
 
+**Of the setup steps README's Local setup lists, one is per working tree rather than once, and the difference is invisible until a check fails.** The hooks above are per clone: they live in the repository's common git directory, which every working tree shares, so a tree created later already has them. The pinned collections are per machine: they install outside the tree entirely. The pinned **Galaxy role is per working tree**, because `ansible/ansible.cfg` sets `roles_path = roles`, so it installs to `ansible/roles/` *inside* the tree, where `.gitignore` keeps it — and a new working tree therefore starts without it however well the main checkout is provisioned:
+
+    ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
+
+Without it, `ansible-playbook --syntax-check` fails with *"the role 'geerlingguy.docker' was not found"*, which reads as a broken playbook rather than as an unprovisioned tree, and takes `pre-commit run --all-files` down with it. That is this project's binding of the provisioning rule above — the one step of README's list that comes back with every tree. README's step 5 has the full account of why `-p` is load-bearing and why the two installs are separate commands.
+
 ### Host configuration and platform stack
 
 `ansible/` configures a Terraform-provisioned host; `platform/` holds the shared Compose stack every application on that host depends on. See `iac-host-configuration` and `iac-platform-services`, and `openspec/changes/archive/2026-08-19-integrate-ansible-host-config/design.md` for the full rationale. This project's defaults for the decisions those specs leave to the consuming project:
