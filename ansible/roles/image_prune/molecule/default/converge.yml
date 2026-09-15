@@ -208,6 +208,64 @@
         docker pull "$PINNED_REF" >/dev/null
         PINNED_ID="$(docker image inspect --format '{{.Id}}' "$PINNED_REF")"
 
+        # --- the REGISTRY HALF of the refusal fixture, added by the change
+        # report-refused-removals-in-the-host-prune. Its host half is in
+        # verify.yml, which pulls these two references back partway through the
+        # run, and the split is load-bearing rather than tidiness.
+        #
+        # THIS STEP DELIBERATELY LEAVES THE HOST HOLDING NOTHING OF IT. Built
+        # whole here, the identity would be refusable from the scenario FIRST
+        # run, every run would report a refusal, and the delta scenario "A run
+        # whose removals were all performed reports no refusals" would have no
+        # run in this role suite to assert against. What lives here is the
+        # registry state alone: one identity under two repository paths, which
+        # is what makes a by-identity removal rejectable later.
+        #
+        # Its content is distinct from every other fixture, and from the
+        # digest-pinned one in particular: that image is KEPT, so a collision
+        # would make this identity a non-candidate and the refusal would never
+        # happen. verify.yml asserts the two identities differ rather than
+        # trusting this marker.
+        build localhost:5000/imgprune-fixture/multirepo-a:seed multirepo
+        docker tag localhost:5000/imgprune-fixture/multirepo-a:seed \
+          localhost:5000/imgprune-fixture/multirepo-b:seed
+        docker push localhost:5000/imgprune-fixture/multirepo-a:seed >/dev/null
+        docker push localhost:5000/imgprune-fixture/multirepo-b:seed >/dev/null
+        # Index 0 of TWO entries, and which one it is does not matter: both
+        # pushes sent the same manifest, so both repository digests carry the
+        # same sha256 and only the repository half differs -- which is
+        # discarded by the cut. Stated because the same read on the pinned
+        # fixture above has exactly one entry, and a reader could take this one
+        # for a copy of it.
+        MULTIREPO_DIGEST="$(docker image inspect \
+          --format '{{index .RepoDigests 0}}' \
+          localhost:5000/imgprune-fixture/multirepo-a:seed | cut -d@ -f2)"
+        MULTIREPO_REF_A="localhost:5000/imgprune-fixture/multirepo-a@${MULTIREPO_DIGEST}"
+        MULTIREPO_REF_B="localhost:5000/imgprune-fixture/multirepo-b@${MULTIREPO_DIGEST}"
+        # Dropped BY NAME, never by identity. A push gives the identity a
+        # `repo@digest` reference in each repository, and removing a
+        # repository last tag drops that same repository digest reference with
+        # it -- so the second of these deletes the image and the host is left
+        # empty-handed. `docker image rm <id>` here would instead be rejected
+        # with "referenced in multiple repositories", which is this fixture own
+        # subject: a cleanup written that way fails on the thing it is building.
+        docker image rm localhost:5000/imgprune-fixture/multirepo-a:seed >/dev/null
+        docker image rm localhost:5000/imgprune-fixture/multirepo-b:seed >/dev/null
+        # The premise of the split, asserted rather than assumed. The last-tag
+        # rule above is the daemon behaviour and not a documented guarantee of
+        # the command, and it stops firing the moment one of these repositories
+        # carries a second tag -- at which point a digest reference survives,
+        # the identity reaches the first run refusable, and the whole-in-
+        # converge placement is back through the side door.
+        if docker image inspect "$MULTIREPO_REF_A" >/dev/null 2>&1; then
+          echo "FIXTURE FAILURE: the refusal fixture is still on the host after" >&2
+          echo "its build tags were dropped, so it would be a candidate on the" >&2
+          echo "FIRST run and the refused-zero assertion could not hold. See the" >&2
+          echo "change report-refused-removals-in-the-host-prune, design.md" >&2
+          echo "Decision 6." >&2
+          exit 1
+        fi
+
         # --- the Compose files of the enumerated applications, on the host.
         # `alpha` and `beta` between them are the union: `alpha` references the
         # base image `beta` does not, which is the delta scenario about the
@@ -250,6 +308,8 @@
         PINNED_DIGEST=${PINNED_DIGEST}
         PINNED_REF=${PINNED_REF}
         PINNED_ID=${PINNED_ID}
+        MULTIREPO_REF_A=${MULTIREPO_REF_A}
+        MULTIREPO_REF_B=${MULTIREPO_REF_B}
         VARS
 
         # The image list AS IT STANDS BEFORE `image_prune` converges. verify.yml
