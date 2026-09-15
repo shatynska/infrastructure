@@ -214,24 +214,6 @@ The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves t
 
 **Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
 
-## 18. refresh-staging-group-vars-banner
-
-**The name is now narrower than the entry.** It spans three files rather than the one it is named for, and it keeps the name anyway: an archived change's proposal cites it, and a backlog name is the citation this repository's own rule says is stable. Read the name as where this started, not as its scope.
-
-Recorded 2026-09-10 by `prepare-two-servers-from-the-start`, which sends a reader to that file for evidence and meets a banner saying the opposite of what the file now is.
-
-`ansible/inventory/group_vars/staging.yml` opens its lower half with
-
-    # THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET CONVERGED.
-
-and closes it with "this file's state is PENDING the operator, not finished. Until it is completed there is no converged staging host, no prune timer and no `staging-server-prune-host-images` check." (That check is `main-staging-prune-host-images` since `rename-the-stacks-and-their-resources` renamed the server; the quotation is left as the file wrote it.) All three values it lists as missing were supplied in PR #130, and the host converged the same evening -- `configure-the-staging-host`'s archived task list records the run and the checks that followed it.
-
-The banner was correct when written and is the kind of text that goes stale silently: nothing fails, and a reader who trusts it draws a wrong conclusion about the environment.
-
-**Two more of the same class, found by `onboard-commerce-ops-to-staging` and left here rather than fixed in passing.** `README.md`'s "What staging is *not*, yet: configured. It carries no Ansible group variables, no platform stack and no DNS records" — two of those three have been false since PR #130 and the platform deploy, the third since the operator created staging's DNS records, which `expose-staging-on-the-web` recorded in `docs/bootstrap-a-new-host.md` §4.4, and it is the statement of staging's status a newcomer reads first. And `ansible/playbooks/host-baseline.yml`'s "Reachable on purpose today — staging's `group_vars` leaves `deploy_apps` unset deliberately", which is the live-case justification for declining the play-scope required-input guard, so a reviewer weighing that gap reads evidence that no longer exists. Take all three together: they are one sweep, and each is a sentence saying staging is less finished than it is. What replaces it is not just deletion — the paragraphs under it explain *which* absence refuses a converge and which is tolerated, and that reasoning is worth keeping in some form for whoever writes the next environment's `group_vars` from scratch.
-
-Not blocked, and small. It touches one file and no mechanism.
-
 ## 19. move-commerce-ops-durable-data-to-supabase
 
 **Not blocked, and its middle step is not this repository's to do — recorded because `openspec/specs/iac-safety-hardening/spec.md` names it as a divergence and nothing else tracks it.**
