@@ -407,6 +407,15 @@
         cat /var/tmp/image-prune-run1.out /var/tmp/image-prune-run1.err \
           > /var/tmp/image-prune-run1.all
         echo "RC $rc"
+        # How many report lines of ANY shape the run emitted, which every
+        # count below depends on being exactly one. The three-field assertion
+        # bounds the lines matching three fields and says nothing about a
+        # SECOND report line of some other shape -- and the reads below take
+        # `head -n 1`, so a stale two-field line printed after the real one
+        # would be invisible to all of them. The two-field assertion this
+        # change deleted was bounding that incidentally; this bounds it on
+        # purpose and more tightly.
+        echo "REPORTS $(grep -ciE 'considered[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all || true)"
         echo "CONSIDERED $(grep -oiE 'considered[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all | grep -oE '[0-9]+' | head -n 1 || true)"
         echo "REMOVED $(grep -oiE 'removed[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all | grep -oE '[0-9]+' | head -n 1 || true)"
       args:
@@ -467,6 +476,7 @@
       ansible.builtin.assert:
         that:
           - "'RC 0' in image_prune_run1.stdout_lines"
+          - "'REPORTS 1' in image_prune_run1.stdout_lines"
           - "'SHAPE3 1' in image_prune_run1_counts.stdout_lines"
           - ('CONSIDERED ' + image_prune_identities.stdout_lines[0].split(' ')[1])
             in image_prune_run1.stdout_lines
@@ -1189,11 +1199,39 @@
         echo "NAMES-FIXTURE $(printf '%s' "$named" | grep -c . || true)"
         echo "NAMES-FIXTURE-ON-STDERR $(grep -F -e "$full" -e "$short12" "$err" | grep -cvE "$summary" || true)"
         echo "NAMES-RUNTIME-REASON $(printf '%s\n' "$named" | grep -ciE 'repositor' || true)"
+        # The script own constant prefix is stripped FIRST, and that is the
+        # whole assertion rather than a tidying step. Without it the prefix
+        # survives every substitution below -- it reduces to
+        # `prunehostimagesrefused`, which is alphabetic and non-empty -- so the
+        # count was 1 for any line at all and the assertion passed against an
+        # implementation naming the identity and NO reason, including the
+        # script own `the runtime gave no reason` fallback. That is the exact
+        # state it exists to refuse, so it was vacuous rather than weak.
+        # The script own FALLBACK is stripped alongside the prefix, and for the
+        # same reason one step further on. Stripping the prefix alone still
+        # passes against a run whose stderr capture was deleted: the fallback
+        # substitutes the words `the runtime gave no reason`, which is text,
+        # and the measurement counts text. Removing both constants makes this
+        # measure what its name claims -- something on the line that came from
+        # neither the identity nor a string this script can produce by itself,
+        # which can only be the runtime own. That is deliberately independent
+        # of the runtime WORDING, which NAMES-RUNTIME-REASON checks separately
+        # and is the term meant to survive a wording change.
+        prefix='prune-host-images: refused'
+        fallback='the runtime gave no reason'
         echo "CARRIES-MORE-THAN-THE-IDENTITY $(printf '%s\n' "$named" \
-          | awk -v a="$full" -v b="$short12" '
+          | awk -v a="$full" -v b="$short12" -v p="$prefix" -v q="$fallback" '
+              function drop(s, lit,   i) {
+                i = index(s, lit)
+                while (i > 0) {
+                  s = substr(s, 1, i - 1) substr(s, i + length(lit))
+                  i = index(s, lit)
+                }
+                return s
+              }
               BEGIN { n = 0 }
               {
-                s = $0
+                s = drop(drop($0, p), q)
                 gsub(a, "", s)
                 gsub(b, "", s)
                 gsub(/[^[:alpha:]]/, "", s)
