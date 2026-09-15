@@ -2,13 +2,15 @@
 
 Changes this project has identified and not yet opened. An entry is deleted when its change is archived. See `AGENTS.md`, "A second change surfacing".
 
-**An entry is also deleted when the operator takes it as a fix rather than a change**, which leaves no archived record to delete it at. Where that happens, the entry's reasoning is not lost with it: it moves into the file that owns the thing being changed, where the next person to touch that thing will read it, and the deleting pull request says so. Entry 10, `upgrade-the-shared-postgres-major`, was the first taken this way, on 2026-09-15 — its reasoning is now `platform/README.md`, *Upgrading the PostgreSQL major version*. This is a narrower door than it reads: the operator decides it per entry, and an entry whose reasoning has nowhere to go but a change record is not a candidate for it.
+**An entry is also deleted when the operator takes it as a fix rather than a change**, which leaves no archived record to delete it at. Where that happens, the entry's reasoning is not lost with it: it moves into the file that owns the thing being changed, where the next person to touch that thing will read it, and the deleting pull request says so. `upgrade-the-shared-postgres-major` was the first taken this way, on 2026-09-15 — its reasoning is now `platform/README.md`, *Upgrading the PostgreSQL major version*. This is a narrower door than it reads: the operator decides it per entry, and an entry whose reasoning has nowhere to go but a change record is not a candidate for it.
 
 An entry carries a number, the change's name, and — where it has one — what it waits on. Not everything here is blocked: where an entry is free to be taken, it says instead why it was recorded rather than folded into the change that found it, usually because it belongs to a different concern than the one that change was closing.
 
-Related entries tend to sit together and an entry another depends on tends to come first, but neither is a rule: a new entry is appended, so the order says nothing on its own. Where one entry actually waits on another, the entry says so.
+**Related entries sit together, and the order is not arbitrary.** The file was regrouped and renumbered from 1 on 2026-09-15; before that a new entry was appended and the order said nothing on its own. It says something now: entries changing the same part of the system are adjacent — host access, the converge and its roles, monitoring, deploys and secrets, the shared database, Terraform, the test suites, the pins, the specifications, and operating the host, in that sequence — and within a run an entry another depends on tends to come first. **Put a new entry beside the ones it belongs with rather than at the end of the file**, and renumber from 1 when you do, so the numbers stay contiguous: a gap means an entry was deleted and nobody renumbered. Where one entry actually waits on another, the entry says so.
 
-**The number is an identifier, not a priority, and it is not stable.** This file has been renumbered from 1 before and may be again, so a number written elsewhere — in a source comment, a specification, an archived change record — may no longer name the entry it was written for. The names are stable; cite an entry by name where the citation has to survive.
+**The number is an identifier, not a priority, and it is not stable.** This file has been renumbered from 1 twice now and may be again, so a number written elsewhere — in a source comment, a specification, an archived change record — may no longer name the entry it was written for. The names are stable; **cite an entry by name, never by number.** The 2026-09-15 renumbering swept every live citation in the tree onto names for that reason; what still cites a number is inside an archived change record, which is not edited to follow a later renumbering.
+
+**Where one batch of these came from.** A second full review on 2026-09-08, at trunk `74c7101`, was made to judge whether this repository's shape can be reused for a second, company-owned host, and a number of the entries below came out of it. It opened with two that are gone from this file — logical off-host backups of the shared database, and a decision on the database model — resolved together by `scope-the-shared-database-to-non-durable-data`: reading the host showed the instance those two argued over holds no application data at all, and that what this host needs is a stated boundary rather than a backup pipeline. Only what applies to **this** host is recorded here; the company-only findings — repository visibility, a second approver, an organisation-owned repository — are not this repository's concern. That review's verdict repeated the first audit's: the architecture is sound, and what it found is operational rather than structural. It read the live host as well as the tree, so where an entry cites a host fact, that is what the host showed on 2026-09-08 rather than an inference from the code.
 
 ---
 
@@ -38,7 +40,66 @@ That is not a regression -- root's existing key is unmanaged in exactly the same
 
 **The chicken-and-egg is real either way and is not an argument against it**: the role that would install the key is a role CI runs, so the first installation is manual whichever shape this takes. What the change buys is every installation after the first.
 
-## 3. report-an-absent-tailscale-auth-key
+## 3. revoke-an-application-s-deploy-authorisation
+
+Recorded 2026-09-13 by `onboard-commerce-ops-to-staging`, which added a `deploy_apps` entry and found, while stating what reverting it would cost, that nothing in this repository takes one back.
+
+`deploy_user` renders three things per entry — `/opt/<name>`, `/etc/sudoers.d/app-deploy-<name>`, and an `authorized_keys` line carrying the forced command — and removes none of them for an entry that is gone. The `ansible.posix.authorized_key` task leaves `exclusive` at its default, deliberately, so that each loop iteration manages only its own key and no application's entry disturbs another's; the sudoers files are written one per application with nothing enumerating the directory; and the `/opt` directory is created and never reaped. **So deleting an entry stops the role acting on it and leaves the host authorising that key exactly as before.** Revocation is an edit on the host, or a rotation of the private half in the application's own repository — neither of which is a commit here, and neither of which any converge would notice.
+
+This is the same shape as `manage-root-authorized-keys-from-a-role`'s finding about `root`'s `authorized_keys`, and the same two things are true of it: `exclusive: true` is the only form that actually revokes and is the form that can lock everyone out, and the `ops_user` role's per-entry `state:` model — where revocation is `state: absent` with the entry **left in place** until a converge has removed it — is the shape to follow rather than invent. The two entries are worth taking together for that reason, though neither blocks the other.
+
+Not blocked. Nothing has needed revoking yet, which is why this is an entry rather than an incident.
+
+## 4. bound-a-deploy-key-to-one-host-when-an-environment-holds-two-stacks
+
+**Not blocked. Recorded 2026-09-15 by `record-how-an-application-is-onboarded`, which decided the deploy keys' naming axis and found that the axis is load-bearing in a way no name can fix.**
+
+`deploy_apps` lives in `ansible/inventory/group_vars/<environment>.yml`, so an entry there authorises its key on **every host in that environment**. Today each environment holds exactly one stack and therefore one host, so "one key per environment" and "one key per host" are the same sentence. A second tenant ends that: `main-production` and `analytics-production` are two stacks and two hosts in one environment, reading one `group_vars` file — so one application's deploy key, and the `platform` entry's key with it, would authorise a deploy to both.
+
+**That is the invariant `docs/bootstrap-a-new-host.md` §0.3 states in as many words** — "one leaked private half must deploy to one host" — and the naming decision this entry came from does not secure it. It puts each key's *name* on the axis its authorisation actually sits on, which is the honest spelling of the current shape; it does not make that shape one host per key.
+
+**Where the fix has to go is the inventory's group layout, not a filename.** The candidates, none costed here: `deploy_apps` moving to a per-stack or per-host vars file; a group per tenant-environment pair rather than per environment; or the entry gaining a host selector the role honours. Each changes what a converge reads, so each wants its own Molecule coverage, and the choice interacts with what `AGENTS.md` records about a source being named for its stack and a group for its axis.
+
+**Nothing reports it, which is the part worth keeping in view.** A second tenant would be onboarded by following `docs/onboard-an-application.md`, which would produce a key per environment as instructed, and the over-authorisation would be silent: both hosts would accept the key and both deploys would work. Take this before a second tenant exists rather than after, since afterwards the remedy is a re-key rather than a layout.
+
+## 5. say-what-the-host-firewall-actually-gates
+
+**Recorded 2026-09-13 by `onboard-commerce-ops-to-staging`, which asserted the opposite in three documents and was caught by a code review that probed the host instead of reading the role.**
+
+Measured from the operator's workstation, over the tailnet, against staging — whose `hardening_web_allowed_cidrs` was `[]` and whose `web_allowed_cidrs` was `[]` at the time, and whose UFW is `active`:
+
+    curl -H 'Host: example.com' http://100.85.219.36/   ->  301
+    curl -k https://100.85.219.36/                       ->  404   (CN = TRAEFIK DEFAULT CERT)
+
+**A container-published port is not filtered by UFW, on any interface.** Docker DNATs it in `nat/PREROUTING` and accepts it in the `FORWARD` chain; UFW's rules hang off `INPUT`, which those packets never traverse. So `hardening_web_allowed_cidrs` gates nothing for `platform-traefik-1`, which publishes `0.0.0.0:80` and `0.0.0.0:443`, and what refuses a request from the public internet is the Hetzner cloud firewall alone. Nothing in `ansible/roles/` touches `DOCKER-USER` or `after.rules`, which is where a fix would go.
+
+**What this falsifies, and it is the reason this is an entry rather than a note.** The firewall convention in `AGENTS.md` says the two layers are the cloud firewall and UFW, and that for any given port exactly one of them is the documented access gate. For a container-published port that is not a split at all — there is one layer, and a reader who closes UFW and believes the port shut is wrong. `docs/bootstrap-a-new-host.md` said "both firewall layers refuse inbound traffic to them" in two places, both rewritten by `expose-staging-on-the-web` when it opened staging's web ports; `expose-staging-on-the-web`'s backlog entry carried the two-layer obligation as one of the two things it said existed nowhere else, until that change was archived; the obligation itself is stated in `ansible/roles/hardening/README.md`. `ansible/inventory/group_vars/staging.yml`'s comment above `hardening_web_allowed_cidrs` reasoned from it directly and was corrected by the change that recorded this entry, since it was editing that file anyway — it is the worked example of what the others need, not an outstanding item. Each of the rest needs to say which ports it is true of. `check-public-endpoints-from-outside` is the one place that draws a wrong *conclusion* rather than just restating the rule: it counts a cloud-firewall change blocking 443 as gated "in two of at least three ways", one of them UFW as "the co-equal host-level layer" — and for 443 UFW is not in the path, so that count is overstated. The mirror obligation itself survives all of this: `terraform.tfvars` and `group_vars` still have to agree, and the reason is unchanged for every port UFW does gate.
+
+**One thing to settle while doing it, because the answer is not obvious.** `add-grafana-tailnet-ufw-rule` exists because Grafana was found unreachable from the tailnet until a UFW allow for 3000 was added by hand, and `platform-grafana-1` publishes `100.85.219.36:3000->3000/tcp` — a container-published port, which by the mechanism above UFW never filtered. Either that rule does nothing and the original diagnosis was wrong, or something distinguishes that case. Find out before writing the general rule down, since one of those two is currently recorded as a worked example in an archived change.
+
+**What is not owed here.** Nothing about this is an exposure: what reaches Traefik from the internet is decided by the cloud firewall on both hosts, and a tailnet peer is an authenticated device of the operator's own. This is a documentation defect about which mechanism does the refusing, and the decision of whether to close container ports at the host layer as well — `DOCKER-USER` rules, or publishing to `127.0.0.1` and reaching containers another way — is a change of its own that this entry does not prejudge.
+
+Not blocked.
+
+## 6. check-public-endpoints-from-outside
+
+**Not blocked; recorded because the monitoring stack watches the host and not the customer's path to it. Narrowed on 2026-09-09 by `alert-on-certificate-expiry`, which delivered the certificate-expiry half.**
+
+The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves the exporters are. `ApplicationHighErrorRate` needs requests to reach Traefik before it can count them. Nothing checks, from outside the host, that a public hostname resolves and answers on 443.
+
+**What was delivered and is no longer in scope here.** A certificate quietly ageing out was the third of the three failures this entry named, and it turned out to need no probe at all: Traefik publishes `traefik_tls_certs_not_after`, Prometheus was already scraping it, and one alert rule now reads it. What survives of that failure is only the half no metric can express -- a hostname resolving to this host with **no** certificate at all, which produces no series because Traefik's default self-signed certificate is not published as one. The company domain's apex and its `www` name are in exactly that state today, by design, because no application is bound to them yet.
+
+**`blackbox-exporter` cannot serve this entry's own motive**, which is the finding that most changes what remains. It runs on the host, and a packet addressed to an IP configured on a local interface is delivered locally -- so a probe from the host to the host's own public address never traverses the Hetzner cloud firewall, which filters ingress at the network edge. The cheaper of the two shapes this entry offered cannot see the firewall failure it was offered for. It would still catch a routing mistake and would measure what a client is actually served rather than what Traefik believes it holds; neither is the same thing as looking from outside.
+
+**The two failures that remain, stated more accurately than this entry stated them.**
+
+*A cloud-firewall change blocking 443* is gated in one of at least three ways it can close, not in all of them. `web_allowed_cidrs` reaches production only through the gated pipeline, where a human reviews the exact plan. **This paragraph used to count UFW as a second gated layer, and that was wrong**, for the reason `say-what-the-host-firewall-actually-gates` sets out: Traefik publishes `0.0.0.0:443` and Docker accepts a published port in `FORWARD`, which UFW's `INPUT` rules never traverse — so for 443 there is no host-level layer to gate, and the count was overstated by the layer that is not in the path. The third is a console-side change, caught only by the drift workflow. That workflow no longer fails into silence — `notice-when-a-periodic-job-stops-reporting` gave it a heartbeat whose quiet raises an alarm — but it still reports only what Terraform manages. An outside check is the only thing that would see it.
+
+*A DNS mistake* is not bounded by how often the zone is hand-edited. `docs/bootstrap-a-new-host.md` §4.4 records that both zones are served by third-party nameservers, so a provider outage or a lapsed registration is a DNS failure with no edit behind it -- and it is exactly the "invisible until a person notices" class this entry was recorded for.
+
+**So what is left is an external uptime service**, with a check per hostname, independent of the host in the way the Watchdog is. Note that the assumption this entry made about it is probably false: the heartbeat provider named in `docs/bootstrap-a-new-host.md` is healthchecks.io, which monitors inbound pings and does not make outbound HTTP checks. This is likely a second vendor account and therefore an operator decision with a cost attached, which is the main reason it is still queued rather than opened.
+
+## 7. report-an-absent-tailscale-auth-key
 
 **Not blocked on another change; recorded because doing it well is a larger job than it looks, and doing it badly breaks the host's reachability.**
 
@@ -56,7 +117,7 @@ Three things make this its own change rather than a fold-in:
 
 Recorded by `fix-volume-discovery-and-consistency`, whose `design.md` Decision 3a carries the full reasoning.
 
-## 4. collect-each-role-s-apt-installs-into-one-task
+## 8. collect-each-role-s-apt-installs-into-one-task
 
 Recorded 2026-09-11 by `cache-the-apt-index-within-a-converge`, whose Non-Goals name it and whose own saving it would extend.
 
@@ -68,158 +129,7 @@ That change bounded how stale an index a converge will install from, which remov
 
 So the honest framing is that this is the fix for the production half that `cache-the-apt-index-within-a-converge` explicitly did not deliver, rather than a further trim of the continuous-integration half it did.
 
-## 6. size-platform-container-resource-limits
-
-**Blocked on data, not on another change.** No service in `platform/docker-compose.yml` declares a memory or CPU limit, on a `cx33`, while `ContainerRestartingOrOOMKilled` alerts on the consequence. A single container can currently starve the host.
-
-Limits picked without evidence are guesses that cause the outage they were meant to prevent. The monitoring stack now collects exactly the data needed — `container_memory_usage_bytes` by container, already on the "Container health" dashboard. Let it run long enough to show real steady-state and peak, then size from observation.
-
-## 7. alert-on-swap-utilisation
-
-**Not blocked; recorded rather than folded into `bound-host-log-growth-and-add-swap`, which is the change that gives this host swap in the first place.** That change is host-level Ansible; this one is a `platform/` Compose change reached by a different pipeline, and folding it in would have made a single change need two deploys.
-
-Once swap exists, "swap is 80% consumed" is the signal that a leak is underway and the OOM killer is next. Nothing says it. `node_memory_SwapFree_bytes` and `node_memory_SwapTotal_bytes` are already scraped -- node-exporter has been running since `add-platform-monitoring` -- so the rule is a few lines beside the seven already inline in `platform/docker-compose.yml`.
-
-**What this adds is the explanation, not the detection.** `HostMemoryPressure` is computed from `MemAvailable / MemTotal`, which is RAM only and unaffected by swap existing, so a leak still drives it over 90% and still fires after ten minutes. What that alert cannot say is *why*, and on a host that now has a last-resort tier the difference between "memory is tight" and "the reserve is being consumed and there is nothing after it" is the difference between a warning and a countdown.
-
-Worth deciding at the same time whether the threshold is a level (swap above some fraction) or a rate (swap consumed per unit time). A level fires late on a slow leak and a rate fires spuriously on a legitimate burst; this host has no history of either yet, which is a reason to pick the simpler one and revisit.
-
-**Do not size it before entry 6.** Container memory limits change what swap is ever asked to absorb, so a threshold chosen now describes a host that is about to change.
-
-## 9. aggregate-container-logs
-
-**Not blocked; lowest priority in this batch for a host running one application, and the first thing missed when it runs several.**
-
-Logs are read by `docker logs` over SSH as `ops-claude`, per container, and are lost when a container is recreated -- which every deploy does. Alerts say *that* a container restarted; the reason is in the log that just went away.
-
-Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones. Traefik's access log was turned on to stdout on 2026-09-13 alongside the entrypoint-wide TLS defaults, so the HTTP traffic this would aggregate is now being written — and is now what shortens Traefik's own `docker logs` history, which is the argument for doing this rather than a detail of it.
-
-## 12. verify-at-deploy-time-that-what-shipped-is-what-runs
-
-**Not blocked; recorded rather than folded into `apply-shipped-config-on-deploy`, which deliberately stops short of it.**
-
-That change makes a configuration-only edit *visible* to Compose, so the services whose configuration moved are replaced. What it does not do — and its added requirement says so in as many words — is establish that a deploy reporting success applied everything it shipped. A container can fail to be replaced for reasons no property of the stack definition can express, and nothing today compares a running container against the definition afterwards.
-
-The check is small: after `docker compose up -d --wait`, compare each running container's `com.docker.compose.config-hash` against `docker compose config --hash='*'` and fail the deploy on a mismatch. It would have caught the original defect on the day it happened rather than a day later, and it catches the whole class rather than the one member of it that a checksum label addresses.
-
-**It does not subsume the label, and adding it instead would have been wrong.** Without a label, a configuration-only change produces equal hashes on both sides — the file's and the container's — so this check passes while the configuration sits unapplied. It is a backstop for reasons nobody has thought of, not a replacement for making the change visible in the first place.
-
-Two things make it a change of its own rather than a rider. It edits `app-deploy`, which is generic across applications, so it changes deploy behaviour for `commerce-ops` and every future application, not just for `platform`. And it needs a decision about what a mismatch should do to a deploy that has already replaced some services and reported them healthy — failing after the fact is not the same as refusing to start.
-
-Note the comparison has a trap the sibling change documented: four of the platform stack's eight services -- `grafana`, `postgres`, `postgres-exporter` and `traefik` -- interpolate `${...}` from `.env` into their service blocks, so a hash computed anywhere without the host's real `.env` does not match the host's. This check must run **on the host**, where that file is, or it will report mismatches that are artefacts of where it ran.
-
-It also does **not** catch the second case below, despite looking as though it should: where a secret interpolated *inside* an embedded config is rotated, both sides of this comparison compute the same unchanged value, so it passes while the running container holds the superseded secret.
-
-**The second half of this entry, and the reason the two are one change.** A configuration change that a deploy reports as applied has two ways of not being applied, and only one decision settles both — whether the digest is computed on the host, after interpolation. What follows was found in code review of `apply-shipped-config-on-deploy`, which is structurally unable to close it.
-
-`alertmanager_config`'s content interpolates `${SLACK_WEBHOOK_URL}` and `${DEADMANSWITCH_URL}`, and `.github/workflows/platform-deploy.yml` renders both into `.env` from GitHub secrets at deploy time. Rotate the Slack webhook and the effective Alertmanager configuration changes -- but the committed text does not, so the checksum label derived from it does not, and Compose's own digest never covered embedded config content in the first place. The container is not replaced. **The revoked webhook stays live until something unrelated replaces that container**, and every alert in the meantime goes to an endpoint the rotation was meant to retire.
-
-Nothing currently reports this. The deploy-time hash comparison above does not: both sides compute the same unchanged value, so it passes. The checksum label cannot: the value that changed is deliberately not in the repository, which is the whole point of it being a secret.
-
-**What would work is the deploy-time computation that change considered and rejected** -- a digest taken on the host, after interpolation, moves when the interpolated value moves. That change's design.md records this as the strongest argument against its own Decision 1, found after the decision was made. Deciding this entry means revisiting that trade with this case in hand, so it is a decision about the mechanism rather than a defect to patch.
-
-Bounded in the meantime by how rotation actually happens here: it is a manual act by the operator, who can force the replacement in the same session. Worth writing that into the rotation step of whatever runbook covers it, which is a smaller piece of work than this entry and does not wait on it.
-
-## 13. name-every-alert-in-a-grouped-slack-notification
-
-**Not blocked; recorded rather than folded into `alert-on-certificate-expiry`, which routed around it for its own alert and found the general case in doing so.**
-
-Alertmanager's `slack` receiver renders `{{ .CommonAnnotations.summary }}` and `{{ .CommonAnnotations.description }}`. `CommonAnnotations` holds only the annotation pairs **identical across every alert in the notification's group** -- so any alert whose annotations name a per-series label delivers an empty title and an empty body the moment two of them group together.
-
-`ApplicationHighErrorRate` is in exactly that state and has been since it was written: its summary names the router, `group_by` is `["alertname"]`, and two routers erroring at once -- which a shared Traefik makes correlated rather than independent -- produce a Slack message that says nothing. Nobody has seen it because the alert has not fired on two routers yet.
-
-`alert-on-certificate-expiry` fixed this for its own alert by adding `cn` to `group_by` on that alert's own route, which is correct and minimal for one alert. It does not generalise: every future alert naming a per-series label needs the same treatment, and forgetting is silent.
-
-The general fix is in the receiver, not in a route: render `{{ range .Alerts }}` so a grouped notification lists each alert's own annotations. That changes delivery for **every** alert in the stack, including ones nobody has re-read, which is why it is a change of its own rather than a fold-in. Worth pairing with an assertion that no alert's annotations reference a label absent from its route's `group_by`, which is a static read of the committed file and would catch the next instance instead of waiting for it to fire.
-
-## 14. check-public-endpoints-from-outside
-
-**Not blocked; recorded because the monitoring stack watches the host and not the customer's path to it. Narrowed on 2026-09-09 by `alert-on-certificate-expiry`, which delivered the certificate-expiry half.**
-
-The dead-man's switch proves Alertmanager is alive. `MetricsTargetDown` proves the exporters are. `ApplicationHighErrorRate` needs requests to reach Traefik before it can count them. Nothing checks, from outside the host, that a public hostname resolves and answers on 443.
-
-**What was delivered and is no longer in scope here.** A certificate quietly ageing out was the third of the three failures this entry named, and it turned out to need no probe at all: Traefik publishes `traefik_tls_certs_not_after`, Prometheus was already scraping it, and one alert rule now reads it. What survives of that failure is only the half no metric can express -- a hostname resolving to this host with **no** certificate at all, which produces no series because Traefik's default self-signed certificate is not published as one. The company domain's apex and its `www` name are in exactly that state today, by design, because no application is bound to them yet.
-
-**`blackbox-exporter` cannot serve this entry's own motive**, which is the finding that most changes what remains. It runs on the host, and a packet addressed to an IP configured on a local interface is delivered locally -- so a probe from the host to the host's own public address never traverses the Hetzner cloud firewall, which filters ingress at the network edge. The cheaper of the two shapes this entry offered cannot see the firewall failure it was offered for. It would still catch a routing mistake and would measure what a client is actually served rather than what Traefik believes it holds; neither is the same thing as looking from outside.
-
-**The two failures that remain, stated more accurately than this entry stated them.**
-
-*A cloud-firewall change blocking 443* is gated in two of at least three ways it can close, not in all of them. `web_allowed_cidrs` reaches production only through the gated pipeline, where a human reviews the exact plan, and `AGENTS.md`'s firewall split makes UFW the co-equal host-level layer — whose playbook now reaches a host through the gated converge `apply-host-configuration-through-a-gated-workflow` built, so that layer is gated too. The third is a console-side change, caught only by the drift workflow. That workflow no longer fails into silence — `notice-when-a-periodic-job-stops-reporting` gave it a heartbeat whose quiet raises an alarm — but it still reports only what Terraform manages. An outside check is the only thing that would see it.
-
-*A DNS mistake* is not bounded by how often the zone is hand-edited. `docs/bootstrap-a-new-host.md` §4.4 records that both zones are served by third-party nameservers, so a provider outage or a lapsed registration is a DNS failure with no edit behind it -- and it is exactly the "invisible until a person notices" class this entry was recorded for.
-
-**So what is left is an external uptime service**, with a check per hostname, independent of the host in the way the Watchdog is. Note that the assumption this entry made about it is probably false: the heartbeat provider named in `docs/bootstrap-a-new-host.md` is healthchecks.io, which monitors inbound pings and does not make outbound HTTP checks. This is likely a second vendor account and therefore an operator decision with a cost attached, which is the main reason it is still queued rather than opened.
-
-## 15. reconcile-the-heartbeat-checks-with-what-the-repository-prescribes
-
-**Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, whose own operator step went looking for a check the observer does not hold.**
-
-`docs/bootstrap-a-new-host.md` §7.1 tells the operator to create a check for Alertmanager's dead-man's switch under a name of the document's choosing. **No check has ever carried that name.** The observer holds *Alertmanager Dead Man's Switch* under the slug `my-first-check` — the vendor's own default first-check name, which is what you get by pinging a project's first check into existence rather than by naming one. The document prescribed, the deployment did something else, and **nothing in this repository can see the difference**, because no committed file names that check: Alertmanager posts to a full ping URL held in `PLATFORM_DEADMANSWITCH_URL`, and a URL carries no slug.
-
-**The two kinds of check differ in exactly the way that decides what may be renamed, and that is worth stating once rather than rediscovering.**
-
-- **Slug-addressed, and a rename of the slug breaks them.** `infrastructure-drift`, `infrastructure-pre-commit-autoupdate` and `<inventory_hostname>-prune-host-images` are reached as `hc-ping.com/<ping key>/<slug>?create=1` — by `.github/workflows/drift.yml`, `.github/workflows/pre-commit-autoupdate.yml` and the `image_prune` role. Because every ping carries `?create=1`, re-slugging one does not fail loudly: the next ping **creates a second check** under the old slug and the renamed one goes quiet, which is an alarm rather than an error and arrives a period later. The display name is free; the slug is not.
-- **URL-addressed, and a rename costs nothing.** The Alertmanager check is reached only by its own ping URL, so its name and its slug may both be changed without touching a secret. That is the one this repository prescribes a name for and the one where the name is least load-bearing.
-
-**What this entry owes.** Decide whether the Alertmanager check is renamed to match §7.1 or §7.1 is amended to match the observer — either is defensible and the divergence is not — and say in the document which field is being named, since the two kinds of check answer differently. Then state the slug rule where an operator meets it rather than here: a reader of §7.1 and Appendix A today cannot tell that renaming one check is free and renaming another quietly doubles it.
-
-**What it must not do.** Re-slug a periodic-job check to tidy the list. `main-production-prune-host-images` and `main-staging-prune-host-images` are templated from `inventory_hostname`, so their slugs are derived rather than chosen, and changing one at the observer alone puts it permanently out of step with what the host pings.
-
-**The same blind spot on a different field of the same check, and the cheaper half.** The observer holds settings no committed file states, so nothing detects either kind of divergence. The name is above; the timing is below, recorded 2026-09-13 by the operator, who read §7.1 against the observer's own settings and could not make the two agree.
-
-`docs/bootstrap-a-new-host.md` §7.1 says of the Alertmanager dead-man's-switch check: *"Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one."* The deployment runs **period 5, grace 2**.
-
-**The sentence is why the divergence is hard to see, and it is wrong in a way that survives a careful reading.** The clause after the colon justifies the **period** and nothing else: a period of 5 minutes against a 2-minute cadence is exactly "tolerate one missed ping before going late". The **grace** value is then stated with no reason attached, so a reader who does the arithmetic finds a number that the sentence appears to explain and does not. That is how it reads as a contradiction when it is really an unexplained figure sitting beside an explained one.
-
-**What the two fields actually do, since the document never says.** They are sequential, not alternatives. *Period* is how long without a ping before the check goes **late**; *grace* is how long it stays late before going **down** and alerting. Time from the last good ping to the alarm is **period + grace**. Against the real cadence — `repeat_interval: 2m` on the `Watchdog` route in `platform/docker-compose.yml` — the documented pair alarms at **10 minutes** and roughly five missed pings; the deployed pair alarms at **7 minutes** and roughly three.
-
-**The deployed value is the better one, which is what makes this a documentation change rather than a configuration one.** This check is the alarm for when everything else is down, so a shorter time to alarm is worth having provided it does not fire on noise — and three consecutive missed pings is well clear of a transient blip or of the brief Alertmanager restart a platform deploy causes. Whoever takes this should change the document to match the observer rather than the reverse, and say *why* the grace is what it is instead of asserting a figure.
-
-**Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
-
-## 19. move-commerce-ops-durable-data-to-supabase
-
-**Not blocked, and its middle step is not this repository's to do — recorded because `openspec/specs/iac-safety-hardening/spec.md` names it as a divergence and nothing else tracks it.**
-
-*No Store on This Host Holds Data Requiring Backup* classifies every store on this host as needing no backup, and states one exception: on the production host, `commerce-ops` keeps durable data in a PostgreSQL container of its own, on its own `app_db` network — staging's `commerce-ops` has none, its database being in staging's shared instance. On 2026-09-08 production's private database held 12 MB. Most of its rows are transient — roughly 17,000 across the `procrastinate_*` queue tables, which are exactly the non-durable class the shared instance exists for — but the part that matters is small and hand-curated: 358 `playbook_steps`, 35 `launch_journal_entries`, 26 `launch_clickup_tasks`, 11 `roles`, 8 `role_holders`, 7 `known_work`, 5 `products`. Nothing backs any of it up. The daily Hetzner snapshot covers the root disk the volume sits on, crash-consistently, restorable only by rolling the whole server back.
-
-The resolution, as the operator decided on 2026-09-14, comes in two stages (`provision-commerce-ops-database-in-the-shared-instance`'s design, decision 3). First, production's whole `commerce-ops` database — the hand-curated tables and the `procrastinate_*` queue tables alike, since the application enqueues inside its domain transaction and its queue cannot live in a second database — moves into the database already provisioned for it in production's shared instance, once its data is classified as tolerable to lose. Later it moves to Supabase, which owns its own backups. Staging is the other case: its whole database is already in staging's shared instance under the rehearsal-data policy.
-
-**Ending the private container takes four steps, and this repository owns three.**
-
-1. Done by that change: a `commerce-ops` role and database in production's shared instance, their password in the `commerce-ops` repository's `production` Environment as `SHARED_POSTGRES_PASSWORD` — deliberately not `POSTGRES_PASSWORD`, which the private PostgreSQL still reads.
-2. Here: `classify-commerce-ops-production-data-for-the-shared-instance`. Nothing from production may land in the shared instance before it merges.
-3. In the `commerce-ops` repository, over which this one has no authority: move the whole database into production's shared-instance database — a dump of `commerce-ops-postgres-1` restored as role `commerce-ops` — point `DATABASE_URL` at `commerce-ops@postgres:5432/commerce-ops` with `SHARED_POSTGRES_PASSWORD`, and remove its own PostgreSQL service, its volume and its `app_db` network. While both exist, `postgres` names two servers to a container on `app_db` and `platform_edge` at once, so the switch and the service's removal belong in one deploy. Until that service is gone, the divergence stands.
-4. Here: delete the divergence paragraph from *No Store on This Host Holds Data Requiring Backup*. No change in this repository would otherwise prompt it, so a completed migration would quietly leave the specification describing a divergence that no longer exists. **Gate it on the host, not on the migration being reported done**: from a session on production, `docker ps --filter name=commerce-ops` shows no PostgreSQL container and `docker volume ls` no longer lists `commerce-ops_commerce_ops_pgdata`. A specification calling the divergence closed while that container runs is worse than one admitting it.
-
-**The later move to Supabase**, recorded so it is not re-derived: use its session pooler — `aws-1-eu-west-1.pooler.supabase.com:5432` with user `postgres.<ref>`, which answered `pg_isready` from a container on staging's `platform_edge` on 2026-09-14. Supabase's direct connection is IPv6-only and `platform_edge` has IPv6 disabled, the transaction pooler on port 6543 cannot carry the worker's `LISTEN/NOTIFY`, and the Free plan has no backups.
-
-## 20. write-and-rehearse-the-rebuild-runbook
-
-**Not blocked; recorded because every piece exists and nobody has run them in sequence.**
-
-Recovering this host from nothing is: a Terraform apply through the gated pipeline (with `server_enabled` toggled, and the destroy-override label for the replace), DNS (a manual edit at the zone's own provider — `docs/bootstrap-a-new-host.md` §4.4 gives the shape of the records and not their values, and is also where the automation of this step is declined), the first converge of the rebuilt host, which is a hand-run one from a workstation with the Vault password and a fresh tailnet key -- the pipeline reaches a host over the tailnet and joining it is what that play does, so `apply-host-configuration-through-a-gated-workflow` did not remove this step and could not, the platform deploy from a re-run of `platform-deploy.yml`, one deploy per application from its own repository, the two manual steps `platform/README.md` lists (the `pgexporter` role and the dead-man's-switch registration). No *platform-stack* store needs restoring: `scope-the-shared-database-to-non-durable-data` classified each of them as needing no backup — each is either recreated by a redeploy or its loss is accepted, and the runbook should say which, because Prometheus's history and Grafana's UI-created state fall in the second group and do not come back. An application's database in the shared instance falls in the second group too, but is not the end of it: the application cannot start without one, so the runbook needs a re-provisioning step per application — the provisioning recipe in `docs/onboard-an-application.md` for that host with `rotate=yes` — before that application's deploy. That leaves one gap, and it is the one the same change names as a divergence — on the production host, `commerce-ops` keeps durable data in a PostgreSQL container of its own that nothing backs up, so a rebuild today loses it. Entry 19 is what closes that; until it does, the runbook has to say so. Those steps live in four repositories and two README sections, in no stated order, and the time they take is unknown.
-
-A `docs/runbook-rebuild.md` that lists them in order, names the secret each step needs, and records the last rehearsal's date and duration is the deliverable. The rehearsal is the point; the document is how it survives. Staging is where the rehearsal can happen without touching prod — converged since 2026-09-10, though entry 16 is what puts a platform stack on it to rehearse against.
-
-## 21. exercise-the-volume-server-coupling-against-live-state
-
-**Not blocked; recorded because an archived change is where it would be lost.** Recovered 2026-09-08 by `make-openspec-validation-a-usable-gate` while settling the red archived records. `add-prod-data-volume`'s task 3.5 was left unticked with the note *"Still open; consider doing this as a follow-up plan-only check"* — real outstanding work, sitting in prose inside a change that had already been archived, which is precisely where nobody would look for it. That task is now disclosed under that change's `## Not performed`; the work it names is here.
-
-`stacks/prod` couples the volume to the server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`, so the volume cannot outlive the server it derives its location from. **That coupling has never been exercised against live state.** `terraform/modules/volume/tests/*.tftest.hcl` cannot reach it — the coupling lives in the stack, not the module, and the module's tests do not evaluate the stack's `count` expression.
-
-Two plan-only reads, **never applied**:
-
-- Set `volume_enabled = false` (uncommitted) and re-plan: the volume is planned for destruction and nothing else changes.
-- Restore it, set `server_enabled = false` instead, and re-plan: the plan destroys server, firewall **and** volume together.
-
-Revert both local edits afterwards. Use the read-only Hetzner token; this is a `terraform plan` and never a `terraform apply`, per this project's rule that production changes reach Hetzner only through the gated pipeline. A destroy plan run locally reads state and proposes; it changes nothing.
-
-The requirement this protects is *Conditional Prod Volume Creation* in `openspec/specs/iac-data-volumes/spec.md`, and the two reads above are literally its scenarios *Volume toggle disabled creates nothing* and *Disabling the server also removes the volume* — both of which say `terraform plan` SHALL show the volume planned for destruction. The specification states them; nothing has ever run them.
-
-Worth doing before the coupling is next relied on — a volume that survived its server would be an orphaned resource with no location, which is the failure the coupling exists to prevent and which nothing has yet observed being prevented.
-
-## 22. narrow-the-converge-trigger-to-what-a-converge-reads
+## 9. narrow-the-converge-trigger-to-what-a-converge-reads
 
 **Not blocked. Recorded 2026-09-12, from the merge of `rename-terraform-environments-to-stacks` (PR #148).**
 
@@ -245,7 +155,7 @@ The cost was not the wall clock. Production's job sat **6h34m** waiting for its 
 
 **Weigh it against the alternative of doing nothing.** The cost today is wall-clock and a standing risk that a documentation change perturbs production. The benefit of the current coarse trigger is that it cannot under-converge. That is a real benefit and this entry should not be taken as a foregone conclusion — a reviewer may decide the coarse trigger is the right answer for the host layer precisely because the failure mode is silent.
 
-## 23. make-the-converge-survive-a-galaxy-outage
+## 10. make-the-converge-survive-a-galaxy-outage
 
 **Not blocked. Recorded 2026-09-12, from the merge of `rename-the-external-services` (PR #155), whose gated production converge failed on it.**
 
@@ -279,7 +189,7 @@ A different collection, a different error and a different workflow, so a fix aim
 
 The cost here is lower than on the converge — a red check and a re-run, not a spent production approval — but it broadens the subject: whatever the fix is, it belongs to **every** workflow that installs Galaxy content, not to `host-converge.yml` alone. Weigh the options above against how often this happens: twice in one day, on two different workflows, against two different collections.
 
-## 24. detect-host-drift-on-a-schedule
+## 11. detect-host-drift-on-a-schedule
 
 **Not blocked, and deliberately not done by `apply-host-configuration-through-a-gated-workflow`**, which is the change that made it possible and the one that declined it. That change's own `design.md` Decision 10 carries the full reasoning; what follows is what this entry inherits.
 
@@ -287,13 +197,287 @@ A converge applies what is committed. Nothing reports what a host has drifted to
 
 **It cannot ship with the baseline it has today.** Two `tailscale` tasks -- *Add the Tailscale apt signing key* and *Add the Tailscale apt repository* -- are `ansible.builtin.get_url` with no `checksum:`, and `get_url` to an existing destination with no checksum reports **changed** under `--check`, because establishing that the file already matches would mean downloading it. So a healthy host reports `changed=2`, forever. A drift detector whose baseline is two is one an operator learns to skip, which is the same failure mode as an approval prompt with nothing to approve. Three remedies, none free: pin a `checksum:` (upstream rotates the key), replace `get_url` with a task that can verify itself in check mode, or filter those two by name and say in the workflow why.
 
-**Entry 3 is a prerequisite rather than a neighbour.** The `tailscale` role carries no Molecule scenario, so any of those remedies would be made against nothing. Entry 3 already owns bringing that role its first scenario.
+**`report-an-absent-tailscale-auth-key` is a prerequisite rather than a neighbour.** The `tailscale` role carries no Molecule scenario, so any of those remedies would be made against nothing. `report-an-absent-tailscale-auth-key` already owns bringing that role its first scenario.
 
 **Two documents move with it.** `docs/bootstrap-a-new-host.md` §6.3 states the `changed=2` baseline and names this entry as owning its removal -- that paragraph is written to change when this lands. And what check mode can see is less than the host: `command` tasks skip under `--check` (`ops_user`'s three, `swap`'s four) and `geerlingguy.docker` carries `ignore_errors: "{{ ansible_check_mode }}"` on five, so a clean check is a statement about files and packages and not about the host. Whatever this ships must say so where it reports, not only in a design document.
 
 Shape it as `drift.yml`'s sibling: scheduled, per environment, an issue per environment deduplicated by title, and a liveness report -- the last is obligatory, since *Scheduled Workflows Report Their Own Liveness* reaches every `schedule:`-triggered workflow.
 
-## 25. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
+## 12. size-platform-container-resource-limits
+
+**Blocked on data, not on another change.** No service in `platform/docker-compose.yml` declares a memory or CPU limit, on a `cx33`, while `ContainerRestartingOrOOMKilled` alerts on the consequence. A single container can currently starve the host.
+
+Limits picked without evidence are guesses that cause the outage they were meant to prevent. The monitoring stack now collects exactly the data needed — `container_memory_usage_bytes` by container, already on the "Container health" dashboard. Let it run long enough to show real steady-state and peak, then size from observation.
+
+## 13. alert-on-swap-utilisation
+
+**Not blocked; recorded rather than folded into `bound-host-log-growth-and-add-swap`, which is the change that gives this host swap in the first place.** That change is host-level Ansible; this one is a `platform/` Compose change reached by a different pipeline, and folding it in would have made a single change need two deploys.
+
+Once swap exists, "swap is 80% consumed" is the signal that a leak is underway and the OOM killer is next. Nothing says it. `node_memory_SwapFree_bytes` and `node_memory_SwapTotal_bytes` are already scraped -- node-exporter has been running since `add-platform-monitoring` -- so the rule is a few lines beside the seven already inline in `platform/docker-compose.yml`.
+
+**What this adds is the explanation, not the detection.** `HostMemoryPressure` is computed from `MemAvailable / MemTotal`, which is RAM only and unaffected by swap existing, so a leak still drives it over 90% and still fires after ten minutes. What that alert cannot say is *why*, and on a host that now has a last-resort tier the difference between "memory is tight" and "the reserve is being consumed and there is nothing after it" is the difference between a warning and a countdown.
+
+Worth deciding at the same time whether the threshold is a level (swap above some fraction) or a rate (swap consumed per unit time). A level fires late on a slow leak and a rate fires spuriously on a legitimate burst; this host has no history of either yet, which is a reason to pick the simpler one and revisit.
+
+**Do not size it before `size-platform-container-resource-limits`.** Container memory limits change what swap is ever asked to absorb, so a threshold chosen now describes a host that is about to change.
+
+## 14. aggregate-container-logs
+
+**Not blocked; lowest priority in this batch for a host running one application, and the first thing missed when it runs several.**
+
+Logs are read by `docker logs` over SSH as `ops-claude`, per container, and are lost when a container is recreated -- which every deploy does. Alerts say *that* a container restarted; the reason is in the log that just went away.
+
+Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones. Traefik's access log was turned on to stdout on 2026-09-13 alongside the entrypoint-wide TLS defaults, so the HTTP traffic this would aggregate is now being written — and is now what shortens Traefik's own `docker logs` history, which is the argument for doing this rather than a detail of it.
+
+## 15. name-every-alert-in-a-grouped-slack-notification
+
+**Not blocked; recorded rather than folded into `alert-on-certificate-expiry`, which routed around it for its own alert and found the general case in doing so.**
+
+Alertmanager's `slack` receiver renders `{{ .CommonAnnotations.summary }}` and `{{ .CommonAnnotations.description }}`. `CommonAnnotations` holds only the annotation pairs **identical across every alert in the notification's group** -- so any alert whose annotations name a per-series label delivers an empty title and an empty body the moment two of them group together.
+
+`ApplicationHighErrorRate` is in exactly that state and has been since it was written: its summary names the router, `group_by` is `["alertname"]`, and two routers erroring at once -- which a shared Traefik makes correlated rather than independent -- produce a Slack message that says nothing. Nobody has seen it because the alert has not fired on two routers yet.
+
+`alert-on-certificate-expiry` fixed this for its own alert by adding `cn` to `group_by` on that alert's own route, which is correct and minimal for one alert. It does not generalise: every future alert naming a per-series label needs the same treatment, and forgetting is silent.
+
+The general fix is in the receiver, not in a route: render `{{ range .Alerts }}` so a grouped notification lists each alert's own annotations. That changes delivery for **every** alert in the stack, including ones nobody has re-read, which is why it is a change of its own rather than a fold-in. Worth pairing with an assertion that no alert's annotations reference a label absent from its route's `group_by`, which is a static read of the committed file and would catch the next instance instead of waiting for it to fire.
+
+## 16. label-each-stack-s-alerts-with-the-stack-they-came-from
+
+Recorded 2026-09-13 by `deploy-the-platform-stack-per-environment`, which put the platform stack on a second host and found that nothing distinguishes the two hosts' alerts.
+
+`platform/docker-compose.yml`'s Prometheus configuration declares no `external_labels`, so a `MetricsTargetDown` raised on staging and one raised on production are **identical text**. Alertmanager adds nothing either: its routes group on the alert's own labels, and none of them names a host, a stack or an environment.
+
+**What that change did instead, and why it is not enough.** Each stack's `PLATFORM_SLACK_WEBHOOK_URL` and `PLATFORM_DEADMANSWITCH_URL` are secrets on that stack's own GitHub Environment, so the operator can — and on 2026-09-13 did — point each stack at a channel and a dead-man's-switch check of its own. Attribution then comes from *where the message arrived* rather than from anything in it. That works, costs nothing, and is what `docs/bootstrap-a-new-host.md` §7.3 now instructs.
+
+It is not enough because **nothing enforces it**. An operator who pastes production's webhook into staging's Environment gets two hosts alerting into one channel with no way to tell them apart, and no check in this repository reports it — the values are repository settings, and `.github/tests` may not read those. The failure is also silent in the direction that matters: the alerts keep arriving, so nothing looks broken until someone acts on the wrong host.
+
+**Why it was not folded in.** It is a change to the committed stack definition — `external_labels` under Prometheus's `global:`, a new variable in `platform/.env.example`, a tenth `PLATFORM_*` secret, and a regenerated `platform.config-checksum` on the Prometheus service. The change that found it had declared parameterising the Compose file a Non-Goal, and its deltas were approved on that boundary.
+
+**Worth settling when it is taken.** Whether the label is the stack (`main-staging`) or the environment (`staging`) — these are different axes and this repository has been bitten by conflating them before; whether the value is rendered from the existing `PLATFORM_DEPLOY_HOST` rather than adding a secret, which would avoid a tenth value to enter per stack; and whether Alertmanager's routes should group on it, which is what would stop two stacks' alerts collapsing into one notification that names neither.
+
+Not blocked.
+
+## 17. quieten-the-certificate-expiry-guard-on-a-host-serving-nothing
+
+**Recorded 2026-09-15 by the operator and this session, from the host rather than from the rules.** `CertificateExpiryNotObserved` has been firing on staging since 2026-09-13 17:01 UTC, which is the hour the platform stack first reached that host. Measured two ways: `amtool alert` inside `platform-alertmanager-1`, and Prometheus's own `/api/v1/alerts`, where it carries `activeAt` `2026-09-13T16:46:46Z` against the rule's `for: 15m`. It predates `expose-staging-on-the-web` by two days, so opening staging's web ports neither caused it nor cleared it.
+
+**The alert is correct, and on this host it is noise.** Its expression in `platform/docker-compose.yml` is `absent(traefik_tls_certs_not_after{cn!=""}) or count(traefik_tls_certs_not_after{cn=""}) > 0`, and it exists to stop `TLSCertificateExpiringSoon` from silently watching nothing — the reasoning is in the change `alert-on-certificate-expiry`. Staging publishes no such series because it holds no certificate: Traefik requests one per router, no container there carries a router label, and `/letsencrypt/acme.json` is 0 bytes. It reaches Slack, since the routing tree sends every alert but `Watchdog` to that receiver (`amtool config routes test severity=warning alertname=CertificateExpiryNotObserved` returns `slack`).
+
+**The design content is telling two silences apart**, which is why this is an entry rather than a one-line fix. Suppressing the alert wherever no certificate exists also suppresses the case it was written for: a Traefik that served certificates and now serves none. A fix therefore needs a series that says the host is *meant* to serve one — a router count, or a per-stack expectation — so that a host with nothing routed is quiet while a host that lost its certificates still alarms.
+
+**Not blocked, and it may close itself.** An application reaching staging clears it: the `commerce-ops` repository's `deploy-commerce-ops-to-staging` is the deploy that would. If that lands first, what survives is the general case, which the next empty host meets on its first day — a second staging, or any new stack whose platform deploy precedes its first application.
+
+## 18. alert-on-the-exporter-being-unable-to-read-postgres
+
+**Not blocked; recorded rather than opened, because the rule is one line and the question of what else shares this shape is not.** Found on 2026-09-15 while writing `platform/README.md`'s *Upgrading the PostgreSQL major version*, whose step 4 needed a check that postgres-exporter can reach the instance after its role is recreated.
+
+**`MetricsTargetDown` cannot catch a broken exporter credential, and `platform/README.md` claimed for months that it could.** That alert is `up == 0` — Prometheus's own scrape success — and postgres-exporter answers `/metrics` with HTTP 200 whether or not it can reach the database. Measured against the pinned `quay.io/prometheuscommunity/postgres-exporter:v0.20.1` with a deliberately wrong password: HTTP `200`, `pg_up 0`, `pg_exporter_last_scrape_error 1`, container `running` and its healthcheck — `wget --spider` against that same endpoint — satisfied. So `up` stays `1`, every alert stays silent, and PostgreSQL's metrics are simply absent.
+
+That is not hypothetical here. The `pgexporter` role lives in `postgres_data` and is recreated by hand after any volume reset or host rebuild, from a password pasted out of a GitHub Environment secret — the one step in this stack most likely to be got wrong, and the one with no automated check behind it.
+
+**It stopped being hypothetical the day after this entry was written, and the case was worse than the one argued above.** On 2026-09-15, checking `pg_up` by hand during the PostgreSQL 18 upgrade found **both** hosts reporting `pg_up 0`, for an unknown period before that. The cause was not a mistyped password but `DATA_SOURCE_NAME` building a URL around one containing `#`, which discarded the host — corrected the same day by splitting the exporter's connection settings. A second finding from the same reading — that both stacks held the *same* exporter password — was rotated out the same day. What this entry is about survived the fix: **nothing reported the outage**, on either host, for however long it lasted. Both containers were `healthy`, both Prometheus targets were `up`, and the operator found it only by running a command this repository had documented three days earlier. That is the evidence for this entry rather than an argument for it.
+
+**What the change owes.** An alert on `pg_up == 0` for the `postgres-exporter` job, in `platform/docker-compose.yml`'s inline `prometheus_rules` config — the sibling `prometheus_config` holds only `global`, `alerting`, `rule_files` and `scrape_configs`, and a `groups:` block added there is not where Prometheus reads rules from. Remember the `platform.config-checksum` label, since editing either block without regenerating it deploys nothing. Give it a `for:` long enough to ride out a restart of the instance, which legitimately shows `pg_up 0` while it comes up.
+
+**The wider question, which is why this is an entry rather than a line.** `up` measures whether an exporter answered, never whether what it answered means anything, and every exporter in this stack is read through that one alert. cAdvisor and node-exporter have no equivalent of `pg_up` and the question does not arise for them; Traefik's metrics endpoint does answer independently of whether its providers are healthy. Worth deciding once whether each exporter needs a liveness signal of its own rather than adding them one incident at a time.
+
+## 19. alert-on-a-scheduled-units-own-output
+
+**Not blocked. Recorded 2026-09-15 by `report-refused-removals-in-the-host-prune`, which found the deferral already being cited and never written down.**
+
+`ansible/roles/image_prune/README.md` has been telling readers that making a silently-stopped prune alertable "is recorded in `docs/backlog.md`". It was not — this entry is what that sentence now names. The deferral itself is real and predates the citation; only its record was missing.
+
+`prune-host-images` writes its outcome to the journal and **nothing reads it**. `systemctl list-units --failed` is a manual read that nothing performs on a schedule, and `HostDiskPressure` fires at 90% full, which is very late. The external dead-man's-switch covers the unit not *running* — a failed activation, a killed run, a timer that stopped firing — and says nothing about what a successful run reported. So a prune that completes every week having refused the same image every week, or one whose `considered` count has quietly collapsed to 1 because an enumerated application stopped rendering its references, is green at the observer and silent on the host.
+
+**The sharpest case, and the one to size this against.** `report-refused-removals-in-the-host-prune` found a state where the observer is not merely uninformative but actively wrong: a container runtime that stops responding part-way through the removal loop leaves the prune reporting every remaining candidate as refused and still **exiting zero** — so `ExecStopPost=` pings the success endpoint and the dead-man's-switch goes green on a run that stopped doing its work half-way. That is not a defect in the prune; exiting non-zero there would add an abandon condition to a list the requirement enumerates exactly, and an abandoned run is specified to have removed nothing, which is false by then. It is a defect in what watches it, which is this entry. The signature is in the role's README, and it is legible **only** to someone reading the journal.
+
+The mechanism is node-exporter's textfile collector: the unit writes a `.prom` file, node-exporter scrapes it with the rest, and the alert rules sit beside the seven already inline in `platform/docker-compose.yml`. node-exporter has been running since `add-platform-monitoring`, so nothing new is deployed for it.
+
+**Why it is its own change.** It reaches three things this repository keeps deliberately separate: a role that writes a metrics file, a collector directory that has to exist and be writable by that unit alone, and alert rules whose thresholds are a judgment rather than a transcription. It also wants a decision this entry does not take — whether the textfile is written by the prune script, which would make a metrics concern part of a script whose own failure modes are the subject of *A Run That Cannot Determine the Keep Set Completely Removes Nothing*, or by a wrapper, which adds a second thing that can silently stop. And the same mechanism would serve every scheduled unit on the host rather than this one, so scoping it to the prune would be the wrong shape.
+
+## 20. reconcile-the-heartbeat-checks-with-what-the-repository-prescribes
+
+**Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, whose own operator step went looking for a check the observer does not hold.**
+
+`docs/bootstrap-a-new-host.md` §7.1 tells the operator to create a check for Alertmanager's dead-man's switch under a name of the document's choosing. **No check has ever carried that name.** The observer holds *Alertmanager Dead Man's Switch* under the slug `my-first-check` — the vendor's own default first-check name, which is what you get by pinging a project's first check into existence rather than by naming one. The document prescribed, the deployment did something else, and **nothing in this repository can see the difference**, because no committed file names that check: Alertmanager posts to a full ping URL held in `PLATFORM_DEADMANSWITCH_URL`, and a URL carries no slug.
+
+**The two kinds of check differ in exactly the way that decides what may be renamed, and that is worth stating once rather than rediscovering.**
+
+- **Slug-addressed, and a rename of the slug breaks them.** `infrastructure-drift`, `infrastructure-pre-commit-autoupdate` and `<inventory_hostname>-prune-host-images` are reached as `hc-ping.com/<ping key>/<slug>?create=1` — by `.github/workflows/drift.yml`, `.github/workflows/pre-commit-autoupdate.yml` and the `image_prune` role. Because every ping carries `?create=1`, re-slugging one does not fail loudly: the next ping **creates a second check** under the old slug and the renamed one goes quiet, which is an alarm rather than an error and arrives a period later. The display name is free; the slug is not.
+- **URL-addressed, and a rename costs nothing.** The Alertmanager check is reached only by its own ping URL, so its name and its slug may both be changed without touching a secret. That is the one this repository prescribes a name for and the one where the name is least load-bearing.
+
+**What this entry owes.** Decide whether the Alertmanager check is renamed to match §7.1 or §7.1 is amended to match the observer — either is defensible and the divergence is not — and say in the document which field is being named, since the two kinds of check answer differently. Then state the slug rule where an operator meets it rather than here: a reader of §7.1 and Appendix A today cannot tell that renaming one check is free and renaming another quietly doubles it.
+
+**What it must not do.** Re-slug a periodic-job check to tidy the list. `main-production-prune-host-images` and `main-staging-prune-host-images` are templated from `inventory_hostname`, so their slugs are derived rather than chosen, and changing one at the observer alone puts it permanently out of step with what the host pings.
+
+**The same blind spot on a different field of the same check, and the cheaper half.** The observer holds settings no committed file states, so nothing detects either kind of divergence. The name is above; the timing is below, recorded 2026-09-13 by the operator, who read §7.1 against the observer's own settings and could not make the two agree.
+
+`docs/bootstrap-a-new-host.md` §7.1 says of the Alertmanager dead-man's-switch check: *"Period **5 minutes**, grace **5 minutes**: Alertmanager pings it every 2 minutes, and the service must expect pings at least that often but tolerate one missed one."* The deployment runs **period 5, grace 2**.
+
+**The sentence is why the divergence is hard to see, and it is wrong in a way that survives a careful reading.** The clause after the colon justifies the **period** and nothing else: a period of 5 minutes against a 2-minute cadence is exactly "tolerate one missed ping before going late". The **grace** value is then stated with no reason attached, so a reader who does the arithmetic finds a number that the sentence appears to explain and does not. That is how it reads as a contradiction when it is really an unexplained figure sitting beside an explained one.
+
+**What the two fields actually do, since the document never says.** They are sequential, not alternatives. *Period* is how long without a ping before the check goes **late**; *grace* is how long it stays late before going **down** and alerting. Time from the last good ping to the alarm is **period + grace**. Against the real cadence — `repeat_interval: 2m` on the `Watchdog` route in `platform/docker-compose.yml` — the documented pair alarms at **10 minutes** and roughly five missed pings; the deployed pair alarms at **7 minutes** and roughly three.
+
+**The deployed value is the better one, which is what makes this a documentation change rather than a configuration one.** This check is the alarm for when everything else is down, so a shorter time to alarm is worth having provided it does not fire on noise — and three consecutive missed pings is well clear of a transient blip or of the brief Alertmanager restart a platform deploy causes. Whoever takes this should change the document to match the observer rather than the reverse, and say *why* the grace is what it is instead of asserting a figure.
+
+**Two things to fix while in there.** Give the arithmetic — `period + grace` is the time to alarm — because no reader can size either field without it. And state which of the two numbers the "tolerate one missed one" reasoning belongs to, since attaching it to the pair is what produced this entry.
+
+## 21. make-a-waiting-approval-announce-itself
+
+**Not blocked. Recorded 2026-09-12 by `rename-the-external-services`, which lost three and a half hours to it and recorded the recognition advice without recording the gap.**
+
+**Nothing tells the operator that a gated run is waiting for them.** A production converge raised at 06:26 on 2026-09-12 sat unapproved until 09:56. It was not noticed by anyone watching for it; it was noticed because a *later* merge raised its own converge, which queued behind the first and reported `waiting on converge (main-production) … to complete`. That message reads like a hung job and is a concurrency queue, so the first thing it provokes is a diagnosis of the wrong run.
+
+**Three things compound it, and each is worth designing against separately.**
+
+- **A pending approval is invisible unless you go and look.** `gh run list --status waiting` is the query, and nothing in this repository or in the operator's routine runs it.
+- **Approval prompts are indistinguishable.** The Terraform apply, the host converge and the platform deploy all gate on the **same** GitHub Environment and render the same prompt, naming the Environment rather than the work. Three pending requests cannot be told apart without opening each one — which is also the failure mode `docs/bootstrap-a-new-host.md` §6.6 now warns about under "read which *workflow* and which *job* you are approving".
+- **A pending approval blocks the stack.** Converges are serialised per stack, so an approval nobody grants stalls every later converge behind it, and the symptom surfaces on the *newer* run.
+
+**Establish what GitHub already sends before building anything.** GitHub raises a *deployment review requested* notification to each required reviewer, and the cheapest possible outcome here is that the notification exists, is not being delivered where the operator reads, and the whole entry is a settings change plus a sentence in §6.6. Measure that first; only if it is genuinely absent or genuinely unreadable does anything get built.
+
+**What could be built, in rough order of cost.** A line in the operator's routine — `gh run list --status waiting` — which costs nothing and is forgotten by construction. A scheduled workflow that queries the same thing and pushes somewhere the operator actually reads. Or reusing the alerting path the platform stack already has, which is where the trap is: `SLACK_WEBHOOK_URL` reaches Alertmanager from `PLATFORM_SLACK_WEBHOOK_URL`, a **production Environment** secret, so a workflow that wants it gates on the very Environment whose pending approval it is trying to announce. A notifier must draw its credential from somewhere ungated, or it cannot fire on the case that matters.
+
+**What it must not become.** A notifier that fires on every run teaches the operator to ignore it, and the run that then goes unapproved is indistinguishable from the noise. The signal is specifically *waiting on a human*, and it is worth a reminder that repeats while the state persists rather than one announcement at the moment the request is raised — the 06:26 request was raised while nobody was reading.
+
+**A related gap, not this entry's to close.** Nothing in this repository bounds how long a request may wait. GitHub is understood to expire a pending deployment review after some weeks and cancel the run — unverified here, and worth measuring against the documentation rather than trusting this sentence. Either way, whether an unapproved converge *should* expire sooner is a separate decision from whether anyone is told about it.
+
+**A second instance, 2026-09-13: 6h34m.** The merge of `namespace-the-molecule-loop-devices` (PR #161) left `converge (main-production)` in run `34716999142` pending approval from 20:24 until 02:58. Nothing announced it. It was found only because the operator mentioned a check still running, and the session then read `gh run list` — which is the failure this entry names: the run is visible to anyone who goes looking, and nothing makes anyone look.
+
+Two things make this instance worse than the first. The approval **should not have been requested at all** — `narrow-the-converge-trigger-to-what-a-converge-reads` covers why, and this same run is its evidence. And the session that opened the pull request had stated the merge would start no converge, so the operator had been told there was nothing to watch for. A mechanism that announces a waiting approval does not depend on anyone having predicted it correctly, which is the argument for building one rather than relying on the author's summary.
+
+## 22. verify-at-deploy-time-that-what-shipped-is-what-runs
+
+**Not blocked; recorded rather than folded into `apply-shipped-config-on-deploy`, which deliberately stops short of it.**
+
+That change makes a configuration-only edit *visible* to Compose, so the services whose configuration moved are replaced. What it does not do — and its added requirement says so in as many words — is establish that a deploy reporting success applied everything it shipped. A container can fail to be replaced for reasons no property of the stack definition can express, and nothing today compares a running container against the definition afterwards.
+
+The check is small: after `docker compose up -d --wait`, compare each running container's `com.docker.compose.config-hash` against `docker compose config --hash='*'` and fail the deploy on a mismatch. It would have caught the original defect on the day it happened rather than a day later, and it catches the whole class rather than the one member of it that a checksum label addresses.
+
+**It does not subsume the label, and adding it instead would have been wrong.** Without a label, a configuration-only change produces equal hashes on both sides — the file's and the container's — so this check passes while the configuration sits unapplied. It is a backstop for reasons nobody has thought of, not a replacement for making the change visible in the first place.
+
+Two things make it a change of its own rather than a rider. It edits `app-deploy`, which is generic across applications, so it changes deploy behaviour for `commerce-ops` and every future application, not just for `platform`. And it needs a decision about what a mismatch should do to a deploy that has already replaced some services and reported them healthy — failing after the fact is not the same as refusing to start.
+
+Note the comparison has a trap the sibling change documented: four of the platform stack's eight services -- `grafana`, `postgres`, `postgres-exporter` and `traefik` -- interpolate `${...}` from `.env` into their service blocks, so a hash computed anywhere without the host's real `.env` does not match the host's. This check must run **on the host**, where that file is, or it will report mismatches that are artefacts of where it ran.
+
+It also does **not** catch the second case below, despite looking as though it should: where a secret interpolated *inside* an embedded config is rotated, both sides of this comparison compute the same unchanged value, so it passes while the running container holds the superseded secret.
+
+**The second half of this entry, and the reason the two are one change.** A configuration change that a deploy reports as applied has two ways of not being applied, and only one decision settles both — whether the digest is computed on the host, after interpolation. What follows was found in code review of `apply-shipped-config-on-deploy`, which is structurally unable to close it.
+
+`alertmanager_config`'s content interpolates `${SLACK_WEBHOOK_URL}` and `${DEADMANSWITCH_URL}`, and `.github/workflows/platform-deploy.yml` renders both into `.env` from GitHub secrets at deploy time. Rotate the Slack webhook and the effective Alertmanager configuration changes -- but the committed text does not, so the checksum label derived from it does not, and Compose's own digest never covered embedded config content in the first place. The container is not replaced. **The revoked webhook stays live until something unrelated replaces that container**, and every alert in the meantime goes to an endpoint the rotation was meant to retire.
+
+Nothing currently reports this. The deploy-time hash comparison above does not: both sides compute the same unchanged value, so it passes. The checksum label cannot: the value that changed is deliberately not in the repository, which is the whole point of it being a secret.
+
+**What would work is the deploy-time computation that change considered and rejected** -- a digest taken on the host, after interpolation, moves when the interpolated value moves. That change's design.md records this as the strongest argument against its own Decision 1, found after the decision was made. Deciding this entry means revisiting that trade with this case in hand, so it is a decision about the mechanism rather than a defect to patch.
+
+Bounded in the meantime by how rotation actually happens here: it is a manual act by the operator, who can force the replacement in the same session. Worth writing that into the rotation step of whatever runbook covers it, which is a smaller piece of work than this entry and does not wait on it.
+
+## 23. render-the-env-file-so-a-secret-survives-it
+
+**Not blocked. Narrowed rather than closed**: the pull request that fixed the shell layer on 2026-09-15 deleted this entry as done, and was wrong to — there are two layers, and only one of them is shut.
+
+**Layer one, closed.** `platform-deploy.yml` rendered `.env` with `echo "NAME=${{ secrets.X }}"`. GitHub substitutes a secret's raw text into the `run:` body, so bash read it as script: `ab$c#d` rendered `ab#d`, `"abc"def` rendered `abcdef`, and ``x`id -u`y`` rendered `x1000y` — **a command ran**, in a job holding that stack's tailnet OAuth client and deploy SSH key. Every value now reaches that script through the step's `env:` block, and `.github/tests` refuses any workflow that interpolates a secret, a workflow input or a `github.event` value into a `run:` body.
+
+**Layer two, open, and it is what this entry now is.** Compose's own `.env` parser expands `$` inside the value. Measured **from inside a running container** on 2026-09-15, against a `.env` rendered exactly as the fixed workflow now renders it:
+
+| Secret as stored | What the container process receives |
+|---|---|
+| `ab$c#d` | `ab#d` — `$c` expanded to nothing |
+| `"abc"def` | `abc` — leading quote consumed, remainder dropped |
+| `A1+b/c=` | `A1+b/c=` — intact, and this is what `openssl rand -base64` produces |
+
+A wrong credential here is silent: the service starts, reports healthy, and fails only at whatever needed the credential — which postgres-exporter did for an unknown period (`alert-on-the-exporter-being-unable-to-read-postgres`). It reaches the seven secrets the render step writes.
+
+**Two remedies were tried and neither is established.** Single-quoting the rendered line does not stop the expansion — measured, same `ab#d`. Escaping `$` as `$$`, Compose's documented escape, was attempted and **not** measured cleanly, because the test harness's own `$$` expanded to the shell's PID; treat it as unverified rather than as ruled out. It is the first thing to try, and it needs a real measurement.
+
+**Measure from inside a container, not with `docker compose config`.** That command escapes a literal `$` as `$$` in its own output, so it reports a value that looks corrupted when it is not, and vice versa. Reading it instead of the container is how this entry's first diagnosis went wrong — twice, in opposite directions: once blaming Compose alone, then bash alone. It is both.
+
+**Until it closes**, generate these with the `openssl rand` commands `docs/bootstrap-a-new-host.md` §0 gives, whose alphabets contain neither character. That instruction is also in `platform/README.md`, beside the manual role step that pastes one.
+
+## 24. assert-no-secret-is-built-into-a-url
+
+**Not blocked. Split out of the fix that motivated it, deliberately, and the reason is the entry's main content.** Recorded 2026-09-15.
+
+`platform/docker-compose.yml` built postgres-exporter's `DATA_SOURCE_NAME` by interpolating a password into a URL, and a `#` in that password discarded the host — see `alert-on-the-exporter-being-unable-to-read-postgres` for what the outage looked like and why nothing reported it. The three-line correction is merged. What is owed is the check that stops the shape returning, in `.github/tests`: a static read of a committed file, which is that suite's stated subject.
+
+**What the check has to decide is narrower than it first looks, and the draft written alongside the fix got it wrong in three different arms on three consecutive review rounds** — which is why it is here rather than merged with the fix. The rule is not "a secret near a URL". It is: a secret-bearing variable appearing **inside** a URL, within its own whitespace-delimited word. The cases that must be separated:
+
+- **An offence**: a scheme (`postgresql://u:${P}@h`), a `user:secret@host` authority with no scheme (which `DATA_SOURCE_URI` accepts), a query parameter (`?sslmode=disable&password=${P}`), a path segment of a scheme-less authority (`host:5432/${P}/x`), and text concatenated onto a secret that is itself a URL (`${SLACK_WEBHOOK_URL}/extra`).
+- **Not an offence**: a value that is nothing but the secret, which is what Alertmanager's `api_url` is — there the secret *is* the URL and nothing it contains can move a boundary. Nor a non-secret host in a URL, nor a secret sharing a value with an unrelated URL (`-Dapi.key=${K} -Dendpoint=https://…`), nor a filesystem path (`/var/lib/${P}/data`), nor Compose's `$$` escape.
+
+**The defect that recurred, named so it is not made a fourth time**: each arm reads the text either side of the secret, and that text must be taken from the **quote-stripped** neighbourhood rather than anchored to the start of the raw word. Quoting is idiomatic inside a `configs:` block and `--flag=value` is idiomatic in a `command:`, so an anchored arm passes every wrapped form while its unwrapped twin is caught — and a test exercising only the bare form sees nothing wrong. Three arms were fixed for this one at a time.
+
+**Two things it must read that are easy to miss.** Which names count as secrets should be read from `platform-deploy.yml`'s render step rather than guessed from keywords: `DEADMANSWITCH_URL` is a bearer credential and no word in its name says so. Read that step's **`env:` block** — since 2026-09-15 the secrets reach it there rather than being interpolated into its script, so a pattern written against the old `echo "NAME=${{ secrets.X }}"` spelling would match nothing and classify no name as secret. And the scan must cover `command:`, `entrypoint:`, `labels:` and `healthcheck.test` as well as `environment:` and the inline `configs:` — Traefik's `${ACME_EMAIL}` is reached only through `command:`, so a check reading `environment:` alone would call the file clean while examining six of its seven secret-bearing interpolations.
+
+**And it must not be able to pass having read nothing.** Seven such interpolations exist today; assert a floor, or moving them into `env_file:` satisfies the check silently.
+
+## 25. automate-per-application-database-provisioning
+
+**Not blocked; recorded because its obligation is due and unmet.** *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) obliges automating how an application's database and role are provisioned in the shared instance and how the role's password reaches the application. That obligation's trigger — the first application given a database there — fired on 2026-09-13 with `commerce-ops` on the staging host, and production's database followed by the same recipe. `provision-commerce-ops-database-in-the-shared-instance` provisioned both by hand, by the recipe now in `docs/onboard-an-application.md`, and recorded the obligation in that requirement as a stated divergence rather than building the mechanism.
+
+**Why it was not built then.** A credential path, naming rule and failure mode fitted to one consumer are fitted to one application's Compose file and one repository's secret names, and are discovered wrong by the next application rather than by review. That change met one such fit on its first host: production's `commerce-ops` Environment already held `POSTGRES_PASSWORD`, for the application's private PostgreSQL, so the shared-instance password had to take a name of its own, `SHARED_POSTGRES_PASSWORD`. A mechanism has to handle that collision for every application, not only the one it was designed against.
+
+**What a design has to answer**, taken from what the manual recipe had to: where the password is generated and how it reaches the application's deploy without a command line, a log line or a file in this repository; what happens when the secret name is already taken; that a re-run is a rotation which the application picks up only on its next deploy; re-provisioning after a rebuild or a volume reset; and per-host independence, so that one leaked credential reaches one host.
+
+**Archiving it obliges a delta elsewhere.** The requirement's paragraph "One divergence is stated rather than hidden, as of 2026-09-13" says it is replaced when this mechanism lands, and nothing else would prompt that; that recipe then becomes whatever the mechanism makes of it.
+
+## 26. make-a-shared-instance-reset-visible-to-its-applications
+
+**Not blocked. Recorded 2026-09-15 from an incident, by the session that triaged it, and not folded into `automate-per-application-database-provisioning` because it is the half of the problem that survives `automate-per-application-database-provisioning` being built.**
+
+**The window ran as written; its last step had not.** `upgrade-the-shared-postgres-major` merged as pull request #196 at 2026-09-15T16:15:09Z and `platform/README.md`'s *Upgrading the PostgreSQL major version* was followed: `platform_postgres_data` was discarded and re-created on both hosts — staging at 16:25:50Z, production at 16:32:04Z — and `platform-postgres-1` came back on `postgres:18.6`. Step 5, "re-provision every application database, then redeploy that application", had not run on either host as of 18:47Z. Measured read-only from `ssh prod` at that time: the instance holds roles `platform_admin` and `pgexporter` and databases `platform_admin`, `postgres`, `template0` and `template1`, so the `commerce-ops` role and database that `provision-commerce-ops-database-in-the-shared-instance` created on production at 2026-09-14T03:58Z are gone, as staging's 03:53Z pair is; `SHARED_POSTGRES_PASSWORD` in each of that repository's Environments now names a role that does not exist.
+
+**Nothing told the application, and nothing tells it now.** `commerce-ops`'s staging deploy was last healthy at 13:27Z (run `34974973852`); its first deploy after the window, at 17:52Z (run `35003835663`), died at `alembic upgrade head` with `password authentication failed for user "commerce-ops"` — PostgreSQL declining to distinguish a wrong password from an absent role — and its container has been crash-looping since, with Traefik answering 404 for want of a backend. The failure surfaced four and a half hours after its cause, in a repository that had changed nothing, carrying a message that points at a credential rather than at a reset. This repository learnt of it from `Fuperia-IT/commerce-ops`, which is the reporting path this entry exists to replace.
+
+**What is uncovered, precisely.** `automate-per-application-database-provisioning` would re-create the role by converged configuration and is the durable fix for *recurrence*. This entry is the other half: an application's ability to see that the database it is configured for has ceased to exist, and the operator's ability to tell the applications on an instance that a window is coming — both of which stay owed if `automate-per-application-database-provisioning` is never built, and one of which stays owed even after it is, since a mechanism that re-provisions on a schedule of its own still leaves a gap between the reset and the re-provisioning. The runbook's step 1 is already the announcement, and it is a sentence addressed to a human, holding a list read from `\l` that step 2 then discards. Nothing survives the reset that a later deploy could read.
+
+**What a change owes**, none of it costed here: whether the signal is an announcement made at window time or a marker an application's deploy reads before it delivers; where such a marker can live, given that anything inside the volume goes with it and anything outside it has to be re-created by the same step that re-creates the role; and what an application does on finding it absent or stale, since `commerce-ops`'s deploy already refuses to deliver when its own configuration is wrong and is the consumer this would be designed against — which is the fitted-to-one-consumer trap `automate-per-application-database-provisioning` records, met again here.
+
+**It also moved the production cutover backwards, and no other entry says so.** `classify-commerce-ops-production-data-for-the-shared-instance`'s cutover, and `move-production-into-the-shared-instance` with it, depend on the production role and database that `provision-commerce-ops-database-in-the-shared-instance` provisioned and deliberately kept unused; both are gone. That was repaired later the same day: the operator re-ran the recipe in `docs/onboard-an-application.md` against production with `rotate=yes`, `SHARED_POSTGRES_PASSWORD` set at 21:04:52Z, and the role and database were verified read-only — owned by `commerce-ops`, `PUBLIC` revoked, `pgexporter` holding no `CONNECT`, and no statement text in `platform-postgres-1`'s log. The cutover's precondition is restored; what this entry is about is that nothing but a report from the other repository would have said it was lost. Production's application itself was untouched — it still runs its own `commerce-ops-postgres-1` on `postgres:16-alpine` with `commerce-ops_commerce_ops_pgdata`, healthy and five days up at 18:47Z — which is the only reason the window cost staging alone. Once `classify-commerce-ops-production-data-for-the-shared-instance` lands and production's data moves in, the same window deletes it, exactly as `platform/README.md` and `classify-commerce-ops-production-data-for-the-shared-instance` both already say.
+
+## 27. classify-commerce-ops-production-data-for-the-shared-instance
+
+**Not blocked; recorded because it is a specification change, decided by the operator after the change that provisioned the database had merged.** On 2026-09-14 the operator decided that production's `commerce-ops` leaves its private PostgreSQL for the database `provision-commerce-ops-database-in-the-shared-instance` provisioned in production's shared instance, and moves to Supabase only later (`move-commerce-ops-durable-data-to-supabase`). Its data includes the hand-curated rows that entry records — durable under *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) as it stands, which keeps durable data out of the shared instance unconditionally, because holding none is what lets that instance go without a backup. Asked whether to keep the private database until Supabase, or to admit the data only with an off-host backup and a rehearsed restore, the operator chose to classify `commerce-ops`'s production data as tolerable to lose, to the operator, with no backup — a temporary decision, taken because the application is at a very early, experimental stage, and ending with its move to Supabase.
+
+**What the change owes.** A MODIFIED delta on that requirement recording the policy — whose loss it treats as tolerable, which application and host it covers, and that it ends with the move to Supabase — in the shape of the staging rehearsal-data policy the requirement already carries, and a delta on *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`), whose store table and divergence paragraph it bears on. It merges before any production row lands in the shared instance, and the `commerce-ops` repository's production cutover waits on it.
+
+**What the operator accepted, and what it must not become.** The shared instance is treated as disposable: a PostgreSQL major upgrade discards its volume, and a rebuild recreates it empty. Once `commerce-ops`'s production data is there, either deletes it for good. `platform/README.md`'s *Upgrading the PostgreSQL major version* already says so, in the terms this entry has to meet — it tells the operator that production's database is empty and reserved for a cutover waiting on this change, and that from the moment this lands and the data moves in, discarding that volume deletes it for good. **This change owes the same sentence to the rebuild runbook**, which does not yet carry it, and owes that procedure a re-read to confirm it still says what is true once this lands. The classification names one application on one host and must not be read as permission for any other application's durable data.
+
+## 28. move-commerce-ops-durable-data-to-supabase
+
+**Not blocked, and its middle step is not this repository's to do — recorded because `openspec/specs/iac-safety-hardening/spec.md` names it as a divergence and nothing else tracks it.**
+
+*No Store on This Host Holds Data Requiring Backup* classifies every store on this host as needing no backup, and states one exception: on the production host, `commerce-ops` keeps durable data in a PostgreSQL container of its own, on its own `app_db` network — staging's `commerce-ops` has none, its database being in staging's shared instance. On 2026-09-08 production's private database held 12 MB. Most of its rows are transient — roughly 17,000 across the `procrastinate_*` queue tables, which are exactly the non-durable class the shared instance exists for — but the part that matters is small and hand-curated: 358 `playbook_steps`, 35 `launch_journal_entries`, 26 `launch_clickup_tasks`, 11 `roles`, 8 `role_holders`, 7 `known_work`, 5 `products`. Nothing backs any of it up. The daily Hetzner snapshot covers the root disk the volume sits on, crash-consistently, restorable only by rolling the whole server back.
+
+The resolution, as the operator decided on 2026-09-14, comes in two stages (`provision-commerce-ops-database-in-the-shared-instance`'s design, decision 3). First, production's whole `commerce-ops` database — the hand-curated tables and the `procrastinate_*` queue tables alike, since the application enqueues inside its domain transaction and its queue cannot live in a second database — moves into the database already provisioned for it in production's shared instance, once its data is classified as tolerable to lose. Later it moves to Supabase, which owns its own backups. Staging is the other case: its whole database is already in staging's shared instance under the rehearsal-data policy.
+
+**Ending the private container takes four steps, and this repository owns three.**
+
+1. Done by that change: a `commerce-ops` role and database in production's shared instance, their password in the `commerce-ops` repository's `production` Environment as `SHARED_POSTGRES_PASSWORD` — deliberately not `POSTGRES_PASSWORD`, which the private PostgreSQL still reads.
+2. Here: `classify-commerce-ops-production-data-for-the-shared-instance`. Nothing from production may land in the shared instance before it merges.
+3. In the `commerce-ops` repository, over which this one has no authority: move the whole database into production's shared-instance database — a dump of `commerce-ops-postgres-1` restored as role `commerce-ops` — point `DATABASE_URL` at `commerce-ops@postgres:5432/commerce-ops` with `SHARED_POSTGRES_PASSWORD`, and remove its own PostgreSQL service, its volume and its `app_db` network. While both exist, `postgres` names two servers to a container on `app_db` and `platform_edge` at once, so the switch and the service's removal belong in one deploy. Until that service is gone, the divergence stands.
+4. Here: delete the divergence paragraph from *No Store on This Host Holds Data Requiring Backup*. No change in this repository would otherwise prompt it, so a completed migration would quietly leave the specification describing a divergence that no longer exists. **Gate it on the host, not on the migration being reported done**: from a session on production, `docker ps --filter name=commerce-ops` shows no PostgreSQL container and `docker volume ls` no longer lists `commerce-ops_commerce_ops_pgdata`. A specification calling the divergence closed while that container runs is worse than one admitting it.
+
+**The later move to Supabase**, recorded so it is not re-derived: use its session pooler — `aws-1-eu-west-1.pooler.supabase.com:5432` with user `postgres.<ref>`, which answered `pg_isready` from a container on staging's `platform_edge` on 2026-09-14. Supabase's direct connection is IPv6-only and `platform_edge` has IPv6 disabled, the transaction pooler on port 6543 cannot carry the worker's `LISTEN/NOTIFY`, and the Free plan has no backups.
+
+## 29. exercise-the-volume-server-coupling-against-live-state
+
+**Not blocked; recorded because an archived change is where it would be lost.** Recovered 2026-09-08 by `make-openspec-validation-a-usable-gate` while settling the red archived records. `add-prod-data-volume`'s task 3.5 was left unticked with the note *"Still open; consider doing this as a follow-up plan-only check"* — real outstanding work, sitting in prose inside a change that had already been archived, which is precisely where nobody would look for it. That task is now disclosed under that change's `## Not performed`; the work it names is here.
+
+`stacks/prod` couples the volume to the server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`, so the volume cannot outlive the server it derives its location from. **That coupling has never been exercised against live state.** `terraform/modules/volume/tests/*.tftest.hcl` cannot reach it — the coupling lives in the stack, not the module, and the module's tests do not evaluate the stack's `count` expression.
+
+Two plan-only reads, **never applied**:
+
+- Set `volume_enabled = false` (uncommitted) and re-plan: the volume is planned for destruction and nothing else changes.
+- Restore it, set `server_enabled = false` instead, and re-plan: the plan destroys server, firewall **and** volume together.
+
+Revert both local edits afterwards. Use the read-only Hetzner token; this is a `terraform plan` and never a `terraform apply`, per this project's rule that production changes reach Hetzner only through the gated pipeline. A destroy plan run locally reads state and proposes; it changes nothing.
+
+The requirement this protects is *Conditional Prod Volume Creation* in `openspec/specs/iac-data-volumes/spec.md`, and the two reads above are literally its scenarios *Volume toggle disabled creates nothing* and *Disabling the server also removes the volume* — both of which say `terraform plan` SHALL show the volume planned for destruction. The specification states them; nothing has ever run them.
+
+Worth doing before the coupling is next relied on — a volume that survived its server would be an orphaned resource with no location, which is the failure the coupling exists to prevent and which nothing has yet observed being prevented.
+
+## 30. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
 
 **Not blocked. Recorded 2026-09-12, from the same merge.**
 
@@ -318,31 +502,7 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 
 **Not in scope here:** auto-replanning on staleness. That would apply a plan no human reviewed, which is the requirement this entry exists to respect.
 
-## 26. make-a-waiting-approval-announce-itself
-
-**Not blocked. Recorded 2026-09-12 by `rename-the-external-services`, which lost three and a half hours to it and recorded the recognition advice without recording the gap.**
-
-**Nothing tells the operator that a gated run is waiting for them.** A production converge raised at 06:26 on 2026-09-12 sat unapproved until 09:56. It was not noticed by anyone watching for it; it was noticed because a *later* merge raised its own converge, which queued behind the first and reported `waiting on converge (main-production) … to complete`. That message reads like a hung job and is a concurrency queue, so the first thing it provokes is a diagnosis of the wrong run.
-
-**Three things compound it, and each is worth designing against separately.**
-
-- **A pending approval is invisible unless you go and look.** `gh run list --status waiting` is the query, and nothing in this repository or in the operator's routine runs it.
-- **Approval prompts are indistinguishable.** The Terraform apply, the host converge and the platform deploy all gate on the **same** GitHub Environment and render the same prompt, naming the Environment rather than the work. Three pending requests cannot be told apart without opening each one — which is also the failure mode `docs/bootstrap-a-new-host.md` §6.6 now warns about under "read which *workflow* and which *job* you are approving".
-- **A pending approval blocks the stack.** Converges are serialised per stack, so an approval nobody grants stalls every later converge behind it, and the symptom surfaces on the *newer* run.
-
-**Establish what GitHub already sends before building anything.** GitHub raises a *deployment review requested* notification to each required reviewer, and the cheapest possible outcome here is that the notification exists, is not being delivered where the operator reads, and the whole entry is a settings change plus a sentence in §6.6. Measure that first; only if it is genuinely absent or genuinely unreadable does anything get built.
-
-**What could be built, in rough order of cost.** A line in the operator's routine — `gh run list --status waiting` — which costs nothing and is forgotten by construction. A scheduled workflow that queries the same thing and pushes somewhere the operator actually reads. Or reusing the alerting path the platform stack already has, which is where the trap is: `SLACK_WEBHOOK_URL` reaches Alertmanager from `PLATFORM_SLACK_WEBHOOK_URL`, a **production Environment** secret, so a workflow that wants it gates on the very Environment whose pending approval it is trying to announce. A notifier must draw its credential from somewhere ungated, or it cannot fire on the case that matters.
-
-**What it must not become.** A notifier that fires on every run teaches the operator to ignore it, and the run that then goes unapproved is indistinguishable from the noise. The signal is specifically *waiting on a human*, and it is worth a reminder that repeats while the state persists rather than one announcement at the moment the request is raised — the 06:26 request was raised while nobody was reading.
-
-**A related gap, not this entry's to close.** Nothing in this repository bounds how long a request may wait. GitHub is understood to expire a pending deployment review after some weeks and cancel the run — unverified here, and worth measuring against the documentation rather than trusting this sentence. Either way, whether an unapproved converge *should* expire sooner is a separate decision from whether anyone is told about it.
-
-**A second instance, 2026-09-13: 6h34m.** The merge of `namespace-the-molecule-loop-devices` (PR #161) left `converge (main-production)` in run `34716999142` pending approval from 20:24 until 02:58. Nothing announced it. It was found only because the operator mentioned a check still running, and the session then read `gh run list` — which is the failure this entry names: the run is visible to anyone who goes looking, and nothing makes anyone look.
-
-Two things make this instance worse than the first. The approval **should not have been requested at all** — entry 22 above covers why, and this same run is its evidence. And the session that opened the pull request had stated the merge would start no converge, so the operator had been told there was nothing to watch for. A mechanism that announces a waiting approval does not depend on anyone having predicted it correctly, which is the argument for building one rather than relying on the author's summary.
-
-## 27. factor-the-four-stack-discovery-bodies
+## 31. factor-the-four-stack-discovery-bodies
 
 **Not blocked. Recorded when the fourth one was written.**
 
@@ -354,7 +514,7 @@ The existing comment in those three anticipated this: *"Copies are not the only 
 
 Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.
 
-## 28. matrix-the-molecule-suite-over-scenarios-and-bound-each-job
+## 32. matrix-the-molecule-suite-over-scenarios-and-bound-each-job
 
 **Not blocked; recorded rather than folded into `promote-molecule-to-a-required-check`**, whose proposal names it as a non-goal. That change decides which job is required and reshapes the workflow's triggers; this one changes what a job *is*. Landing both in one diff would mean the change that picks the registered context also redefines the thing being registered.
 
@@ -380,37 +540,7 @@ No workflow in `.github/workflows/` declares `timeout-minutes` anywhere, so ever
 
 `cache-the-apt-index-within-a-converge` has since lowered both the baseline and the ceiling, so the durations this one chooses against are the ones measured after it and not the ones quoted above. They are independent in mechanism and not in the number.
 
-## 29. two-deferred-ci-items
-
-Both noticed during `close-ci-verification-gaps`, neither a verification gap:
-
-- **`.github/workflows/pre-commit-autoupdate.yml` installs `pre-commit` unpinned** (`pip install pre-commit`). That change created `.github/requirements-ci.txt`, which pins it; bringing this workflow onto the same file is a one-line fix in a workflow that change did not otherwise touch.
-- **The destroy-policy gate's inspection logic is inline workflow shell.** Moving it into a version-controlled script with executable fixtures would make the highest-consequence logic in this repository reviewable and testable as code — `design.md` Decision 5 of that change names this as considered and deferred on merit-vs-scope grounds, not as rejected. Four fixtures already exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are described in that change's `tasks.md` 1.1; the structural tests in `.github/tests/test_ci_configuration.py` currently assert the routes are closed, not that each is reached.
-- **`actionlint` is named as a verification means but nothing installs it.** Three tasks in `close-ci-verification-gaps` cite it, and it was run manually from a scratch install. Adding it to `.pre-commit-config.yaml` would close that permanently — but it exits non-zero on two pre-existing `SC2016:info` findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the job-summary step — both single-quoted literal markdown in an `echo`, and both intentional). So landing the hook means dispositioning those two first, by fixing or ignoring them. That is the same trap this change refused to lay for the next person when `ansible-lint` failed on pre-existing violations, and it wants its own decision rather than being folded in.
-
-## 30. lint-the-repository's-shell-scripts
-
-**Not blocked; recorded rather than folded into `namespace-the-molecule-suite-per-working-tree`**, which added the script that makes this worth doing.
-
-`ansible/scripts/run-molecule` is this repository's first committed shell script, and nothing checks it. `.pre-commit-config.yaml` carries hooks for Terraform, Ansible, secrets and commit messages, and none for shell. That change's own test-authoring step declined to verify the script with ShellCheck for the reason `AGENTS.md` gives about unpinned tools: an ad-hoc invocation of a linter this repository does not pin is unrepeatable, and a check that cannot be reached is indistinguishable from one that passed. Its `tasks.md` discloses the refusal under `## Not performed`.
-
-The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a decision about whether `.github/tests` should assert that the hook exists — the same shape as the pins that suite already reads. Small, and worth doing before there is a second script.
-
-## 31. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
-
-`prune-unreferenced-host-images-periodically` shipped two guards that no assertion covers: local images are enumerated *before* the keep set is computed, and each tag is re-resolved immediately before removal. Both are observable only when the host's images change midway through a run, and a black-box Molecule scenario has no seam at which to change them. They are also the two that close the concurrent-deploy window against `app-deploy`, so the least-verified part of that design is the part facing the only actor competing with it.
-
-Its code review built a rig that supplies the seam — a stubbed `docker` on `PATH` that answers some calls and fails others — and used it to confirm both guards present and mutation-visible, and to reproduce the fail-open that review found. Its `test-plan.md` invites exactly this: "if a deterministic arrangement is found for either — sized rather than slept — add it to `tasks.md` 2.7 and 2.8 together and strike it from here."
-
-Adopting it would also cover the two abandon branches added by that review's own fix, which are likewise unasserted.
-
----
-
-The entries from here to 13 came out of a second full review on 2026-09-08 (trunk at `74c7101`), made to judge whether this repository's shape can be reused for a second, company-owned host. It opened with two entries that are gone from this file, logical off-host backups of the shared database and a decision on the database model, resolved together by `scope-the-shared-database-to-non-durable-data`: reading the host showed the instance those entries argued over holds no application data at all, and that what this host needs is a stated boundary rather than a backup pipeline.
-
-Only what applies to **this** host too is recorded here; the company-only findings (repository visibility, a second approver, an organisation-owned repository) are not this repository's concern. The review's verdict repeated the first audit's: the architecture is sound, and what follows is operational rather than structural. It read the live host as well as the tree, so where an entry cites a host fact, that is what `main-server` showed on 2026-09-08, not an inference from the code.
-
-## 32. test-a-play-at-play-scope
+## 33. test-a-play-at-play-scope
 
 Recorded 2026-09-10 by `configure-the-staging-host`, whose `design.md` Decision 10 found the gap and whose test author independently confirmed it.
 
@@ -427,7 +557,7 @@ What a play-scope harness would cover, beyond this one guard: any play-level beh
 
 Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and whatever runner it needs, which is why it was not invented inside a change whose diff most needed reading closely.
 
-## 33. tighten-the-refusal-scenario-s-own-filesystem-assert
+## 34. tighten-the-refusal-scenario-s-own-filesystem-assert
 
 **Not blocked. Recorded 2026-09-12 by `namespace-the-molecule-loop-devices`, whose code review found it in a file that change edits but in a line it does not author.**
 
@@ -437,7 +567,15 @@ Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and wh
 
 **A second, separate hazard in the same assert, which tightening the predicate does NOT close.** Each play redeclares its loop-minor offset by hand, so `verify.yml` and `prepare.yml` could drift apart. A drifted `verify` probes an unassociated minor, gets rc 2, and passes — under `rc != 2` exactly as under `rc != 0`. Whoever takes this entry should fix the rc-1 case and record the drift as still open, rather than closing one believing it closed the other. Deriving both from one place, or asserting in `verify` that the device is the one `prepare` associated, are the two shapes available.
 
-## 34. hold-the-whole-static-suite-to-its-own-constraints
+## 35. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
+
+`prune-unreferenced-host-images-periodically` shipped two guards that no assertion covers: local images are enumerated *before* the keep set is computed, and each tag is re-resolved immediately before removal. Both are observable only when the host's images change midway through a run, and a black-box Molecule scenario has no seam at which to change them. They are also the two that close the concurrent-deploy window against `app-deploy`, so the least-verified part of that design is the part facing the only actor competing with it.
+
+Its code review built a rig that supplies the seam — a stubbed `docker` on `PATH` that answers some calls and fails others — and used it to confirm both guards present and mutation-visible, and to reproduce the fail-open that review found. Its `test-plan.md` invites exactly this: "if a deterministic arrangement is found for either — sized rather than slept — add it to `tasks.md` 2.7 and 2.8 together and strike it from here."
+
+Adopting it would also cover the two abandon branches added by that review's own fix, which are likewise unasserted.
+
+## 36. hold-the-whole-static-suite-to-its-own-constraints
 
 **Not blocked; small, and recorded by `alert-on-certificate-expiry`, which is the change that made it untrue.**
 
@@ -449,9 +587,9 @@ The fix is to widen the three from their own file to every `test_*.py` in the su
 
 Note the edge this sits on. The derive-tests step has an author other than the implementer write a change's tests, and forbids that author editing an existing test file — so tests belonging in one arrive as a new module instead. Whether such a module is then folded into an existing one or left standing is a question about that workflow rather than about this repository, and it is settled where the workflow is written. This entry is what the tree owes either way: a module left standing must be held to the suite's own constraints.
 
-## 35. prune-the-repository-walkers-of-provisioned-content
+**This entry absorbed `prune-the-repository-walkers-of-provisioned-content` on 2026-09-15**, which was recorded separately and is the same defect seen from the other side: that one is about the set a repository-scope *walker* reads, this one about the set the suite's *self-checks* read, and both are answered by pointing a reader at the repository's tracked files instead of at a directory glob. They sit in one module, were deferred on the same grounds, and splitting them would mean deriving tests twice for one predicate. What that entry carried follows.
 
-Recorded 2026-09-11 by the test author deriving `cache-the-apt-index-within-a-converge`, who met it as a red suite on a provisioned working tree.
+**The walkers, which read a directory rather than the repository.** Recorded 2026-09-11 by the test author deriving `cache-the-apt-index-within-a-converge`, who met it as a red suite on a provisioned working tree.
 
 `.github/tests/test_ci_configuration.py`'s `TestEveryComposeFileDeclaringAServiceImageIsCovered` walks the repository for Compose files and fails on six that live under `.molecule-home/collections/` — integration fixtures shipped by `community.docker` and `community.general`, which arrive the moment `ansible-galaxy collection install` runs into this project's per-working-tree Molecule namespace.
 
@@ -465,7 +603,7 @@ Worth doing before the next person meets it: this failure reads as "your tree is
 
 **It is also a race, not only a false positive.** That directory is *live* while Molecule runs — the ephemeral `tmp/` is created and removed under it — so running this suite during a Molecule run produces an intermittent error on top of the steady failure, as a file the walker has listed disappears before it is read. Observed 2026-09-11 while both ran at once, and not reproducible afterwards, which is the worst shape for anyone trying to diagnose it. Reading tracked files removes the race with the false positive, since nothing under that directory is tracked.
 
-## 36. unify-the-two-role-exclusion-rules
+## 37. unify-the-two-role-exclusion-rules
 
 **Not blocked.** Recorded as declined until 2026-09-13, and re-read then as work deferred on diff-hygiene grounds rather than a decision taken, which is what puts it here.
 
@@ -477,7 +615,7 @@ The newer rule is the stronger one: content vendored into `ansible/roles/` that 
 
 Worth doing before a directory appears that the two rules would classify differently, at which point the disagreement stops being theoretical and one of the two is silently wrong about a real role.
 
-## 37. widen-what-the-pull-request-identity-checks-can-read
+## 38. widen-what-the-pull-request-identity-checks-can-read
 
 **Not blocked.** Recorded as declined until 2026-09-13.
 
@@ -494,7 +632,7 @@ None is a defect in what the tests assert; each is a limit on the shapes they ca
 
 The first of the four is the one most likely to bite: it fires the first time a workflow here opens a pull request with `gh` instead of an action, and it fires as a red build on a correct change.
 
-## 38. assert-the-autoupdate-workflow-s-two-unchecked-properties
+## 39. assert-the-autoupdate-workflow-s-two-unchecked-properties
 
 **Not blocked.** Recorded as declined until 2026-09-13, though with its own successor already named: "a small change of its own that adds the scenario and has the assertion derived from it".
 
@@ -509,7 +647,7 @@ Neither is a live risk today: the App's own scope is exactly the two permissions
 
 The workflow header says plainly which of its claims the suite does not stand behind, and that note is what this entry replaces.
 
-## 39. assert-every-role-has-a-mock_roles-entry
+## 40. assert-every-role-has-a-mock_roles-entry
 
 **Not blocked; recorded rather than folded into `bound-host-log-growth-and-add-swap`, which is the change that hit it.** Adding the missing entry belonged to that change; asserting the invariant is a different concern, and the `.github/tests` suite is not that change's subject.
 
@@ -521,7 +659,7 @@ This is a **static read of a committed file** -- the set of directories under `a
 
 Worth doing because the cost is paid by whoever adds the *next* role, not by whoever left the list short, and because the failure arrives as a message pointing somewhere else.
 
-## 40. assert-every-tfvars-assigns-its-required-variables
+## 41. assert-every-tfvars-assigns-its-required-variables
 
 Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the gap by falling into it.
 
@@ -545,7 +683,23 @@ The rule makes the assertion crisp rather than heuristic: under "one line per pa
 
 Not blocked. One new module in `.github/tests`, whose constraints it fits: a static read of committed files, no network, no credential, no container.
 
-## 43. catch-up-the-drifted-galaxy-pins
+## 43. three-deferred-ci-items
+
+All three noticed during `close-ci-verification-gaps`, none of them a verification gap. The entry was recorded naming two and a third was appended without the name being corrected; the bullets are what it covers.
+
+- **`.github/workflows/pre-commit-autoupdate.yml` installs `pre-commit` unpinned** (`pip install pre-commit`). That change created `.github/requirements-ci.txt`, which pins it; bringing this workflow onto the same file is a one-line fix in a workflow that change did not otherwise touch.
+- **The destroy-policy gate's inspection logic is inline workflow shell.** Moving it into a version-controlled script with executable fixtures would make the highest-consequence logic in this repository reviewable and testable as code — `design.md` Decision 5 of that change names this as considered and deferred on merit-vs-scope grounds, not as rejected. Four fixtures already exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are described in that change's `tasks.md` 1.1; the structural tests in `.github/tests/test_ci_configuration.py` currently assert the routes are closed, not that each is reached.
+- **`actionlint` is named as a verification means but nothing installs it.** Three tasks in `close-ci-verification-gaps` cite it, and it was run manually from a scratch install. Adding it to `.pre-commit-config.yaml` would close that permanently — but it exits non-zero on two pre-existing `SC2016:info` findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the job-summary step — both single-quoted literal markdown in an `echo`, and both intentional). So landing the hook means dispositioning those two first, by fixing or ignoring them. That is the same trap this change refused to lay for the next person when `ansible-lint` failed on pre-existing violations, and it wants its own decision rather than being folded in.
+
+## 44. lint-the-repository's-shell-scripts
+
+**Not blocked; recorded rather than folded into `namespace-the-molecule-suite-per-working-tree`**, which added the script that makes this worth doing.
+
+`ansible/scripts/run-molecule` is this repository's first committed shell script, and nothing checks it. `.pre-commit-config.yaml` carries hooks for Terraform, Ansible, secrets and commit messages, and none for shell. That change's own test-authoring step declined to verify the script with ShellCheck for the reason `AGENTS.md` gives about unpinned tools: an ad-hoc invocation of a linter this repository does not pin is unrepeatable, and a check that cannot be reached is indistinguishable from one that passed. Its `tasks.md` discloses the refusal under `## Not performed`.
+
+The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a decision about whether `.github/tests` should assert that the hook exists — the same shape as the pins that suite already reads. Small, and worth doing before there is a second script.
+
+## 45. catch-up-the-drifted-galaxy-pins
 
 **Not blocked.** Recorded 2026-09-08, from an inventory taken while archiving `open-autoupdate-pr-with-app-token`.
 
@@ -565,7 +719,7 @@ Four majors is a migration rather than a version bump, which is why this is an e
 
 **Also delete the stale caveat while here.** Four of the five pins carry a comment saying the version "was chosen without the ability to query Galaxy from this environment (no network access) -- confirm it resolves". All five were confirmed against the Galaxy API on 2026-09-08 and every one resolves. The comment is now false where it is not merely stale, and it invites the next reader to re-do work that has been done.
 
-## 44. cover-the-unwatched-manifests-and-settle-the-watcher
+## 46. cover-the-unwatched-manifests-and-settle-the-watcher
 
 **Not blocked; the same shape as `cover-platform-images-with-dependabot`**, whose entry was deleted from this file when that change landed.
 
@@ -575,39 +729,25 @@ Dependabot watches four ecosystems — `terraform`, `github-actions`, `docker-co
 
 **The third pip manifest arrived with `apply-host-configuration-through-a-gated-workflow` and changes what this entry must do**, because it does not merely add a file to watch. `ansible/requirements.txt` pins `ansible-core` at the version `ansible/requirements-test.txt` pins, and `.github/tests` fails the build on a difference -- so the converge runs the Ansible the Molecule suite verified those roles under. A Dependabot configuration that opened a pull request against one of the two would be red on arrival, every time. Whatever this entry does, the two must move as a pair: a grouped update, or one manifest watched and the other asserted to follow it.
 
-Lower stakes than the platform images were -- these are the test and CI toolchain rather than production services -- but the cost is a few lines and the alternative is the same "when a person notices" that entry 43 is the consequence of.
+Lower stakes than the platform images were -- these are the test and CI toolchain rather than production services -- but the cost is a few lines and the alternative is the same "when a person notices" that `catch-up-the-drifted-galaxy-pins` is the consequence of.
 
-Note the ordering constraint against entry 43: `ansible-core` is pinned here and the collections are pinned there, and the two are a matched set -- `ansible/requirements-test.txt`'s own comment records that the toolchain was "verified together, in this combination, on Python 3.12". A Dependabot bump of `ansible-core` landing mid-migration would confuse which half broke.
+Note the ordering constraint against `catch-up-the-drifted-galaxy-pins`: `ansible-core` is pinned here and the collections are pinned there, and the two are a matched set -- `ansible/requirements-test.txt`'s own comment records that the toolchain was "verified together, in this combination, on Python 3.12". A Dependabot bump of `ansible-core` landing mid-migration would confuse which half broke.
 
 **Which watcher, decided rather than assumed.** Recorded separately on 2026-09-08 with a recommendation attached, so that the question is settled once by whoever closes the gap above rather than re-opened every time a manifest goes unwatched. The recommendation is attached, so that revisiting it starts from a position rather than from scratch.
 
-Eight manifests in this repository carry pins, and five are watched: the Terraform lockfiles and Actions refs by Dependabot, `.pre-commit-config.yaml` by the workflow `open-autoupdate-pr-with-app-token` repaired, the eight `platform/docker-compose.yml` images by the `docker-compose` ecosystem `cover-platform-images-with-dependabot` added, and the OpenSpec CLI pin by the `npm` ecosystem that followed it. Three are not: the five galaxy pins (entry 43) and the five pip pins across two files, which is the half above.
+Eight manifests in this repository carry pins, and five are watched: the Terraform lockfiles and Actions refs by Dependabot, `.pre-commit-config.yaml` by the workflow `open-autoupdate-pr-with-app-token` repaired, the eight `platform/docker-compose.yml` images by the `docker-compose` ecosystem `cover-platform-images-with-dependabot` added, and the OpenSpec CLI pin by the `npm` ecosystem that followed it. Three are not: the five galaxy pins (`catch-up-the-drifted-galaxy-pins`) and the five pip pins across two files, which is the half above.
 
 Renovate has native managers for all seven, including `pre-commit` and `ansible-galaxy`, which Dependabot has for neither. One tool and one config would close every gap and retire the bespoke workflow.
 
-**The recommendation is to stay with Dependabot, for now,** and it is stronger than when written: the gaps this paragraph counted on configuration to close have been closed that way twice since, by `cover-platform-images-with-dependabot` and by the `npm` stanza, neither needing a new trust relationship. The half above closes the pip gap on the same terms. What Renovate uniquely adds is the galaxy manager -- and entry 43 argues that a four-major backlog wants a deliberate migration, not a bot proposing it. Hosted Renovate is also a third-party application with write access, which cuts against the reasoning already recorded in the *Automated Dependency Updates* requirement about third-party supply-chain risk.
+**The recommendation is to stay with Dependabot, for now,** and it is stronger than when written: the gaps this paragraph counted on configuration to close have been closed that way twice since, by `cover-platform-images-with-dependabot` and by the `npm` stanza, neither needing a new trust relationship. The half above closes the pip gap on the same terms. What Renovate uniquely adds is the galaxy manager -- and `catch-up-the-drifted-galaxy-pins` argues that a four-major backlog wants a deliberate migration, not a bot proposing it. Hosted Renovate is also a third-party application with write access, which cuts against the reasoning already recorded in the *Automated Dependency Updates* requirement about third-party supply-chain risk.
 
 Self-hosted Renovate is the interesting middle: it would reuse the `infrastructure-autoupdate` GitHub App, which is already scoped to Contents and Pull requests on this repository alone, so no third party gains write access and the credential work is done. The generalised requirement was written to permit exactly this -- *any* workflow opening a pull request, not just the hook-update one.
 
-**Revisit when** a second Compose stack appears, or the galaxy manifest grows past a handful of entries, or entry 43's migration is done and the small incremental bumps it will then need start being missed again. The single-config argument strengthens as the manifest count rises; at three unwatched manifests it does not yet carry the trust cost.
+**Revisit when** a second Compose stack appears, or the galaxy manifest grows past a handful of entries, or `catch-up-the-drifted-galaxy-pins`'s migration is done and the small incremental bumps it will then need start being missed again. The single-config argument strengthens as the manifest count rises; at three unwatched manifests it does not yet carry the trust cost.
 
 **The condition this waited on is met.** It said: do not add a fifth automation to a repository where nothing notices a red scheduled run, which is the lesson `open-autoupdate-pr-with-app-token` was. Something notices now — `notice-when-a-periodic-job-stops-reporting` gives every scheduled workflow a heartbeat check whose silence alarms, and its own coverage test obliges any workflow added later to carry one. The trust cost argued above is what remains to weigh.
 
-## 45. sweep-the-stale-scenario-titles-and-check-them
-
-**Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, which swept the requirement half of this defect and measured the scenario half rather than folding it in.**
-
-A citation in this repository names a requirement and, very often, a scenario inside it — a docstring reading `MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenario "A source's credential variable is the name the environment declares"` is the ordinary shape. Both halves rot in the same rename, and that change corrected only the first, so a docstring it edited can name a live requirement and, in the next breath, a scenario that no longer exists.
-
-**Measured 2026-09-13, at trunk `80a8ec5`: thirty citations name a scenario no specification under `openspec/specs/` currently holds.** Twenty-nine are in `.github/tests`, one is in `.github/workflows/drift.yml`.
-
-**The one in `drift.yml` is the inverse case and is half somebody else's.** That comment cites a scenario as *"Drift in one stack does not resolve another's report"* while the specification still titles it *"Drift in one environment does not resolve another's report"* — the citation is ahead of the specification rather than behind it. The specification side of that rename was deliberately left alone by `rename-terraform-environments-to-stacks`, for a reason that still binds: a `MODIFIED` requirement replaces its block whole, so `openspec validate` reads a renamed scenario as a *dropped* one and refuses the change. A change wanting to rename one needs a mechanism, not an edit — and that is this entry's other half. Sweeping the twenty-nine without deciding this one would leave the tree citing a title the specification does not have, which is this entry's own defect in the opposite direction.
-
-**Why it was not folded into the sweep that found it.** It is a different predicate over a different set — the live scenario titles, not the retired requirement names — so the check that change built does not hold it and would not have caught a single one of the thirty. And the replacements are not mechanical: several scenario titles were reworded rather than renamed, so each needs a reading rather than a substitution. Folding it in would have doubled that change's diff and put a second unchecked sweep inside the change whose whole argument is that unchecked sweeps re-accumulate.
-
-**Do the check with the sweep, not after it.** `.github/tests/test_the_retired_requirement_names_are_gone.py` already reads every tracked file, already flattens each one so a title wrapped across a comment's line break is found, and already derives its subject from committed specifications. The scenario predicate is the inverse of its current one — a cited title that is **not** among the live scenario titles, rather than a name that **is** among the retired ones — so it needs a reader of its own rather than a second literal. Its false-positive risk is the thing to measure first: a quoted phrase that is not a citation at all looks exactly like a citation of a scenario that does not exist.
-
-## 46. rename-the-requirements-that-read-narrower-than-they-are
+## 47. rename-the-requirements-that-read-narrower-than-they-are
 
 **Not blocked.**
 
@@ -641,11 +781,25 @@ The last two are in `openspec/specs/iac-host-configuration/spec.md`, and both ac
 
 The first two describe a mechanism both environments now use: staging declares `server_enabled` and `volume_enabled` with prod's semantics, and its rollback and its cost-pause both rest on them. They are obliged for staging by nothing — the requirements name prod. The middle two say "this host", which was unambiguous at one host and is not at two.
 
-**Why it was deferred.** Nothing on staging contradicts any of them: it holds no store, so the durability and backup requirements have no second subject yet, and the lifecycle toggles are correct at both environments whether or not the requirement says so. Generalising six requirements across four capabilities inside a change whose scope was one environment directory would have mixed a mechanical sweep into the diff that most needed reading closely.
+**Why it was deferred**, written when it was true and kept for the reasoning rather than the state: nothing on staging contradicted any of them, because it held no store, so the durability and backup requirements had no second subject and the lifecycle toggles were correct at both environments whether or not the requirement said so. Generalising six requirements across four capabilities inside a change whose scope was one environment directory would have mixed a mechanical sweep into the diff that most needed reading closely.
 
-**What makes it live rather than theoretical.** Entry 16 puts the platform stack and a database on staging. That is the moment "this host" stops being merely imprecise and starts being wrong about which host a durability obligation binds — so this is worth taking before 29 rather than after it.
+**It became live rather than theoretical on 2026-09-13, and the paragraph above is why it was deferred rather than a reason still standing.** Staging took the platform stack that day and a `commerce-ops` database in its shared instance the next, so it holds stores: `platform_postgres_data`, `platform_traefik_letsencrypt` and the anonymous volume Alertmanager's image declares. "This host" is now wrong about which host a durability obligation binds rather than merely imprecise, which is the condition this paragraph named. It waits on nothing.
 
-## 47. correct-the-tfvars-parenthetical-that-names-labels
+## 48. sweep-the-stale-scenario-titles-and-check-them
+
+**Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, which swept the requirement half of this defect and measured the scenario half rather than folding it in.**
+
+A citation in this repository names a requirement and, very often, a scenario inside it — a docstring reading `MODIFIED requirement: Dynamic Inventory via the hcloud Plugin, One Source per Stack -- scenario "A source's credential variable is the name the environment declares"` is the ordinary shape. Both halves rot in the same rename, and that change corrected only the first, so a docstring it edited can name a live requirement and, in the next breath, a scenario that no longer exists.
+
+**Measured 2026-09-13, at trunk `80a8ec5`: thirty citations name a scenario no specification under `openspec/specs/` currently holds.** Twenty-nine are in `.github/tests`, one is in `.github/workflows/drift.yml`.
+
+**The one in `drift.yml` is the inverse case and is half somebody else's.** That comment cites a scenario as *"Drift in one stack does not resolve another's report"* while the specification still titles it *"Drift in one environment does not resolve another's report"* — the citation is ahead of the specification rather than behind it. The specification side of that rename was deliberately left alone by `rename-terraform-environments-to-stacks`, for a reason that still binds: a `MODIFIED` requirement replaces its block whole, so `openspec validate` reads a renamed scenario as a *dropped* one and refuses the change. A change wanting to rename one needs a mechanism, not an edit — and that is this entry's other half. Sweeping the twenty-nine without deciding this one would leave the tree citing a title the specification does not have, which is this entry's own defect in the opposite direction.
+
+**Why it was not folded into the sweep that found it.** It is a different predicate over a different set — the live scenario titles, not the retired requirement names — so the check that change built does not hold it and would not have caught a single one of the thirty. And the replacements are not mechanical: several scenario titles were reworded rather than renamed, so each needs a reading rather than a substitution. Folding it in would have doubled that change's diff and put a second unchecked sweep inside the change whose whole argument is that unchecked sweeps re-accumulate.
+
+**Do the check with the sweep, not after it.** `.github/tests/test_the_retired_requirement_names_are_gone.py` already reads every tracked file, already flattens each one so a title wrapped across a comment's line break is found, and already derives its subject from committed specifications. The scenario predicate is the inverse of its current one — a cited title that is **not** among the live scenario titles, rather than a name that **is** among the retired ones — so it needs a reader of its own rather than a second literal. Its false-positive risk is the thing to measure first: a quoted phrase that is not a citation at all looks exactly like a citation of a scenario that does not exist.
+
+## 49. correct-the-tfvars-parenthetical-that-names-labels
 
 **Not blocked, and small.** It waited three months as a correction to batch into whatever change next touched the requirement, and no such change came — which is what makes it an entry of its own.
 
@@ -657,7 +811,7 @@ The disagreement is **factual, not normative**. The parenthetical is illustrativ
 
 **What it costs is the part to decide when it is proposed.** Correcting it is a `MODIFIED` delta, and the derived test it would owe is "the requirement's parenthetical agrees with `terraform.tfvars`" — a cross-file assertion this repository has declined twice on its own merits, on the grounds that an assertion converts a silent staleness into a standing editing obligation. So this change should probably correct the prose and argue explicitly that the scenario it owes is not that assertion.
 
-## 49. separate-history-from-rationale-in-source-comments
+## 50. separate-history-from-rationale-in-source-comments
 
 **No longer blocked.** It waited on the citation-form decision and on the sweep that followed it; both were delivered by `decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which also converted every citation in the comment blocks below. What remains here is the separation this change deliberately did not do: it changed citation *form* only, and left the prose around it alone.
 
@@ -674,70 +828,7 @@ Only the first kind survives archiving. Concrete instances of the other two (the
 
 The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-13; it was 48 against 90 when this entry was written, so the ratio has worsened rather than held. This is a style question with a real maintenance cost, not a cosmetic one.
 
-## 50. label-each-stack-s-alerts-with-the-stack-they-came-from
-
-Recorded 2026-09-13 by `deploy-the-platform-stack-per-environment`, which put the platform stack on a second host and found that nothing distinguishes the two hosts' alerts.
-
-`platform/docker-compose.yml`'s Prometheus configuration declares no `external_labels`, so a `MetricsTargetDown` raised on staging and one raised on production are **identical text**. Alertmanager adds nothing either: its routes group on the alert's own labels, and none of them names a host, a stack or an environment.
-
-**What that change did instead, and why it is not enough.** Each stack's `PLATFORM_SLACK_WEBHOOK_URL` and `PLATFORM_DEADMANSWITCH_URL` are secrets on that stack's own GitHub Environment, so the operator can — and on 2026-09-13 did — point each stack at a channel and a dead-man's-switch check of its own. Attribution then comes from *where the message arrived* rather than from anything in it. That works, costs nothing, and is what `docs/bootstrap-a-new-host.md` §7.3 now instructs.
-
-It is not enough because **nothing enforces it**. An operator who pastes production's webhook into staging's Environment gets two hosts alerting into one channel with no way to tell them apart, and no check in this repository reports it — the values are repository settings, and `.github/tests` may not read those. The failure is also silent in the direction that matters: the alerts keep arriving, so nothing looks broken until someone acts on the wrong host.
-
-**Why it was not folded in.** It is a change to the committed stack definition — `external_labels` under Prometheus's `global:`, a new variable in `platform/.env.example`, a tenth `PLATFORM_*` secret, and a regenerated `platform.config-checksum` on the Prometheus service. The change that found it had declared parameterising the Compose file a Non-Goal, and its deltas were approved on that boundary.
-
-**Worth settling when it is taken.** Whether the label is the stack (`main-staging`) or the environment (`staging`) — these are different axes and this repository has been bitten by conflating them before; whether the value is rendered from the existing `PLATFORM_DEPLOY_HOST` rather than adding a secret, which would avoid a tenth value to enter per stack; and whether Alertmanager's routes should group on it, which is what would stop two stacks' alerts collapsing into one notification that names neither.
-
-Not blocked.
-
-## 52. revoke-an-application-s-deploy-authorisation
-
-Recorded 2026-09-13 by `onboard-commerce-ops-to-staging`, which added a `deploy_apps` entry and found, while stating what reverting it would cost, that nothing in this repository takes one back.
-
-`deploy_user` renders three things per entry — `/opt/<name>`, `/etc/sudoers.d/app-deploy-<name>`, and an `authorized_keys` line carrying the forced command — and removes none of them for an entry that is gone. The `ansible.posix.authorized_key` task leaves `exclusive` at its default, deliberately, so that each loop iteration manages only its own key and no application's entry disturbs another's; the sudoers files are written one per application with nothing enumerating the directory; and the `/opt` directory is created and never reaped. **So deleting an entry stops the role acting on it and leaves the host authorising that key exactly as before.** Revocation is an edit on the host, or a rotation of the private half in the application's own repository — neither of which is a commit here, and neither of which any converge would notice.
-
-This is the same shape as entry 2's finding about `root`'s `authorized_keys`, and the same two things are true of it: `exclusive: true` is the only form that actually revokes and is the form that can lock everyone out, and the `ops_user` role's per-entry `state:` model — where revocation is `state: absent` with the entry **left in place** until a converge has removed it — is the shape to follow rather than invent. The two entries are worth taking together for that reason, though neither blocks the other.
-
-Not blocked. Nothing has needed revoking yet, which is why this is an entry rather than an incident.
-
-## 53. say-what-the-host-firewall-actually-gates
-
-**Recorded 2026-09-13 by `onboard-commerce-ops-to-staging`, which asserted the opposite in three documents and was caught by a code review that probed the host instead of reading the role.**
-
-Measured from the operator's workstation, over the tailnet, against staging — whose `hardening_web_allowed_cidrs` was `[]` and whose `web_allowed_cidrs` was `[]` at the time, and whose UFW is `active`:
-
-    curl -H 'Host: example.com' http://100.85.219.36/   ->  301
-    curl -k https://100.85.219.36/                       ->  404   (CN = TRAEFIK DEFAULT CERT)
-
-**A container-published port is not filtered by UFW, on any interface.** Docker DNATs it in `nat/PREROUTING` and accepts it in the `FORWARD` chain; UFW's rules hang off `INPUT`, which those packets never traverse. So `hardening_web_allowed_cidrs` gates nothing for `platform-traefik-1`, which publishes `0.0.0.0:80` and `0.0.0.0:443`, and what refuses a request from the public internet is the Hetzner cloud firewall alone. Nothing in `ansible/roles/` touches `DOCKER-USER` or `after.rules`, which is where a fix would go.
-
-**What this falsifies, and it is the reason this is an entry rather than a note.** The firewall convention in `AGENTS.md` says the two layers are the cloud firewall and UFW, and that for any given port exactly one of them is the documented access gate. For a container-published port that is not a split at all — there is one layer, and a reader who closes UFW and believes the port shut is wrong. `docs/bootstrap-a-new-host.md` said "both firewall layers refuse inbound traffic to them" in two places, both rewritten by `expose-staging-on-the-web` when it opened staging's web ports; `expose-staging-on-the-web`'s backlog entry carried the two-layer obligation as one of the two things it said existed nowhere else, until that change was archived; the obligation itself is stated in `ansible/roles/hardening/README.md`. `ansible/inventory/group_vars/staging.yml`'s comment above `hardening_web_allowed_cidrs` reasoned from it directly and was corrected by the change that recorded this entry, since it was editing that file anyway — it is the worked example of what the others need, not an outstanding item. Each of the rest needs to say which ports it is true of. Entry 14 is the one place that draws a wrong *conclusion* rather than just restating the rule: it counts a cloud-firewall change blocking 443 as gated "in two of at least three ways", one of them UFW as "the co-equal host-level layer" — and for 443 UFW is not in the path, so that count is overstated. The mirror obligation itself survives all of this: `terraform.tfvars` and `group_vars` still have to agree, and the reason is unchanged for every port UFW does gate.
-
-**One thing to settle while doing it, because the answer is not obvious.** `add-grafana-tailnet-ufw-rule` exists because Grafana was found unreachable from the tailnet until a UFW allow for 3000 was added by hand, and `platform-grafana-1` publishes `100.85.219.36:3000->3000/tcp` — a container-published port, which by the mechanism above UFW never filtered. Either that rule does nothing and the original diagnosis was wrong, or something distinguishes that case. Find out before writing the general rule down, since one of those two is currently recorded as a worked example in an archived change.
-
-**What is not owed here.** Nothing about this is an exposure: what reaches Traefik from the internet is decided by the cloud firewall on both hosts, and a tailnet peer is an authenticated device of the operator's own. This is a documentation defect about which mechanism does the refusing, and the decision of whether to close container ports at the host layer as well — `DOCKER-USER` rules, or publishing to `127.0.0.1` and reaching containers another way — is a change of its own that this entry does not prejudge.
-
-Not blocked.
-
-## 54. automate-per-application-database-provisioning
-
-**Not blocked; recorded because its obligation is due and unmet.** *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) obliges automating how an application's database and role are provisioned in the shared instance and how the role's password reaches the application. That obligation's trigger — the first application given a database there — fired on 2026-09-13 with `commerce-ops` on the staging host, and production's database followed by the same recipe. `provision-commerce-ops-database-in-the-shared-instance` provisioned both by hand, by the recipe now in `docs/onboard-an-application.md`, and recorded the obligation in that requirement as a stated divergence rather than building the mechanism.
-
-**Why it was not built then.** A credential path, naming rule and failure mode fitted to one consumer are fitted to one application's Compose file and one repository's secret names, and are discovered wrong by the next application rather than by review. That change met one such fit on its first host: production's `commerce-ops` Environment already held `POSTGRES_PASSWORD`, for the application's private PostgreSQL, so the shared-instance password had to take a name of its own, `SHARED_POSTGRES_PASSWORD`. A mechanism has to handle that collision for every application, not only the one it was designed against.
-
-**What a design has to answer**, taken from what the manual recipe had to: where the password is generated and how it reaches the application's deploy without a command line, a log line or a file in this repository; what happens when the secret name is already taken; that a re-run is a rotation which the application picks up only on its next deploy; re-provisioning after a rebuild or a volume reset; and per-host independence, so that one leaked credential reaches one host.
-
-**Archiving it obliges a delta elsewhere.** The requirement's paragraph "One divergence is stated rather than hidden, as of 2026-09-13" says it is replaced when this mechanism lands, and nothing else would prompt that; that recipe then becomes whatever the mechanism makes of it.
-
-## 55. classify-commerce-ops-production-data-for-the-shared-instance
-
-**Not blocked; recorded because it is a specification change, decided by the operator after the change that provisioned the database had merged.** On 2026-09-14 the operator decided that production's `commerce-ops` leaves its private PostgreSQL for the database `provision-commerce-ops-database-in-the-shared-instance` provisioned in production's shared instance, and moves to Supabase only later (`move-commerce-ops-durable-data-to-supabase`). Its data includes the hand-curated rows that entry records — durable under *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) as it stands, which keeps durable data out of the shared instance unconditionally, because holding none is what lets that instance go without a backup. Asked whether to keep the private database until Supabase, or to admit the data only with an off-host backup and a rehearsed restore, the operator chose to classify `commerce-ops`'s production data as tolerable to lose, to the operator, with no backup — a temporary decision, taken because the application is at a very early, experimental stage, and ending with its move to Supabase.
-
-**What the change owes.** A MODIFIED delta on that requirement recording the policy — whose loss it treats as tolerable, which application and host it covers, and that it ends with the move to Supabase — in the shape of the staging rehearsal-data policy the requirement already carries, and a delta on *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`), whose store table and divergence paragraph it bears on. It merges before any production row lands in the shared instance, and the `commerce-ops` repository's production cutover waits on it.
-
-**What the operator accepted, and what it must not become.** The shared instance is treated as disposable: a PostgreSQL major upgrade discards its volume, and a rebuild recreates it empty. Once `commerce-ops`'s production data is there, either deletes it for good. `platform/README.md`'s *Upgrading the PostgreSQL major version* already says so, in the terms this entry has to meet — it tells the operator that production's database is empty and reserved for a cutover waiting on this change, and that from the moment this lands and the data moves in, discarding that volume deletes it for good. **This change owes the same sentence to the rebuild runbook**, which does not yet carry it, and owes that procedure a re-read to confirm it still says what is true once this lands. The classification names one application on one host and must not be read as permission for any other application's durable data.
-
-## 56. record-the-hostname-scheme
+## 51. record-the-hostname-scheme
 
 **Recorded 2026-09-14 by `expose-staging-on-the-web`, which wrote down the DNS the scheme produces and not the scheme.** The public names this repository's hosts serve follow `<service>.<server>.BASE_DOMAIN` — `<app>.main-production.BASE_DOMAIN`, `<app>.main-staging.BASE_DOMAIN` — resolved by one wildcard `A` record per server, with a short alias directly under `BASE_DOMAIN` as a record of its own. The rule was decided in the `commerce-ops` repository, whose `deploy-commerce-ops-to-staging` handoff names `docs/naming-conventions.md` here as its home. That file names servers, stacks, keys and the OS hostname, and not the public names under them.
 
@@ -745,57 +836,7 @@ Not blocked.
 
 Not blocked. It touches `docs/` and no mechanism.
 
-## 57. quieten-the-certificate-expiry-guard-on-a-host-serving-nothing
-
-**Recorded 2026-09-15 by the operator and this session, from the host rather than from the rules.** `CertificateExpiryNotObserved` has been firing on staging since 2026-09-13 17:01 UTC, which is the hour the platform stack first reached that host. Measured two ways: `amtool alert` inside `platform-alertmanager-1`, and Prometheus's own `/api/v1/alerts`, where it carries `activeAt` `2026-09-13T16:46:46Z` against the rule's `for: 15m`. It predates `expose-staging-on-the-web` by two days, so opening staging's web ports neither caused it nor cleared it.
-
-**The alert is correct, and on this host it is noise.** Its expression in `platform/docker-compose.yml` is `absent(traefik_tls_certs_not_after{cn!=""}) or count(traefik_tls_certs_not_after{cn=""}) > 0`, and it exists to stop `TLSCertificateExpiringSoon` from silently watching nothing — the reasoning is in the change `alert-on-certificate-expiry`. Staging publishes no such series because it holds no certificate: Traefik requests one per router, no container there carries a router label, and `/letsencrypt/acme.json` is 0 bytes. It reaches Slack, since the routing tree sends every alert but `Watchdog` to that receiver (`amtool config routes test severity=warning alertname=CertificateExpiryNotObserved` returns `slack`).
-
-**The design content is telling two silences apart**, which is why this is an entry rather than a one-line fix. Suppressing the alert wherever no certificate exists also suppresses the case it was written for: a Traefik that served certificates and now serves none. A fix therefore needs a series that says the host is *meant* to serve one — a router count, or a per-stack expectation — so that a host with nothing routed is quiet while a host that lost its certificates still alarms.
-
-**Not blocked, and it may close itself.** An application reaching staging clears it: the `commerce-ops` repository's `deploy-commerce-ops-to-staging` is the deploy that would. If that lands first, what survives is the general case, which the next empty host meets on its first day — a second staging, or any new stack whose platform deploy precedes its first application.
-
-## 58. bound-a-deploy-key-to-one-host-when-an-environment-holds-two-stacks
-
-**Not blocked. Recorded 2026-09-15 by `record-how-an-application-is-onboarded`, which decided the deploy keys' naming axis and found that the axis is load-bearing in a way no name can fix.**
-
-`deploy_apps` lives in `ansible/inventory/group_vars/<environment>.yml`, so an entry there authorises its key on **every host in that environment**. Today each environment holds exactly one stack and therefore one host, so "one key per environment" and "one key per host" are the same sentence. A second tenant ends that: `main-production` and `analytics-production` are two stacks and two hosts in one environment, reading one `group_vars` file — so one application's deploy key, and the `platform` entry's key with it, would authorise a deploy to both.
-
-**That is the invariant `docs/bootstrap-a-new-host.md` §0.3 states in as many words** — "one leaked private half must deploy to one host" — and the naming decision this entry came from does not secure it. It puts each key's *name* on the axis its authorisation actually sits on, which is the honest spelling of the current shape; it does not make that shape one host per key.
-
-**Where the fix has to go is the inventory's group layout, not a filename.** The candidates, none costed here: `deploy_apps` moving to a per-stack or per-host vars file; a group per tenant-environment pair rather than per environment; or the entry gaining a host selector the role honours. Each changes what a converge reads, so each wants its own Molecule coverage, and the choice interacts with what `AGENTS.md` records about a source being named for its stack and a group for its axis.
-
-**Nothing reports it, which is the part worth keeping in view.** A second tenant would be onboarded by following `docs/onboard-an-application.md`, which would produce a key per environment as instructed, and the over-authorisation would be silent: both hosts would accept the key and both deploys would work. Take this before a second tenant exists rather than after, since afterwards the remedy is a re-key rather than a layout.
-
-## 60. alert-on-the-exporter-being-unable-to-read-postgres
-
-**Not blocked; recorded rather than opened, because the rule is one line and the question of what else shares this shape is not.** Found on 2026-09-15 while writing `platform/README.md`'s *Upgrading the PostgreSQL major version*, whose step 4 needed a check that postgres-exporter can reach the instance after its role is recreated.
-
-**`MetricsTargetDown` cannot catch a broken exporter credential, and `platform/README.md` claimed for months that it could.** That alert is `up == 0` — Prometheus's own scrape success — and postgres-exporter answers `/metrics` with HTTP 200 whether or not it can reach the database. Measured against the pinned `quay.io/prometheuscommunity/postgres-exporter:v0.20.1` with a deliberately wrong password: HTTP `200`, `pg_up 0`, `pg_exporter_last_scrape_error 1`, container `running` and its healthcheck — `wget --spider` against that same endpoint — satisfied. So `up` stays `1`, every alert stays silent, and PostgreSQL's metrics are simply absent.
-
-That is not hypothetical here. The `pgexporter` role lives in `postgres_data` and is recreated by hand after any volume reset or host rebuild, from a password pasted out of a GitHub Environment secret — the one step in this stack most likely to be got wrong, and the one with no automated check behind it.
-
-**It stopped being hypothetical the day after this entry was written, and the case was worse than the one argued above.** On 2026-09-15, checking `pg_up` by hand during the PostgreSQL 18 upgrade found **both** hosts reporting `pg_up 0`, for an unknown period before that. The cause was not a mistyped password but `DATA_SOURCE_NAME` building a URL around one containing `#`, which discarded the host — corrected the same day by splitting the exporter's connection settings. A second finding from the same reading — that both stacks held the *same* exporter password — was rotated out the same day. What this entry is about survived the fix: **nothing reported the outage**, on either host, for however long it lasted. Both containers were `healthy`, both Prometheus targets were `up`, and the operator found it only by running a command this repository had documented three days earlier. That is the evidence for this entry rather than an argument for it.
-
-**What the change owes.** An alert on `pg_up == 0` for the `postgres-exporter` job, in `platform/docker-compose.yml`'s inline `prometheus_rules` config — the sibling `prometheus_config` holds only `global`, `alerting`, `rule_files` and `scrape_configs`, and a `groups:` block added there is not where Prometheus reads rules from. Remember the `platform.config-checksum` label, since editing either block without regenerating it deploys nothing. Give it a `for:` long enough to ride out a restart of the instance, which legitimately shows `pg_up 0` while it comes up.
-
-**The wider question, which is why this is an entry rather than a line.** `up` measures whether an exporter answered, never whether what it answered means anything, and every exporter in this stack is read through that one alert. cAdvisor and node-exporter have no equivalent of `pg_up` and the question does not arise for them; Traefik's metrics endpoint does answer independently of whether its providers are healthy. Worth deciding once whether each exporter needs a liveness signal of its own rather than adding them one incident at a time.
-
-## 61. alert-on-a-scheduled-units-own-output
-
-**Not blocked. Recorded 2026-09-15 by `report-refused-removals-in-the-host-prune`, which found the deferral already being cited and never written down.**
-
-`ansible/roles/image_prune/README.md` has been telling readers that making a silently-stopped prune alertable "is recorded in `docs/backlog.md`". It was not — this entry is what that sentence now names. The deferral itself is real and predates the citation; only its record was missing.
-
-`prune-host-images` writes its outcome to the journal and **nothing reads it**. `systemctl list-units --failed` is a manual read that nothing performs on a schedule, and `HostDiskPressure` fires at 90% full, which is very late. The external dead-man's-switch covers the unit not *running* — a failed activation, a killed run, a timer that stopped firing — and says nothing about what a successful run reported. So a prune that completes every week having refused the same image every week, or one whose `considered` count has quietly collapsed to 1 because an enumerated application stopped rendering its references, is green at the observer and silent on the host.
-
-**The sharpest case, and the one to size this against.** `report-refused-removals-in-the-host-prune` found a state where the observer is not merely uninformative but actively wrong: a container runtime that stops responding part-way through the removal loop leaves the prune reporting every remaining candidate as refused and still **exiting zero** — so `ExecStopPost=` pings the success endpoint and the dead-man's-switch goes green on a run that stopped doing its work half-way. That is not a defect in the prune; exiting non-zero there would add an abandon condition to a list the requirement enumerates exactly, and an abandoned run is specified to have removed nothing, which is false by then. It is a defect in what watches it, which is this entry. The signature is in the role's README, and it is legible **only** to someone reading the journal.
-
-The mechanism is node-exporter's textfile collector: the unit writes a `.prom` file, node-exporter scrapes it with the rest, and the alert rules sit beside the seven already inline in `platform/docker-compose.yml`. node-exporter has been running since `add-platform-monitoring`, so nothing new is deployed for it.
-
-**Why it is its own change.** It reaches three things this repository keeps deliberately separate: a role that writes a metrics file, a collector directory that has to exist and be writable by that unit alone, and alert rules whose thresholds are a judgment rather than a transcription. It also wants a decision this entry does not take — whether the textfile is written by the prune script, which would make a metrics concern part of a script whose own failure modes are the subject of *A Run That Cannot Determine the Keep Set Completely Removes Nothing*, or by a wrapper, which adds a second thing that can silently stop. And the same mechanism would serve every scheduled unit on the host rather than this one, so scoping it to the prune would be the wrong shape.
-
-## 62. reclaim-a-multiply-referenced-untagged-image
+## 52. reclaim-a-multiply-referenced-untagged-image
 
 **Not blocked. Recorded 2026-09-15 by `report-refused-removals-in-the-host-prune`, which made the condition visible and deliberately did not remove it.**
 
@@ -808,55 +849,10 @@ Removing it needs one of two things, and both are changes to **what the run remo
 
 **Neither host is known to carry such an image**, so this is not urgent. What makes it worth keeping is that the condition is now legible: when `refused` reads non-zero for this reason on a real host, this entry is what it points at.
 
-## 64. render-the-env-file-so-a-secret-survives-it
+## 53. write-and-rehearse-the-rebuild-runbook
 
-**Not blocked. Narrowed rather than closed**: the pull request that fixed the shell layer on 2026-09-15 deleted this entry as done, and was wrong to — there are two layers, and only one of them is shut.
+**Not blocked; recorded because every piece exists and nobody has run them in sequence.**
 
-**Layer one, closed.** `platform-deploy.yml` rendered `.env` with `echo "NAME=${{ secrets.X }}"`. GitHub substitutes a secret's raw text into the `run:` body, so bash read it as script: `ab$c#d` rendered `ab#d`, `"abc"def` rendered `abcdef`, and ``x`id -u`y`` rendered `x1000y` — **a command ran**, in a job holding that stack's tailnet OAuth client and deploy SSH key. Every value now reaches that script through the step's `env:` block, and `.github/tests` refuses any workflow that interpolates a secret, a workflow input or a `github.event` value into a `run:` body.
+Recovering this host from nothing is: a Terraform apply through the gated pipeline (with `server_enabled` toggled, and the destroy-override label for the replace), DNS (a manual edit at the zone's own provider — `docs/bootstrap-a-new-host.md` §4.4 gives the shape of the records and not their values, and is also where the automation of this step is declined), the first converge of the rebuilt host, which is a hand-run one from a workstation with the Vault password and a fresh tailnet key -- the pipeline reaches a host over the tailnet and joining it is what that play does, so `apply-host-configuration-through-a-gated-workflow` did not remove this step and could not, the platform deploy from a re-run of `platform-deploy.yml`, one deploy per application from its own repository, the two manual steps `platform/README.md` lists (the `pgexporter` role and the dead-man's-switch registration). No *platform-stack* store needs restoring: `scope-the-shared-database-to-non-durable-data` classified each of them as needing no backup — each is either recreated by a redeploy or its loss is accepted, and the runbook should say which, because Prometheus's history and Grafana's UI-created state fall in the second group and do not come back. An application's database in the shared instance falls in the second group too, but is not the end of it: the application cannot start without one, so the runbook needs a re-provisioning step per application — the provisioning recipe in `docs/onboard-an-application.md` for that host with `rotate=yes` — before that application's deploy. That leaves one gap, and it is the one the same change names as a divergence — on the production host, `commerce-ops` keeps durable data in a PostgreSQL container of its own that nothing backs up, so a rebuild today loses it. `move-commerce-ops-durable-data-to-supabase` is what closes that; until it does, the runbook has to say so. Those steps live in four repositories and two README sections, in no stated order, and the time they take is unknown.
 
-**Layer two, open, and it is what this entry now is.** Compose's own `.env` parser expands `$` inside the value. Measured **from inside a running container** on 2026-09-15, against a `.env` rendered exactly as the fixed workflow now renders it:
-
-| Secret as stored | What the container process receives |
-|---|---|
-| `ab$c#d` | `ab#d` — `$c` expanded to nothing |
-| `"abc"def` | `abc` — leading quote consumed, remainder dropped |
-| `A1+b/c=` | `A1+b/c=` — intact, and this is what `openssl rand -base64` produces |
-
-A wrong credential here is silent: the service starts, reports healthy, and fails only at whatever needed the credential — which postgres-exporter did for an unknown period (`alert-on-the-exporter-being-unable-to-read-postgres`). It reaches the seven secrets the render step writes.
-
-**Two remedies were tried and neither is established.** Single-quoting the rendered line does not stop the expansion — measured, same `ab#d`. Escaping `$` as `$$`, Compose's documented escape, was attempted and **not** measured cleanly, because the test harness's own `$$` expanded to the shell's PID; treat it as unverified rather than as ruled out. It is the first thing to try, and it needs a real measurement.
-
-**Measure from inside a container, not with `docker compose config`.** That command escapes a literal `$` as `$$` in its own output, so it reports a value that looks corrupted when it is not, and vice versa. Reading it instead of the container is how this entry's first diagnosis went wrong — twice, in opposite directions: once blaming Compose alone, then bash alone. It is both.
-
-**Until it closes**, generate these with the `openssl rand` commands `docs/bootstrap-a-new-host.md` §0 gives, whose alphabets contain neither character. That instruction is also in `platform/README.md`, beside the manual role step that pastes one.
-
-## 65. assert-no-secret-is-built-into-a-url
-
-**Not blocked. Split out of the fix that motivated it, deliberately, and the reason is the entry's main content.** Recorded 2026-09-15.
-
-`platform/docker-compose.yml` built postgres-exporter's `DATA_SOURCE_NAME` by interpolating a password into a URL, and a `#` in that password discarded the host — see `alert-on-the-exporter-being-unable-to-read-postgres` for what the outage looked like and why nothing reported it. The three-line correction is merged. What is owed is the check that stops the shape returning, in `.github/tests`: a static read of a committed file, which is that suite's stated subject.
-
-**What the check has to decide is narrower than it first looks, and the draft written alongside the fix got it wrong in three different arms on three consecutive review rounds** — which is why it is here rather than merged with the fix. The rule is not "a secret near a URL". It is: a secret-bearing variable appearing **inside** a URL, within its own whitespace-delimited word. The cases that must be separated:
-
-- **An offence**: a scheme (`postgresql://u:${P}@h`), a `user:secret@host` authority with no scheme (which `DATA_SOURCE_URI` accepts), a query parameter (`?sslmode=disable&password=${P}`), a path segment of a scheme-less authority (`host:5432/${P}/x`), and text concatenated onto a secret that is itself a URL (`${SLACK_WEBHOOK_URL}/extra`).
-- **Not an offence**: a value that is nothing but the secret, which is what Alertmanager's `api_url` is — there the secret *is* the URL and nothing it contains can move a boundary. Nor a non-secret host in a URL, nor a secret sharing a value with an unrelated URL (`-Dapi.key=${K} -Dendpoint=https://…`), nor a filesystem path (`/var/lib/${P}/data`), nor Compose's `$$` escape.
-
-**The defect that recurred, named so it is not made a fourth time**: each arm reads the text either side of the secret, and that text must be taken from the **quote-stripped** neighbourhood rather than anchored to the start of the raw word. Quoting is idiomatic inside a `configs:` block and `--flag=value` is idiomatic in a `command:`, so an anchored arm passes every wrapped form while its unwrapped twin is caught — and a test exercising only the bare form sees nothing wrong. Three arms were fixed for this one at a time.
-
-**Two things it must read that are easy to miss.** Which names count as secrets should be read from `platform-deploy.yml`'s render step rather than guessed from keywords: `DEADMANSWITCH_URL` is a bearer credential and no word in its name says so. Read that step's **`env:` block** — since 2026-09-15 the secrets reach it there rather than being interpolated into its script, so a pattern written against the old `echo "NAME=${{ secrets.X }}"` spelling would match nothing and classify no name as secret. And the scan must cover `command:`, `entrypoint:`, `labels:` and `healthcheck.test` as well as `environment:` and the inline `configs:` — Traefik's `${ACME_EMAIL}` is reached only through `command:`, so a check reading `environment:` alone would call the file clean while examining six of its seven secret-bearing interpolations.
-
-**And it must not be able to pass having read nothing.** Seven such interpolations exist today; assert a floor, or moving them into `env_file:` satisfies the check silently.
-
-## 67. make-a-shared-instance-reset-visible-to-its-applications
-
-**Not blocked. Recorded 2026-09-15 from an incident, by the session that triaged it, and not folded into entry 54 because it is the half of the problem that survives entry 54 being built.**
-
-**The window ran as written; its last step had not.** `upgrade-the-shared-postgres-major` merged as pull request #196 at 2026-09-15T16:15:09Z and `platform/README.md`'s *Upgrading the PostgreSQL major version* was followed: `platform_postgres_data` was discarded and re-created on both hosts — staging at 16:25:50Z, production at 16:32:04Z — and `platform-postgres-1` came back on `postgres:18.6`. Step 5, "re-provision every application database, then redeploy that application", had not run on either host as of 18:47Z. Measured read-only from `ssh prod` at that time: the instance holds roles `platform_admin` and `pgexporter` and databases `platform_admin`, `postgres`, `template0` and `template1`, so the `commerce-ops` role and database that `provision-commerce-ops-database-in-the-shared-instance` created on production at 2026-09-14T03:58Z are gone, as staging's 03:53Z pair is; `SHARED_POSTGRES_PASSWORD` in each of that repository's Environments now names a role that does not exist.
-
-**Nothing told the application, and nothing tells it now.** `commerce-ops`'s staging deploy was last healthy at 13:27Z (run `34974973852`); its first deploy after the window, at 17:52Z (run `35003835663`), died at `alembic upgrade head` with `password authentication failed for user "commerce-ops"` — PostgreSQL declining to distinguish a wrong password from an absent role — and its container has been crash-looping since, with Traefik answering 404 for want of a backend. The failure surfaced four and a half hours after its cause, in a repository that had changed nothing, carrying a message that points at a credential rather than at a reset. This repository learnt of it from `Fuperia-IT/commerce-ops`, which is the reporting path this entry exists to replace.
-
-**What is uncovered, precisely.** Entry 54 would re-create the role by converged configuration and is the durable fix for *recurrence*. This entry is the other half: an application's ability to see that the database it is configured for has ceased to exist, and the operator's ability to tell the applications on an instance that a window is coming — both of which stay owed if entry 54 is never built, and one of which stays owed even after it is, since a mechanism that re-provisions on a schedule of its own still leaves a gap between the reset and the re-provisioning. The runbook's step 1 is already the announcement, and it is a sentence addressed to a human, holding a list read from `\l` that step 2 then discards. Nothing survives the reset that a later deploy could read.
-
-**What a change owes**, none of it costed here: whether the signal is an announcement made at window time or a marker an application's deploy reads before it delivers; where such a marker can live, given that anything inside the volume goes with it and anything outside it has to be re-created by the same step that re-creates the role; and what an application does on finding it absent or stale, since `commerce-ops`'s deploy already refuses to deliver when its own configuration is wrong and is the consumer this would be designed against — which is the fitted-to-one-consumer trap entry 54 records, met again here.
-
-**It also moved the production cutover backwards, and no other entry says so.** Entry 55's cutover, and `move-production-into-the-shared-instance` with it, depend on the production role and database that `provision-commerce-ops-database-in-the-shared-instance` provisioned and deliberately kept unused; both are gone. That cutover now needs the recipe in `docs/onboard-an-application.md` re-run against production with `rotate=yes` before it can proceed. Production's application itself was untouched — it still runs its own `commerce-ops-postgres-1` on `postgres:16-alpine` with `commerce-ops_commerce_ops_pgdata`, healthy and five days up at 18:47Z — which is the only reason the window cost staging alone. Once entry 55 lands and production's data moves in, the same window deletes it, exactly as `platform/README.md` and entry 55 both already say.
+A `docs/runbook-rebuild.md` that lists them in order, names the secret each step needs, and records the last rehearsal's date and duration is the deliverable. The rehearsal is the point; the document is how it survives. Staging is where the rehearsal can happen without touching prod: converged since 2026-09-10 and carrying the platform stack since 2026-09-13, so the thing this entry once waited on is in place and the rehearsal is now merely unscheduled.

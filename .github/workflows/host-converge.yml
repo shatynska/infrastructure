@@ -42,7 +42,7 @@ name: Host Converge
 # Drift detection is NOT this workflow. `--check --diff` against a live host is
 # the host layer's `drift.yml` rather than its `terraform plan`, it needs the
 # credential this workflow's first job must not hold, and its baseline is
-# `changed=2` rather than zero -- see `docs/backlog.md` entry 24.
+# `changed=2` rather than zero -- see `docs/backlog.md` `detect-host-drift-on-a-schedule`.
 on:
   push:
     branches: [main]
@@ -112,7 +112,7 @@ jobs:
           # `key: value` reader below, the secret-name validation, the refusal to
           # report success having discovered nothing, and the JSON emission. Four
           # near-siblings now exist where the decision to keep three copies was
-          # taken; `docs/backlog.md` entry 27 carries the work to factor them out.
+          # taken; `docs/backlog.md` `factor-the-four-stack-discovery-bodies` carries the work to factor them out.
           #
           # FREE OF ACTIONS EXPRESSIONS ON PURPOSE, which is what lets
           # `.github/tests` pull this body out and run it against a scratch tree

@@ -46,7 +46,7 @@ name: Pre-commit Autoupdate
 # `GITHUB_TOKEN` permissions. It asserts NEITHER of the two things items 2 and 3
 # are about: not the `permission-*` down-scoping, and not the restricted input
 # set. Both are enforced by reading this file, which is why they are written
-# here rather than left to the delta spec. `docs/backlog.md` entry 38 is the
+# here rather than left to the delta spec. `docs/backlog.md` `assert-the-autoupdate-workflow-s-two-unchecked-properties` is the
 # change that would assert them. The suite also cannot assert that the App exists or is still installed --
 # that is repository settings rather than repository content -- so the README
 # runbook records what the App is, what it is scoped to, and how its key is
