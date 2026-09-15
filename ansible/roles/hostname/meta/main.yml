@@ -10,9 +10,9 @@
 # found" against a role directory that plainly exists -- which reads as a broken
 # path rather than as a missing file.
 galaxy_info:
-  namespace: shatynska
+  namespace: company
   role_name: hostname
-  author: shatynska
+  author: company
   description: >-
     Sets the host's own name from the operating company and the host's
     inventory identity, and makes the host resolve it.

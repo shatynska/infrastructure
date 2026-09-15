@@ -16,10 +16,16 @@
 # incompatibility the toolchain bump surfaced; it is a metadata gap in this
 # role, not a defect in the new Molecule, so it is fixed here rather than by
 # reconsidering the pin.
+#
+# `company` below is a LITERAL, not a placeholder to fill in: a Galaxy
+# namespace admits only `[a-z0-9_]`, so the `<company>` spelling this
+# repository uses elsewhere is invalid here. Nothing reads the resulting
+# fully qualified name, so the value is free and deliberately says nothing
+# about who operates the clone.
 galaxy_info:
-  namespace: shatynska
+  namespace: company
   role_name: docker
-  author: shatynska
+  author: company
   description: >-
     Installs the container runtime by depending on the pinned external
     geerlingguy.docker role.
