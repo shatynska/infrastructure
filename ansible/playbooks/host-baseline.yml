@@ -39,7 +39,7 @@
 #                        rather than the diagnostic below. Do not pass --limit
 #                        to this playbook; there is nothing here to narrow,
 #                        since the environment already selects the host set.
-#                        docs/backlog.md entry 32 records it.
+#                        docs/backlog.md `test-a-play-at-play-scope` records it.
 - name: Refuse before configuring anything if the target resolved to nothing
   hosts: localhost
   connection: local

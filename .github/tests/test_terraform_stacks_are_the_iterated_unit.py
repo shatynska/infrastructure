@@ -355,7 +355,7 @@ def old_root_occurrences(root: Path | None = None) -> list[str]:
     made it likely: that shape is common in third-party Ansible content where
     the prefixed path never was. `AGENTS.md` scopes this suite to a static read
     of a COMMITTED file, and vendored untracked content is not committed. See
-    `docs/backlog.md` entry 35, which names this class and recommends this
+    `docs/backlog.md` `hold-the-whole-static-suite-to-its-own-constraints`, which names this class and recommends this
     helper.
 
     A `root` argument means a scratch tree instead, which is NOT a repository
@@ -1842,7 +1842,7 @@ class TestNoCommittedFileStillNamesTheOldTerraformRoot(unittest.TestCase):
 
 class TestTheSweepReadsCommittedFilesOnly(unittest.TestCase):
     """DERIVED -- `AGENTS.md` scopes this suite to a static read of a COMMITTED
-    file, and `docs/backlog.md` entry 35 names the class this closes.
+    file, and `docs/backlog.md` `hold-the-whole-static-suite-to-its-own-constraints` names the class this closes.
 
     `old_root_occurrences()` selected its files with a filesystem walk until
     this was written, and that walk prunes four directory names of which
@@ -1900,7 +1900,7 @@ class TestTheSweepReadsCommittedFilesOnly(unittest.TestCase):
             "an UNTRACKED file naming the old root was reported as an offence: "
             f"{reported}. This sweep's subject is the committed file; reading a "
             "developer's provisioned content makes it red on a working machine and "
-            "green on a runner, which is `docs/backlog.md` entry 35's class",
+            "green on a runner, which is `docs/backlog.md` `hold-the-whole-static-suite-to-its-own-constraints`'s class",
         )
 
 

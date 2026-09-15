@@ -281,7 +281,7 @@ def superseded_path_occurrences(
     `<path>:<line>`.
 
     THE FILE SET IS TRACKED FILES, NOT A FILESYSTEM WALK, for the reason
-    `tracked_files()` itself records and `docs/backlog.md` entry 35 names:
+    `tracked_files()` itself records and `docs/backlog.md` `hold-the-whole-static-suite-to-its-own-constraints` names:
     a walk reads `.molecule-home/` and sibling working trees under
     `.claude/worktrees/`, which do not exist in continuous integration and
     appear the moment a developer follows this repository's own Molecule
