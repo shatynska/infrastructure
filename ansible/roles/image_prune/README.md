@@ -45,7 +45,22 @@ Each reports its own condition, distinguishably: an absent enumeration is remedi
 
 Unlike `app-deploy`'s reclamation, which must never fail a deploy that already succeeded, this unit has no caller to damage. It fails, so the host records it.
 
-**Nothing scrapes the journal.** `systemctl list-units --failed` and `HostDiskPressure` (at 90% full, which is very late) are the only signals. Making a silently-stopped prune alertable needs node-exporter's textfile collector and is recorded in `docs/backlog.md`.
+**Nothing scrapes the journal.** `systemctl list-units --failed` and `HostDiskPressure` (at 90% full, which is very late) are the only signals. Making a silently-stopped prune alertable needs node-exporter's textfile collector and is recorded in `docs/backlog.md` as `alert-on-a-scheduled-units-own-output`.
+
+## When a run reports a refusal
+
+A completed run reports `considered N, removed M, refused R`. `refused` counts the identities this run offered for removal and the container runtime **rejected** — not images the keep set protected, which the run never touches, and not a removal that dropped one reference from an image the runtime kept, which is what every removal but the last looks like on a multiply-tagged image. It is read from the invocation's exit status, so those stay separate. Each refusal is also named on its own line, on standard error, carrying the identity and the runtime's own message.
+
+**`refused 0` is the normal reading, and a non-zero one is worth acting on.** Two causes are expected here:
+
+- *"container … is using its referenced image"* — **the keep set is wrong.** Every container's image belongs to it by construction, so a container-held image should never have been offered, and the runtime's refusal is the only thing that stood between a defective keep set and an image in use. Find out why that container's image was missing from the union before anything else.
+- *"image is referenced in multiple repositories"* — the keep set is fine. An untagged image carrying more than one repository reference is removed by identity, and the runtime refuses that unless forced. This run cannot reclaim it, and will offer and be refused on it every week until something else removes it. Not urgent, but it will not go away on its own; `docs/backlog.md` carries the entry for reclaiming one.
+
+The line carries the runtime's own text, so those two are what to *expect* rather than the whole set it can produce — `image has dependent child images` is a third, on a host that builds images rather than pulling them, and neither it nor the first can be overridden with `-f`. Read an unfamiliar message as the runtime's, not as this script's classification of it.
+
+**A refusal does not fail the unit**, is never retried with force, and does not stop the run. The refusal is the backstop working; a unit recorded as failed because its backstop worked would report the opposite of what happened.
+
+**What the count cannot see.** It reaches only the defects the runtime blocks. A keep set that offers an image *no* container holds — an image of a defined-but-never-started service, say, or one behind an inactive profile — is removed successfully and counted in `removed`, and nothing in this line distinguishes that from a correct removal. A run cannot tell an image it was right to remove from one it was wrong to remove, which is why the keep set is computed carefully rather than checked afterwards. This narrows the blind spot to the class the backstop catches; it does not close it.
 
 ## Liveness reporting — a silent check is the alarm, not a red unit
 

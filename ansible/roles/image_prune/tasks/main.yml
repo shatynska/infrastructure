@@ -109,7 +109,7 @@
       # still references. See openspec/specs/iac-host-configuration/spec.md,
       # "Unreferenced Host Images Are Pruned on a Schedule".
       #
-      # Five things in here look simplifiable and are not:
+      # Six things in here look simplifiable and are not:
       #
       #   * LOCAL IMAGES ARE ENUMERATED BEFORE THE KEEP SET. With the keep set
       #     built first, an image a concurrent deploy pulls in between is on
@@ -138,13 +138,24 @@
       #     fails with "must be forced", and the runtime refusal to remove an
       #     image a container holds is the last backstop against a wrong keep
       #     set.
+      #
+      #   * A REFUSAL IS COUNTED AND NAMED, AND CHANGES NOTHING ELSE. It does
+      #     not stop the loop, is never retried with force, and does not make
+      #     the run exit non-zero -- the refusal is that backstop working, and
+      #     a unit recorded as failed because its backstop worked reports the
+      #     opposite of what happened. What it is read from is the invocation
+      #     exit status, never the image surviving; see the removal loop.
       set -euo pipefail
 
       apps_file=/etc/prune-host-images/apps
 
-      # Holds one `docker image inspect` stderr at a time, so a reference that
-      # could not be resolved can be told apart from one that resolved to
-      # nothing.
+      # Holds one `docker image inspect` OR one `docker image rm` stderr at a
+      # time, so a reference that could not be resolved can be told apart from
+      # one that resolved to nothing, and so a removal the runtime rejected can
+      # be attributed to the identity it was made for. One slot, deliberately:
+      # a second file would need a second entry in the trap below, and a
+      # message that must be attributed to one identity must not be mixed with
+      # another one.
       inspect_err="$(mktemp)"
       # `|| :` so a failing cleanup cannot turn a successful run's exit 0 into
       # a 1: bash takes the EXIT trap's last status as the script's.
@@ -345,17 +356,44 @@
 
       considered="${#tags_of[@]}"
       removed=0
+      refused=0
 
       for image_id in ${tags_of[@]+"${!tags_of[@]}"}; do
         [ -z "${keep[$image_id]+set}" ] || continue
         dropped=0
+        # Set where the RUNTIME REJECTED an invocation for this identity, which
+        # is read from the invocation's exit status and never from the image
+        # surviving. Three things can happen to a candidate and only the
+        # middle one is a refusal: the runtime deletes the image and says
+        # `Deleted:` at status 0; the runtime rejects the call at a non-zero
+        # status; or the call succeeds at status 0 having only dropped a
+        # reference from an image the runtime is keeping for a reason of its
+        # own. That last is what every removal but the last looks like on an
+        # ordinary multi-tag image, so a count reading "attempted and not
+        # deleted" would read non-zero on healthy runs over ordinary hosts --
+        # the signal-free report this count exists to end, moved one field to
+        # the right.
+        rejected=0
+        rejected_reason=
         image_tags="${tags_of[$image_id]}"
         if [ -z "${image_tags// /}" ]; then
           # No tag to drop: remove by identity.
-          rm_output=$(docker image rm "$image_id" 2>/dev/null || true)
+          #
+          # `|| rm_status=$?` and NOT `|| true`. Written `$(... || true)` the
+          # guard sits INSIDE the command substitution, so the assignment's
+          # status is unconditionally 0 and the rejection is unreadable -- a
+          # `refused` pinned at zero forever, which reports exactly as a host
+          # with nothing to refuse. The guard is still here: `set -e` is in
+          # force and a rejected removal is a normal outcome.
+          rm_status=0
+          rm_output=$(docker image rm "$image_id" 2>"$inspect_err") || rm_status=$?
           case "$rm_output" in
             *'Deleted: '*) dropped=1 ;;
           esac
+          if [ "$rm_status" -ne 0 ]; then
+            rejected=1
+            rejected_reason="$(tr -d '\n' < "$inspect_err")"
+          fi
         else
           for image_tag in $image_tags; do
             # Selected by identity, removed by name -- and a pull can re-point
@@ -363,22 +401,64 @@
             # moved is dropped from an image no container holds yet.
             current=$(docker image inspect -f '{{.Id}}' "$image_tag" 2>/dev/null || true)
             [ "$current" = "$image_id" ] || continue
-            rm_output=$(docker image rm "$image_tag" 2>/dev/null || true)
+            rm_status=0
+            rm_output=$(docker image rm "$image_tag" 2>"$inspect_err") || rm_status=$?
             case "$rm_output" in
               *'Deleted: '*) dropped=1 ;;
             esac
+            if [ "$rm_status" -ne 0 ]; then
+              rejected=1
+              rejected_reason="$(tr -d '\n' < "$inspect_err")"
+            fi
           done
         fi
         removed=$((removed + dropped))
+        # An identity both deleted and rejected counts as REMOVED, so that
+        # `removed + refused` can never exceed `considered`. The two cannot
+        # co-occur as the loop is written -- a deletion makes the remaining
+        # tags unresolvable and the re-check above skips them -- so this
+        # ordering is what keeps that invariant true of a later edit rather
+        # than of this one.
+        if [ "$dropped" -eq 0 ] && [ "$rejected" -eq 1 ]; then
+          refused=$((refused + 1))
+          # Named as well as counted, because the count cannot be acted on. On
+          # a managed host two causes are expected and they are not the same
+          # problem: an image a container holds means the keep set is WRONG and
+          # this refusal is what stood between it and a live image, while an
+          # untagged image carrying more than one repository reference cannot
+          # be removed by this run at all and will be offered and refused on
+          # every run after this one. Carrying the runtime's own text rather
+          # than classifying it is what keeps a cause neither of those readable
+          # -- `image has dependent child images` is a third the runtime
+          # produces, on a host that builds images rather than pulling them.
+          printf 'prune-host-images: refused %s -- %s\n' \
+            "$image_id" "${rejected_reason:-the runtime gave no reason}" >&2
+        fi
       done
 
-      # Both counts are over distinct identities: `docker images -a` yields a
-      # row per tag, so a two-tag image would otherwise be counted twice on
-      # each side. `removed` is anchored to this run own invocations reporting
-      # the image deleted, not read off the host afterwards -- app-deploy
-      # removes images too, and a weekly window will occasionally overlap a
-      # deploy.
-      printf 'prune-host-images: considered %s, removed %s\n' "$considered" "$removed"
+      # All three counts are over distinct identities: `docker images -a`
+      # yields a row per tag, so a two-tag image would otherwise be counted
+      # twice on each side. `removed` is anchored to this run own invocations
+      # reporting the image deleted, not read off the host afterwards --
+      # app-deploy removes images too, and a weekly window will occasionally
+      # overlap a deploy.
+      #
+      # `refused` is anchored the same way, to an invocation the runtime
+      # REJECTED, and is read from that invocation exit status rather than from
+      # the image still being present afterwards -- the image is present after
+      # a rejection and after a removal that only dropped a reference, so its
+      # survival does not separate them and the status does.
+      #
+      # It is here because the gap between `considered` and `removed` carries
+      # no signal on its own: `considered` is every identity the host holds
+      # rather than the set this run offered, so a defective keep set whose
+      # removals were blocked printed exactly what a healthy run over a fully
+      # referenced host printed. Each refusal is also named on stderr above.
+      #
+      # APPENDED rather than inserted, so the pair a reader already knows stays
+      # adjacent and in its existing order.
+      printf 'prune-host-images: considered %s, removed %s, refused %s\n' \
+        "$considered" "$removed" "$refused"
       {% endraw %}
 
 # 0600 root, per iac-host-configuration's "Secrets Never Committed in Plaintext

@@ -2,13 +2,26 @@
 # Verifies the requirement "Unreferenced Host Images Are Pruned on a Schedule"
 # in openspec/specs/iac-host-configuration/spec.md.
 #
-# Derived from that delta spec ahead of any implementation, per tasks.md
-# section 2, and WITHOUT reading any implementation of the prune script -- none
-# exists. Read this change's test-plan.md before changing anything below: it
-# carries the scenario-accounting table (24 delta scenarios, all accounted
-# for), every assertion's specified/derived classification, the assumptions
-# taken on report wording, and the mutation-test obligation task 2.8 places on
-# each guard.
+# EVERY ASSERTION IN THIS FILE WAS DERIVED FROM THAT REQUIREMENT AHEAD OF THE
+# IMPLEMENTATION IT READS, and without reading that implementation.
+#
+# Everything but the three-count assertions and the refusal fixture was written
+# for the change prune-unreferenced-host-images-periodically, per its tasks.md
+# section 2, when no implementation of the prune script existed at all. That
+# remains true of it. The three-count assertions and the multiply-referenced
+# refusal fixture were added afterwards, for the change
+# report-refused-removals-in-the-host-prune, derived from its delta spec before
+# any of its own implementation was written: a script existed by then and was
+# deliberately not read.
+#
+# TWO ACCOUNTING TABLES, one per change, and both are read before changing
+# anything below. prune-unreferenced-host-images-periodically's test-plan.md
+# accounts for the 24 scenarios the requirement carried then, and states the
+# mutation-test obligation its task 2.8 places on each guard;
+# report-refused-removals-in-the-host-prune's test-plan.md accounts for all 27
+# the requirement carries now, and classifies every assertion that change
+# added. Between them they carry the specified/derived classification of
+# everything here and the assumptions taken on report wording.
 #
 # ORDERING IS LOAD-BEARING (tasks.md 2.7). Every keep-set and removal assertion
 # is made BEFORE the unresolvable-Compose-file and malformed-reference
@@ -307,6 +320,50 @@
           resolved identity, not on carrying a tag) is lost. Collected:
           {{ image_prune_fixtures.stdout_lines }}
 
+    # ------------------------------------------------------------
+    # THE BUILD BASE, RECORDED BEFORE THE FIRST RUN. Read by the delta scenario
+    # "A refusal is distinguished from a removal that deleted nothing", added by
+    # the change report-refused-removals-in-the-host-prune.
+    #
+    # `alpine:3.19` is this scenario's build base: every fixture is built FROM
+    # it with the classic builder, so a dozen images depend on its layers, and
+    # no enumerated application references it and no container holds it. It is
+    # therefore a candidate on the first run, it still carries its tag then, and
+    # the by-tag removal UNTAGS it while the runtime keeps the image its
+    # children depend on -- an invocation that succeeded, deleted nothing and
+    # exited zero. That is the distinction the new count has to make, occurring
+    # on this host by itself rather than arranged; see that change's design.md,
+    # Decision 7, for the observation and the date it was made.
+    #
+    # Recorded in a task of its own rather than added to the fixture block
+    # above, because that block's distinctness assertion counts its own `ID-`
+    # lines and a twelfth would break it.
+    - name: Record the build base identity and tag count before the first run
+      ansible.builtin.shell: |
+        {% raw %}
+        set -euo pipefail
+        echo "BASE-ID $(docker images -q --no-trunc alpine:3.19)"
+        echo "BASE-TAGS $(docker image inspect --format '{{len .RepoTags}}' alpine:3.19)"
+        {% endraw %}
+      args:
+        executable: /bin/bash
+      register: image_prune_base_before
+      changed_when: false
+
+    - name: Assert the build base enters the first run tagged, so its removal takes the by-tag path
+      ansible.builtin.assert:
+        that:
+          - image_prune_base_before.stdout_lines
+            | select('match', '^BASE-ID sha256:[0-9a-f]+$') | list | length == 1
+          - "'BASE-TAGS 1' in image_prune_base_before.stdout_lines"
+        fail_msg: >-
+          The build base alpine:3.19 SHALL be on the host carrying exactly one
+          tag when the first run starts. This is a fixture premise, not a defect
+          in the prune: untagged, the first run would take the by-identity path
+          and the runtime would REJECT it -- which is a refusal, the opposite of
+          the untag-without-delete the scenario below reads from it. Collected:
+          {{ image_prune_base_before.stdout_lines }}
+
     # ============================================================
     # RUN 1 -- the completed run every keep-set and removal assertion reads.
     #
@@ -382,6 +439,101 @@
           distinct identities on the host immediately before the run -- an
           implementation counting `docker images` rows would report the two
           two-tag fixtures twice each and fail here. Run output:
+          {{ image_prune_run1_report.stdout }}
+
+    # ------------------------------------------------------------
+    # THE THIRD COUNT, read as a FIELD rather than as a substring. Added by the
+    # change report-refused-removals-in-the-host-prune; its test-plan.md carries
+    # the classification of every assertion below.
+    #
+    # `REFUSED no-such-field` is the whole point of reading it this way. An
+    # assertion written as the ABSENCE of the word "refused" from the output is
+    # satisfied by a script that reports no refused count at all, so it cannot
+    # tell "the field says zero" from "there is no field" -- and the field
+    # existing and reading zero is exactly what this change adds.
+    # ------------------------------------------------------------
+    - name: Read the first run's report as three counted fields
+      ansible.builtin.shell: |
+        set -euo pipefail
+        f=/var/tmp/image-prune-run1.all
+        three='considered[[:space:]]*[0-9]+,[[:space:]]*removed[[:space:]]*[0-9]+,[[:space:]]*refused[[:space:]]*[0-9]+'
+        report="$(grep -iE 'considered[[:space:]]*[0-9]+' "$f" | head -n 1 || true)"
+        echo "SHAPE3 $(grep -ciE "$three" "$f" || true)"
+        refused="$(printf '%s\n' "$report" | grep -oiE 'refused[[:space:]]*[0-9]+' \
+          | grep -oE '[0-9]+' | head -n 1 || true)"
+        if [ -n "$refused" ]; then
+          echo "REFUSED $refused"
+        else
+          echo "REFUSED no-such-field"
+        fi
+        echo "RUNTIME-CONFLICTS $(grep -ciE 'conflict:|must be forced|cannot be forced' "$f" || true)"
+      args:
+        executable: /bin/bash
+      register: image_prune_run1_counts
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Delta scenario: A completed run reports what it did -- AS MODIFIED by the
+    # change report-refused-removals-in-the-host-prune, which makes it three
+    # counts rather than two.
+    #
+    # The two-count assertion immediately above is not the same assertion and
+    # does not stand in for this one: it matches `considered N, removed M`
+    # UNANCHORED, so it passes against a three-field line while establishing
+    # nothing whatever about the third field. That change records it as its
+    # obsolete test for exactly that reason; see its test-plan.md, which marks
+    # it a candidate for human confirmation rather than deleting it here.
+    # ------------------------------------------------------------
+    - name: Assert the completed run reported all three counts, contiguously and in order, and exited zero
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' in image_prune_run1.stdout_lines"
+          - "'SHAPE3 1' in image_prune_run1_counts.stdout_lines"
+          - ('CONSIDERED ' + image_prune_identities.stdout_lines[0].split(' ')[1])
+            in image_prune_run1.stdout_lines
+          - ((image_prune_run1.stdout_lines
+             | select('match', '^REMOVED ') | first).split(' ')[1] | int) >= 1
+          - image_prune_run1_counts.stdout_lines
+            | select('match', '^REFUSED [0-9]+$') | list | length == 1
+        fail_msg: >-
+          A completed run SHALL report how many images it considered, how many
+          it removed and HOW MANY REMOVALS THE RUNTIME REFUSED, each counted
+          over distinct image identities, and SHALL exit zero. The three are
+          asserted CONTIGUOUS AND IN ORDER because the count is specified as
+          appended to the existing pair rather than inserted among it, so a
+          reader and every static quotation of the line keep the shape they
+          already have. `REFUSED no-such-field` below means the run printed no
+          refused field at all -- the state this change exists to end, in which
+          a host whose removals were blocked is byte-identical to a healthy one.
+          Counted fields: {{ image_prune_run1_counts.stdout_lines }} -- run
+          output: {{ image_prune_run1_report.stdout }}
+
+    # ------------------------------------------------------------
+    # Delta scenario: A run whose removals were all performed reports no
+    # refusals
+    #
+    # This run is the one in this scenario where nothing is refusable. Every
+    # candidate either carries a tag to drop or is a singly-referenced untagged
+    # identity, and the multiply-referenced fixture is deliberately NOT on the
+    # host yet -- its registry half is built by converge.yml and pulled back
+    # only much further down this file. That is why the split exists.
+    # ------------------------------------------------------------
+    - name: Assert the first run reports a refused count of zero and names no refusal
+      ansible.builtin.assert:
+        that:
+          - "'REFUSED 0' in image_prune_run1_counts.stdout_lines"
+          - "'RUNTIME-CONFLICTS 0' in image_prune_run1_counts.stdout_lines"
+          - ((image_prune_run1.stdout_lines
+             | select('match', '^REMOVED ') | first).split(' ')[1] | int) >= 1
+        fail_msg: >-
+          A run the runtime rejected none of the removal invocations of SHALL
+          report a refused count of ZERO, so that a run over a correctly
+          protected host is distinguishable from one whose removals were
+          blocked. The removed count is asserted non-zero alongside it because a
+          run that offered nothing would report `refused 0` vacuously and prove
+          nothing about the count. A refused count of zero is asserted as the
+          FIELD reading zero, never as the word being absent. Counted fields:
+          {{ image_prune_run1_counts.stdout_lines }} -- run output:
           {{ image_prune_run1_report.stdout }}
 
     - name: Report which fixtures survived the first run
@@ -599,6 +751,72 @@
           image itself survives, which reads as nothing being wrong.
           Present/absent: {{ image_prune_after_run1.stdout_lines }}
 
+    # ------------------------------------------------------------
+    # Delta scenario: A refusal is distinguished from a removal that deleted
+    # nothing (the change report-refused-removals-in-the-host-prune).
+    #
+    # Two invocations of the first run performed a removal that deleted no
+    # image, and NEITHER may be counted as refused:
+    #
+    #   * the build base, untagged by the run while the runtime kept the image
+    #     a dozen fixtures are built on -- an identity with an untag and NO
+    #     deletion at all, which is the purer of the two;
+    #   * the first of the two-tag fixture's tags, dropped from an image that
+    #     survived under its second tag until that one was dropped too, which is
+    #     the ordinary shape of removing a multiply-tagged image and is asserted
+    #     as ABSENT twotag-* above.
+    #
+    # Both invocations exit ZERO, which is why the count is specified as read
+    # from the exit status rather than from whether the image survived: by
+    # survival, the build base below is indistinguishable from an image the
+    # runtime rejected, and the count would read non-zero on a healthy run.
+    # ------------------------------------------------------------
+    - name: Read the build base state after the first run
+      ansible.builtin.shell: |
+        set -euo pipefail
+        base_id="{{ (image_prune_base_before.stdout_lines
+                     | select('match', '^BASE-ID ') | first).split(' ')[1] }}"
+        if docker image inspect "$base_id" >/dev/null 2>&1; then
+          echo "BASE-IDENTITY present"
+        else
+          echo "BASE-IDENTITY absent"
+        fi
+        if docker image inspect alpine:3.19 >/dev/null 2>&1; then
+          echo "BASE-REFERENCE present"
+        else
+          echo "BASE-REFERENCE absent"
+        fi
+        echo "BASE-TAGS-AFTER $(docker image inspect --format '{% raw %}{{len .RepoTags}}{% endraw %}' "$base_id" 2>/dev/null || echo NA)"
+      args:
+        executable: /bin/bash
+      register: image_prune_base_after_run1
+      changed_when: false
+
+    - name: Assert a removal that deleted nothing was not counted as refused
+      ansible.builtin.assert:
+        that:
+          - "'BASE-REFERENCE absent' in image_prune_base_after_run1.stdout_lines"
+          - "'BASE-IDENTITY present' in image_prune_base_after_run1.stdout_lines"
+          - "'BASE-TAGS-AFTER 0' in image_prune_base_after_run1.stdout_lines"
+          - "'ABSENT twotag-a' in image_prune_after_run1.stdout_lines"
+          - "'ABSENT twotag-b' in image_prune_after_run1.stdout_lines"
+          - "'REFUSED 0' in image_prune_run1_counts.stdout_lines"
+        fail_msg: >-
+          The run dropped the build base tag from an image the runtime KEPT,
+          because a dozen fixtures depend on its layers -- the invocation
+          succeeded, deleted nothing and exited zero. That identity SHALL NOT be
+          counted as refused, the runtime having rejected nothing. An
+          implementation reading the count off the image surviving, or off the
+          absence of a `Deleted:` line, reports a non-zero refused count here on
+          a run in which nothing was rejected, which is the defect this count
+          exists to remove rather than to relocate. If the first three
+          assertions fail instead, the premise is gone and not the property:
+          the base was expected to lose its tag and keep its identity.
+          Base before: {{ image_prune_base_before.stdout_lines }} -- base after:
+          {{ image_prune_base_after_run1.stdout_lines }} -- counted fields:
+          {{ image_prune_run1_counts.stdout_lines }} -- run output:
+          {{ image_prune_run1_report.stdout }}
+
     # ============================================================
     # Delta scenario: A retired application's images become reclaimable
     #
@@ -806,6 +1024,287 @@
           Starting prune-host-images.service SHALL run the prune and, on a
           completed run, leave a successful unit. Collected:
           {{ image_prune_unit_run.stdout_lines }}
+
+    # ============================================================
+    # THE MULTIPLY-REFERENCED REFUSAL FIXTURE, and the two runs that bracket it.
+    # Added by the change report-refused-removals-in-the-host-prune; its
+    # design.md, Decisions 6 and 7, carry the reasoning summarised here.
+    #
+    # WHERE THIS SITS IS LOAD-BEARING, twice over.
+    #
+    #   * It is BELOW every keep-set and removal assertion. A refused image is
+    #     still on the host afterwards, so an assertion placed above this point
+    #     could read the fixture surviving as a keep-set outcome.
+    #   * It is ABOVE the abandon arrangements. Those stop the run before it
+    #     removes anything, so no refusal can be produced once either is in
+    #     place.
+    #
+    # THE FIXTURE IS SPLIT BETWEEN TWO FILES AND THE SPLIT IS THE POINT. Its
+    # registry half belongs to converge.yml (that change's tasks.md section 3):
+    # one image identity pushed to TWO repository paths in the local registry
+    # this scenario already runs, with every local reference then dropped, so
+    # the host ends the converge holding no image for that identity at all.
+    # This is the host half -- pulling both references back by digest, which
+    # gives the host an identity carrying two references and no tag that
+    # nothing enumerated references and no container holds. The script removes
+    # such an identity BY IDENTITY, precisely because it has no tag to drop, and
+    # the runtime rejects that for a multiply-referenced image unless forced,
+    # which this requirement forbids.
+    #
+    # Built wholly in converge.yml the identity would be refusable from the
+    # first run onward, every run would report a refusal, and the delta scenario
+    # "A run whose removals were all performed reports no refusals" would have
+    # no run in this scenario to assert against. Split, the one host yields
+    # both.
+    #
+    # THE COUNT BELOW IS ASSERTED AS A DELTA OF ONE, NEVER AS A LITERAL. This
+    # host refuses a second identity this change did not arrange: from the
+    # SECOND run onward the build base is an untagged image with dependent
+    # children, taken by the by-identity path, and the runtime rejects that too
+    # -- a third cause beyond the two the documentation names, and free evidence
+    # that it is real. Two runs bracket the pull-back and differ in it alone, so
+    # the delta is attributable to the fixture whatever else this host refuses.
+    # A literal `refused 1` would be wrong about this host and would read as a
+    # defect in the accumulator, which is the most expensive way for a test to
+    # be wrong.
+    # ============================================================
+    - name: Run the prune immediately before the refusal fixture is pulled back
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-run-pre-refusal.all 2>&1 || rc=$?
+        echo "RC $rc"
+        report="$(grep -iE 'considered[[:space:]]*[0-9]+' \
+          /var/tmp/image-prune-run-pre-refusal.all | head -n 1 || true)"
+        refused="$(printf '%s\n' "$report" | grep -oiE 'refused[[:space:]]*[0-9]+' \
+          | grep -oE '[0-9]+' | head -n 1 || true)"
+        if [ -n "$refused" ]; then
+          echo "REFUSED $refused"
+        else
+          echo "REFUSED no-such-field"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_run_pre_refusal
+      changed_when: false
+
+    - name: Read the bracketing run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-run-pre-refusal.all
+      register: image_prune_run_pre_refusal_report
+      changed_when: false
+
+    - name: Pull the multiply-referenced fixture back from both of its repository paths
+      ansible.builtin.shell: |
+        {% raw %}
+        set -euo pipefail
+        . /var/tmp/image-prune-fixtures.env
+        if [ -z "${MULTIREPO_REF_A:-}" ] || [ -z "${MULTIREPO_REF_B:-}" ]; then
+          echo "FIXTURE FAILURE: /var/tmp/image-prune-fixtures.env carries no" >&2
+          echo "MULTIREPO_REF_A and MULTIREPO_REF_B. The registry half of this" >&2
+          echo "fixture belongs to converge.yml, under section 3 of the change" >&2
+          echo "report-refused-removals-in-the-host-prune. Until it is written" >&2
+          echo "there is nothing on the registry to pull back, and the three" >&2
+          echo "assertions below it cannot run. This is the expected state" >&2
+          echo "while only the tests exist." >&2
+          exit 1
+        fi
+        docker pull "$MULTIREPO_REF_A" >/dev/null
+        docker pull "$MULTIREPO_REF_B" >/dev/null
+        MULTIREPO_ID="$(docker image inspect --format '{{.Id}}' "$MULTIREPO_REF_A")"
+        echo "MULTIREPO-ID ${MULTIREPO_ID}"
+        echo "MULTIREPO-ID-VIA-B $(docker image inspect --format '{{.Id}}' "$MULTIREPO_REF_B")"
+        echo "MULTIREPO-REFS $(docker image inspect --format '{{len .RepoDigests}}' "$MULTIREPO_ID")"
+        echo "MULTIREPO-TAGS $(docker image inspect --format '{{len .RepoTags}}' "$MULTIREPO_ID")"
+        echo "PINNED-ID ${PINNED_ID}"
+        echo "HELD-BY $(docker ps -aq --filter ancestor="${MULTIREPO_ID}" | wc -l)"
+        {% endraw %}
+      args:
+        executable: /bin/bash
+      register: image_prune_multirepo
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # THE FIXTURE PREMISES, ASSERTED RATHER THAN COMMENTED. Each one silently
+    # disarms the two assertions below it:
+    #
+    #   * with ONE reference the script removes the identity and succeeds, and
+    #     the refusal never happens;
+    #   * with a TAG it takes the by-tag path, which the runtime does not
+    #     reject, and the refusal never happens;
+    #   * colliding with PINNED_ID it is an image an enumerated application
+    #     pins, so it is in the keep set, is never offered, and the refusal
+    #     never happens. The eleven-identity distinctness block above does not
+    #     cover this: it enumerates the fixtures it knew about, by name.
+    #
+    # In every one of those three the scenario goes GREEN having exercised
+    # nothing, which is the shape this file was written to refuse.
+    # ------------------------------------------------------------
+    - name: Assert the pulled-back fixture is one untagged identity with two references
+      ansible.builtin.assert:
+        that:
+          - "'MULTIREPO-REFS 2' in image_prune_multirepo.stdout_lines"
+          - "'MULTIREPO-TAGS 0' in image_prune_multirepo.stdout_lines"
+          - (image_prune_multirepo.stdout_lines
+             | select('match', '^MULTIREPO-ID ') | first).split(' ')[1]
+            == (image_prune_multirepo.stdout_lines
+                | select('match', '^MULTIREPO-ID-VIA-B ') | first).split(' ')[1]
+          - (image_prune_multirepo.stdout_lines
+             | select('match', '^MULTIREPO-ID ') | first).split(' ')[1]
+            != (image_prune_multirepo.stdout_lines
+                | select('match', '^PINNED-ID ') | first).split(' ')[1]
+          - "'HELD-BY 0' in image_prune_multirepo.stdout_lines"
+        fail_msg: >-
+          The refusal fixture SHALL be ONE identity carrying TWO repository
+          references, NO tag, distinct from the digest-pin fixture and held by
+          no container. Every one of those is a premise of the two assertions
+          below and each is separately sufficient to make them pass having
+          exercised nothing -- one reference and the removal succeeds, a tag and
+          the by-tag path is taken instead, PINNED_ID and the image is in the
+          keep set and never offered, a container and likewise. This is a broken
+          fixture, not a defect in the prune. Collected:
+          {{ image_prune_multirepo.stdout_lines }}
+
+    - name: Run the prune immediately after the refusal fixture is in place
+      ansible.builtin.shell: |
+        set -o pipefail
+        rc=0
+        /usr/local/bin/prune-host-images \
+          > /var/tmp/image-prune-run-post-refusal.out \
+          2> /var/tmp/image-prune-run-post-refusal.err || rc=$?
+        cat /var/tmp/image-prune-run-post-refusal.out \
+            /var/tmp/image-prune-run-post-refusal.err \
+          > /var/tmp/image-prune-run-post-refusal.all
+        echo "RC $rc"
+        f=/var/tmp/image-prune-run-post-refusal.all
+        three='considered[[:space:]]*[0-9]+,[[:space:]]*removed[[:space:]]*[0-9]+,[[:space:]]*refused[[:space:]]*[0-9]+'
+        report="$(grep -iE 'considered[[:space:]]*[0-9]+' "$f" | head -n 1 || true)"
+        echo "SHAPE3 $(grep -ciE "$three" "$f" || true)"
+        refused="$(printf '%s\n' "$report" | grep -oiE 'refused[[:space:]]*[0-9]+' \
+          | grep -oE '[0-9]+' | head -n 1 || true)"
+        if [ -n "$refused" ]; then
+          echo "REFUSED $refused"
+        else
+          echo "REFUSED no-such-field"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_run_post_refusal
+      changed_when: false
+
+    - name: Read the post-arrangement run's own report
+      ansible.builtin.command: cat /var/tmp/image-prune-run-post-refusal.all
+      register: image_prune_run_post_refusal_report
+      changed_when: false
+
+    - name: Read the lines of that run which name the refused fixture
+      ansible.builtin.shell: |
+        set -euo pipefail
+        full="{{ (image_prune_multirepo.stdout_lines
+                  | select('match', '^MULTIREPO-ID ') | first).split(' ')[1] }}"
+        short12="$(printf '%s' "${full#sha256:}" | cut -c1-12)"
+        all=/var/tmp/image-prune-run-post-refusal.all
+        err=/var/tmp/image-prune-run-post-refusal.err
+        summary='considered[[:space:]]*[0-9]+'
+        named="$(grep -F -e "$full" -e "$short12" "$all" | grep -vE "$summary" || true)"
+        echo "NAMES-FIXTURE $(printf '%s' "$named" | grep -c . || true)"
+        echo "NAMES-FIXTURE-ON-STDERR $(grep -F -e "$full" -e "$short12" "$err" | grep -cvE "$summary" || true)"
+        echo "NAMES-RUNTIME-REASON $(printf '%s\n' "$named" | grep -ciE 'repositor' || true)"
+        echo "CARRIES-MORE-THAN-THE-IDENTITY $(printf '%s\n' "$named" \
+          | awk -v a="$full" -v b="$short12" '
+              BEGIN { n = 0 }
+              {
+                s = $0
+                gsub(a, "", s)
+                gsub(b, "", s)
+                gsub(/[^[:alpha:]]/, "", s)
+                if (length(s) > 0) n = n + 1
+              }
+              END { print n }
+          ')"
+      args:
+        executable: /bin/bash
+      register: image_prune_post_refusal_lines
+      changed_when: false
+
+    - name: Read the refused fixture state after the run that was refused
+      ansible.builtin.shell: |
+        set -euo pipefail
+        full="{{ (image_prune_multirepo.stdout_lines
+                  | select('match', '^MULTIREPO-ID ') | first).split(' ')[1] }}"
+        if docker image inspect "$full" >/dev/null 2>&1; then
+          echo "MULTIREPO-PRESENT yes"
+        else
+          echo "MULTIREPO-PRESENT no"
+        fi
+        echo "MULTIREPO-REFS-AFTER $(docker image inspect --format '{% raw %}{{len .RepoDigests}}{% endraw %}' "$full" 2>/dev/null || echo NA)"
+        echo "MULTIREPO-TAGS-AFTER $(docker image inspect --format '{% raw %}{{len .RepoTags}}{% endraw %}' "$full" 2>/dev/null || echo NA)"
+      args:
+        executable: /bin/bash
+      register: image_prune_multirepo_after
+      changed_when: false
+
+    # ------------------------------------------------------------
+    # Delta scenario: A refused removal is counted and named
+    # ------------------------------------------------------------
+    - name: Assert the refused removal was counted, named, left the image alone and exited zero
+      ansible.builtin.assert:
+        that:
+          - "'RC 0' in image_prune_run_post_refusal.stdout_lines"
+          - "'SHAPE3 1' in image_prune_run_post_refusal.stdout_lines"
+          - image_prune_run_pre_refusal.stdout_lines
+            | select('match', '^REFUSED [0-9]+$') | list | length == 1
+          - image_prune_run_post_refusal.stdout_lines
+            | select('match', '^REFUSED [0-9]+$') | list | length == 1
+          - ((image_prune_run_post_refusal.stdout_lines
+              | select('match', '^REFUSED ') | first).split(' ')[1] | int)
+            == ((image_prune_run_pre_refusal.stdout_lines
+                 | select('match', '^REFUSED ') | first).split(' ')[1] | int) + 1
+          - ((image_prune_post_refusal_lines.stdout_lines
+              | select('match', '^NAMES-FIXTURE ') | first).split(' ')[1] | int) >= 1
+          - ((image_prune_post_refusal_lines.stdout_lines
+              | select('match', '^CARRIES-MORE-THAN-THE-IDENTITY ') | first).split(' ')[1] | int) >= 1
+          - "'MULTIREPO-PRESENT yes' in image_prune_multirepo_after.stdout_lines"
+          - "'MULTIREPO-REFS-AFTER 2' in image_prune_multirepo_after.stdout_lines"
+          - "'MULTIREPO-TAGS-AFTER 0' in image_prune_multirepo_after.stdout_lines"
+        fail_msg: >-
+          Where the runtime rejects a removal the run offered, the run SHALL
+          count that identity as refused, SHALL report the identity and the
+          reason the runtime gave, and SHALL still exit zero, the image being
+          unchanged on the host. The count is asserted as EXACTLY ONE MORE than
+          the bracketing run above, which differs from this one in the fixture
+          and nothing else -- this host refuses its own build base from its
+          second run onward, so a literal count here would be wrong about the
+          host rather than about the script. A non-zero exit would record a
+          failed unit because the backstop worked, which reports the opposite of
+          what happened. Bracketing run:
+          {{ image_prune_run_pre_refusal.stdout_lines }} -- this run:
+          {{ image_prune_run_post_refusal.stdout_lines }} -- lines naming the
+          fixture: {{ image_prune_post_refusal_lines.stdout_lines }} -- fixture
+          afterwards: {{ image_prune_multirepo_after.stdout_lines }} -- run
+          output: {{ image_prune_run_post_refusal_report.stdout }}
+
+    - name: Assert the named refusal carries the runtime's own message and reaches standard error
+      ansible.builtin.assert:
+        that:
+          - ((image_prune_post_refusal_lines.stdout_lines
+              | select('match', '^NAMES-RUNTIME-REASON ') | first).split(' ')[1] | int) >= 1
+          - ((image_prune_post_refusal_lines.stdout_lines
+              | select('match', '^NAMES-FIXTURE-ON-STDERR ') | first).split(' ')[1] | int) >= 1
+        fail_msg: >-
+          DERIVED, and separated from the assertion above for that reason -- see
+          this change's test-plan.md. The delta requires the reason the runtime
+          gave; it does not fix the wording, and the stream is named by the
+          change's proposal rather than by the requirement. What is asserted is
+          that the line carries the runtime's own text for THIS cause -- an
+          image referenced in multiple repositories -- rather than a constant
+          the script supplies, and that it is on standard error. If the wording
+          has moved on in the pinned runtime, correct the pattern rather than
+          dropping the assertion: a refusal line that classifies rather than
+          carries the message cannot report a cause nobody anticipated, which is
+          the whole argument for passing the text through. Lines naming the
+          fixture: {{ image_prune_post_refusal_lines.stdout_lines }} -- run
+          output: {{ image_prune_run_post_refusal_report.stdout }}
 
     # ============================================================
     # FROM HERE ON THE RUN ABANDONS.

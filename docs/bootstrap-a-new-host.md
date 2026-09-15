@@ -771,7 +771,9 @@ ansible <environment> -i inventory/<stack>.hcloud.yml \
   -a "journalctl -u prune-host-images.service -n 20 --no-pager" --vault-id <environment>@prompt
 ```
 
-The journal should carry `prune-host-images: considered N, removed M` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence, and `OK` on every activation after it. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed.
+The journal should carry `prune-host-images: considered N, removed M, refused R` and then a line from `prune-host-images-report` — `Created` on the first activation, which is the observer's own reply to a ping that brought the check into existence, and `OK` on every activation after it. A line reading `reporting … failed` names the endpoint and curl's status instead, and means the check is not being fed.
+
+**`refused` should read 0 on a first activation.** If it does not, the journal also carries one `prune-host-images: refused <identity> -- <reason>` line per refusal, on standard error. A reason naming a container using the image means the keep set is wrong and wants investigating before you go further; one naming multiple repositories means an image this prune cannot reclaim and is not urgent. The role's README has both.
 
 **Read that journal as `root`, not as the inspection account.** `ops-claude` is in `docker` and in no other group, so it is not in `systemd-journal` or `adm` — and `journalctl -u prune-host-images.service` run as that account prints `-- No entries --` rather than a permission error. That is indistinguishable from a unit that has never run, and it is a trap worth knowing about before it costs you an hour: it reads as evidence and is the absence of evidence. `systemctl show prune-host-images.service -p ExecMainStartTimestamp -p Result` needs no privilege and answers the same question honestly.
 
@@ -779,7 +781,7 @@ A check named `<inventory_hostname>-prune-host-images` should now exist at the h
 
 ### 6.5 Staging's prune fails, and that is the expected state
 
-On staging, the run above will not say `considered N, removed M`. It will report that the run was **abandoned** because the keep set is empty, exit non-zero, and ping `/fail`. Nothing is wrong.
+On staging, the run above will not say `considered N, removed M, refused R`. It will report that the run was **abandoned** because the keep set is empty, exit non-zero, and ping `/fail`. Nothing is wrong.
 
 The prune protects images that a deployed application references or a running container holds. On a host where nothing is deployed there are neither, so an empty keep set is the honest answer — and the role treats it as a refusal rather than proceeding, because proceeding would mean `docker image prune -a`, weekly, reporting success. That guard is doing exactly what it exists to do.
 
@@ -796,9 +798,9 @@ ssh -i ~/.ssh/<company>-root root@<that host's tailnet IP> \
 What you are reading for is the transition, and the journal shows both sides of it in one place:
 
     prune-host-images: abandoned -- the keep set is empty     <- before the stack
-    prune-host-images: considered 8, removed 0                <- after it
+    prune-host-images: considered 8, removed 0, refused 0     <- after it
 
-`considered N` with N at least 1 is the confirmation; `removed 0` is correct on a host whose images are all in use. **N should equal the number of services in `platform/docker-compose.yml`** plus whatever any deployed application contributes — anything less means an enumerated application is not rendering an image reference.
+`considered N` with N at least 1 is the confirmation; `removed 0` is correct on a host whose images are all in use, and `refused 0` is what says so — a `removed 0` beside a non-zero `refused` means the run did offer images and the runtime turned it down, which is a different state entirely. **N should equal the number of services in `platform/docker-compose.yml`** plus whatever any deployed application contributes — anything less means an enumerated application is not rendering an image reference.
 
 ### 6.6 Hand the converge to the pipeline
 
