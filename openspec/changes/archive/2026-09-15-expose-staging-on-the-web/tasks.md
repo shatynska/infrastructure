@@ -27,9 +27,9 @@ No specification deltas, so no derived tests are owed (`proposal.md`, "Capabilit
 
 ## 4. Ship
 
-- [ ] 4.1 Open the pull request; its plan comment for `main-staging` shows `hcloud_firewall` updated in place with two added rules and nothing replaced or destroyed. Operator confirms the merge, and that staging's apply and staging's converge are green.
-- [ ] 4.2 Confirm per design.md decision 5 from the operator's workstation, and record the outputs here.
-- [ ] 4.3 Archive on the freshly fetched trunk: delete `docs/backlog.md`'s `expose-staging-on-the-web`, and correct `say-what-the-host-firewall-actually-gates`'s sentence citing it.
+- [x] 4.1 Open the pull request; its plan comment for `main-staging` shows `hcloud_firewall` updated in place with two added rules and nothing replaced or destroyed. Operator confirms the merge, and that staging's apply and staging's converge are green.
+- [x] 4.2 Confirm per design.md decision 5 from the operator's workstation, and record the outputs here.
+- [x] 4.3 Archive on the freshly fetched trunk: delete `docs/backlog.md`'s `expose-staging-on-the-web`, and correct `say-what-the-host-firewall-actually-gates`'s sentence citing it.
 
 ## Verification record
 
@@ -56,3 +56,37 @@ One round of `ai-toolkit:change-code-reviewer`, on 2026-09-15, reviewed `4315b3c
 4. **Low.** `refresh-staging-group-vars-banner` credited this change with making "no DNS records" false. It now credits the operator, who created the records, which this change only recorded.
 
 The fixes were not re-reviewed: they are small documentation corrections, below AGENTS.md's bar of "substantial enough to warrant it". After them, `.github/tests` passed (1210 tests OK), `openspec validate --all` passed (11), and pre-commit passed over the edited files.
+
+## Ship record
+
+**4.1.** Pull request #189 was opened on 2026-09-15. Every check passed: `validate`, `ansible-verify`, `molecule (hardening)` and `plan (main-staging)`.
+
+- **Plan comment for `main-staging`:** `Plan: 0 to add, 1 to change, 0 to destroy`. `hcloud_firewall.this` is updated in place, adding TCP 80 and TCP 443 from `0.0.0.0/0`. The SSH rule (22 from `176.104.184.0/24`) appears removed and re-added with identical values; that is the rule set being re-sent, not a change to the rule.
+- **Merge:** the operator reported it merged and deployed. The forge shows `MERGED` at 04:39:23Z as `6beec4b`.
+- **Terraform Apply**, run `34929665350`: `apply (main-staging)` succeeded with `Modifications complete` and `Apply complete! Resources: 0 added, 1 changed, 0 destroyed.`
+- **Host Converge**, run `34929665363`:
+  - `converge (main-staging)` succeeded. It changed exactly `hardening : Allow HTTP (80) from the configured web CIDRs` and `… Allow HTTPS (443) …`, each for `0.0.0.0/0`; the recap was `ok=87 changed=2 failed=0`.
+  - `converge (main-production)` also succeeded.
+
+**4.2, observed** on 2026-09-15 at 05:07Z from the operator's workstation, against the public address with design.md decision 5's commands:
+
+- `http://unrouted.main-staging.fincci.bike/` returned `301`, curl exit 0.
+- `https://unrouted.main-staging.fincci.bike/` returned `404`, curl exit 0.
+- `openssl s_client … | openssl x509 -noout -subject` returned `subject=CN = TRAEFIK DEFAULT CERT`.
+
+Before the merge, the same address timed out on both ports (design.md Context). `sudo ufw status` could not be read in-session, because `ops-claude` has no sudo. The converge log above is the evidence for the UFW mirror.
+
+**4.2, confirmed by the operator** on 2026-09-15. They ran `ssh -i ~/.ssh/shatynska-root root@62.238.17.177 'ufw status'` and reported:
+
+    Status: active
+    22/tcp     ALLOW  176.104.184.0/24
+    22/tcp     ALLOW  100.64.0.0/10
+    3000/tcp   ALLOW  100.64.0.0/10
+    80/tcp     ALLOW  Anywhere
+    443/tcp    ALLOW  Anywhere
+
+Together with the public probe above, the effect is confirmed at both layers. No certificate was issued, and none was expected (design.md decision 1): staging has no application router yet, and the first certificate is observed by `commerce-ops`'s staging deploy.
+
+**4.3.** Archived on 2026-09-15, on the trunk at `6beec4b`. In the same commit, `docs/backlog.md`'s `expose-staging-on-the-web` entry is deleted, and `say-what-the-host-firewall-actually-gates`'s sentence citing it now names where the two-layer obligation is stated, `ansible/roles/hardening/README.md`.
+
+Three steps come after the commit that writes this file, so they are recorded here in prose rather than as tasks that could never be ticked: opening the record's own pull request, then removing the branch and the working tree once it merges.
