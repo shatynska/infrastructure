@@ -211,10 +211,38 @@ def _is_literal(value) -> bool:
 GALAXY_MANIFEST = "ansible/requirements.yml"
 
 
+def _role_name_from_source(source: str) -> str:
+    """A `src` resolved to the directory name, by `ansible-galaxy`'s own rule.
+
+    MIRRORS `RoleRequirement.repo_url_to_role_name`, ORDER INCLUDED. Ansible
+    strips `.git` from the trailing path segment and only then splits on the
+    comma, so `.../ansible-role-docker.git,8.0.0` installs to
+    `ansible-role-docker.git`: at the moment the suffix is tested for, the
+    string still ends in the version, so the test does not match and the
+    suffix survives. Stripping the version first -- which reads more sensibly
+    and is what both copies of this did until
+    `unify-the-two-role-exclusion-rules` checked -- names a directory that is
+    never created, so the role is not excluded and its scenarios reach the
+    matrix.
+
+    A source carrying neither `://` nor `@` is returned unchanged, which is
+    Ansible's own first line.
+    """
+    if "://" not in source and "@" not in source:
+        return source
+    trailing = source.split("/")[-1]
+    if trailing.endswith(".git"):
+        trailing = trailing[: -len(".git")]
+    if trailing.endswith(".tar.gz"):
+        trailing = trailing[: -len(".tar.gz")]
+    if "," in trailing:
+        trailing = trailing.split(",")[0]
+    return trailing
+
+
 def _galaxy_directory_name(entry, position: int) -> str:
     """Resolve one `roles:` entry to the directory `ansible-galaxy` installs it
-    under: `name` where given, else the `src` basename with any version
-    qualifier and `.git` suffix stripped.
+    under: `role:` or `name:` where given, else the `src` resolved as above.
 
     THE SAME RESOLUTION `.github/tests` PERFORMS, deliberately duplicated. This
     module is production code and cannot import the test suite; the suite is
@@ -223,24 +251,55 @@ def _galaxy_directory_name(entry, position: int) -> str:
     by a test that resolves one manifest through both -- see
     `test_the_matrix_runs_the_roles_a_pull_request_owes.py`,
     `TestTheSelectorEnumeratesRolesLikeTheRestOfTheSuite`.
+
+    THAT BINDING HOLDS THE COPIES TO EACH OTHER AND NOT TO ANSIBLE, which is
+    its limit and worth stating where the duplication is: both were wrong
+    together about the two spellings below until each was checked against
+    `RoleRequirement`, and the binding was green throughout.
     """
-    source = None
     if isinstance(entry, str):
-        source = entry
+        # `role_yaml_parse`'s string branch: `src[,version[,name]]`, where an
+        # explicit third field wins and the comma is split BEFORE the name is
+        # derived.
+        fields = entry.strip().split(",")
+        if len(fields) > 3:
+            raise DerivationRefused(
+                f"{GALAXY_MANIFEST} roles[{position}] is not a role line "
+                f"ansible-galaxy accepts -- `role_name[,version[,name]]` takes at "
+                f"most two commas: {entry!r}"
+            )
+        if len(fields) == 3 and fields[2].strip():
+            return fields[2].strip()
+        source = fields[0]
     elif isinstance(entry, dict):
+        # `role:` is a spelling `role_yaml_parse` accepts and rewrites to
+        # `name`. Refusing it failed the discovery job on a manifest
+        # `ansible-galaxy` reads without complaint.
+        if entry.get("role"):
+            name = str(entry["role"])
+            if "," in name:
+                raise DerivationRefused(
+                    f"{GALAXY_MANIFEST} roles[{position}] uses the `role:` key with a "
+                    f"comma in it, which ansible-galaxy rejects as an old-style "
+                    f"requirement: {entry!r}"
+                )
+            return name
         if entry.get("name"):
             return str(entry["name"])
         source = entry.get("src")
+    else:
+        source = None
     if not isinstance(source, str) or not source.strip():
         raise DerivationRefused(
-            f"{GALAXY_MANIFEST} roles[{position}] gives neither a `name` nor a `src`, "
-            f"so the directory ansible-galaxy installs it under cannot be named and "
-            f"which roles are this repository's own is unknown. Refused rather than "
-            f"treated as installing nothing: {entry!r}"
+            f"{GALAXY_MANIFEST} roles[{position}] gives none of `name`, `src` or "
+            f"`role`, so the directory ansible-galaxy installs it under cannot be "
+            f"named and which roles are this repository's own is unknown. Refused "
+            f"rather than treated as installing nothing: {entry!r}"
         )
-    basename = source.split(",")[0].strip().rstrip("/").rsplit("/", 1)[-1]
-    if basename.endswith(".git"):
-        basename = basename[: -len(".git")]
+    source = source.strip()
+    if "+" in source:
+        source = source.partition("+")[2]
+    basename = _role_name_from_source(source)
     if not basename:
         raise DerivationRefused(
             f"{GALAXY_MANIFEST} roles[{position}] has a `src` that resolves to no "

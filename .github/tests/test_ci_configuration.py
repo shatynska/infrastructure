@@ -281,27 +281,90 @@ class ManifestNotUsable(AssertionError):
     """
 
 
+def _role_name_from_source(source: str) -> str:
+    """A `src` resolved to the directory name, by `ansible-galaxy`'s own rule.
+
+    MIRRORS `RoleRequirement.repo_url_to_role_name`, ORDER INCLUDED, because
+    the only correct answer to "what directory does `ansible-galaxy` install
+    this under" is the one `ansible-galaxy` computes. An earlier version of
+    this function stripped a comma-separated version qualifier FIRST and the
+    `.git` suffix after, which reads more sensibly and is not what happens:
+    Ansible strips `.git` from the trailing path segment and only then splits
+    on the comma, so `…/ansible-role-docker.git,8.0.0` installs to
+    `ansible-role-docker.git` -- the suffix survives, because at the moment it
+    is tested for, the string still ends in the version.
+
+    A source carrying neither `://` nor `@` is returned unchanged, which is
+    Ansible's own first line and is why `geerlingguy.docker` resolves to
+    itself.
+    """
+    if "://" not in source and "@" not in source:
+        return source
+    trailing = source.split("/")[-1]
+    if trailing.endswith(".git"):
+        trailing = trailing[: -len(".git")]
+    if trailing.endswith(".tar.gz"):
+        trailing = trailing[: -len(".tar.gz")]
+    if "," in trailing:
+        trailing = trailing.split(",")[0]
+    return trailing
+
+
 def _galaxy_directory_name(entry: object, position: int) -> str:
     """Resolve one `roles:` entry to the directory `ansible-galaxy` installs it
-    under: `name` where given, else the `src` basename with any version
-    qualifier and `.git` suffix stripped (`pin-and-fix-molecule-suite`'s
-    design.md decision 3a)."""
-    source: object = None
+    under (`pin-and-fix-molecule-suite`'s design.md decision 3a, corrected
+    against Ansible by `unify-the-two-role-exclusion-rules`).
+
+    THREE SPELLINGS NAME A ROLE, not two. `name:`, `src:`, and `role:` --
+    which `RoleRequirement.role_yaml_parse` accepts and rewrites to `name`,
+    and which this refused outright until the correction, failing the check on
+    a manifest `ansible-galaxy` reads without complaint. A refusal that fires
+    on a legitimate edit is the false-positive failure this suite is meant not
+    to produce.
+    """
     if isinstance(entry, str):
-        source = entry
+        # `role_yaml_parse`'s string branch: `src[,version[,name]]`, where an
+        # explicit third field wins and the comma is split BEFORE the name is
+        # derived -- which is why the string form does not carry the `.git`
+        # quirk that the `src:` mapping form does.
+        fields = entry.strip().split(",")
+        if len(fields) > 3:
+            raise ManifestNotUsable(
+                f"{GALAXY_MANIFEST} roles[{position}] is not a role line "
+                f"ansible-galaxy accepts -- `role_name[,version[,name]]` takes at "
+                f"most two commas: {entry!r}"
+            )
+        if len(fields) == 3 and fields[2].strip():
+            return fields[2].strip()
+        source: object = fields[0]
     elif isinstance(entry, dict):
+        if entry.get("role"):
+            name = str(entry["role"])
+            if "," in name:
+                raise ManifestNotUsable(
+                    f"{GALAXY_MANIFEST} roles[{position}] uses the `role:` key with a "
+                    f"comma in it, which ansible-galaxy rejects as an old-style "
+                    f"requirement: {entry!r}"
+                )
+            return name
         if entry.get("name"):
             return str(entry["name"])
         source = entry.get("src")
+    else:
+        source = None
     if not isinstance(source, str) or not source.strip():
         raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST} roles[{position}] gives neither a `name` nor a `src`, "
-            f"so the directory ansible-galaxy installs it under cannot be named and "
-            f"the exclusion cannot be derived from it: {entry!r}"
+            f"{GALAXY_MANIFEST} roles[{position}] gives none of `name`, `src` or "
+            f"`role`, so the directory ansible-galaxy installs it under cannot be "
+            f"named and the exclusion cannot be derived from it: {entry!r}"
         )
-    basename = source.split(",")[0].strip().rstrip("/").rsplit("/", 1)[-1]
-    if basename.endswith(".git"):
-        basename = basename[: -len(".git")]
+    source = source.strip()
+    # `role_yaml_parse` splits an `scm+url` source and names the role from the
+    # url half. Its github-specific `git+` prepend is a no-op for naming, since
+    # it partitions the prefix straight back off.
+    if "+" in source:
+        source = source.partition("+")[2]
+    basename = _role_name_from_source(source)
     if not basename:
         raise ManifestNotUsable(
             f"{GALAXY_MANIFEST} roles[{position}] has a `src` that resolves to no "
@@ -1454,35 +1517,61 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
         self.assertIn(GALAXY_MANIFEST, str(raised.exception))
 
     def test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name(self) -> None:
-        """DERIVED -- design.md decision 3a states the resolution rule (`name`
-        where given, else the `src` basename with any `.git` suffix and version
-        qualifier stripped). The delta spec requires only that the exclusion be
-        derived from the manifest, so the exact resolution is design-level, not
-        SHALL text.
+        """DERIVED -- design.md decision 3a states that a `src:` entry resolves
+        to the directory `ansible-galaxy` installs it under. The delta spec
+        requires only that the exclusion be derived from the manifest, so the
+        exact resolution is design-level, not SHALL text.
 
-        Recorded as derived because it constrains the implementation beyond what
-        a scenario states: today's manifest has one entry, in `name` form, so
-        nothing in the repository exercises this path yet.
+        THE RESOLUTION IS ANSIBLE'S, QUIRK INCLUDED, and this test was wrong
+        about it until `unify-the-two-role-exclusion-rules` checked the
+        expected values against `RoleRequirement.repo_url_to_role_name` rather
+        than against a reading of what the rule ought to be.
+        `repo_url_to_role_name` strips `.git` from the trailing path segment
+        and only THEN splits on the comma -- so where a version qualifier
+        follows, the string does not end in `.git` at the moment that suffix is
+        tested for, and it survives into the directory name. The two forms
+        below therefore resolve differently, and both are asserted: naming a
+        directory that is never created is how a genuinely installed role stops
+        being excluded.
+
+        Still derived, and still unexercised by the repository itself: today's
+        manifest has one entry, in `name:` form.
         """
-        root = self.scratch_tree(
-            {
-                ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE),
-                ("docker", "default"): scenario_document(PINNED_IMAGE),
-            },
+        scenarios = {
+            ("geerlingguy.docker", "default"): scenario_document(PINNED_IMAGE),
+            ("docker", "default"): scenario_document(PINNED_IMAGE),
+        }
+        qualified = self.scratch_tree(
+            scenarios,
             manifest=(
                 "roles:\n"
                 "  - src: https://github.com/geerlingguy/ansible-role-docker.git,8.0.0\n"
             ),
         )
         self.assertEqual(
+            {"ansible-role-docker.git"},
+            galaxy_role_directories(qualified),
+            "a `src` carrying a comma-separated version did not resolve the way "
+            "ansible-galaxy resolves it -- the `.git` suffix survives, because the "
+            "comma is split off after it is tested for",
+        )
+        separate = self.scratch_tree(
+            scenarios,
+            manifest=(
+                "roles:\n"
+                "  - src: https://github.com/geerlingguy/ansible-role-docker.git\n"
+                '    version: "8.0.0"\n'
+            ),
+        )
+        self.assertEqual(
             {"ansible-role-docker"},
-            galaxy_role_directories(root),
-            "a `src`-only entry did not resolve to the directory name ansible-galaxy "
-            "installs it under",
+            galaxy_role_directories(separate),
+            "a `src` with the version given as its own key did not resolve to the "
+            "basename with `.git` stripped",
         )
         self.assertEqual(
             {"geerlingguy.docker", "docker"},
-            {path.relative_to(root).parts[2] for path in authored_scenario_files(root)},
+            {path.relative_to(root).parts[2] for root in (qualified,) for path in authored_scenario_files(root)},
             "resolving a `src`-only entry excluded a directory the manifest does not "
             "install to",
         )
@@ -1545,11 +1634,13 @@ class TestTheRoleEnumerationIsDerivedFromThePinnedManifest(
 
         The manifest spelling is the one
         `test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name`
-        already uses, deliberately: the two tests are then about the same
-        resolution rather than about two inventions. A `src:`-only entry
-        resolves to a bare basename carrying no dot, so the replaced rule
-        classified a directory `ansible-galaxy` was actively reinstalling as
-        one of this repository's own.
+        asserts for this form, deliberately: the two tests are then about the
+        same resolution rather than about two inventions. The version is given
+        as its own key rather than after a comma, because only that form
+        resolves to a DOTLESS basename -- with the comma, `.git` survives into
+        the directory name and the case stops being the one this test is
+        about. An earlier version of this fixture used the comma and asserted a
+        directory `ansible-galaxy` would never create.
         """
         root = self.scratch_tree(
             {
@@ -1558,7 +1649,8 @@ class TestTheRoleEnumerationIsDerivedFromThePinnedManifest(
             },
             manifest=(
                 "roles:\n"
-                "  - src: https://github.com/geerlingguy/ansible-role-docker.git,8.0.0\n"
+                "  - src: https://github.com/geerlingguy/ansible-role-docker.git\n"
+                '    version: "8.0.0"\n'
             ),
         )
         self.assertEqual(

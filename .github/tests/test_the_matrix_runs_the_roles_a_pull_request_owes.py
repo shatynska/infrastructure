@@ -1482,10 +1482,17 @@ class TestTheSelectorEnumeratesRolesLikeTheRestOfTheSuite(unittest.TestCase):
     #: name heuristic it replaced. Spelled as `test_ci_configuration`'s
     #: `test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name`
     #: spells it, so the two implementations are bound over the same input.
+    #:
+    #: THE VERSION IS ITS OWN KEY, not a comma qualifier, and that is not a
+    #: style choice: `ansible-galaxy` strips `.git` before it splits the comma,
+    #: so the comma form installs to `ansible-role-docker.git` -- dotted, which
+    #: is the wrong case for this fixture and the name an earlier version of it
+    #: wrongly assumed away.
     SOURCE_FORM_MANIFEST = (
         "collections: []\n"
         "roles:\n"
-        "  - src: https://github.com/geerlingguy/ansible-role-docker.git,8.0.0\n"
+        "  - src: https://github.com/geerlingguy/ansible-role-docker.git\n"
+        '    version: "8.0.0"\n'
     )
 
     def _tree_separating_the_two_rules(self) -> Tree:

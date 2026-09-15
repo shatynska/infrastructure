@@ -114,6 +114,31 @@ The review returned four findings and no blocker. Three were applied; the fourth
 
 **What the reviewer checked that this record should not claim for itself.** Both guards the plan asked a reviewer to test were verified rather than inferred: each moved symbol was compared across revisions through its AST with docstrings stripped, and all four are executable-identical, so no body moved altered; and `test_an_external_galaxy_dependency_contributes_no_edge_and_is_not_refused` is byte-identical across the diff. The review also reproduced the discrimination gate independently, by exporting `5dad086` and running the new classes against it — 3 of 4 and 3 of 6 failing, matching the table above.
 
+### After the second review round
+
+The round-2 verdict on the fixes above was clean: the widened `except` is right in scope (`UnicodeDecodeError` is a `ValueError`, not an `OSError`, so listing it separately was necessary rather than redundant), and both new tests were confirmed to discriminate by reverting the clause and watching them fail. One gap noted and accepted: the undecodable-manifest test exercises the `UnicodeDecodeError` half only, and nothing provokes the `OSError` half — a directory or dangling symlink fails `is_file()` first, and `chmod` proves nothing on a runner that is root.
+
+**The round also carried findings from the background `code-review` skill, and one goes to this change's premise.** The manifest resolver — written by `pin-and-fix-molecule-suite`, and *promoted into production code by this change* — disagrees with `ansible-galaxy` on two entry spellings. Verified here against the installed Ansible 2.21.3 rather than taken from the report:
+
+| entry | `ansible-galaxy` installs to | the resolver said |
+|---|---|---|
+| `- src: …/ansible-role-docker.git,8.0.0` | `ansible-role-docker.git` | `ansible-role-docker` |
+| `- role: geerlingguy.docker` | `geerlingguy.docker` | refused the manifest |
+
+`repo_url_to_role_name` strips `.git` from the trailing path segment and only *then* splits the comma, so where a version follows, the string does not end in `.git` at the moment the suffix is tested for and it survives. The resolver stripped the comma first — which reads more sensibly and names a directory that is never created, so a genuinely installed role would not be excluded and its scenarios would reach the matrix and the pinning checks. The `role:` spelling is one `role_yaml_parse` accepts, so refusing it fails the discovery job on a manifest Ansible reads without complaint.
+
+**Both were fixed in both copies**, mirroring `repo_url_to_role_name`'s order and accepting all three spellings. A differential probe over thirteen entry shapes — `name:`, `role:`, bare `src:`, comma-qualified `src:`, `.tar.gz`, `git+`-prefixed, `scp`-style, and the string forms including the two-comma explicit-name form — now agrees three ways: Ansible, the suite's copy, the selector's copy, **13/13**.
+
+**Three fixtures asserted the name Ansible would never create**, this change's own discriminating ones among them, and were corrected. Where a fixture's point is a *dotless* installed directory, the version is now given as its own key rather than after a comma — only that form resolves to `ansible-role-docker`, and with the comma the case stops being the one the test is about. The pre-existing `test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name` now asserts both forms and says why they differ.
+
+**The check that would have caught this could not be written here, and that is recorded rather than worked around.** A test comparing the resolution against `RoleRequirement.role_yaml_parse` was written, and it failed two of this suite's own assertions: *The Suite Needs No Privileged or External Resource* requires the suite depend only on the standard library and on `.github/requirements-ci.txt`, which does not pin `ansible-core`. That check is AST-based and catches a lazy import inside a function as readily as a top-level one. The test was removed rather than the constraint weakened, and `docs/backlog.md` entry 55 carries the conformance check to the tier that already has the pinned Ansible.
+
+**What this leaves standing, stated plainly.** Every expected value in these fixtures now matches what Ansible computes, verified in this session. None of it is *asserted against Ansible* by anything that runs — so the same class of error can recur, and entry 55 is what closes it. The binding between the two copies remains what it was: a guard against them drifting apart, and no guard at all against them being wrong together, which is exactly how this survived four rounds of plan review and a code review.
+
+**One slip, caught and corrected.** Removing the ansible-importing test with a scripted slice cut backwards and duplicated ninety-five lines instead of deleting them. Caught by reading the diffstat and grepping for duplicate definitions, not by the suite — though the suite would have caught it too. Excised, the seam checked, the module re-parsed.
+
+**Re-verification.** `python3 -m unittest discover --start-directory .github/tests` — **1285 tests, OK**, and identical with `ansible/roles/geerlingguy.docker/` absent. `pre-commit run --all-files` — every hook passes, `ansible-lint` and `--syntax-check` among them, which do read the selector. `openspec validate --all` — 10 passed, 0 failed. The selector's command-line entry point still loads.
+
 ## 6. Ship
 
 - [ ] 6.1 Commit the implementation and dispatch the code review over the committed diff, as `AGENTS.md`'s `build` stage requires. Give the reviewer two things explicitly: decision 7's guard — the moved block is read with `git diff --color-moved`, and a body altered under cover of the move is what to look for — and decision 2's scope argument, since the diff reaches production code and a reviewer is entitled to ask why.
