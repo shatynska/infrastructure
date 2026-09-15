@@ -779,13 +779,15 @@ The journal should carry `prune-host-images: considered N, removed M, refused R`
 
 A check named `<inventory_hostname>-prune-host-images` should now exist at the heartbeat service — `main-production-prune-host-images` and `main-staging-prune-host-images`, one per host and distinctly named because the two servers are named differently on purpose. **Give each the period and grace from Appendix A now.** A check created by its own first ping carries the *observer's* default period, not the unit's weekly one, so until you correct it the observer will call a perfectly healthy weekly job overdue within a day.
 
-### 6.5 Staging's prune fails, and that is the expected state
+### 6.5 Until stage 7 reaches this host, its prune fails, and that is the expected state
 
-On staging, the run above will not say `considered N, removed M, refused R`. It will report that the run was **abandoned** because the keep set is empty, exit non-zero, and ping `/fail`. Nothing is wrong.
+**This describes a stage, not a host.** It is true of any host between its first converge and its first platform deploy — the position you are in right now, whichever stack you are bootstrapping. Once stage 7 has reached that host the prune completes instead, and the completed line below is what it should say from then on. A host already past stage 7 reporting `considered N, removed M, refused R` is not a regression against this section; it is this section's own next paragraph.
+
+Until then, the run above will not say `considered N, removed M, refused R`. It will report that the run was **abandoned** because the keep set is empty, exit non-zero, and ping `/fail`. Nothing is wrong.
 
 The prune protects images that a deployed application references or a running container holds. On a host where nothing is deployed there are neither, so an empty keep set is the honest answer — and the role treats it as a refusal rather than proceeding, because proceeding would mean `docker image prune -a`, weekly, reporting success. That guard is doing exactly what it exists to do.
 
-So `main-staging-prune-host-images` is red from the moment it exists until the platform stack reaches it. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
+So that host's `<inventory_hostname>-prune-host-images` check is red from the moment it exists until the platform stack reaches it. Confirm the failure is *that* one — the journal should name the empty keep set, not a missing enumeration and not an unreachable observer — and leave it. What you must not do is mute it or delete the check: the alarm becomes meaningful the day staging runs something, and a muted check is one nobody re-arms.
 
 **It does not go green by itself when the stack arrives, and this is the step everyone misses.** The check reflects the last *activation*, and the timer is weekly — so a stack deployed on Saturday leaves a red check until the following Saturday, with nothing wrong. Trigger one activation by hand after stage 7 reaches that host:
 
