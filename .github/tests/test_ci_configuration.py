@@ -344,14 +344,40 @@ def galaxy_role_directories(root: Path | None = None) -> set[str]:
 
 
 def role_names(root: Path | None = None) -> set[str]:
+    """The directories under `ansible/roles/` that are THIS REPOSITORY'S OWN.
+
+    Installed Galaxy content is excluded, and the exclusion is derived from
+    `ansible/requirements.yml` -- the same rule the pinning checks below use,
+    and, since `unify-the-two-role-exclusion-rules`, the only rule this
+    repository holds for the question. It replaced a heuristic on the
+    directory NAME, which read the Galaxy `namespace.role` convention as
+    provenance and was wrong in both directions: content vendored under a
+    dotted name that nobody pinned was exempted from obligations that range
+    over this repository's roles, and a manifest entry given as a `src:`
+    resolves to a dotless basename that the heuristic claimed as ours while
+    `ansible-galaxy` was reinstalling it.
+
+    THE `startswith(".")` GUARD IS NOT THAT HEURISTIC and stays. It excludes
+    hidden directories -- `.git` and its like -- which no manifest would ever
+    name and which are not installed content.
+
+    A manifest that cannot be read raises `ManifestNotUsable` rather than
+    falling back to the name heuristic, to an empty exclusion, or to the raw
+    listing: each would answer silently a question this function cannot
+    answer, and they fail in opposite directions. Note what that costs a
+    caller -- raised inside a test method it is a failure, raised inside
+    `setUp` it is reported as an error, and several callers do the latter.
+    Either way the suite is red and the message names the file.
+    """
     base = ROOT if root is None else root
     roles_dir = base / "ansible" / "roles"
     if not roles_dir.is_dir():
         return set()
+    installed = galaxy_role_directories(base)
     return {
         entry.name
         for entry in roles_dir.iterdir()
-        if entry.is_dir() and not entry.name.startswith(".") and "." not in entry.name
+        if entry.is_dir() and not entry.name.startswith(".") and entry.name not in installed
     }
 
 
@@ -1264,19 +1290,22 @@ class TestMoleculeScenarioDiscoveryIsBoundedByThePinnedManifest(
         drop out of discovery. `roles_with_molecule_scenarios()` computes the
         role set from directory names independently of the glob above.
 
-        `roles_with_molecule_scenarios()` rests on `role_names()`, which excludes
-        a directory whose name contains a `.` -- the older, weaker of this file's
-        two notions of "installed content". Subtracting the manifest-derived set
-        as well keeps this assertion on the same rule the pinning checks use, so
-        a Galaxy entry resolving to a dotless directory name (`ansible-role-docker`,
-        say) cannot make it fail. Neither `role_names()` nor any test resting on
-        it is touched."""
+        Both sides now rest on one rule. `roles_with_molecule_scenarios()` is
+        built on `role_names()`, which derives its exclusion from
+        `ansible/requirements.yml`, and `authored_scenario_files()` derives its
+        own from the same manifest -- so the two agree about installed Galaxy
+        content by construction rather than by compensation. This assertion
+        used to subtract `galaxy_role_directories()` here to reach that state,
+        because the enumeration underneath read the directory name instead;
+        `unify-the-two-role-exclusion-rules` removed the reason and the
+        subtraction with it. A dead subtraction would read as a live guard, and
+        would keep this test green if the enumeration were ever reverted to the
+        name heuristic -- hiding the regression it looks like it is guarding
+        against."""
         discovered_roles = {
             path.relative_to(ROOT).parts[2] for path in authored_scenario_files()
         }
-        missing = sorted(
-            roles_with_molecule_scenarios() - galaxy_role_directories() - discovered_roles
-        )
+        missing = sorted(roles_with_molecule_scenarios() - discovered_roles)
         self.assertEqual(
             [],
             missing,

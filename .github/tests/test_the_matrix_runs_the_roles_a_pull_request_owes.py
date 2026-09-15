@@ -134,7 +134,9 @@ from test_ci_configuration import (
 #   roles_with_scenarios(root) -> set[str]
 #       The roles the run can execute: directories under `ansible/roles/`
 #       carrying a `molecule/` directory, under the same enumeration
-#       `role_names()` uses -- dotted (Galaxy) directory names excluded.
+#       `role_names()` uses -- installed Galaxy content excluded, derived from
+#       `ansible/requirements.yml` rather than from the shape of a directory
+#       name. Raises `DerivationRefused` for a manifest it cannot read.
 #
 #   PERMITTED_NESTED_PLAYBOOKS: mapping
 #       The permitted-instance entries, keyed `(file, construction, target)`
@@ -663,8 +665,12 @@ def role_files_reaching_outside(root) -> tuple[list[str], int]:
     point it at a tree written to falsify it. The real tree carries no such
     route -- that is the finding, not the check's warrant.
 
-    Dotted directory names are excluded here as `role_names()` excludes them:
-    an installed Galaxy role's own tasks are not this repository's to refuse.
+    Installed Galaxy content is excluded here as `role_names()` excludes it,
+    and by the same rule -- derived from `ansible/requirements.yml`: an
+    installed role's own tasks are not this repository's to refuse. Reading the
+    directory name instead, as this did before
+    `unify-the-two-role-exclusion-rules`, exempted vendored content nobody
+    pinned from a refusal that should reach it.
     """
     base = Path(root)
     roles_directory = base / "ansible" / "roles"
@@ -672,11 +678,7 @@ def role_files_reaching_outside(root) -> tuple[list[str], int]:
     scanned = 0
     if not roles_directory.is_dir():
         return offenders, scanned
-    for role in sorted(
-        entry.name
-        for entry in roles_directory.iterdir()
-        if entry.is_dir() and not entry.name.startswith(".") and "." not in entry.name
-    ):
+    for role in sorted(role_names(base)):
         for subdirectory in ("tasks", "handlers"):
             directory = roles_directory / role / subdirectory
             if not directory.is_dir():
@@ -1464,7 +1466,14 @@ class TestTheSelectorEnumeratesRolesLikeTheRestOfTheSuite(unittest.TestCase):
     by the checks that already read these scenario definitions, under the same
     enumeration of this repository's own roles -- so that installed Galaxy
     content cannot make the check report one result on a provisioned developer
-    machine and another on a runner that has installed nothing"."""
+    machine and another on a runner that has installed nothing".
+
+    THE SAME enumeration is what the clause asks for, and WHICH rule that
+    enumeration applies is left open by it. Both implementations answer
+    `ansible/requirements.yml`, which `unify-the-two-role-exclusion-rules`
+    settled; before it they read the directory name, agreeing with each other
+    and being wrong together in both directions.
+    """
 
     #: A manifest naming one role by `src:` rather than by `name:`. The entry
     #: resolves to the DOTLESS basename `ansible-role-docker`, which is the
