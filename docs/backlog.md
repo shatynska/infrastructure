@@ -841,14 +841,3 @@ Not blocked. It touches `docs/` and no mechanism.
 **Where the fix has to go is the inventory's group layout, not a filename.** The candidates, none costed here: `deploy_apps` moving to a per-stack or per-host vars file; a group per tenant-environment pair rather than per environment; or the entry gaining a host selector the role honours. Each changes what a converge reads, so each wants its own Molecule coverage, and the choice interacts with what `AGENTS.md` records about a source being named for its stack and a group for its axis.
 
 **Nothing reports it, which is the part worth keeping in view.** A second tenant would be onboarded by following `docs/onboard-an-application.md`, which would produce a key per environment as instructed, and the over-authorisation would be silent: both hosts would accept the key and both deploys would work. Take this before a second tenant exists rather than after, since afterwards the remedy is a re-key rather than a layout.
-
-## 59. cover-the-live-key-names-in-the-private-key-block
-
-**Not blocked, small, and it predates the change that measured it.** Recorded 2026-09-15 by `record-how-an-application-is-onboarded`, which corrected the block's *comment* and deliberately left its patterns alone: widening one is a behaviour change rather than a correction, and it wanted a decision of its own.
-
-`.gitignore`'s private-key block is the layer that catches a passphrase-less key generated into the checkout without depending on anything being installed — gitleaks is a pre-commit hook and the hazard exists before `pre-commit install` has run. Its root-anchored patterns do not match the names this repository's own documents now tell an operator to generate:
-
-- `/*-deploy` was written for the retired `<company>-<app>-deploy` spelling. An application deploy key is `<company>-<app>-<environment>` — `shatynska-commerce-ops-staging` — and matches **nothing** in the block. It is also the most frequently generated key of the set, one per application per environment.
-- `/*-platform-staging` matches `<company>-platform-staging` and nothing matches `<company>-platform-production`. One environment's platform key is covered and the other is not, which is harder to notice than neither being covered.
-
-**What the change owes is a decision rather than a wider glob.** The block's own comment explains why every pattern is anchored to the root and why none may be unanchored: `*-ops` unanchored would swallow a directory named `commerce-ops`. A pattern per key purpose keeps that property and goes stale again at the next purpose; a broader one risks ignoring a real file. Worth pairing with the question of whether `.github/tests` should assert that every `ssh-keygen -f` target either document prints is matched by the block — a static read of two committed files and the thing that would keep this in step, which is what neither the comment nor a pattern does today.
