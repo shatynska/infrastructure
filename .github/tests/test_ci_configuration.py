@@ -13008,14 +13008,25 @@ def postgres_data_mount_offences(path: Path | None = None) -> list[str]:
     # -- the detection does not exist. Flagging it would fail a pin-back to a
     # 17-or-earlier release for carrying a value that is simply correct, which
     # is the emergency this check must not stand in the way of.
-    if major >= POSTGRES_PARENT_MOUNT_MAJOR and "PGDATA" in service_environment(
-        POSTGRES_SERVICE, path
-    ):
-        offences.append(
-            f"{POSTGRES_SERVICE} pins major {major} and sets PGDATA, which overrides "
-            f"the image default the mount above is derived from, and switches off "
-            f"the entrypoint's old-database detection along with it"
-        )
+    if major >= POSTGRES_PARENT_MOUNT_MAJOR:
+        if "PGDATA" in service_environment(POSTGRES_SERVICE, path):
+            offences.append(
+                f"{POSTGRES_SERVICE} pins major {major} and sets PGDATA, which "
+                f"overrides the image default the mount above is derived from, and "
+                f"switches off the entrypoint's old-database detection along with it"
+            )
+        # The check above reads the inline `environment:` block, which is where
+        # this stack declares everything. A PGDATA arriving through `env_file:`
+        # would do the same damage unseen, and following one means reading a
+        # file that is not committed. So the declaration itself is the offence,
+        # reported while the service has none rather than after it gains one.
+        elif definition.get("env_file"):
+            offences.append(
+                f"{POSTGRES_SERVICE} declares env_file, which can carry a PGDATA this "
+                f"check cannot see -- it reads the inline environment: block, and an "
+                f"env_file is not committed. Either keep PGDATA out of it and say so "
+                f"here, or extend this check to whatever renders that file"
+            )
     return offences
 
 
@@ -13023,12 +13034,12 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
     """DERIVED -- `platform/docker-compose.yml`'s mount comment, and the
     procedure in `platform/README.md` that rests on it."""
 
-    def compose_fixture(self, service: str, extra: str = "") -> Path:
+    def compose_fixture(self, service: str) -> Path:
         directory = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, directory, True)
         path = directory / "docker-compose.yml"
         path.write_text(
-            "services:\n" + service + "volumes:\n  postgres_data:\n" + extra,
+            "services:\n" + service + "volumes:\n  postgres_data:\n",
             encoding="utf-8",
         )
         return path
@@ -13113,6 +13124,28 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:16.15\n"
             "    environment:\n      PGDATA: /var/lib/postgresql/data\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+        )
+        self.assertEqual([], postgres_data_mount_offences(fixture))
+
+    def test_an_env_file_at_a_modern_major_is_reported(self) -> None:
+        """FALSIFIED -- PGDATA can arrive through env_file, where this check
+        cannot follow it, so the declaration is the offence."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:18.6\n"
+            "    env_file:\n      - .env\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("env_file", offenders[0])
+
+    def test_an_env_file_at_a_legacy_major_is_accepted(self) -> None:
+        """DERIVED -- the arm is about the detection 18+ has, so it must not
+        fire below it, where there is no detection to switch off."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:16.15\n"
+            "    env_file:\n      - .env\n"
             "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
         )
         self.assertEqual([], postgres_data_mount_offences(fixture))
