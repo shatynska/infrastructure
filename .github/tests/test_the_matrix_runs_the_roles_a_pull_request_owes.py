@@ -82,6 +82,7 @@ from test_ci_configuration import (
     AGGREGATING_CONTEXT,
     ANSIBLE_VERIFY,
     ROOT,
+    ManifestNotUsable,
     MoleculeWorkflowShapeMixin,
     compact,
     github_output_pairs,
@@ -1633,6 +1634,29 @@ class TestTheSelectorEnumeratesRolesLikeTheRestOfTheSuite(unittest.TestCase):
         with self.assertRaises(symbol("DerivationRefused")) as raised:
             symbol("roles_with_scenarios")(tree.root)
         self.assertIn("ansible/requirements.yml", str(raised.exception))
+
+    def test_both_implementations_refuse_a_manifest_that_is_not_utf8(self) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        3, over the input that reaches neither parser.
+
+        The refusal has to be the same on both sides or the duplication this
+        class binds is only parallel where it is convenient. A manifest that
+        `read_text` cannot decode is refused by each implementation in its own
+        idiom -- `DerivationRefused` here, `ManifestNotUsable` in the suite --
+        and each names the file, which is what tells an operator their tree is
+        damaged rather than their code broken.
+        """
+        tree = Tree(self)
+        tree.scenario("ours", converge=converge_through_roles_list("- ours"))
+        (tree.root / "ansible" / "requirements.yml").write_bytes(
+            b"roles:\n  - name: \xff\xfe\n"
+        )
+        with self.assertRaises(symbol("DerivationRefused")) as raised:
+            symbol("roles_with_scenarios")(tree.root)
+        self.assertIn("ansible/requirements.yml", str(raised.exception))
+        with self.assertRaises(ManifestNotUsable) as suite_raised:
+            roles_with_molecule_scenarios(tree.root)
+        self.assertIn("ansible/requirements.yml", str(suite_raised.exception))
 
     def test_no_selection_ever_carries_a_role_that_cannot_be_run(self) -> None:
         """SPECIFIED -- "a role in the closure that declares none SHALL be

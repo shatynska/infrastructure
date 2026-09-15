@@ -272,11 +272,12 @@ class ManifestNotUsable(AssertionError):
     silently widened exclusion lets an unpinned scenario through, which is the
     vacuous pass this capability forbids elsewhere).
 
-    That subclassing is not uniform in its effect, and the difference is worth
-    knowing before diagnosing a red suite. Raised inside a test method it is a
-    FAILURE; raised inside `setUp` -- which several callers of the enumeration
-    below do -- `unittest` reports it as an ERROR. The suite goes red either
-    way and the message names the manifest either way.
+    That effect is uniform, and it is stated because it is easy to assume
+    otherwise: `TestCase.run` routes a raised exception by whether it is an
+    instance of `failureException`, never by which part of the test raised it.
+    So this is a FAILURE in `setUp` -- which several callers of the enumeration
+    below use -- exactly as it is inside a test method, and the message names
+    the manifest in both.
     """
 
 
@@ -322,10 +323,20 @@ def galaxy_role_directories(root: Path | None = None) -> set[str]:
         )
     try:
         parsed = yaml.safe_load(manifest.read_text(encoding="utf-8"))
-    except yaml.YAMLError as error:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
+        # THE READ AND THE PARSE ARE BOTH IN SCOPE. `read_text` raises before
+        # `safe_load` sees anything -- `UnicodeDecodeError` on bytes that are
+        # not UTF-8, `OSError` on a file that cannot be opened -- and catching
+        # the parse alone let those escape raw. That was survivable while only
+        # the pinning checks reached here; `unify-the-two-role-exclusion-rules`
+        # put the whole suite's role enumeration on this function, and a raw
+        # `PermissionError` from underneath it is not the refusal this class
+        # promises. It is also the case the selector's own copy already
+        # covered, so narrowing here left the two implementations answering
+        # differently on the one input neither can read.
         raise ManifestNotUsable(
-            f"{GALAXY_MANIFEST} could not be parsed, so the exclusion cannot be "
-            f"derived from it: {error}"
+            f"{GALAXY_MANIFEST} could not be read or parsed, so the exclusion "
+            f"cannot be derived from it: {error}"
         ) from None
     if not isinstance(parsed, dict):
         raise ManifestNotUsable(
@@ -364,10 +375,9 @@ def role_names(root: Path | None = None) -> set[str]:
     A manifest that cannot be read raises `ManifestNotUsable` rather than
     falling back to the name heuristic, to an empty exclusion, or to the raw
     listing: each would answer silently a question this function cannot
-    answer, and they fail in opposite directions. Note what that costs a
-    caller -- raised inside a test method it is a failure, raised inside
-    `setUp` it is reported as an error, and several callers do the latter.
-    Either way the suite is red and the message names the file.
+    answer, and they fail in opposite directions. The raise reaches every
+    caller as a test failure naming the file, in `setUp` as much as in a test
+    method -- see `ManifestNotUsable`.
     """
     base = ROOT if root is None else root
     roles_dir = base / "ansible" / "roles"
@@ -1606,6 +1616,28 @@ class TestTheRoleEnumerationIsDerivedFromThePinnedManifest(
         root = self.scratch_tree(
             {("docker", "default"): scenario_document(PINNED_IMAGE)}, manifest=None
         )
+        with self.assertRaises(ManifestNotUsable) as raised:
+            role_names(root)
+        self.assertIn(GALAXY_MANIFEST, str(raised.exception))
+
+    def test_a_manifest_that_is_not_utf8_fails_the_enumeration_too(self) -> None:
+        """DERIVED -- as above, for the way the manifest stops being readable
+        BEFORE the parser is reached.
+
+        `read_text` raises `UnicodeDecodeError` on bytes that are not UTF-8 and
+        `OSError` on a file that cannot be opened, so a `yaml.YAMLError`-only
+        guard lets both escape as themselves. That was survivable while this
+        function was read by the pinning checks alone; it is not now that the
+        whole suite's role enumeration rests on it, and the selector's own copy
+        already refused these -- so the narrow guard left the two
+        implementations answering differently on an input neither can read,
+        which is the divergence this class exists to prevent.
+
+        Bytes rather than permissions, deliberately: `chmod` proves nothing on
+        a runner that happens to be root, where an unreadable file is readable.
+        """
+        root = self.scratch_tree({("docker", "default"): scenario_document(PINNED_IMAGE)})
+        (root / GALAXY_MANIFEST).write_bytes(b"roles:\n  - name: \xff\xfe\n")
         with self.assertRaises(ManifestNotUsable) as raised:
             role_names(root)
         self.assertIn(GALAXY_MANIFEST, str(raised.exception))

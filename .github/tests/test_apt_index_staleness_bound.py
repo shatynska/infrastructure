@@ -91,7 +91,6 @@ import yaml
 
 from test_ci_configuration import (
     ROOT,
-    galaxy_role_directories,
     role_names,
 )
 

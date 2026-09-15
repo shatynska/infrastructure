@@ -98,6 +98,22 @@ The plan classified **3.5 as a property test with the gate not claimed**. It dis
 
 **5.4** `openspec validate --all` — 10 passed, 0 failed, with the expected `skip_specs` INFO line.
 
+### After the code review
+
+The review returned four findings and no blocker. Three were applied; the fourth was recorded rather than fixed, for the reason the plan gave for not touching it.
+
+**A claim this change wrote into two docstrings was false, and it came from the plan review rather than from the tree.** Round 2 of the plan review raised that `unittest` reports an `AssertionError` raised in `setUp` as an *error* rather than a failure. It was accepted without probing, written into design.md decision 3, the proposal and two docstrings, and survived two further plan-review rounds. It is wrong: `TestCase.run` routes by whether the exception is an instance of `failureException`, not by which part raised it. Probed on the pinned Python 3.12 — `setUp` and test method each give `errors=0 failures=1`. All four places corrected to say the property is uniform, and design.md records that it got it wrong rather than quietly restating it. **The lesson is the one this change is otherwise about:** a claim about behaviour is checked against the thing that behaves, and a reviewer asserting it is not that thing.
+
+**A divergence the change had introduced without noticing.** `galaxy_role_directories()` guarded only `yaml.YAMLError`, so a manifest that `read_text` could not decode or open escaped as a raw `UnicodeDecodeError` or `OSError` — past the refusal `ManifestNotUsable` exists to deliver, and past this change's own promise that the message names the file. The selector's copy already covered both. That was survivable while the pinning checks alone reached this function and stopped being so when the whole suite's enumeration was put on it, which is this change's doing. Widened to match the selector, with two tests added: one per implementation, and the matrix-module one asserts **both** refuse the same undecodable manifest, which is the binding this change claims for the duplication. Bytes rather than `chmod`, since an unreadable file is readable to root.
+
+**A dead import** of `galaxy_role_directories` in `test_apt_index_staleness_bound.py`, left when `own_role_names()` was reduced. Removed. Nothing in this repository's toolchain would have caught it: neither `ruff` nor `pyflakes` is installed here or run by any hook.
+
+**Not fixed, recorded instead.** `test_an_external_galaxy_dependency_contributes_no_edge_and_is_not_refused` filters graph targets with `if "." in target` — the heuristic this change removed — and passes today only because its fixture builds no dotted role directory. The plan required that test to pass **unaltered**, because it is the guard establishing that the edge-filter change is behaviour-preserving; editing it in the same change that changes the filter would have removed the evidence. Carried to `docs/backlog.md` beside entry 54, which asks the same question of the workflow.
+
+**Re-verification after the fixes.** `python3 -m unittest discover --start-directory .github/tests` — **1285 tests, OK**, and identical with `ansible/roles/geerlingguy.docker/` absent. `pre-commit run --all-files` — every hook passes. `openspec validate --all` — 10 passed, 0 failed.
+
+**What the reviewer checked that this record should not claim for itself.** Both guards the plan asked a reviewer to test were verified rather than inferred: each moved symbol was compared across revisions through its AST with docstrings stripped, and all four are executable-identical, so no body moved altered; and `test_an_external_galaxy_dependency_contributes_no_edge_and_is_not_refused` is byte-identical across the diff. The review also reproduced the discrimination gate independently, by exporting `5dad086` and running the new classes against it — 3 of 4 and 3 of 6 failing, matching the table above.
+
 ## 6. Ship
 
 - [ ] 6.1 Commit the implementation and dispatch the code review over the committed diff, as `AGENTS.md`'s `build` stage requires. Give the reviewer two things explicitly: decision 7's guard — the moved block is read with `git diff --color-moved`, and a body altered under cover of the move is what to look for — and decision 2's scope argument, since the diff reaches production code and a reviewer is entitled to ask why.
