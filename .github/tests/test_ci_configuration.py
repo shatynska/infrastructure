@@ -13233,6 +13233,12 @@ def secret_env_names(path: Path | None = None) -> frozenset:
     target = (
         ROOT / ".github" / "workflows" / "platform-deploy.yml" if path is None else path
     )
+    if not target.is_file():
+        raise AssertionError(
+            f"{target} does not exist, so no name can be classified as secret-bearing "
+            f"and every URL check below would pass having examined nothing. If the "
+            f"platform deploy has been renamed or moved, point this at it"
+        )
     text = target.read_text(encoding="utf-8")
     names = frozenset(ENV_NAME_FROM_SECRET.findall(text))
     if not names:
@@ -13280,10 +13286,18 @@ SECRET_TOKENS = frozenset(
 # lookbehind keeps it out.
 INTERPOLATION = re.compile(r"(?<!\$)\$(?:\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|([A-Za-z_][A-Za-z0-9_]*))")
 URL_SHAPED = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
-# A scheme-less authority followed by a path: `host/…` or `host:5432/…`. What
-# `DATA_SOURCE_URI` itself is, and deliberately not a leading `/`, so an
-# ordinary filesystem path is not read as a URL.
-AUTHORITY_PATH = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]*(?::\d+)?/")
+# A scheme-less authority followed by a path -- `host:5432/…` or
+# `example.test/…` -- which is what `DATA_SOURCE_URI` itself is. SEARCHED in
+# the text before the secret rather than anchored at the start of its word, so
+# a leading quote or a `--flag=` prefix does not defeat it; anchoring is what
+# made this arm miss every quoted form while its siblings caught them.
+#
+# An authority must carry a PORT or a DOTTED NAME. Without that requirement
+# `/var/lib/${DB_PASSWORD}/data` reads as authority `var` plus a path, and an
+# ordinary filesystem path becomes a URL.
+AUTHORITY_PATH = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)*(?:\.[A-Za-z]{2,}|:\d+)/"
+)
 # The characters that carry structure in a URL. A secret touching one of these
 # can move a boundary; a secret with whitespace either side of it cannot.
 # `#` is in the set because it is the character this whole check exists for --
@@ -13391,9 +13405,7 @@ def _scan(path, note_secret, note_offence) -> None:
             # shape this check claims to cover. Anchored on a host-looking
             # authority so an ordinary filesystem path -- `/etc/${THING}/x` --
             # is not swept in.
-            path = (
-                before.endswith("/") or after.startswith("/")
-            ) and AUTHORITY_PATH.match(token) is not None
+            path = AUTHORITY_PATH.search(before) is not None
             if not (userinfo or query or appended or path):
                 continue
             note_offence(offence(name, where))
@@ -13710,6 +13722,41 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
             "      DATA_SOURCE_URI: example.test/${POSTGRES_EXPORTER_PASSWORD}/x\n"
         )
         self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_scheme_less_path_is_reported_however_it_is_wrapped(self) -> None:
+        """FALSIFIED -- the arm was anchored at the start of the secret's word
+        while its siblings read the quote-stripped text, so a leading quote or
+        a `--flag=` prefix defeated it. Both wrappings are the idiomatic ones:
+        quoting inside a `configs:` block, and `--flag=` in a `command:`."""
+        for label, body in (
+            (
+                "quoted config line",
+                "services:\n  a:\n    image: a:1\n"
+                "configs:\n  c:\n    content: |\n"
+                "      uri: 'host:5432/${POSTGRES_PASSWORD}/x'\n",
+            ),
+            (
+                "quoted list item in a config",
+                "services:\n  a:\n    image: a:1\n"
+                "configs:\n  c:\n    content: |\n"
+                '      - "host:9090/${DEADMANSWITCH_URL}/m"\n',
+            ),
+            (
+                "flag-prefixed command entry",
+                "services:\n  e:\n    image: e:1\n    command:\n"
+                "      - --dsn=postgres:5432/${POSTGRES_PASSWORD}/x\n",
+            ),
+            (
+                "quoted healthcheck argument",
+                "services:\n  e:\n    image: e:1\n    healthcheck:\n"
+                "      test: [\"CMD-SHELL\", \"wget 'h.test:9187/"
+                "${POSTGRES_PASSWORD}/m'\"]\n",
+            ),
+        ):
+            with self.subTest(label):
+                self.assertEqual(
+                    1, len(secrets_interpolated_into_urls(self.compose_fixture(body)))
+                )
 
     def test_a_filesystem_path_is_not_a_url(self) -> None:
         """DERIVED -- the converse of the arm above: an absolute path is not an
