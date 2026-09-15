@@ -194,8 +194,8 @@
 
       # Enumerated first, and its status checked in its own right rather than
       # as the head of a pipeline whose failure would be swallowed and printed
-      # as `considered 0, removed 0` -- byte-identical to a healthy run over a
-      # host with nothing to reclaim.
+      # as `considered 0, removed 0, refused 0` -- byte-identical to a healthy
+      # run over a host with nothing to reclaim.
       if ! listing=$(docker images -a --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null); then
         abandon "the local images could not be enumerated"
       fi
@@ -390,7 +390,16 @@
           case "$rm_output" in
             *'Deleted: '*) dropped=1 ;;
           esac
-          if [ "$rm_status" -ne 0 ]; then
+          # A non-zero status is not yet a refusal. `no such image` means the
+          # image was GONE before this invocation -- a concurrent app-deploy
+          # reclaimed it in the window this script own summary comment
+          # acknowledges -- and the runtime rejected nothing. Counting it would
+          # send an operator hunting a keep-set defect that is not there, and
+          # the delta already takes the symmetric position for `removed`: an
+          # image a concurrent actor removed is not this run work. Same `grep`
+          # on the same slot as the keep-set resolution above, which draws the
+          # "could not ask" / "answered nothing" line in the same place.
+          if [ "$rm_status" -ne 0 ] && ! grep -qi 'no such image' "$inspect_err"; then
             rejected=1
             rejected_reason="$(tr -d '\n' < "$inspect_err")"
           fi
@@ -406,7 +415,10 @@
             case "$rm_output" in
               *'Deleted: '*) dropped=1 ;;
             esac
-            if [ "$rm_status" -ne 0 ]; then
+            # Same exclusion as the by-identity branch, and needed here too
+            # even though the re-check above narrows the window rather than
+            # closing it: the tag can go between that check and this call.
+            if [ "$rm_status" -ne 0 ] && ! grep -qi 'no such image' "$inspect_err"; then
               rejected=1
               rejected_reason="$(tr -d '\n' < "$inspect_err")"
             fi

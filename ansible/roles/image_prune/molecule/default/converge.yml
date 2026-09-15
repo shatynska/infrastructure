@@ -231,6 +231,12 @@
           localhost:5000/imgprune-fixture/multirepo-b:seed
         docker push localhost:5000/imgprune-fixture/multirepo-a:seed >/dev/null
         docker push localhost:5000/imgprune-fixture/multirepo-b:seed >/dev/null
+        # Index 0 of TWO entries, and which one it is does not matter: both
+        # pushes sent the same manifest, so both repository digests carry the
+        # same sha256 and only the repository half differs -- which is
+        # discarded by the cut. Stated because the same read on the pinned
+        # fixture above has exactly one entry, and a reader could take this one
+        # for a copy of it.
         MULTIREPO_DIGEST="$(docker image inspect \
           --format '{{index .RepoDigests 0}}' \
           localhost:5000/imgprune-fixture/multirepo-a:seed | cut -d@ -f2)"

@@ -407,7 +407,6 @@
         cat /var/tmp/image-prune-run1.out /var/tmp/image-prune-run1.err \
           > /var/tmp/image-prune-run1.all
         echo "RC $rc"
-        echo "SHAPE $(grep -ciE 'considered[[:space:]]*[0-9]+,[[:space:]]*removed[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all || true)"
         echo "CONSIDERED $(grep -oiE 'considered[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all | grep -oE '[0-9]+' | head -n 1 || true)"
         echo "REMOVED $(grep -oiE 'removed[[:space:]]*[0-9]+' /var/tmp/image-prune-run1.all | grep -oE '[0-9]+' | head -n 1 || true)"
       args:
@@ -419,27 +418,6 @@
       ansible.builtin.command: cat /var/tmp/image-prune-run1.all
       register: image_prune_run1_report
       changed_when: false
-
-    # ------------------------------------------------------------
-    # Delta scenario: A completed run reports what it did
-    # ------------------------------------------------------------
-    - name: Assert the completed run reported both counts, deduplicated by identity, and exited zero
-      ansible.builtin.assert:
-        that:
-          - "'RC 0' in image_prune_run1.stdout_lines"
-          - "'SHAPE 1' in image_prune_run1.stdout_lines"
-          - ('CONSIDERED ' + image_prune_identities.stdout_lines[0].split(' ')[1])
-            in image_prune_run1.stdout_lines
-          - ((image_prune_run1.stdout_lines
-             | select('match', '^REMOVED ') | first).split(' ')[1] | int) >= 1
-        fail_msg: >-
-          A completed run SHALL report how many images it considered and how
-          many it removed, counted over DISTINCT IMAGE IDENTITIES, and SHALL
-          exit zero. The considered count is asserted equal to the number of
-          distinct identities on the host immediately before the run -- an
-          implementation counting `docker images` rows would report the two
-          two-tag fixtures twice each and fail here. Run output:
-          {{ image_prune_run1_report.stdout }}
 
     # ------------------------------------------------------------
     # THE THIRD COUNT, read as a FIELD rather than as a substring. Added by the
@@ -477,12 +455,13 @@
     # change report-refused-removals-in-the-host-prune, which makes it three
     # counts rather than two.
     #
-    # The two-count assertion immediately above is not the same assertion and
-    # does not stand in for this one: it matches `considered N, removed M`
-    # UNANCHORED, so it passes against a three-field line while establishing
-    # nothing whatever about the third field. That change records it as its
-    # obsolete test for exactly that reason; see its test-plan.md, which marks
-    # it a candidate for human confirmation rather than deleting it here.
+    # This SUPERSEDES the two-count assertion that stood here, which that
+    # change records as its obsolete test. That one matched
+    # `considered N, removed M` UNANCHORED, so it passed against a three-field
+    # line while establishing nothing whatever about the third field; every
+    # clause it carried -- the exit status, the deduplicated considered count
+    # and a non-zero removed count -- is asserted below, so it was deleted as
+    # subsumed rather than left standing as a weaker duplicate.
     # ------------------------------------------------------------
     - name: Assert the completed run reported all three counts, contiguously and in order, and exited zero
       ansible.builtin.assert:
