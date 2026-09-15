@@ -8,13 +8,17 @@ Verification commands referenced below, from this project's conventions:
 
 ## 1. Verify the plan resolves and the fact still holds
 
-- [ ] 1.1 Run `openspec validate correct-the-tfvars-parenthetical-that-names-labels --strict` and confirm the delta resolves against the current main spec with no error.
-- [ ] 1.2 Re-confirm the fact this change corrects, against the tree at implementation time rather than trusting `proposal.md`'s earlier measurement: neither `terraform/stacks/main-production/terraform.tfvars` nor `terraform/stacks/main-staging/terraform.tfvars` assigns `labels`, and neither stack's `main.tf` passes `labels` to a module. Record the command used and its result in this task's completion note.
+- [x] 1.1 Run `openspec validate correct-the-tfvars-parenthetical-that-names-labels --strict` and confirm the delta resolves against the current main spec with no error.
+      **Performed 2026-09-15.** Reports "Change 'correct-the-tfvars-parenthetical-that-names-labels' is valid". Independently re-confirmed by `ai-toolkit:change-plan-reviewer`, which resolved the delta itself and returned APPROVED.
+- [x] 1.2 Re-confirm the fact this change corrects, against the tree at implementation time rather than trusting `proposal.md`'s earlier measurement: neither `terraform/stacks/main-production/terraform.tfvars` nor `terraform/stacks/main-staging/terraform.tfvars` assigns `labels`, and neither stack's `main.tf` passes `labels` to a module. Record the command used and its result in this task's completion note.
+      **Performed 2026-09-15.** `grep -rn "labels" terraform/stacks/main-production/ terraform/stacks/main-staging/` finds `labels` only inside each stack's own `ssh_key.tf` (a literal resource block, not a `terraform.tfvars`-sourced value); neither `terraform.tfvars` file and neither `main.tf`'s module blocks assign it. Independently re-verified by both `ai-toolkit:change-plan-reviewer` and `ai-toolkit:change-test-writer`, each reading the files directly rather than trusting this note.
 
 ## 2. Verify the suite stays green
 
-- [ ] 2.1 Run `python3 -m unittest discover --start-directory .github/tests` and confirm it passes; no assertion in that suite reads this table cell today, so no output is expected to change.
-- [ ] 2.2 Run `openspec validate --all` and confirm no other change in flight is broken by this one.
+- [x] 2.1 Run `python3 -m unittest discover --start-directory .github/tests` and confirm it passes; no assertion in that suite reads this table cell today, so no output is expected to change.
+      **Performed 2026-09-15** by `ai-toolkit:change-test-writer`, as this change's derived-test dispatch: 1276 tests, OK, unscoped. It also confirmed independently that all three of the requirement's scenarios are byte-identical to the currently recorded spec, so this `MODIFIED` delta owes no new test — see `test-plan.md`.
+- [x] 2.2 Run `openspec validate --all` and confirm no other change in flight is broken by this one.
+      **Performed 2026-09-15.** Totals: 10 passed, 0 failed (10 items); only pre-existing `[INFO]`-level length notices, no `[ERROR]`.
 
 ## 3. Archive
 
