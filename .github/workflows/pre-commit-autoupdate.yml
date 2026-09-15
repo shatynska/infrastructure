@@ -72,8 +72,11 @@ jobs:
         with:
           python-version: "3.x"
 
+      # Pinned, from the same manifest every other job installs from, so this
+      # workflow updates the hooks with the `pre-commit` the rest of the
+      # pipeline verified under rather than with whatever PyPI serves today.
       - name: Install pre-commit
-        run: pip install pre-commit
+        run: pip install -r .github/requirements-ci.txt
 
       - name: pre-commit autoupdate
         run: pre-commit autoupdate

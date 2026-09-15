@@ -28,13 +28,3 @@ resource "hcloud_ssh_key" "this" {
     managed_by  = "terraform"
   }
 }
-
-# One-time relocation: this resource used to live inside the server
-# module (module.server.hcloud_ssh_key.this) before modules/server
-# stopped owning SSH keys. `moved` tells Terraform this is the same
-# real-world object at a new address — no destroy, no recreate, no
-# re-import. Safe to delete once the next apply has run.
-moved {
-  from = module.server.hcloud_ssh_key.this
-  to   = hcloud_ssh_key.this
-}
