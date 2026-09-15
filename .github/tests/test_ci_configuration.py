@@ -13205,9 +13205,19 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
 # SLACK_WEBHOOK_URL and DEADMANSWITCH_URL are classified: both are bearer
 # credentials whose whole value is a URL, and no keyword in either name says so.
 # A set of keywords alone had them wrong, and had them wrong silently.
+# Tolerant of how the value is wrapped, because the rendering is expected to
+# change: `docs/backlog.md` `render-the-env-file-so-a-secret-survives-it` fixes
+# an unquoted `echo` that lets Compose's dotenv parser expand a `$` in the
+# secret, and its remedy is quoting -- which a pattern pinned to the current
+# spelling would stop matching, taking this whole check down with a message
+# about an empty workflow.
 ENV_NAME_FROM_SECRET = re.compile(
-    r"""echo\s+"([A-Za-z_][A-Za-z0-9_]*)=\$\{\{\s*secrets\."""
+    r"""(?:echo|printf)[^\n]*?\b([A-Za-z_][A-Za-z0-9_]*)=['"]?\$\{\{\s*secrets\."""
 )
+# Whether the workflow mentions repository secrets at all. Used only to tell
+# "this renders no secret" apart from "this renders secrets in a spelling the
+# pattern above does not recognise" -- two very different things to be told.
+ANY_SECRET_REFERENCE = re.compile(r"\$\{\{\s*secrets\.")
 
 
 @functools.lru_cache(maxsize=None)
@@ -13221,8 +13231,18 @@ def secret_env_names(path: Path | None = None) -> frozenset:
     target = (
         ROOT / ".github" / "workflows" / "platform-deploy.yml" if path is None else path
     )
-    names = frozenset(ENV_NAME_FROM_SECRET.findall(target.read_text(encoding="utf-8")))
+    text = target.read_text(encoding="utf-8")
+    names = frozenset(ENV_NAME_FROM_SECRET.findall(text))
     if not names:
+        if ANY_SECRET_REFERENCE.search(text):
+            raise AssertionError(
+                f"{target} does reference repository secrets, but this check cannot "
+                f"see which `.env` names it renders them into -- the rendering is "
+                f"written in a form ENV_NAME_FROM_SECRET does not recognise. Widen "
+                f"that pattern to the new spelling. This is NOT a workflow that "
+                f"renders no secret, and the distinction matters: until it is "
+                f"widened, no variable is classified as secret-bearing by name"
+            )
         raise AssertionError(
             f"{target} renders no `.env` name from a GitHub secret, so no variable "
             f"can be classified as secret-bearing and every URL check below would "
@@ -13260,7 +13280,10 @@ INTERPOLATION = re.compile(r"(?<!\$)\$(?:\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}|([A-Z
 URL_SHAPED = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 # The characters that carry structure in a URL. A secret touching one of these
 # can move a boundary; a secret with whitespace either side of it cannot.
-URL_STRUCTURE = frozenset(":/@?&=")
+# `#` is in the set because it is the character this whole check exists for --
+# it begins a fragment and discards the host after it. Leaving it out made the
+# `appended` shape below unreachable for exactly that character.
+URL_STRUCTURE = frozenset(":/@?&=#")
 
 
 def names_a_secret(name: str) -> bool:
@@ -13309,8 +13332,13 @@ def _scan(path, note_secret, note_offence) -> None:
             while right < len(value) and not value[right].isspace():
                 right += 1
             token = value[left:right]
-            before = value[left : match.start()]
-            after = value[match.end() : right]
+            # Quotes are stripped before the shape tests below. A `configs:`
+            # block is raw text where quoting a value is idiomatic -- the
+            # Alertmanager config is exactly that -- and a rule keyed on the
+            # secret starting its token, or sitting right after a `:`, is
+            # defeated by one `'`. The defect is identical either way.
+            before = value[left : match.start()].lstrip("\"'")
+            after = value[match.end() : right].rstrip("\"'")
             # The secret standing alone in its token is the opposite case: the
             # secret IS the value, as Alertmanager's api_url is, and nothing it
             # contains can move a boundary.
@@ -13359,6 +13387,22 @@ def _scan(path, note_secret, note_offence) -> None:
         for key, value in pairs:
             if value is not None:
                 inspect(f"service {name}, {key}", str(value))
+
+        # `command:`, `entrypoint:` and `labels:` interpolate too, and this
+        # stack already puts a deploy-rendered secret in a command -- Traefik's
+        # `--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}`. A
+        # check reading `environment:` alone would call the file clean while
+        # the same defect sat one key away.
+        for key in ("command", "entrypoint", "labels"):
+            block = definition.get(key)
+            if isinstance(block, str):
+                inspect(f"service {name}, {key}", block)
+            elif isinstance(block, list):
+                for index, entry in enumerate(block):
+                    inspect(f"service {name}, {key}[{index}]", str(entry))
+            elif isinstance(block, dict):
+                for label, entry in block.items():
+                    inspect(f"service {name}, {key}.{label}", str(entry))
 
     # The inline `configs:` blocks interpolate too, and a password embedded in
     # a URL there fails the same way -- Alertmanager's routing is built this
@@ -13509,6 +13553,81 @@ class TestNoSecretIsInterpolatedIntoAUrl(unittest.TestCase):
             "      api_url: ${SLACK_WEBHOOK_URL}/extra\n"
         )
         self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_fragment_appended_to_a_url_valued_secret_is_reported(self) -> None:
+        """FALSIFIED -- `#` is the character the incident was about, and it was
+        the one appended shape this check could not reach: it was listed in the
+        appended arm but missing from the punctuation set gating it."""
+        fixture = self.compose_fixture(
+            "services:\n  a:\n    image: a:1\n"
+            "configs:\n  c:\n    content: |\n"
+            "      api_url: ${SLACK_WEBHOOK_URL}#frag\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_quoting_does_not_hide_the_defect(self) -> None:
+        """FALSIFIED -- a config block is raw text where quoting is idiomatic,
+        and a rule keyed on the secret starting its token, or following a `:`,
+        was defeated by a single `'`."""
+        for line in (
+            "      uri: '${DB_PASSWORD}@postgres:5432/d'\n",
+            '      api_url: "${SLACK_WEBHOOK_URL}/extra"\n',
+        ):
+            with self.subTest(line=line.strip()):
+                fixture = self.compose_fixture(
+                    "services:\n  a:\n    image: a:1\n"
+                    "configs:\n  c:\n    content: |\n" + line
+                )
+                self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_command_is_read(self) -> None:
+        """FALSIFIED -- `environment:` is not the only place a secret is
+        interpolated: this stack already puts one in Traefik's command."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n"
+            "    command:\n      - --dsn=postgresql://u:${DB_PASSWORD}@h:5432/d\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_a_label_is_read(self) -> None:
+        """FALSIFIED -- labels take interpolations too, and Traefik's routing
+        is configured entirely through them."""
+        fixture = self.compose_fixture(
+            "services:\n  e:\n    image: e:1\n"
+            "    labels:\n      probe: https://u:${API_KEY}@example.test/x\n"
+        )
+        self.assertEqual(1, len(secrets_interpolated_into_urls(fixture)))
+
+    def test_an_unrecognised_rendering_is_named_as_such(self) -> None:
+        """DERIVED -- entry 62's own remedy is to quote the rendered value,
+        which a pattern pinned to today's spelling would stop matching. The
+        failure must say that rather than 'this workflow renders no secret'."""
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        unknown = directory / "platform-deploy.yml"
+        unknown.write_text(
+            'jobs:\n  d:\n    steps:\n      - run: |\n'
+            '          cat <<EOF >.env\n'
+            '          A=${{ secrets.PLATFORM_A }}\n'
+            '          EOF\n',
+            encoding="utf-8",
+        )
+        with self.assertRaises(AssertionError) as raised:
+            secret_env_names(unknown)
+        self.assertIn("does reference repository secrets", str(raised.exception))
+
+    def test_the_quoted_rendering_entry_62_proposes_is_read(self) -> None:
+        """DERIVED -- the converse, so the widened pattern is known to accept
+        the shape that is expected to land rather than merely to fail loudly."""
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        quoted = directory / "platform-deploy.yml"
+        quoted.write_text(
+            '      - run: |\n'
+            '          echo "POSTGRES_PASSWORD=\'${{ secrets.PLATFORM_POSTGRES_PASSWORD }}\'"\n',
+            encoding="utf-8",
+        )
+        self.assertEqual(frozenset({"POSTGRES_PASSWORD"}), secret_env_names(quoted))
 
     def test_a_secret_in_a_query_parameter_is_reported(self) -> None:
         """FALSIFIED -- the shipped DATA_SOURCE_URI already ends in a query
