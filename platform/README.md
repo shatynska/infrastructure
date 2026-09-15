@@ -59,7 +59,7 @@ A non-relational store — a Redis cache, a queue file, an uploads directory —
 
 Where a classification is what admits the data, tell the operator before the window rather than after. On the production host a database is already provisioned for `commerce-ops` and stands empty, reserved for a cutover that waits on a specification change classifying that application's production data as tolerable to lose; from the moment that lands and the data moves in, discarding production's volume deletes it for good.
 
-Then, **per host**, in this order, and **take the unreviewed stack first** — step 3 explains why that ordering is free. A stack whose deploy waits for a reviewer is the one whose volume you discard last, after you have watched the instance come up healthy on the new major somewhere else. That is the only protection against an image-level incompatibility like the one above: found on staging it costs a re-plan, found on production it is found with production's data already gone.
+Then, **per host**, in this order, and **take the ungated stacks first** — step 3 explains why that ordering is free. One merge reaches *every* stack whose GitHub Environment has no reviewer, so steps 1 and 2 must be complete on **all** of them before the merge, not on one of them: a second ungated stack left with its volume in place meets the new major unattended and its instance is down with nobody watching. A stack whose deploy waits for a reviewer is the one whose volume you discard last, after you have watched the instance come up healthy on the new major somewhere else. That is the only protection against an image-level incompatibility like the one above: found on an ungated stack it costs a re-plan; found on a reviewed one it is found with that host's data already gone.
 
 Each step says where it runs. The on-host commands address the containers and the volume directly rather than through `docker compose`, and that is deliberate: `/opt/platform` is `deploy:deploy` mode `0750` and `ansible/roles/ops_user` grants an operator account the `docker` group and never `deploy`, so it cannot read the Compose file `docker compose` would need — and `docker` group membership is enough for every command below.
 
@@ -70,14 +70,14 @@ Each step says where it runs. The on-host commands address the containers and th
 
    The `$POSTGRES_USER` is expanded **inside** the container deliberately: that variable is the instance's superuser name from this stack's own `.env`, and it exists in the container's environment and not in the shell you are typing into. Expanded outside, it is empty and `psql` tries to connect as your own account.
 
-2. **On the host — discard the database and its volume.** Only the `postgres` container — Traefik, Grafana and the rest keep serving, and `postgres-exporter` goes red for the length of the window, which is expected. Nothing else mounts this volume, so removing that one container is what frees it:
+2. **On the host — discard the database and its volume.** Only the `postgres` container — Traefik, Grafana and the rest keep serving. `postgres-exporter` does **not** go red: it keeps serving `/metrics` with HTTP 200 and reports `pg_up 0`, so its container stays healthy, its Prometheus target stays up, and nothing alerts for the length of the window. Nothing else mounts this volume, so removing that one container is what frees it:
 
        docker rm -f platform-postgres-1
        docker volume rm platform_postgres_data
 
    **Check** `docker volume ls --filter name=platform_postgres_data` lists no volume. **On the production host, `commerce-ops-postgres-1` and `commerce-ops_commerce_ops_pgdata` are not this instance** — that is an application's own container, holding durable data, and nothing here touches it.
 
-3. **From a workstation — let the deploy carry the new major to that host.** Merging the pull request that changes the pin starts one `platform-deploy.yml` run covering every opted-in stack; a stack whose GitHub Environment has no reviewer deploys immediately, and one that has a reviewer waits in that run for an approval. So the merge is what reaches an unreviewed stack, and the approval is what reaches a reviewed one — which is why step 2 comes before the merge on the first and before the approval on the second, and why the unreviewed stack goes first: its whole window can complete while the reviewed stack's deploy is still sitting unapproved and its data still on disk. A host whose window falls after that run is over is redeployed on its own, by a `workflow_dispatch` of that workflow from the default branch naming its stack.
+3. **From a workstation — let the deploy carry the new major to that host.** Merging the pull request that changes the pin starts one `platform-deploy.yml` run covering every opted-in stack; a stack whose GitHub Environment has no reviewer deploys immediately, and one that has a reviewer waits in that run for an approval. So the merge is what reaches every ungated stack at once, and an approval is what reaches each reviewed one — which is why steps 1 and 2 come before the merge on all of the first kind and before the approval on each of the second, and why the ungated ones go first: their whole window can complete while a reviewed stack's deploy is still sitting unapproved and its data still on disk. A host whose window falls after that run is over is redeployed on its own, by a `workflow_dispatch` of that workflow from the default branch naming its stack.
 
    **Check**, on the host, that the instance came back on the new major. `docker ps` without `-a` is not the check: after a failed upgrade the container is precisely not running, and the filter prints an empty table and exits 0, which reads like output you have not scrolled to.
 
@@ -86,7 +86,13 @@ Each step says where it runs. The on-host commands address the containers and th
 
    If it exited, `docker logs platform-postgres-1` says why, and the entrypoint's refusals name what they found. **Stop here rather than continuing to the next host.**
 
-4. **On the host — recreate postgres-exporter's role.** It lives in the volume that was just discarded, so it is gone — run "One manual step per stack: postgres-exporter's monitoring role" below, with that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD`. **Check** `MetricsTargetDown` stops firing for the `postgres-exporter` job.
+4. **On the host — recreate postgres-exporter's role.** It lives in the volume that was just discarded, so it is gone — run "One manual step per stack: postgres-exporter's monitoring role" below, with that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD`.
+
+   **Check** the exporter can actually reach the instance. `MetricsTargetDown` is not that check and cannot be: it is `up == 0`, and the exporter answers `/metrics` with HTTP 200 whether or not it can connect, so a mistyped password leaves the target up, the alert silent and PostgreSQL's metrics quietly absent.
+
+       docker exec platform-postgres-exporter-1 wget -qO- http://localhost:9187/metrics | grep -E '^pg_up |^pg_exporter_last_scrape_error '
+
+   `pg_up 1` and `pg_exporter_last_scrape_error 0` is the pass. Anything else means the role or its password is wrong, and it is worth fixing here rather than discovering later — nothing in this stack alerts on it.
 
 5. **From a workstation — re-provision every application database, then redeploy that application.** Each is gone with the volume, which each application's classification tolerates and none can start without. Run the recipe in `docs/onboard-an-application.md` for that host, per application, with `rotate=yes`. **That block is a workstation paste, not an on-host one** — it calls `gh` and then reaches the host over `ssh` itself, so pasted into a session on the host it aborts at the first `gh` under `set -eu`, having changed nothing. The password is generated fresh and delivered to that application's Environment, so only that application's **next deploy** picks it up. Trigger that deploy from the application's own repository; nothing here can. **Check** per application that it comes up and that `\l` in the instance lists its database owned by its own role.
 
@@ -121,7 +127,9 @@ CREATE ROLE pgexporter WITH LOGIN PASSWORD '<value of PLATFORM_POSTGRES_EXPORTER
 GRANT pg_monitor TO pgexporter;
 ```
 
-`pg_monitor` is Postgres's own built-in predefined role: read-only access to the statistics views postgres-exporter's standard collectors query, no table data access, no superuser. If this role is ever missing or its password out of sync (e.g. after rebuilding the shared instance), the `MetricsTargetDown` alert fires for the `postgres-exporter` job rather than that metrics gap going unnoticed.
+`pg_monitor` is Postgres's own built-in predefined role: read-only access to the statistics views postgres-exporter's standard collectors query, no table data access, no superuser.
+
+**If this role is ever missing or its password out of sync — after rebuilding the shared instance, or after the volume reset above — nothing tells you.** `MetricsTargetDown` does not, whatever an earlier reading of it suggested: it is `up == 0`, and postgres-exporter serves `/metrics` with HTTP 200 and `pg_up 0` when it cannot connect, so its target stays up and no alert fires while PostgreSQL's metrics are absent. Verified against `v0.20.1` on 2026-09-15. `pg_up` is what would catch it and nothing alerts on it yet — `docs/backlog.md` `alert-on-the-exporter-being-unable-to-read-postgres` is that gap. Until it lands, this is checked by hand, with the command in *Upgrading the PostgreSQL major version* above.
 
 ### One manual step per stack: dead-man's-switch registration
 

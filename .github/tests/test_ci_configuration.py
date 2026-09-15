@@ -12888,5 +12888,203 @@ class TestNoScenarioReadsAPathTheSuiteIsNoLongerTriggeredBy(unittest.TestCase):
             "this check exists to prevent",
         )
 
+# ---------------------------------------------------------------------------
+# The shared instance's data mount is coupled to its pinned major
+# ---------------------------------------------------------------------------
+#
+# From 18 the official PostgreSQL image declares `VOLUME /var/lib/postgresql`
+# and defaults `PGDATA` to `/var/lib/postgresql/<major>/docker`, so that an
+# upgrade can use `pg_upgrade --link` without crossing a mount boundary
+# (docker-library/postgres#1259). A volume mounted at the 17-and-earlier
+# `/var/lib/postgresql/data` makes 18 exit 1 -- against an EMPTY volume as
+# much as a populated one, so discarding the volume does not work around it.
+#
+# That makes the mount target a function of the pinned major, and nothing
+# else in this repository reads the two together. The failure it admits is the
+# expensive one: a major bump that edits `image:` alone passes every check
+# here, and is found by a red deploy on a host whose volume the upgrade
+# procedure has already discarded. `platform/README.md`'s "Upgrading the
+# PostgreSQL major version" states the coupling in prose; this asserts it.
+
+POSTGRES_SERVICE = "postgres"
+POSTGRES_DATA_VOLUME = "postgres_data"
+POSTGRES_PARENT_MOUNT_MAJOR = 18
+POSTGRES_PARENT_MOUNT = "/var/lib/postgresql"
+POSTGRES_LEGACY_MOUNT = "/var/lib/postgresql/data"
+
+
+def postgres_pinned_major(path: Path | None = None) -> int:
+    """The major version the shared instance's `image:` pins.
+
+    An image this cannot read a major out of is an assertion failure rather
+    than a skip: the mount check below would otherwise pass having compared
+    the mount against nothing.
+    """
+    images = dict(compose_service_images(path))
+    if POSTGRES_SERVICE not in images:
+        raise AssertionError(
+            f"the stack defines no service named {POSTGRES_SERVICE!r}, so the "
+            f"mount-to-major coupling cannot be read"
+        )
+    image = images[POSTGRES_SERVICE]
+    if image is None:
+        raise AssertionError(f"the {POSTGRES_SERVICE!r} service declares no image:")
+    _, tag, _ = parse_image_reference(image)
+    major, _, _ = tag.partition(".")
+    if not major.isdigit():
+        raise AssertionError(
+            f"the {POSTGRES_SERVICE!r} service names {image!r}, whose tag does not "
+            f"begin with a major version, so the mount it requires cannot be derived"
+        )
+    return int(major)
+
+
+def postgres_data_mount_offences(path: Path | None = None) -> list[str]:
+    """Every way the shared instance's data mount disagrees with its major."""
+    major = postgres_pinned_major(path)
+    expected = (
+        POSTGRES_PARENT_MOUNT
+        if major >= POSTGRES_PARENT_MOUNT_MAJOR
+        else POSTGRES_LEGACY_MOUNT
+    )
+    definition = compose_services(path)[POSTGRES_SERVICE]
+    mounts = definition.get("volumes") if isinstance(definition, dict) else None
+    targets = []
+    for entry in mounts if isinstance(mounts, list) else []:
+        if isinstance(entry, str):
+            source, _, rest = entry.partition(":")
+            target, _, _ = rest.partition(":")
+            if source == POSTGRES_DATA_VOLUME:
+                targets.append(target)
+        elif isinstance(entry, dict) and entry.get("source") == POSTGRES_DATA_VOLUME:
+            targets.append(str(entry.get("target", "")))
+
+    offences = []
+    if not targets:
+        offences.append(
+            f"{POSTGRES_SERVICE} mounts no {POSTGRES_DATA_VOLUME!r}, so the instance "
+            f"either keeps its data in the container's writable layer or names it "
+            f"something this check cannot follow"
+        )
+    for target in targets:
+        if target.rstrip("/") != expected:
+            offences.append(
+                f"{POSTGRES_SERVICE} pins major {major} and mounts "
+                f"{POSTGRES_DATA_VOLUME} at {target!r}, but {major} requires "
+                f"{expected!r}"
+            )
+
+    # The coupling above holds only while PGDATA is the image's own default.
+    # Pinning it back to the old path also starts, and switches off the
+    # entrypoint's old-database detection -- which is what makes a forgotten
+    # volume discard refuse loudly instead of initialising an empty cluster
+    # beside the previous major's data.
+    if "PGDATA" in service_environment(POSTGRES_SERVICE, path):
+        offences.append(
+            f"{POSTGRES_SERVICE} sets PGDATA, which overrides the image default the "
+            f"mount above is derived from, and switches off the entrypoint's "
+            f"old-database detection along with it"
+        )
+    return offences
+
+
+class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
+    """DERIVED -- `platform/docker-compose.yml`'s mount comment, and the
+    procedure in `platform/README.md` that rests on it."""
+
+    def compose_fixture(self, service: str, extra: str = "") -> Path:
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = directory / "docker-compose.yml"
+        path.write_text(
+            "services:\n" + service + "volumes:\n  postgres_data:\n" + extra,
+            encoding="utf-8",
+        )
+        return path
+
+    def test_the_committed_stack_mounts_where_its_major_requires(self) -> None:
+        offenders = postgres_data_mount_offences()
+        self.assertEqual(
+            [],
+            offenders,
+            "the shared PostgreSQL instance's data mount does not match the major "
+            f"it pins:\n  " + "\n  ".join(offenders) + "\n"
+            "From 18 the official image declares `VOLUME /var/lib/postgresql` and "
+            "defaults PGDATA to /var/lib/postgresql/<major>/docker; below 18 the "
+            "volume is /var/lib/postgresql/data. Mounted at the wrong one the "
+            "container exits 1 even against an empty volume, so the upgrade "
+            "procedure's volume discard does not rescue it. Move the mount in the "
+            "same commit as the pin -- see `platform/README.md`, "
+            '"Upgrading the PostgreSQL major version"',
+        )
+
+    def test_a_modern_major_at_the_legacy_mount_is_reported(self) -> None:
+        """FALSIFIED -- the shape this check exists for: a bump that edits
+        `image:` and leaves the mount where the previous major wanted it."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:18.6\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("/var/lib/postgresql/data", offenders[0])
+        self.assertIn("/var/lib/postgresql'", offenders[0])
+
+    def test_a_legacy_major_at_the_parent_mount_is_reported(self) -> None:
+        """FALSIFIED -- the converse, so the check is a coupling rather than a
+        one-way preference for the newer path."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:16.15\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("major 16", offenders[0])
+
+    def test_each_major_at_its_own_mount_is_accepted(self) -> None:
+        """DERIVED -- the converse half. Without it a check reporting every
+        stack would satisfy both falsifications above."""
+        for image, mount in (
+            ("postgres:18.6", "/var/lib/postgresql"),
+            ("postgres:16.15", "/var/lib/postgresql/data"),
+        ):
+            with self.subTest(image=image):
+                fixture = self.compose_fixture(
+                    f"  postgres:\n    image: {image}\n"
+                    f"    volumes:\n      - postgres_data:{mount}\n"
+                )
+                self.assertEqual([], postgres_data_mount_offences(fixture))
+
+    def test_pinning_pgdata_is_reported(self) -> None:
+        """FALSIFIED -- PGDATA set back to the old path starts, so nothing else
+        would catch it, and it disables the detection the procedure relies on."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:18.6\n"
+            "    environment:\n      PGDATA: /var/lib/postgresql/data\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("PGDATA", offenders[0])
+
+    def test_a_stack_mounting_no_data_volume_is_reported(self) -> None:
+        """FALSIFIED -- the non-vacuity guard. A service that mounts nothing
+        must fail rather than yield an empty offender list."""
+        fixture = self.compose_fixture("  postgres:\n    image: postgres:18.6\n")
+        offenders = postgres_data_mount_offences(fixture)
+        self.assertEqual(1, len(offenders), offenders)
+        self.assertIn("mounts no", offenders[0])
+
+    def test_an_unreadable_major_fails_rather_than_passing(self) -> None:
+        """FALSIFIED -- an image whose tag names no major must raise, not
+        silently compare the mount against a default."""
+        fixture = self.compose_fixture(
+            "  postgres:\n    image: postgres:latest\n"
+            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+        )
+        with self.assertRaises(AssertionError):
+            postgres_data_mount_offences(fixture)
+
+
 if __name__ == "__main__":
     unittest.main()
