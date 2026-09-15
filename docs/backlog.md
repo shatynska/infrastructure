@@ -885,7 +885,7 @@ Nothing fails: the service starts with the wrong credential, and for postgres-ex
 
 **And it must not be able to pass having read nothing.** Seven such interpolations exist today; assert a floor, or moving them into `env_file:` satisfies the check silently.
 
-## 61. make-a-shared-instance-reset-visible-to-its-applications
+## 67. make-a-shared-instance-reset-visible-to-its-applications
 
 **Not blocked. Recorded 2026-09-15 from an incident, by the session that triaged it, and not folded into entry 54 because it is the half of the problem that survives entry 54 being built.**
 
