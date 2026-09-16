@@ -353,7 +353,7 @@ services:
       # alertmanager_config alone, so editing the routing tree replaces this
       # container and nothing else. Regenerate it when that config changes; the
       # static check names the correct value.
-      platform.config-checksum: "076ba5edb811"
+      platform.config-checksum: "a9cea23fda3b"
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
     configs:
@@ -647,18 +647,17 @@ configs:
           - matchers:
               - alertname="TLSCertificateExpiringSoon"
             receiver: slack
-            # alert-on-certificate-expiry: this grouping is what makes the
-            # alert readable, not a preference. The slack receiver above
-            # renders {{ .CommonAnnotations.summary }}, and CommonAnnotations
-            # holds only the annotations IDENTICAL across every alert in a
-            # group. The summary names {{ $$labels.cn }}, so under the
-            # inherited group_by ["alertname"] two certificates firing
-            # together produce a notification with no title and no body.
-            # That is the expected case here, not an edge: this host's
+            # alert-on-certificate-expiry: the slack receiver now renders
+            # every alert's own annotations (name-every-alert-in-a-grouped-slack-notification),
+            # so this is no longer needed to keep the notification non-empty.
+            # It is kept for cadence: without it, two certificates firing
+            # together would share one group, and the 24h repeat_interval
+            # below would apply to the pair rather than to each certificate,
+            # so a second certificate expiring mid-window would ride the
+            # first one's countdown instead of starting its own. This host's
             # certificates are issued through one ACME account by one
-            # Traefik process, so whatever stops one renewing stops both.
-            # Grouping by cn puts each certificate in its own group and each
-            # notification back in possession of its annotations.
+            # Traefik process, so whatever stops one renewing stops both,
+            # making that the expected case rather than an edge.
             group_by: ["alertname", "cn"]
             # A legitimate three-week firing would re-notify ~126 times at
             # the inherited 4h, into the same #alerts channel every other
@@ -673,8 +672,21 @@ configs:
             - api_url: ${SLACK_WEBHOOK_URL}
               channel: "#alerts"
               send_resolved: true
-              title: "{{ .CommonAnnotations.summary }}"
-              text: "{{ .CommonAnnotations.description }}"
+              # name-every-alert-in-a-grouped-slack-notification: CommonAnnotations
+              # holds only annotation pairs identical across every alert in
+              # the group, so any alert naming a per-series label (e.g.
+              # ApplicationHighErrorRate's router) produced an empty title
+              # and body the moment two of them grouped together. Title uses
+              # CommonLabels.alertname instead, which every route's group_by
+              # includes and is therefore always common; the body lists each
+              # alert's own summary and description individually.
+              title: "{{ .CommonLabels.alertname }}"
+              text: |-
+                {{ range .Alerts -}}
+                {{ .Annotations.summary }}
+                {{ .Annotations.description }}
+
+                {{ end -}}
         - name: deadmansswitch
           webhook_configs:
             - url: ${DEADMANSWITCH_URL}
