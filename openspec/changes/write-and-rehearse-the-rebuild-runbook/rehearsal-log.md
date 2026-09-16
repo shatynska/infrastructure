@@ -153,3 +153,20 @@ Read back from the inventory, as the runbook says rather than from `terraform ou
    That is not a defect in the deployment: §5.3 permits a second key outright, for the reason this one exists — *"if you want to revoke one host's join without touching the other."* It is a gap in the runbook, which assumes the documented default and gives a reader with the permitted variant nothing to choose by. Phase 2 should name the description as the discriminator, and say that a fresh key is the cheap answer when it is unclear — a single-use key is burnt by the first join, so a rebuilt host needs one anyway.
 
    Cost: a few minutes of the operator's time, at a phase whose entire purpose is to prevent exactly that later.
+
+### Phase 7, first attempt — failed at inventory parse, 2026-09-16T~20:55Z
+
+    Invalid Hetzner Cloud API Token: unable to authenticate (unauthorized)
+    [ERROR]: Completely failed to parse inventory source .../main-staging.hcloud.yml
+
+`direnv` was not active in the operator's shell, so `HCLOUD_TOKEN_MAIN_STAGING` was unset. Nothing reached the host; the run failed before connecting.
+
+**This is the runbook working, not failing.** Phase 2's first command is that same inventory read, placed there so this surfaces before a converge is half-done. The operator went from phase 5 straight to phase 7 and met it there instead — which is the evidence that phase 2 earns its place rather than being a formality.
+
+**It is also `ansible.cfg`'s `any_unparsed_is_failed` earning its place.** Without it the source would have resolved to a group with no host in it and the play would have reported success having converged nothing — byte-identical to a host that was destroyed, which is precisely the state this host was in twenty minutes earlier. The clean failure naming the source is that setting's whole purpose, observed.
+
+### Divergence found in phase 7
+
+8. **Neither phase 2 nor phase 7 says how the token gets into the shell.** Phase 2 runs the inventory read and says a failure "names the source it could not parse", and phase 7 gives the `ansible-playbook` line — but neither mentions `direnv allow` or `source .envrc`, and `ansible/.envrc` is **per working tree**, so a tree cloned since the last rebuild has no token at all however well the main checkout is provisioned. Phase 1's credential line was corrected to say that during code review; phases 2 and 7, which are where it is actually used, were not.
+
+   The fix is one clause in phase 2: the read is run after `direnv allow` in `ansible/`, or after `source .envrc`, and the failure above is what an unprovisioned shell looks like.
