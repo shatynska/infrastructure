@@ -961,3 +961,21 @@ The last row is the tell. It differs because `provision-commerce-ops-database-in
 **What a change owes.** Give each stack its own Grafana admin password, and then decide where the separation is asserted, because a runbook step performed once is what let three values sit shared for weeks. Two things to decide inside that: whether `#alerts` stays production's and staging gets a new channel or both move, since the existing channel's history is production's; and whether the separation is worth asserting somewhere repeatable rather than in a runbook step — a probe comparing hashes across hosts is the shape that would work, and it needs a home, because it is a property of two running hosts and neither `.github/tests` nor Molecule can hold it.
 
 **Sequencing note, because it bites.** Replacing any of these three secrets does not reach the running container on a deploy — `make-a-rotated-secret-reach-its-inline-config` is why, and it covers the webhook and the dead-man's-switch. Plan the recreation as part of the work rather than discovering it afterwards.
+
+---
+
+## 57. decide-whether-the-data-volume-should-survive-a-server-toggle
+
+**Not blocked, and deliberately not yet worth doing. Recorded 2026-09-16 from a question asked during `write-and-rehearse-the-rebuild-runbook`'s rehearsal, once the destroy had shown what the coupling actually does.**
+
+Each stack couples its data volume to its server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`. So `server_enabled = false` discards the volume and everything on it. That was decided deliberately — `add-prod-data-volume`'s design records it as an accepted consequence rather than an oversight, and states the part that matters more: *"Unlike the server, Hetzner volumes have no automatic-backup equivalent, so this destroy has no data-durability net."* The server's automatic backups reach the root disk alone, so a store on the volume sits outside the only copy this host takes.
+
+**The rehearsal made it concrete.** The apply of 2026-09-16 destroyed the volume **first**, after 9 seconds, before the server it was attached to — which is a stronger statement than the documented coupling, that being only about the volume's inability to exist without the server. Anyone planning around "detach it and keep it" needs that ordering, and nothing here had said it, because nothing had run it.
+
+**What decoupling would take, and what it would cost.** Give the volume a `location` of its own instead of deriving it from `server_id`, and gate it on `volume_enabled` alone; the module omits `location` today precisely because the provider derives it from the attachment and requires the two to agree. Hetzner volumes can exist detached — it is this repository's module that cannot express one.
+
+The money is not the obstacle and should not be cited as one: a detached 10 GB volume is on the order of tens of cents a month. What it costs instead is the toggle's meaning. `terraform/stacks/main-staging/variables.tf` calls `server_enabled` *"the way to stop paying for staging without deleting its configuration"*, and a volume that survives makes "off" no longer free and no longer clean — a resource nothing reclaims, accumulating quietly across every cycle.
+
+**Why it is not worth doing now.** Under *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) nothing on that volume is durable: Prometheus's database is bounded by its own retention, Grafana's provisioned state is reproduced by a redeploy, and the shared instance admits no durable data at all. There is nothing there to protect, so decoupling would buy protection for data that does not exist.
+
+**The trigger is durable data landing on that host, not cost and not convenience.** At that point two things are owed together — the decoupling *and* a real backup — and **the decoupling alone is the more dangerous half**, because a volume that survives a toggle looks like protection while remaining unprotected against deletion, corruption, and the region. Whoever takes this should deliver both or neither. The production divergence that requirement already records — `commerce-ops`'s own PostgreSQL, which nothing backs up — is the first candidate to make the trigger real.
