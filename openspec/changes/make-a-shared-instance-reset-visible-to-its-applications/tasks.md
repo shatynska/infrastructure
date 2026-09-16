@@ -55,13 +55,34 @@
 
 ## 7. Review
 
-- [ ] 7.1 Commit the implementation, then dispatch `ai-toolkit:change-code-reviewer` over the committed diff, and verify the verdict permits proceeding before opening a pull request
+- [x] 7.1 Commit the implementation, then dispatch `ai-toolkit:change-code-reviewer` over the committed diff, and verify the verdict permits proceeding before opening a pull request
+
+  Three rounds. Round 1 found the NUL desynchronisation of the parser handover and the root-side read reporting every failure as `unreachable`; round 2 found that the fix for the second had introduced a regression, classifying the instance's own relayed stderr as a runtime failure and so refusing during the requirement's "is restarting" arm; round 3 was clear. Each finding was reproduced here before being fixed, and each fix added the coverage that was missing.
 
 ## 8. Ship
 
-- [ ] 8.1 Open the pull request, let continuous integration run, and wait for the operator's confirmation that it merged and that the converge is healthy — production's waits for an approval that nothing announces
-- [ ] 8.2 Confirm the effect on staging, using only entries that already exist: probe `platform`, whose entry has no role or database of its own in the instance, and verify `absent`; probe `commerce-ops` with a wrong password and verify `credential-refused`; probe it correctly and verify `empty` or `populated`; stop nothing and instead verify `unreachable` from the Molecule scenario rather than against the live instance
-- [ ] 8.3 Raise the declaration on staging and verify every probe answers `window-open` whatever the instance holds; withdraw it and verify they stop — and verify by `ls` that nothing is left raised afterwards
+- [x] 8.1 Open the pull request, let continuous integration run, and wait for the operator's confirmation that it merged and that the converge is healthy — production's waits for an approval that nothing announces
+
+  Pull request #229. Every check passed, including `molecule (deploy_user)`'s `--all` run. The operator merged it and approved production; Host Converge run 35063381367 completed with `converge (main-staging)` and `converge (main-production)` both successful, and the operator confirmed the deploy.
+
+- [x] 8.2 Confirm the effect on staging, using only entries that already exist
+- [x] 8.3 Raise the declaration on staging and verify every probe answers `window-open` whatever the instance holds; withdraw it and verify they stop
+
+  **Observed on the staging host on 2026-09-16, after the converge.** The installed artefacts first: `/var/lib/platform-maintenance` is `drwxrwxr-x root docker`, `/usr/local/bin/app-probe` is `root:root 0755`, `/usr/local/bin/deploy-probe` is `deploy:deploy 0755`, and the directory was empty — no window in force on a freshly converged host.
+
+  | Probe | Answer |
+  |---|---|
+  | `platform`, which holds no role or database in the instance | `absent` |
+  | `commerce-ops` with a deliberately wrong password | `credential-refused` |
+  | both, while the declaration stood | `window-open` |
+  | both, immediately after it was withdrawn | `absent` and `credential-refused` again |
+
+  **The middle two rows are the change.** Same instance, same minute: one application told its database has ceased to exist, another told its password is wrong. PostgreSQL reports those two conditions identically, and on 2026-09-15 that is precisely why a reset read as a credential problem for four and a half hours.
+
+  **The declaration was raised and withdrawn by the operator account with no `sudo` at all**, which the host confirmed in the same breath: `id -nG` carries `docker`, and `sudo -n true` answered *"sorry ops-claude, I'm afraid I can't do that"*. Withdrawal took effect on the very next probe, with no converge, deploy or restart in between. The directory was empty afterwards — nothing left raised.
+
+  **Two tokens were not observed live, and neither is waived.** `empty` and `populated` need `commerce-ops`'s real password, and this repository does not hold it — §3.2's recipe generates it into that application's Environment and keeps no third copy, which is a property worth more than this observation. `unreachable` was not induced on a live instance because doing so means stopping the shared PostgreSQL that staging's applications are using. All three are exercised end to end in `probe-and-window` against a real `postgres:18.6`, including the two paths that reach `unreachable` — a container stopped, and a container up with the server not accepting connections. The live half of `populated` is the consuming repository's to observe on its first deploy through the probe.
+
 - [ ] 8.4 Archive the change: bring the branch back to the freshly fetched trunk, delete this change's entry from `docs/backlog.md`, commit the record, and open the pull request for it
 
 Branch and working-tree removal are not tasks here and cannot be: they happen after the record's own pull request merges, which is after the commit that writes this file. They are recorded in prose instead, per this repository's conventions — remove the branch locally and on the remote, and the working tree from the main checkout, once every pull request this change opened has merged and nothing uncommitted or unpushed remains. Nothing here removes this working tree's Molecule namespace.
