@@ -200,15 +200,17 @@ Where data is placed in such a store and meets none of those reasons, a logical 
 
 This fallback reaches every store on this host **except** the shared PostgreSQL instance, which admits no durable data at all under *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) — a prohibition no backup lifts, because that instance's classification above depends on it holding unconditionally.
 
-The platform stack's stores as at 2026-09-08, and the reason each satisfies this requirement. One further store, an application's own, does not satisfy it and is named below rather than omitted:
+The platform stack's stores **as this change leaves them**, and the reason each satisfies this requirement. The census was re-read from both hosts on 2026-09-16 with `docker volume ls` and each container's mounts rather than from the stack definition — that reading is what the four unchanged rows rest on, and the shared instance's row names the location this change moves it to rather than the one that reading found. One further store, an application's own, does not satisfy it and is named below rather than omitted:
 
 | Store | Reason |
 |---|---|
-| The shared PostgreSQL instance's data — `postgres_data`, on the host `platform_postgres_data` | Non-durable by policy — *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) limits it to technical or temporary records whose loss is tolerable to the application that wrote them |
+| The shared PostgreSQL instance's data (`/mnt/main/postgres`) | Non-durable by policy — *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) limits it to technical or temporary records whose loss is tolerable to the application that wrote them |
 | Prometheus's time-series database (`/mnt/main/prometheus`) | Rolling retention it enforces on itself, bounded by both time and size |
 | Grafana's data directory (`/mnt/main/grafana`) | Split, and both halves are covered: the datasource and the dashboards this repository provisions are reproduced by a redeploy, and the rest is non-durable under the dashboard-state policy stated below |
 | Traefik's ACME storage — `traefik_letsencrypt`, on the host `platform_traefik_letsencrypt` | Certificates are re-issued on demand by the certificate authority |
 | Alertmanager's state, in the anonymous volume its image declares at `/alertmanager` | Non-durable under the alerting-state policy stated below. This store is declared by the image rather than by the stack definition, which is why the scope above reaches an anonymous volume and why the table was built from the host rather than from `platform/docker-compose.yml` |
+
+**Three of those five stores sit on the attached data volume and two on the root disk, and the split is not a durability ranking.** It follows from what each store costs to keep: Prometheus's database and the shared instance both grow with what the host does, and Grafana's sits there for the reason the change that moved it recorded, while what stays on the root disk — Traefik's ACME storage and Alertmanager's state — is small and re-issued or re-created. The consequence worth stating, because nothing else here would say it, is that the server's automatic backups reach the root disk alone — so a store on the volume is outside the only copy of anything this host takes. That is not a gap in this requirement: a store classified above needs no backup, and a store needing one owes the logical backup and rehearsed restore this requirement already demands, wherever it sits. It is stated so that the snapshot is not read as a safety net under a store it does not reach.
 
 That table is the classification on one date and will age; the obligation above is what does not. A store added later SHALL state which of the reasons above it satisfies, in the artifacts of the change that adds it — or, where the store is added outside this repository, in the change here that records it. That is where the second scenario below finds a reason to test, and it costs no delta to this table. Such a store is in scope whether or not the table names it, and a store already named is in breach the moment its stated reason stops being true — a retention flag removed from Prometheus, the provisioning stanza that reproduces Grafana's dashboards deleted from `platform/docker-compose.yml` — whether or not any new data landed.
 
@@ -240,3 +242,8 @@ Durable application data is expected to live in an external managed service that
 #### Scenario: The stated divergence is not a precedent
 - **WHEN** an application proposes keeping durable data on this host on the grounds that `commerce-ops` already does
 - **THEN** that SHALL NOT be treated as permission, because the divergence is recorded as unmet rather than as allowed
+
+#### Scenario: A classified store moves between the host's disks
+- **WHEN** a store named in the table above is relocated between the host's root disk and the attached data volume
+- **THEN** the table SHALL name it at the location it then occupies, so that no row names a store the host no longer has
+- **AND** its stated reason SHALL be reassessed against the reasons above rather than carried over unread, since a reason resting on where the store sits does not survive the move
