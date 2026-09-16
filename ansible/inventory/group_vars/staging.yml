@@ -80,7 +80,11 @@ ops_user_accounts:
 # Owner/group match each image's own upstream default user, so no `user:`
 # override is needed in the Compose service definitions: 65534/65534 is
 # prom/prometheus's default ("nobody"); 472/472 is grafana/grafana's own
-# documented default.
+# documented default; 999/999 is the `postgres` image's own user, which its
+# entrypoint steps down to after creating `<major>/docker` beneath this
+# directory as root (move-the-shared-database-onto-the-data-volume). `0755`
+# rather than the `1777` that image sets in its own filesystem: that mode
+# exists so it can run as an arbitrary uid, which this stack does not do.
 platform_data_volume_subdirs:
   - path: prometheus
     owner: "65534"
@@ -89,6 +93,10 @@ platform_data_volume_subdirs:
   - path: grafana
     owner: "472"
     group: "472"
+    mode: "0755"
+  - path: postgres
+    owner: "999"
+    group: "999"
     mode: "0755"
 
 # The path this volume used to be mounted at, removed from /etc/fstab so the
