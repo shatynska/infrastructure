@@ -30,21 +30,17 @@ hardening_ssh_allowed_cidrs:
 hardening_web_allowed_cidrs:
   - "0.0.0.0/0"
 
-# Per-application deploy public keys (add-per-app-deploy-keys). Safe to
-# commit -- these are public keys, not secrets; only each private half is
-# sensitive, and that never appears here (platform's lives in this
-# repository's PLATFORM_DEPLOY_SSH_KEY Environment secret; commerce-ops's
-# lives in that application's own repository's Environment secret, per
-# tasks.md 2.2). `platform`'s entry is the same keypair that already
-# authenticates the production host today (tasks.md 2.1's "existing platform
-# public key") -- restricting its authorized_keys entry to deploy-receive,
-# rather than rotating it, is what lets the migration in design.md's Migration Plan
-# proceed without needing a new secret on the platform-deploy.yml side.
-deploy_apps:
-  - name: platform
-    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKbTTA4VUQjmUt2+jOE3FxPahMc8i+bRvR6g8f+7/m9M deploy@platform"
-  - name: commerce-ops
-    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvqBXstDCjAlYAZ3i92iLanC+lDe44eNpS0UGa6N4jw commerce-ops-deploy"
+# `deploy_apps` IS NOT HERE, AND MUST NOT BE PUT BACK. The applications a host
+# authorises to deploy to it live in that host's own file --
+# `host_vars/main-production.yml` for this environment's one host today. An
+# entry in THIS file would authorise its key on every host in the environment,
+# and an environment may hold two stacks of different tenants; one leaked
+# private half must reach one host. See "A Host-Scoped Variable Lives in the
+# Host's Own Vars File" (openspec/specs/iac-host-configuration/spec.md).
+#
+# Writing a third environment's file from scratch: its host's `deploy_apps`
+# goes in `host_vars/<server name>.yml`, and `.github/tests` fails the pull
+# request if a stack has no such file.
 
 # Operator identities allowed an unprivileged, interactive login on this
 # host (add-ops-account). Safe to commit for the same reason deploy_apps's
