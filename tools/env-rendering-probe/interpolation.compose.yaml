@@ -1,0 +1,13 @@
+# The platform stack's own consumption path: `.env` is read by Compose's
+# dotenv parser and interpolated into this file, and the service receives
+# whatever that interpolation produced.
+#
+# Pinned by digest rather than by tag, per this repository's pinning rule. The
+# image-pin assertions in `.github/tests` anchor on `platform/docker-compose.yml`
+# exactly and do not reach this file, so nothing refreshes this pin for you.
+services:
+  probe:
+    image: alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+    environment:
+      PROBE: ${PROBE}
+    command: ["sh", "-c", "printf %s \"$$PROBE\" | base64 -w0"]

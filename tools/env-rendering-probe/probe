@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# probe [--path interpolation|env-file] <rendering> <value>
+#
+# Renders a one-variable `.env` the way the named candidate rendering would,
+# runs it through Compose, and prints the base64 of what the container process
+# actually received. Exit status is 0 whatever the value came back as; the
+# caller compares.
+#
+# WHY BASE64, AND WHY FROM INSIDE THE CONTAINER. Base64 so that whitespace,
+# line breaks and non-ASCII survive the comparison rather than being eaten by
+# the shell reading the result. From inside the container because
+# `docker compose config` escapes a literal `$` as `$$` in its own output --
+# it reports a value that looks corrupted when it is not, and vice versa, and
+# reading it instead of the container is how this problem was twice diagnosed
+# backwards.
+set -uo pipefail
+cd "$(dirname "$0")"
+
+path=interpolation
+if [ "${1:-}" = "--path" ]; then
+  path="$2"
+  shift 2
+fi
+
+rendering="${1:?usage: probe [--path interpolation|env-file] <rendering> <value>}"
+value="${2-}"
+
+case "$path" in
+  interpolation) compose=interpolation.compose.yaml ;;
+  env-file)      compose=env-file.compose.yaml ;;
+  *) echo "probe: unknown path '$path' -- expected interpolation or env-file" >&2; exit 2 ;;
+esac
+
+escape() { # the rule the workflow's render step implements
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  v="${v//\$/\$\$}"
+  printf '%s' "$v"
+}
+
+umask 077
+case "$rendering" in
+  raw)           printf 'PROBE=%s\n' "$value" >.env ;;
+  double)        printf 'PROBE="%s"\n' "$value" >.env ;;
+  single)        printf "PROBE='%s'\n" "$value" >.env ;;
+  single-bs)     printf "PROBE='%s'\n" "${value//\'/\\\'}" >.env ;;
+  single-shell)  printf "PROBE='%s'\n" "${value//\'/\'\\\'\'}" >.env ;;
+  dollar-dollar) printf 'PROBE=%s\n' "${value//\$/\$\$}" >.env ;;
+  escaped)       printf 'PROBE="%s"\n' "$(escape "$value")" >.env ;;
+  literal)       printf 'PROBE=%s\n' "$value" >.env ;;  # value is the raw line body
+  *) echo "probe: unknown rendering '$rendering'" >&2; exit 2 ;;
+esac
+
+docker compose -f "$compose" run --rm --quiet-pull probe 2>/dev/null | tr -d '\r\n'
