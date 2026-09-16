@@ -1818,6 +1818,7 @@
         set -euo pipefail
         docker rm -f platform-postgres-1 >/dev/null 2>&1 || true
         docker run -d --name platform-postgres-1 --network platform_edge \
+          -e POSTGRES_USER={{ probe_superuser | quote }} \
           {{ probe_postgres_image | quote }} sleep 600
       args:
         executable: /bin/bash
