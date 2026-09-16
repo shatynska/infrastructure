@@ -61,9 +61,15 @@
 
 ## 6. Verification
 
-- [ ] 6.1 `python3 -m unittest discover --start-directory .github/tests`, from the repository root. Read the count as well as the result: the suite gains assertions in section 3, so a run reporting the same total as before this change has not picked them up.
-- [ ] 6.2 `ansible-inventory -i inventory/<stack>.hcloud.yml --host <host>` for **both** stacks, run from `ansible/`, confirming each host resolves the `deploy_apps` its own file carries and that the two differ where the committed files differ. This is the check that the move actually took effect against the live plugin rather than only in the tree.
-- [ ] 6.3 `pre-commit run --all-files`. This working tree's Galaxy role was installed at 2026-09-15 (`ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`), without which `ansible-playbook --syntax-check` fails on a missing `geerlingguy.docker` and takes the whole run with it.
+- [x] 6.1 `python3 -m unittest discover --start-directory .github/tests`, from the repository root. Read the count as well as the result: the suite gains assertions in section 3, so a run reporting the same total as before this change has not picked them up.
+
+  **1336 tests, OK.** The count moved 1285 -> 1335 when the derived module landed and 1335 -> 1336 when section 3 added its two-stacks-in-one-environment discriminator, so the total is 51 higher than before this change rather than equal to it.
+- [x] 6.2 `ansible-inventory -i inventory/<stack>.hcloud.yml --host <host>` for **both** stacks, run from `ansible/`, confirming each host resolves the `deploy_apps` its own file carries and that the two differ where the committed files differ. This is the check that the move actually took effect against the live plugin rather than only in the tree.
+
+  **Both stacks resolved.** `main-production` returns `platform` and `commerce-ops`, `main-staging` returns its own two, each from its own file, and neither environment's `group_vars` supplies the variable any more. Run against the live Hetzner API with each stack's read-only token.
+- [x] 6.3 `pre-commit run --all-files`. This working tree's Galaxy role was installed at 2026-09-15 (`ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`), without which `ansible-playbook --syntax-check` fails on a missing `geerlingguy.docker` and takes the whole run with it.
+
+  **Passed, every hook, over every file.** `terraform fmt`, `tflint`, `terraform validate`, `gitleaks`, `ansible-lint` and `ansible-playbook --syntax-check`. The syntax check is the one that needed the Galaxy role and the one that reports `Passed` rather than `Skipped` only when run over the whole tree, so it is the run that establishes this tree is provisioned.
 
 ## 7. Ship
 
