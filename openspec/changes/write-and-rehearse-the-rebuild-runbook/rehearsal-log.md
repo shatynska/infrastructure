@@ -239,3 +239,48 @@ Verified on the host afterwards: `hostname` is `shatynska-main-staging`; `/mnt/m
     The runbook warns the operator about alarms the rebuild raises on **this** repository's checks. It says nothing about the deploys of **other** repositories that target the host, which fail for the length of the window and land in those repositories' own histories as red runs with a cause that reads as a network fault.
 
     Phase 1 should say to tell whoever owns each application that the window is open, for the same reason it says to announce the expected alarms — and phase 15 should note that a failed deploy from during the window is expected and is what the redeploy replaces. `docs/backlog.md` `announce-a-rebuild-to-the-applications-that-hold-databases` is the mechanised version of this and remains open; the runbook step is prose addressed to a human, which is what exists today.
+
+## Phase 16 — the host is serving what it served before, 2026-09-16T21:18Z
+
+Checked against the phase 1 capture, item by item, rather than against what looked reasonable:
+
+| | Before | After |
+|---|---|---|
+| Containers | 10 — 8 platform, 2 application | 10, the same set, all healthy |
+| Scrape targets | 5, all `up` | 5, all `up` |
+| `/` on the application | 404 from `server: uvicorn` | 404 from `server: uvicorn` |
+| `/health` | 200 | 200 |
+| TLS | issued | reissued, Let's Encrypt |
+| `pg_up` | 1 | 1 |
+| Sessions on `commerce-ops` | 7 | 6 |
+| Prune | — | `considered 9, removed 0, refused 0` |
+
+`considered 9` is the closing confirmation: eight platform services plus the application's own image, which is what `docs/bootstrap-a-new-host.md` §6.5 says N should equal. At 21:10, before the application redeployed, it was 8 — the count moved by exactly the one image the redeploy added.
+
+**The application's database is empty and that is the rebuild working.** The shared instance went with the volume, phase 14 recreated the role and database, and the application migrated into a fresh schema. Six sessions on it means it authenticated with the password phase 14 rotated.
+
+## Timings
+
+From the merge that destroyed the server to the confirmation that the host was serving again: **57 minutes**.
+
+| Phase | Wall clock |
+|---|---|
+| 1 — pre-state capture | ~9 min |
+| 2 — credential confirmation | folded into 7, and skipped, which is divergence 8 |
+| 3 — destroy, merge to apply complete | **1 min 12 s** |
+| 4 — recreate, merge to apply complete | **1 min 22 s** |
+| 5 — DNS | **0** — the public address was reused |
+| 6 — delete the dead tailnet peer | ~2 min, operator |
+| 7 — workstation converge | ~8 min including one failed start at inventory parse |
+| 8 — converge key and its pipeline proof | ~7 min, most of it the dispatch running |
+| 9 — the three address holders | ~1 min |
+| 10 — platform deploy | ~2 min |
+| 11 — `pgexporter` role | <1 min |
+| 13 — prune activation | <1 min |
+| 14 — database re-provisioning | <1 min |
+| 15 — the application's own deploy | ~4 min, after the button it names was found not to exist |
+| 16 — confirmation | ~2 min |
+
+**What the number does and does not say.** Fifty-seven minutes is this operator, on this stack, with the sequence written down in front of them and someone driving it who had read every file it touches. It is not the number for an unrehearsed rebuild at three in the morning, and it is emphatically not production's — production has a reviewer on both applies, a destroy-override label, delete protection to clear first, and an application whose durable data no backup covers.
+
+**The honest headline is the other number.** The sequence cost 57 minutes. The defects it exposed — three live ones found before anything was destroyed, and thirteen divergences in a document that had been through four rounds of plan review and three of code review — cost the rest of the evening. That is the argument for rehearsing rather than writing, and it is the argument this change was proposing on paper six hours ago.
