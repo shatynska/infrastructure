@@ -72,3 +72,18 @@ The plan job of PR #243 (`server_enabled = false` on `main-staging`), read from 
 4. **The destroy pull request's checks can fail transiently, and the runbook does not say so.** `validate` failed on its first run with `could not connect to registry.terraform.io: ... read: connection reset by peer`, while initialising the **`main-production`** stack — a stack the pull request does not touch. `plan (main-staging)` had already passed. A re-run of the failed job was the whole remedy.
 
    It matters here more than it would elsewhere: this is the pull request whose merge destroys a host, so an operator meeting a red check on it is in exactly the state where reading it as "something about my change is wrong" costs the most. The runbook's phase 3 should say that the check aggregates every stack, that a failure naming a stack the change does not touch is usually the registry rather than the change, and that the remedy is a re-run rather than an edit.
+
+## Interlude — three defects found before the destroy, two fixed, 2026-09-16T20:00–20:30Z
+
+The pre-state capture found more than it was looking for, and the fixes were taken before the rebuild rather than after, because two of them bear on what the rebuild can observe.
+
+**What was found, all by reading the running hosts rather than the documents:**
+
+- Both hosts pinged one dead-man's-switch check, so production's liveness alarm was masked — a single check fed by two hosts stays green while either is alive.
+- Both hosts posted alerts through one webhook, into one channel, in one Slack workspace — and it was the **staging** workspace, so production's alerts had never reached the Slack its operator watches. Confirmed by delivery: two probes, both arriving in staging's `#alerts`, none in production's.
+- Both hosts hold one Grafana admin password. Not fixed; it needs no container change and was left out to keep the urgent fix small.
+- A **rotated secret does not reach its container on a deploy.** Measured: staging's ping URL replaced at 19:45:05Z, deploy green at 19:45:23Z, the container still up eleven hours afterwards on the old value. The `platform.config-checksum` label is computed from the committed config text, and a secret is not in that text.
+
+**What was done.** PR #244 edited the config block, which moved the checksum, which recreated the container — using the mechanism as designed rather than working around it, and recording at the point of use why a rotation needs it. After the deploy: both Alertmanagers recreated (44 seconds and one minute old), the Slack workspace ids distinct, the ping URLs distinct, and a probe from each host arriving in its own workspace and in neither other. **That is `docs/bootstrap-a-new-host.md` §7.5's check, performed for the first time since the system was built, and passing.**
+
+**Why it belongs in this log.** None of it is the rebuild, and all of it is the rehearsal: every one of these is a per-stack GitHub Environment secret, which no committed file can see, so no test in this repository and no reviewer could have reached any of them. The only mechanism that does is an operator comparing two running hosts — which is the class of step the runbook exists to make someone actually perform.

@@ -911,33 +911,7 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 
 **What a change owes.** The guard itself is a near-copy of `platform-deploy.yml`'s, and the reasoning is already written there; the decisions are what to do about the two differences. That workflow's guard runs in a job whose only input is the repository, while `host-converge.yml`'s `discover` already reads each stack's `pipeline.yml` — so the guard must come before that read rather than beside it. And a refusal message has to say what to do instead, which for a converge is "merge it", not "dispatch it from `main`" — a converge of unreviewed Ansible has no legitimate form. `.github/tests` is where the assertion belongs, beside the one that reads `platform-deploy.yml`'s guard today.
 
----
-
-## 55. give-staging-its-own-dead-mans-switch-check
-
-**Not blocked, and it is a live defect rather than a plan. Found 2026-09-16 by the pre-state capture of `write-and-rehearse-the-rebuild-runbook`'s rehearsal, before anything was destroyed.**
-
-**Both hosts ping the same dead-man's-switch check.** The `deadmansswitch` receiver in each host's running `alertmanager.yml` carries the same `hc-ping.com` URL — verified by comparing a hash of the two, so the value itself is not reproduced here. At the observer there is one check, `main-production-alertmanager`; `main-staging-alertmanager` does not exist.
-
-**What that costs is the whole point of the mechanism.** `platform/README.md` states it in as many words: *"One check per host: a single check fed by two hosts stays green while either one is alive, which is the opposite of what this exists to notice."* Production's dead-man's-switch is therefore masked — if the production host dies, staging's Watchdog keeps the shared check green every two minutes and nothing reports it. The alarm for when everything is down is the one alarm that cannot currently fire, and it has been in that state since staging began running the platform stack on 2026-09-13.
-
-**It is a secret-level mistake rather than a code one**, which is why nothing caught it: `PLATFORM_DEADMANSWITCH_URL` is a per-stack GitHub Environment secret, the workflow reads whichever value that Environment holds, and no committed file can see that two Environments hold the same one. `.github/tests` cannot reach it; a reviewer cannot either. `docs/bootstrap-a-new-host.md` §7.1 says to create a check per stack and the deployment did not.
-
-**Three register divergences were found in the same read**, and they are the same class — the register claims what nobody has compared against the observer:
-
-| Check | Appendix A records | The observer carries |
-|---|---|---|
-| `main-production-alertmanager` | 5 minutes / 5 minutes | 5 minutes / **2 minutes** |
-| `main-staging-alertmanager` | 5 minutes / 5 minutes | **does not exist** |
-| `main-staging-prune-host-images` | 7 days / 2 days | 7 days / **2 hours** |
-
-**What a change owes.** Create a check per stack at the observer, put each stack's own ping URL in that stack's `PLATFORM_DEADMANSWITCH_URL`, redeploy each platform stack so the receiver is re-rendered, and then reconcile Appendix A against what the observer actually carries rather than the other way round. Two decisions sit inside that: whether the existing check keeps production or is renamed, since a rename carries the ping history and a new check does not; and what the graces should actually be, since the observed 2 minutes and 2 hours may be better values than the recorded ones rather than drift from them — the register is a claim nobody has checked, not a specification anyone wrote to.
-
-**Worth doing before the next rebuild of either host**, because the rebuild runbook's phase 12 re-reads each of a host's checks against the register, and on staging there is no check to re-read.
-
----
-
-## 56. make-a-rotated-secret-reach-its-inline-config
+## 55. make-a-rotated-secret-reach-its-inline-config
 
 **Not blocked, and it is a live defect. Found 2026-09-16 while closing `give-staging-its-own-dead-mans-switch-check`, by checking whether the fix had actually landed rather than by reading the deploy's result.**
 
@@ -955,7 +929,7 @@ So the mechanism is exactly as sound as it was designed to be, for committed edi
 
 ---
 
-## 57. perform-the-stack-separation-check-that-was-never-run
+## 56. perform-the-stack-separation-check-that-was-never-run
 
 **Not blocked, and it is three live defects rather than a plan. Found 2026-09-16 by the rehearsal's pre-state capture, which read the running containers rather than the documents.**
 
@@ -963,7 +937,7 @@ So the mechanism is exactly as sound as it was designed to be, for committed edi
 
 | Per-stack value | The two hosts hold |
 |---|---|
-| `PLATFORM_DEADMANSWITCH_URL` | the same — see `give-staging-its-own-dead-mans-switch-check` |
+| `PLATFORM_DEADMANSWITCH_URL` | the same — fixed 2026-09-16, see below |
 | `PLATFORM_SLACK_WEBHOOK_URL` | the same, and both configs name the same channel `#alerts` **in the same workspace** |
 | `PLATFORM_GRAFANA_ADMIN_PASSWORD` | the same |
 | `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | **different** |
@@ -976,10 +950,14 @@ The last row is the tell. It differs because `provision-commerce-ops-database-in
 
 - **The Slack webhook** defeats attribution. Nothing labels an alert with the host it came from — the channel *is* the attribution, which is why Appendix A says a channel per stack. Today an alert in `#alerts` could be either host, and the operator has no way to tell which from the alert itself.
 - **The Grafana password** means one leaked credential opens both dashboards, including production's. It also silently defeats the one check §7.5 offers for telling the two stacks apart.
-- **The dead-man's-switch** masks production's own liveness, and has its own entry.
+- **The dead-man's-switch** masked production's own liveness. Fixed on the day this entry was written, and it is the reason the rest of this entry is narrower than it was.
 
 **Why no mechanism could have caught any of them.** All four are GitHub Environment secrets. A committed file cannot see what an Environment holds, still less that two Environments hold one value, so `.github/tests` cannot reach it and neither can a reviewer; Molecule converges a container and never sees a secret. The only check that reaches it is an operator comparing the running hosts, which is what §7.5 asks for and what nobody did. That is worth stating plainly rather than filed as an oversight: **this class of defect is invisible to every automated guard this repository has**, and its only defence is a manual step in a document read once.
 
-**What a change owes.** Give each stack its own value for the three shared secrets, a channel of its own for the alerts, and then perform §7.5's check and record the date it was performed. Two things to decide inside that: whether `#alerts` stays production's and staging gets a new channel or both move, since the existing channel's history is production's; and whether the separation is worth asserting somewhere repeatable rather than in a runbook step — a probe comparing hashes across hosts is the shape that would work, and it needs a home, because it is a property of two running hosts and neither `.github/tests` nor Molecule can hold it.
+**Two of the three were fixed on 2026-09-16, as a fix rather than as a change**, by `apply-the-per-stack-alert-routing` (PR #244): each stack now holds its own Slack webhook in its own workspace, and its own dead-man's-switch URL. §7.5's check was then performed for the first time and **passed** — one probe to each host, one message arriving in each workspace, neither in both, confirmed by the operator. The ping URLs and the Slack workspace ids were confirmed distinct on both hosts before the probes were sent.
+
+**What remains is the Grafana admin password and the absence of any repeatable check.** Both hosts still hold one admin password, so one leaked credential opens production's dashboard; that needs no container recreation and was left out deliberately to keep the urgent fix small.
+
+**What a change owes.** Give each stack its own Grafana admin password, and then decide where the separation is asserted, because a runbook step performed once is what let three values sit shared for weeks. Two things to decide inside that: whether `#alerts` stays production's and staging gets a new channel or both move, since the existing channel's history is production's; and whether the separation is worth asserting somewhere repeatable rather than in a runbook step — a probe comparing hashes across hosts is the shape that would work, and it needs a home, because it is a property of two running hosts and neither `.github/tests` nor Molecule can hold it.
 
 **Sequencing note, because it bites.** Replacing any of these three secrets does not reach the running container on a deploy — `make-a-rotated-secret-reach-its-inline-config` is why, and it covers the webhook and the dead-man's-switch. Plan the recreation as part of the work rather than discovering it afterwards.
