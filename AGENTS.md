@@ -132,6 +132,8 @@ Such a branch is created and left: it takes no working tree and does not become 
 
 It sits outside the change that recorded it, because a note kept inside one is archived with it: it is the change succeeding, not the session ending, that would lose it.
 
+**A `docs/backlog.md` entry's number is an identifier, not a priority, and it is not stable.** The names are stable; cite an entry by name, never by number.
+
 **Assumptions.** Do not silently invent a requirement that was not stated and cannot reasonably be inferred; where an important decision cannot be inferred, ask rather than guess. Record significant decisions in this project's own artifacts rather than in conversation history alone.
 
 **The repository is the source of truth.** Do not rely on earlier conversation context for information the repository itself can supply. Prefer reading a file, a spec or a commit over recalling what a previous exchange said about it.
@@ -243,8 +245,6 @@ A change's planning artifacts move when it is archived — from `openspec/change
 Archiving merges a change's delta specifications into the main specification, so the first form's path is permanent — and it names the requirement as it stands now, rather than as one change once proposed it. The second form has no path to break. Once a change is archived you may also give its location as `openspec/changes/archive/<date>-<name>/…`, which is stable.
 
 Do not write a path naming a change's own directory under `openspec/changes/`, whether or not a further path component follows the change's name. Over a third of the citations this rule replaced named the change and stopped there.
-
-**A `docs/backlog.md` entry is cited by its name and never by its number.** The numbers are useful in that file and are kept there, but they are an identifier rather than a priority and they are not stable — the file is renumbered from 1 whenever an entry is added or deleted, so a number written anywhere else may no longer name the entry it was written for. The names are stable. Nothing enforces this; that file's own preamble carries the same rule and the reasoning behind it.
 
 One interval is accepted. Where a change introduces a **new** capability, archiving is what creates `openspec/specs/<capability>/spec.md`, so a citation of it does not resolve until that change is archived. That is bounded by the change's own life and is not rot.
 
