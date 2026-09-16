@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# SHELLCHECK: SC2016 and SC1003 are suppressed for this file, and only
+# those two. Its arrays are an escaping probe's test data -- every `$`,
+# backtick and backslash in them is meant to stay literal, which is the
+# property being measured, so those two checks fire on the subject
+# rather than on a defect. Every other check still applies here.
+# shellcheck disable=SC2016,SC1003
 #
 # probe [--path interpolation|env-file] <rendering> <value>
 #
@@ -26,7 +32,7 @@
 # wrong reason. Hence the status check below rather than `2>/dev/null` and a
 # shrug.
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 usage() {
   echo "usage: probe [--path interpolation|env-file] <rendering> <value>" >&2
@@ -98,6 +104,9 @@ if end is None:
     sys.exit("the render function in that step is not brace-balanced")
 pathlib.Path(sys.argv[1]).write_text(body[start:end] + "\n")
 PY
+  # Pre-set so that `set -u` does not trip on it: the sourced file below
+  # is what assigns it, which ShellCheck cannot see through.
+  # shellcheck disable=SC2034
   altered=''
   # shellcheck disable=SC1090
   . "$extracted"

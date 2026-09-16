@@ -170,6 +170,12 @@ collections_are_installed() {
 	# Word splitting on IFS is the point here, so the expansion is unquoted.
 	# shellcheck disable=SC2086
 	for entry in $list; do
+		# SC2088 reads the `~/` in the second arm as an unexpanded tilde. It
+		# is a case PATTERN, not an expansion -- the expansion is the
+		# ${HOME:-} on the right, which is what that arm exists to do. The
+		# directive sits here because ShellCheck accepts one in front of a
+		# complete `case`, not in front of an individual branch.
+		# shellcheck disable=SC2088
 		case "$entry" in
 		"~") entry="${HOME:-}" ;;
 		"~/"*) entry="${HOME:-}/${entry#"~/"}" ;;
