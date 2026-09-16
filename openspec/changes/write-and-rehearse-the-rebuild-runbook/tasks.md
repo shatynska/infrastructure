@@ -34,7 +34,7 @@
 - [x] 5.1 Run the verification relevant to what changed — `python3 -m unittest discover --start-directory .github/tests`, `openspec validate --all`, and `pre-commit run --all-files` — and report each result. Verify the static suite's count exceeds the green baseline recorded in task 1.2 by the number of assertions derived.
 - [x] 5.2 Commit the implementation, dispatch `ai-toolkit:change-code-reviewer` over the committed diff, and act on its findings. Verify the review's verdict permits proceeding.
   - Three rounds, the bound this project sets, ending **APPROVED**. Eighteen findings applied: twelve from the reviewer and six from a `code-review` skill run it had forked, four of which reached this session only when they were restated on request — they had sat undelivered in the reviewer's transcript while the file they concerned was being edited. Two of the reviewer's own calls were corrected against evidence: a `terraform output` block it reported as replaced was not, and finding A, which it downgraded to a documentation contradiction on the strength of an archived record that `ls ~/.ssh/` shows to be eleven days stale. The review's two closing notes are applied and its backlog recommendation is `guard-the-converge-dispatch-to-the-default-branch`.
-- [ ] 5.3 Open the runbook's pull request, let continuous integration run, and wait for the operator's confirmation that it merged. Verify from the pull request's own state, not from branch ancestry.
+- [x] 5.3 Open the runbook's pull request, let continuous integration run, and wait for the operator's confirmation that it merged. Verify from the pull request's own state, not from branch ancestry.
 
 ## 6. Rehearse, on `main-staging`, following the merged text
 
