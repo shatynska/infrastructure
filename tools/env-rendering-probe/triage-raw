@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Every value any round recorded as coming back EMPTY under the CURRENT
+# rendering, re-run with Compose's status and stderr read rather than
+# discarded. See `triage` for why the distinction exists.
+set -uo pipefail
+cd "$(dirname "$0")"
+
+values=( "'unclosed" '"opens' '"' "'" '"abc"def' '${PATH}' )
+
+unset PROBE
+umask 077
+for v in "${values[@]}"; do
+  printf 'PROBE=%s\n' "$v" >.env
+  err="$(mktemp)"
+  if out="$(docker compose -f interpolation.compose.yaml run --rm --quiet-pull probe 2>"$err")"; then
+    got="$(printf '%s' "$out" | tr -d '\r\n' | base64 -d 2>/dev/null)"
+    if [ "$got" = "$v" ]; then verdict="INTACT "; else verdict="ALTERED"; fi
+    printf '%s stored=%-12q received=%q\n' "$verdict" "$v" "$got"
+  else
+    printf 'REFUSED stored=%-12q -- %s\n' "$v" "$(grep -o 'unterminated.*' "$err" | head -1)"
+  fi
+  rm -f "$err"
+done

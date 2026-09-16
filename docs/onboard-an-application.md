@@ -6,21 +6,21 @@ Adding one service to a host that already runs the platform stack. `docs/bootstr
 
 ## The unit of work is a cell, not an application
 
-An application is onboarded **per deploy target**: `commerce-ops` on staging and `commerce-ops` on production are two runs of this document, not one. Each cell needs a keypair of its own, an entry in that environment's `group_vars`, a deploy job in the application's own repository, and that repository's Environment for that target.
+An application is onboarded **per deploy target**: `commerce-ops` on staging and `commerce-ops` on production are two runs of this document, not one. Each cell needs a keypair of its own, an entry in that host's own vars file, a deploy job in the application's own repository, and that repository's Environment for that target.
 
 Two axes are in play and they are not the same axis, which is the single thing most worth getting right before you start:
 
-- **The environment** — `production`, `staging` — is what the infrastructure side sits on. `deploy_apps` lives in `ansible/inventory/group_vars/<environment>.yml`, so an application's deploy key, its `authorized_keys` line and its `sudoers` rule are one set per application per environment.
-- **The stack** — `main-production`, `main-staging` — is what this repository's own GitHub Environments, Hetzner projects and Terraform state sit on. The application's repository never sees a stack name.
+- **The stack** — `main-production`, `main-staging` — is what the infrastructure side sits on, and what this repository's own GitHub Environments, Hetzner projects and Terraform state sit on. A stack provisions one host, and `deploy_apps` lives in that host's own `ansible/inventory/host_vars/<server name>.yml`, so an application's deploy key, its `authorized_keys` line and its `sudoers` rule are one set per application per host. The application's repository never sees a stack name.
+- **The environment** — `production`, `staging` — is what the *baseline* sits on: the Ansible group a converge targets, the `--vault-id` label, and `ansible/inventory/group_vars/<environment>.yml`, which carries what is true of every host in that environment whichever tenant owns it. Nothing you do in this procedure is written there.
 
-Today each environment holds exactly one stack, so the two coincide and nothing distinguishes them. They stop coinciding the moment a second tenant exists, and `docs/naming-conventions.md` is where the scheme is written down.
+Today each environment holds exactly one stack, so the two coincide and nothing distinguishes them. They stop coinciding the moment a second tenant exists — two stacks, two hosts, one environment — which is exactly why an application's deploy key is not written on the environment axis: one entry there would authorise it on both hosts. `docs/naming-conventions.md` is where the scheme is written down, and *A Host-Scoped Variable Lives in the Host's Own Vars File* (`openspec/specs/iac-host-configuration/spec.md`) is the requirement.
 
 **What repeats, and what does not:**
 
 | Step | How often |
 |---|---|
 | 1. The name | once per application |
-| 2. The deploy authorisation on the host | once per application per environment |
+| 2. The deploy authorisation on the host | once per application per **stack** — a stack is one host, and an environment may hold two |
 | 3. The database | once per application per deploy target, if it needs one at all |
 | 4. The application's own repository | the repository once; the Environment, the secrets and the deploy job once per deploy target |
 | 5. The public hostname | once per deploy target |
@@ -33,34 +33,34 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 
 ## 2. Authorise the deploy on the host
 
-One pass per environment the application deploys to.
+One pass per **stack** the application deploys to, not per environment. Today each environment holds one stack and the two counts are equal; with `main-production` and `analytics-production` in one environment they are not, and a single pass would leave the second host authorising nothing — which is *A Host-Scoped Variable Lives in the Host's Own Vars File*'s "Two stacks share an environment" scenario (`openspec/specs/iac-host-configuration/spec.md`), met from the wrong side.
 
 ### 2.1 Generate that cell's deploy key
 
-    ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-<environment> -N "" -C "<app>-deploy-<environment>"
+    ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-<stack> -N "" -C "<app>-deploy-<stack>"
 
-Passphrase-less, because continuous integration cannot type one. One key per application per environment, never one shared: the public half is committed in that environment's `group_vars`, and one leaked private half must deploy to one host.
+Passphrase-less, because continuous integration cannot type one. One key per application per stack, never one shared: the public half is committed in that host's own vars file, and one leaked private half must deploy to one host.
 
-**Into `~/.ssh/`, never into this checkout.** The key has no passphrase, and a routine `git add -A` in a repository directory is one command away from publishing it. Write the path out in full rather than generating where you happen to be standing. What stands behind you if you slip is `gitleaks`, which reads the content at commit time — and only once `pre-commit install` has been run, per README's Local setup. `.gitignore`'s private-key block is a second net for this key — `/*-staging` and `/*-production`, anchored to the repository root, match `<company>-<app>-<environment>` — and it is a net rather than a floor all the same: it catches the key only where the slip lands in a checkout's root, and an ignored key is still sitting on your disk.
+**Into `~/.ssh/`, never into this checkout.** The key has no passphrase, and a routine `git add -A` in a repository directory is one command away from publishing it. Write the path out in full rather than generating where you happen to be standing. What stands behind you if you slip is `gitleaks`, which reads the content at commit time — and only once `pre-commit install` has been run, per README's Local setup. `.gitignore`'s private-key block is a second net for this key — `/*-staging` and `/*-production`, anchored to the repository root, match `<company>-<app>-<stack>` — and it is a net rather than a floor all the same: it catches the key only where the slip lands in a checkout's root, and an ignored key is still sitting on your disk.
 
-**Check:** `ssh-keygen -lf ~/.ssh/<company>-<app>-<environment>.pub` prints a fingerprint. Keep it — §2.2 commits the public half and §4.2 stores the private one, and the fingerprint is how you tell two of these apart afterwards. The comment is a label for a human reading the file and nothing reads it mechanically.
+**Check:** `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` prints a fingerprint. Keep it — §2.2 commits the public half and §4.2 stores the private one, and the fingerprint is how you tell two of these apart afterwards. The comment is a label for a human reading the file and nothing reads it mechanically.
 
-**The comment convention, and the two committed entries that predate it.** An application's key carries `<app>-deploy-<environment>` and the platform's carries `deploy@platform-<environment>`, so a `group_vars` entry says which cell it authorises. Production's two entries are older than the second host and carry no environment segment at all — `deploy@platform` and `commerce-ops-deploy` in `ansible/inventory/group_vars/production.yml`, against `deploy@platform-staging` and `commerce-ops-deploy-staging` in `staging.yml`. They are left as they are: rewriting a committed comment converges both hosts to change a label nothing reads, and a key is identified by the fingerprint above. Read production's two as legacy rather than as a second convention.
+**The comment convention, and the committed entries that predate it.** An application's key carries `<app>-deploy-<stack>` and the platform's carries `deploy@platform-<stack>`, so an entry says which cell it authorises. The committed entries predate both this convention and the move onto the host axis, and they are inconsistent in two different ways: production's carry no per-target segment at all — `deploy@platform` and `commerce-ops-deploy` in `ansible/inventory/host_vars/main-production.yml` — while staging's carry the environment rather than the stack, `deploy@platform-staging` and `commerce-ops-deploy-staging` in `main-staging.yml`. All four are left as they are: rewriting a committed comment converges both hosts to change a label nothing reads, and a key is identified by the fingerprint above. Read them as history rather than as competing conventions.
 
 ### 2.2 Add the entry, and let a converge install it
 
-Add to `deploy_apps` in `ansible/inventory/group_vars/<environment>.yml`:
+Add to `deploy_apps` in `ansible/inventory/host_vars/<server name>.yml` — the vars file of the host that stack provisions, whose name is the `name` its `terraform.tfvars` declares. **Not `group_vars/<environment>.yml`**: an entry there would authorise this key on every host in the environment, and `.github/tests` fails the pull request for a stack whose host has no vars file at all.
 
 ```yaml
 - name: <app>
-  public_key: "ssh-ed25519 AAAA... <app>-deploy-<environment>"
+  public_key: "ssh-ed25519 AAAA... <app>-deploy-<stack>"
 ```
 
 Open a pull request and merge it. Merging to `main` with anything under `ansible/` changed runs the gated host converge, which installs `/opt/<app>`, the forced-command `authorized_keys` line, and the `sudoers` rule that lets that key trigger `app-deploy <app>` and nothing else. Production's converge waits for your approval; nothing announces that it is waiting, so watch for it.
 
 **The order matters and it only works one way round.** The entry needs a converge before the application's own deploy can authenticate, so an application repository that is ready first waits on an infrastructure pull request — never the reverse.
 
-**An entry with nothing deployed behind it is a normal state, not a fault.** Between this step and the application's first deploy, the host authorises a key for an application whose images it has never pulled. Such an application contributes nothing to the image prune's keep set, which is correct: the prune enumerates applications from this version-controlled list and protects the images each one currently references, and an application referencing none protects none. *Unreferenced Host Images Are Pruned on a Schedule* (`openspec/specs/iac-host-configuration/spec.md`) is the requirement.
+**An entry with nothing deployed behind it is a normal state, not a fault.** Between this step and the application's first deploy, the host authorises a key for an application whose images it has never pulled. Such an application contributes nothing to the image prune's keep set, which is correct: the prune enumerates applications from that version-controlled list and protects the images each one currently references, and an application referencing none protects none. *Unreferenced Host Images Are Pruned on a Schedule* (`openspec/specs/iac-host-configuration/spec.md`) is the requirement.
 
 **Check**, from a session on that host: `sudo ls /opt/<app>` exists, and `sudo grep <app> /etc/sudoers.d/app-deploy-<app>` shows the fully-qualified invocation.
 
@@ -172,7 +172,7 @@ The whole table repeats per Environment, and every row after the first takes tha
 | The shared-instance database password, under the name §3.2 gave it — `SHARED_POSTGRES_PASSWORD` for `commerce-ops` | Written by §3.2's recipe, with that target's own independently generated value — never set by hand here, and never under a name the Environment already holds |
 | The application's own settings | Whatever the application needs |
 
-**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<environment>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance.
+**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance.
 
 ### 4.3 Anything it persists has to say why it needs no backup
 
@@ -189,6 +189,12 @@ tar -czf - docker-compose.yml .env | ssh -i ~/.ssh/deploy_key deploy@${{ secrets
 ```
 
 The host extracts exactly those two files into `/opt/<app>` and runs `docker compose pull && docker compose up -d --wait`; the job fails if any service does not become healthy.
+
+**Render that `.env` with the values escaped, and take the rule from `platform-deploy.yml` rather than writing one.** A `.env` file has a parser, and it processes what it reads: it expands `$`, honours a quote that OPENS a value, begins an inline comment at a space-preceded `#`, truncates at a line break, and strips leading and trailing whitespace. So a secret written into the file unaltered is not what the service receives, and the failure is silent — the container starts, reports healthy, and fails at whatever needed the credential. Write each assignment as `NAME="<value>"` with `\` → `\\`, `"` → `\"` and `$` → `$$` applied inside it **in that order**, through one helper every value goes through; `.github/workflows/platform-deploy.yml`'s *Render .env from secrets* step in the infrastructure repository is the worked form, and `tools/env-rendering-probe/` there is the harness that established the rule.
+
+**The rule was measured on `env_file:`, which is the path this section instructs**, and not carried across from the platform stack's `${VAR}` interpolation. They are different entry points into the parser; no difference between them has been measured, and each was established on its own rather than inferred from the other. The escaping holds on both.
+
+**Two things this repository cannot do for you.** The values also have to reach the shell safely — bring every secret into the step through its `env:` block rather than interpolating `${{ secrets.X }}` into a `run:` body, where GitHub substitutes the raw text and bash then reads a backtick or `$(…)` as script. And an escaped value is a string GitHub's log masking, registered against the secret's own form, does not cover: write it to the file and print it nowhere.
 
 ## 5. The public hostname
 

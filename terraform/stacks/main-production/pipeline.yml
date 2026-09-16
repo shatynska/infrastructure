@@ -150,8 +150,13 @@ destroy_policy_gate: true
 #
 # OPTING IN IS NOT THE SAME FACT AS THE HOST AUTHORISING THE DEPLOY KEY, and
 # the two are checked against each other rather than derived one from the
-# other. `deploy_apps` in this stack's `group_vars` must enumerate `platform`,
-# or `.github/tests` fails the pull request naming both files -- left to the
+# other. `deploy_apps` in this stack's host's own
+# `ansible/inventory/host_vars/<server name>.yml` must enumerate `platform`,
+# or `.github/tests` fails the pull request naming both files. NOT this
+# stack's `group_vars`: an environment may hold two stacks of different
+# tenants, and an entry there would authorise one key on both their hosts --
+# see "A Host-Scoped Variable Lives in the Host's Own Vars File"
+# (openspec/specs/iac-host-configuration/spec.md). Left to the
 # deploy, the same disagreement surfaces as an authentication failure after
 # the tailnet join and after a human approved it.
 deploys_platform: true

@@ -21,6 +21,24 @@ updates:
       interval: "weekly"
 
   - package-ecosystem: "docker-compose"
+    # The `.env` rendering probe's own image. It is not a stack this
+    # repository deploys -- nothing runs it in CI and no host receives it --
+    # but *Automated Dependency Updates* covers every Compose file in the tree
+    # declaring a service image, not every file that is deployed, and the
+    # CI-configuration suite reports one in an unnamed directory as uncovered.
+    # Covering it is also better than the alternative that was considered:
+    # the probe's README used to say nothing refreshed its pin, which is a
+    # resigned note where a weekly pull request was available for one entry.
+    #
+    # It holds TWO Compose files, one per consumption path, and both are
+    # fetched: the fetcher's filename pattern is satisfied by a name
+    # CONTAINING "compose", which `interpolation.compose.yaml` and
+    # `env-file.compose.yaml` both do.
+    directory: "/tools/env-rendering-probe"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker-compose"
     # The shared platform stack's image pins. The directory is listed
     # explicitly because there is no alternative: Dependabot's Compose file
     # fetcher lists the contents of the configured directory and does not
@@ -70,9 +88,10 @@ updates:
   # pin has somewhere Dependabot can see it: `pr-validation.yml` validates this
   # repository's own specification record with it, and Dependabot's npm
   # ecosystem reads `package.json` -- a version pinned inline in a workflow
-  # step is exact but invisible to it. Entries 43-16 of docs/backlog.md
-  # record four exactly-pinned manifests here that nothing watches; the change
-  # that added this one would not defensibly have made it five.
+  # step is exact but invisible to it. `docs/backlog.md`'s
+  # `cover-the-unwatched-manifests-and-settle-the-watcher` records the
+  # exactly-pinned manifests here that nothing watches; the change that added
+  # this one would not defensibly have added to them.
   #
   # The package is `@fission-ai/openspec`; the binary it installs is
   # `openspec`. Those are different names, which the derived tests for that

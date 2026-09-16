@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#
+# triage <rendering> [path]
+#
+# Tells the three outcomes apart for every round-2 value, which `probe` alone
+# cannot: INTACT, ALTERED (the parser yielded something else), and REFUSED
+# (the parser rejected the file and Compose exited non-zero, reading nothing).
+#
+# It exists because the first version of this harness discarded Compose's
+# stderr and compared stdout alone, so a REFUSED run and a value that genuinely
+# came back empty were the same row. That is not a cosmetic difference: round 2
+# concluded that single-quoting "fails into empty, silently", and a refusal is
+# neither empty nor silent.
+set -uo pipefail
+cd "$(dirname "$0")"
+export DOCKER_CONFIG="${DOCKER_CONFIG-}"
+
+rendering="${1:?usage: triage <rendering> [interpolation|env-file]}"
+path="${2:-interpolation}"
+case "$path" in
+  interpolation) compose=interpolation.compose.yaml ;;
+  env-file)      compose=env-file.compose.yaml ;;
+  *) echo "triage: unknown path '$path'" >&2; exit 2 ;;
+esac
+
+values=( "a'b" "it's" "a\"b'c\$d" '' 'a=b=c' $'line1\nline2' '\' "trailing'" )
+
+unset PROBE
+umask 077
+for v in "${values[@]}"; do
+  case "$rendering" in
+    raw)    printf 'PROBE=%s\n' "$v" >.env ;;
+    single) printf "PROBE='%s'\n" "$v" >.env ;;
+    double) printf 'PROBE="%s"\n' "$v" >.env ;;
+    *) echo "triage: unknown rendering '$rendering'" >&2; exit 2 ;;
+  esac
+  err="$(mktemp)"
+  if out="$(docker compose -f "$compose" run --rm --quiet-pull probe 2>"$err")"; then
+    got="$(printf '%s' "$out" | tr -d '\r\n' | base64 -d 2>/dev/null)"
+    if [ "$got" = "$v" ]; then verdict="INTACT "; else verdict="ALTERED"; fi
+    printf '%s stored=%-14q received=%q\n' "$verdict" "$v" "$got"
+  else
+    reason="$(grep -o 'unterminated[^,]*\|failed to read[^:]*' "$err" | head -1)"
+    printf 'REFUSED stored=%-14q -- %s\n' "$v" "${reason:-compose exited non-zero}"
+  fi
+  rm -f "$err"
+done

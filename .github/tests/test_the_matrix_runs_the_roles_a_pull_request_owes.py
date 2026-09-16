@@ -82,6 +82,7 @@ from test_ci_configuration import (
     AGGREGATING_CONTEXT,
     ANSIBLE_VERIFY,
     ROOT,
+    ManifestNotUsable,
     MoleculeWorkflowShapeMixin,
     compact,
     github_output_pairs,
@@ -134,7 +135,9 @@ from test_ci_configuration import (
 #   roles_with_scenarios(root) -> set[str]
 #       The roles the run can execute: directories under `ansible/roles/`
 #       carrying a `molecule/` directory, under the same enumeration
-#       `role_names()` uses -- dotted (Galaxy) directory names excluded.
+#       `role_names()` uses -- installed Galaxy content excluded, derived from
+#       `ansible/requirements.yml` rather than from the shape of a directory
+#       name. Raises `DerivationRefused` for a manifest it cannot read.
 #
 #   PERMITTED_NESTED_PLAYBOOKS: mapping
 #       The permitted-instance entries, keyed `(file, construction, target)`
@@ -663,8 +666,12 @@ def role_files_reaching_outside(root) -> tuple[list[str], int]:
     point it at a tree written to falsify it. The real tree carries no such
     route -- that is the finding, not the check's warrant.
 
-    Dotted directory names are excluded here as `role_names()` excludes them:
-    an installed Galaxy role's own tasks are not this repository's to refuse.
+    Installed Galaxy content is excluded here as `role_names()` excludes it,
+    and by the same rule -- derived from `ansible/requirements.yml`: an
+    installed role's own tasks are not this repository's to refuse. Reading the
+    directory name instead, as this did before
+    `unify-the-two-role-exclusion-rules`, exempted vendored content nobody
+    pinned from a refusal that should reach it.
     """
     base = Path(root)
     roles_directory = base / "ansible" / "roles"
@@ -672,11 +679,7 @@ def role_files_reaching_outside(root) -> tuple[list[str], int]:
     scanned = 0
     if not roles_directory.is_dir():
         return offenders, scanned
-    for role in sorted(
-        entry.name
-        for entry in roles_directory.iterdir()
-        if entry.is_dir() and not entry.name.startswith(".") and "." not in entry.name
-    ):
+    for role in sorted(role_names(base)):
         for subdirectory in ("tasks", "handlers"):
             directory = roles_directory / role / subdirectory
             if not directory.is_dir():
@@ -1464,7 +1467,59 @@ class TestTheSelectorEnumeratesRolesLikeTheRestOfTheSuite(unittest.TestCase):
     by the checks that already read these scenario definitions, under the same
     enumeration of this repository's own roles -- so that installed Galaxy
     content cannot make the check report one result on a provisioned developer
-    machine and another on a runner that has installed nothing"."""
+    machine and another on a runner that has installed nothing".
+
+    THE SAME enumeration is what the clause asks for, and WHICH rule that
+    enumeration applies is left open by it. Both implementations answer
+    `ansible/requirements.yml`, which `unify-the-two-role-exclusion-rules`
+    settled; before it they read the directory name, agreeing with each other
+    and being wrong together in both directions.
+    """
+
+    #: A manifest naming one role by `src:` rather than by `name:`. The entry
+    #: resolves to the DOTLESS basename `ansible-role-docker`, which is the
+    #: shape that separates the manifest-derived exclusion from the directory
+    #: name heuristic it replaced. Spelled as `test_ci_configuration`'s
+    #: `test_a_manifest_entry_given_as_a_source_resolves_to_its_directory_name`
+    #: spells it, so the two implementations are bound over the same input.
+    #:
+    #: THE VERSION IS ITS OWN KEY, not a comma qualifier, and that is not a
+    #: style choice: `ansible-galaxy` strips `.git` before it splits the comma,
+    #: so the comma form installs to `ansible-role-docker.git` -- dotted, which
+    #: is the wrong case for this fixture and the name an earlier version of it
+    #: wrongly assumed away.
+    SOURCE_FORM_MANIFEST = (
+        "collections: []\n"
+        "roles:\n"
+        "  - src: https://github.com/geerlingguy/ansible-role-docker.git\n"
+        '    version: "8.0.0"\n'
+    )
+
+    def _tree_separating_the_two_rules(self) -> Tree:
+        """A tree on which the manifest rule and the name heuristic disagree in
+        both directions at once.
+
+        ALL THREE DIRECTORIES CARRY SCENARIOS, and that is load-bearing rather
+        than incidental: both enumerations restrict to roles carrying a
+        `molecule/` directory, so a directory built without one drops out of
+        both for a reason that has nothing to do with the manifest. The
+        `src:`-pinned case would then be excluded correctly by accident, in
+        every state, and the resolution this fixture exists to exercise would
+        never run.
+        """
+        tree = Tree(self)
+        tree.scenario("ours", converge=converge_through_roles_list("- ours"))
+        tree.scenario("vendor.theirs", converge=converge_through_roles_list("- vendor.theirs"))
+        tree.scenario(
+            "ansible-role-docker",
+            converge=converge_through_roles_list("- ansible-role-docker"),
+        )
+        # Overwrite the fixture's manifest rather than parameterising `Tree`:
+        # thirty-odd tests in this module depend on that constructor, and
+        # reshaping it to serve two of them is a change to a fixture this
+        # change was not meant to touch.
+        write(tree.root / "ansible" / "requirements.yml", self.SOURCE_FORM_MANIFEST)
+        return tree
 
     def test_the_selectors_enumeration_agrees_with_the_suites_own(self) -> None:
         """SPECIFIED -- as above. On a provisioned working tree
@@ -1476,25 +1531,139 @@ class TestTheSelectorEnumeratesRolesLikeTheRestOfTheSuite(unittest.TestCase):
             roles_with_molecule_scenarios(),
             set(symbol("roles_with_scenarios")(ROOT)),
             "the selector's role enumeration disagrees with `role_names()`, which "
-            "every other check in this suite uses. A Galaxy role installed beside "
-            "this repository's own carries a dot in its directory name and ships its "
-            "own scenarios; running them would verify somebody else's code",
+            "every other check in this suite uses. Galaxy content installed beside "
+            "this repository's own roles is named in `ansible/requirements.yml` and "
+            "ships scenarios of its own; running them would verify somebody else's code",
         )
 
-    def test_a_dotted_role_directory_carrying_scenarios_is_not_discovered(self) -> None:
+    def test_both_enumerations_answer_the_manifest_on_a_tree_that_separates_the_rules(
+        self,
+    ) -> None:
+        """SPECIFIED -- as above, and this is where that clause is actually
+        established rather than assumed.
+
+        The selector and this suite hold SEPARATE implementations of the rule:
+        the selector is production code and cannot import `.github/tests`, and
+        a suite that took the selector as its own authority for the rule would
+        be checking nothing. The binding between them is this class -- and over
+        `ROOT` alone that binding does not reach the case it exists for, since
+        this repository's manifest holds a single `name:` entry and the
+        `src:`-basename resolution both implementations carry is exercised by
+        nothing.
+
+        TWO ASSERTIONS, AND ONLY THE FIRST DISCRIMINATES. The content
+        assertion says what the shared enumeration must return, and fails
+        against the name heuristic for both of its errors at once: that rule
+        excludes the dotted directory the manifest does not name, and admits
+        the dotless directory it does. The agreement assertion cannot fail
+        while both implementations apply the same rule, whichever rule that is
+        -- it is a permanent divergence detector between two copies, not
+        evidence about which rule is in force. See
+        `unify-the-two-role-exclusion-rules`, design.md decision 2.
+        """
+        tree = self._tree_separating_the_two_rules()
+        suite = roles_with_molecule_scenarios(tree.root)
+        selector = set(symbol("roles_with_scenarios")(tree.root))
+        self.assertEqual(
+            {"ours", "vendor.theirs"},
+            suite,
+            "the shared enumeration did not answer the manifest. `vendor.theirs` is "
+            "vendored content nobody pinned and is this repository's own; "
+            "`ansible-role-docker` is what the manifest's `src:` entry installs and "
+            "is not. A rule reading the directory name gets both backwards",
+        )
+        self.assertEqual(
+            suite,
+            selector,
+            "the selector and this suite resolved the same manifest to different role "
+            "sets. They hold separate implementations of one rule, so a divergence "
+            "here is the two copies drifting -- which on a provisioned machine is a "
+            "check that disagrees with itself between there and continuous integration",
+        )
+
+    def test_a_role_directory_the_manifest_names_is_not_discovered(self) -> None:
         """SPECIFIED -- as above, shown on a fixture so that the assertion is
         not vacuous in continuous integration, where no Galaxy role is
         installed and the comparison above compares two sets that agree for want
-        of the case that separates them."""
+        of the case that separates them.
+
+        Replaces an earlier form of this test that asserted a DOTTED directory
+        is not discovered. The specification requires a shared enumeration and
+        never mentions a dot; the fixture changes, the tracing does not.
+        """
+        tree = Tree(self)
+        tree.scenario("ours", converge=converge_through_roles_list("- ours"))
+        tree.scenario("vendor.theirs", converge=converge_through_roles_list("- vendor.theirs"))
+        write(
+            tree.root / "ansible" / "requirements.yml",
+            'collections: []\nroles:\n  - name: vendor.theirs\n    version: "1.0.0"\n',
+        )
+        self.assertEqual(
+            {"ours"},
+            set(symbol("roles_with_scenarios")(tree.root)),
+            "a role directory named in `ansible/requirements.yml` -- content "
+            "`ansible-galaxy` installs and a reinstall discards -- was discovered as "
+            "one of this repository's own roles",
+        )
+
+    def test_a_vendored_directory_the_manifest_does_not_name_is_discovered(self) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        1. The other direction, which no scenario states and which the replaced
+        rule got wrong silently: a dotted directory nobody pinned is not
+        installed content, it is content this repository carries, and the
+        matrix owes its changes a run."""
         tree = Tree(self)
         tree.scenario("ours", converge=converge_through_roles_list("- ours"))
         tree.scenario("vendor.theirs", converge=converge_through_roles_list("- vendor.theirs"))
         self.assertEqual(
-            {"ours"},
+            {"ours", "vendor.theirs"},
             set(symbol("roles_with_scenarios")(tree.root)),
-            "a dotted (Galaxy-namespaced) role directory carrying scenarios was "
-            "discovered as one of this repository's own roles",
+            "a dotted directory that the fixture manifest does not name was excluded "
+            "from the roles the matrix can run. Nothing installed it, so nothing will "
+            "discard it, and a change to it would select no row",
         )
+
+    def test_a_manifest_the_selector_cannot_read_refuses(self) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        3. The selector's own idiom for the polarity `ManifestNotUsable`
+        carries in `.github/tests`: what this repository's roles are is
+        unknown, and `_documents` already refuses an unreadable scenario file
+        for the reason this case shares -- a file that silently contributes
+        nothing is how a role stops being tested with nothing reporting.
+
+        Not the module's `to run rather than to skip` polarity, which governs a
+        selection that is merely under-determined and not a tree the module
+        cannot read.
+        """
+        tree = Tree(self)
+        tree.scenario("ours", converge=converge_through_roles_list("- ours"))
+        (tree.root / "ansible" / "requirements.yml").unlink()
+        with self.assertRaises(symbol("DerivationRefused")) as raised:
+            symbol("roles_with_scenarios")(tree.root)
+        self.assertIn("ansible/requirements.yml", str(raised.exception))
+
+    def test_both_implementations_refuse_a_manifest_that_is_not_utf8(self) -> None:
+        """DERIVED -- `unify-the-two-role-exclusion-rules`, design.md decision
+        3, over the input that reaches neither parser.
+
+        The refusal has to be the same on both sides or the duplication this
+        class binds is only parallel where it is convenient. A manifest that
+        `read_text` cannot decode is refused by each implementation in its own
+        idiom -- `DerivationRefused` here, `ManifestNotUsable` in the suite --
+        and each names the file, which is what tells an operator their tree is
+        damaged rather than their code broken.
+        """
+        tree = Tree(self)
+        tree.scenario("ours", converge=converge_through_roles_list("- ours"))
+        (tree.root / "ansible" / "requirements.yml").write_bytes(
+            b"roles:\n  - name: \xff\xfe\n"
+        )
+        with self.assertRaises(symbol("DerivationRefused")) as raised:
+            symbol("roles_with_scenarios")(tree.root)
+        self.assertIn("ansible/requirements.yml", str(raised.exception))
+        with self.assertRaises(ManifestNotUsable) as suite_raised:
+            roles_with_molecule_scenarios(tree.root)
+        self.assertIn("ansible/requirements.yml", str(suite_raised.exception))
 
     def test_no_selection_ever_carries_a_role_that_cannot_be_run(self) -> None:
         """SPECIFIED -- "a role in the closure that declares none SHALL be

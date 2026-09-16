@@ -244,6 +244,8 @@ Archiving merges a change's delta specifications into the main specification, so
 
 Do not write a path naming a change's own directory under `openspec/changes/`, whether or not a further path component follows the change's name. Over a third of the citations this rule replaced named the change and stopped there.
 
+**A `docs/backlog.md` entry is cited by its name and never by its number.** The numbers are useful in that file and are kept there, but they are an identifier rather than a priority and they are not stable — the file is renumbered from 1 whenever an entry is added or deleted, so a number written anywhere else may no longer name the entry it was written for. The names are stable. Nothing enforces this; that file's own preamble carries the same rule and the reasoning behind it.
+
 One interval is accepted. Where a change introduces a **new** capability, archiving is what creates `openspec/specs/<capability>/spec.md`, so a citation of it does not resolve until that change is archived. That is bounded by the change's own life and is not rot.
 
 `.github/tests/test_ci_configuration.py` asserts this, because no author or reviewer can catch a violation: the citation is correct when written, correct when reviewed, and wrong only once the change it cites has succeeded. The previous sweep of these paths changed no rule and re-accumulated in three weeks.

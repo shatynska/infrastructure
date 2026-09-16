@@ -123,11 +123,17 @@ ghcr_pull_username: shatynska
 # checks that followed it.
 #
 # WHAT EACH ABSENCE COSTS is kept, because it is the part that outlives this
-# file's own completion: it is what to know when the NEXT environment's
-# group_vars is written from scratch, where all three are absent again. They
-# are not alike, and only two of the three refuse.
+# file's own completion: it is what to know when the NEXT environment's files
+# are written from scratch, where all three are absent again. They are not
+# alike, and only two of the three refuse. The first of them is no longer
+# supplied from a file like this one at all -- it is named here because a
+# converge needs it whatever file it comes from, and because the way it refuses
+# is the same.
 #
-#   deploy_apps                     REFUSES while unset. Do not answer that
+#   deploy_apps                     NOT IN THIS FILE -- it belongs in the
+#                                   host's own `host_vars/<server name>.yml`,
+#                                   for the reason stated where the list used
+#                                   to sit. REFUSES while unset. Do not answer that
 #                                   with `[]`, which is a *supplied* value to
 #                                   both roles that read it -- their assertions
 #                                   say so in as many words -- meaning "no
@@ -159,45 +165,18 @@ ghcr_pull_username: shatynska
 # above its `swap` role. This file is where that exposure was last live.
 # ---------------------------------------------------------------------------
 
-# Per-application deploy public keys (add-per-app-deploy-keys). Safe to
-# commit -- public keys, not secrets.
+# `deploy_apps` IS NOT HERE, AND MUST NOT BE PUT BACK. The applications a host
+# authorises to deploy to it live in that host's own file --
+# `host_vars/main-staging.yml`, which carries this environment's entries and
+# the reasoning that used to sit here. An entry in THIS file would authorise
+# its key on every host in the environment, and an environment may hold two
+# stacks of different tenants; one leaked private half must reach one host.
+# See "A Host-Scoped Variable Lives in the Host's Own Vars File"
+# (openspec/specs/iac-host-configuration/spec.md).
 #
-# STAGING'S OWN KEYPAIR, NOT PRODUCTION'S -- and that holds of every entry
-# below, not just the first. One leaked private half must deploy to one host,
-# which is why these lists differ per environment rather than being shared.
-# Each keypair is generated on the workstation, its public half committed
-# here, and its private half stored only in the GitHub Environment secret of
-# the repository that deploys that application: `platform`'s in this
-# repository's own main-staging Environment as PLATFORM_DEPLOY_SSH_KEY,
-# `commerce-ops`'s in that application's repository.
-#
-# `commerce-ops` was left out of this list while it had no staging deploy
-# path in its own repository. That deploy path is being built now, and its
-# entry deliberately lands BEFORE the path exists rather than after: the
-# entry needs a converge before the application's deploy can authenticate,
-# so an application repository that is ready first waits on an
-# infrastructure pull request rather than the reverse. Until that deploy
-# runs, this entry authorises something that has never used it.
-#
-# NOTE ON THE PRUNE, so neither state is read as a fault. An enumerated
-# application with no Compose file on the host renders no image reference and
-# contributes nothing to the keep set -- harmless, and the reason an entry
-# may sit here before anything deploys behind it. While NOTHING at all was
-# deployed the keep set was empty outright and the weekly unit ABANDONED and
-# reported failure, which was this role's documented contract and was
-# accepted deliberately; that ended when the platform stack reached staging
-# and the keep set stopped being empty.
-#
-deploy_apps:
-  - name: platform
-    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMCOPPlcE5sXqy1//8Cl8S3fac51+ceyD9YBnN4Vwq+ deploy@platform-staging"
-  # The name is not free: image reclamation identifies an application's images
-  # as ghcr.io/<any owner>/<this name>, so it must equal the last segment of
-  # the image repository (ghcr.io/<org>/commerce-ops) or it reclaims nothing,
-  # silently. Same name as production's entry for that reason; a different
-  # keypair for the reason above.
-  - name: commerce-ops
-    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7D0FcW/kPrjuxwDgy6mt27qx3V8I+1sYT3CcOSY5ID commerce-ops-deploy-staging"
+# The block above still describes what `deploy_apps` costs when absent, and
+# that is still true -- it refuses, and `[]` is a supplied value rather than an
+# answer to it. Only the file it is supplied FROM has changed.
 
 # A genuine secret (a read:packages-scoped GHCR token): Vault-encrypt it in
 # place, never plain text.
