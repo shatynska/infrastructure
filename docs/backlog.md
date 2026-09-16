@@ -908,7 +908,7 @@ Both were corrected against Ansible 2.21.3, and the expected values in every fix
 
 So the check belongs in the tier that already has the pinned Ansible: a scenario under `ansible/roles/*/molecule/`, or a step in `ansible-verify.yml` after `ansible/requirements-test.txt` is installed. Adding `ansible-core` to `.github/requirements-ci.txt` instead is the other option and is a change to what that suite is, not a rider on one — it would put a heavyweight dependency behind every check in the repository's only static tier.
 
-## 56. read-the-rendered-env-back-through-the-host-s-own-parser
+## 57. read-the-rendered-env-back-through-the-host-s-own-parser
 
 **Not blocked. Recorded 2026-09-16 by `render-the-env-file-so-a-secret-survives-it`, which measured a rule and could not arrange for anything to notice if it stops holding.**
 
@@ -920,7 +920,7 @@ That change escapes each value written into `platform/.env` so that Compose's do
 
 `tools/env-rendering-probe/` is where it starts from: the harness, its two consumption paths and the value corpus are committed, so this is a matter of running an existing measurement in a new place rather than building one. The probe's own README carries the versions each recorded round was taken against.
 
-## 57. escape-a-value-for-the-configuration-it-is-interpolated-into
+## 58. escape-a-value-for-the-configuration-it-is-interpolated-into
 
 **Not blocked. Recorded 2026-09-16 by `render-the-env-file-so-a-secret-survives-it`, whose obligation deliberately stops one layer short of this.**
 
