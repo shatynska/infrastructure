@@ -1098,10 +1098,18 @@ The checks it addresses, and the settings each needs at the observer. A check co
 |---|---|---|---|
 | `infrastructure-drift` | `.github/workflows/drift.yml`, nightly | 1 day | 12 hours |
 | `infrastructure-pre-commit-autoupdate` | `.github/workflows/pre-commit-autoupdate.yml`, weekly | 7 days | 2 days |
-| `main-production-prune-host-images` | `prune-host-images.service` on the production host, weekly | 7 days | 2 days |
-| `main-staging-prune-host-images` | `prune-host-images.service` on the staging host, weekly | 7 days | 2 days |
+| `main-production-prune-host-images` | `prune-host-images.service` on the production host, weekly | 7 days | 2 hours |
+| `main-staging-prune-host-images` | `prune-host-images.service` on the staging host, weekly | 7 days | 2 hours |
 
 The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system.
+
+**That reasoning is about GitHub-hosted runs and does not reach the prune, whose grace this table was corrected to on 2026-09-16 — 2 hours, which is what the observer already carried, against the 2 days recorded here.** `prune-host-images.timer` is `Sun *-*-* 04:00:00 UTC` with `RandomizedDelaySec=3600`, so **on a host that is up at the firing minute** its lateness is bounded at one hour, and two hours covers that with an hour to spare. Two days was this table copying the paragraph above it across a reporter that paragraph is not about.
+
+**The bound is conditional, and the condition is exactly the case this repository's rebuild runbook is about.** The unit also carries `Persistent=true`, deliberately, so a host that was down at the firing minute runs the catch-up at next boot — and *that* lateness is bounded by the length of the outage and by nothing else. A host down for six hours across a Sunday-morning window pages as overdue on a two-hour grace where two days would have absorbed it. The two hours stands because it is what the observer carries and because the tighter value is the right default for a weekly job, but this is the case that would reopen it, and it is worth knowing before reading such an alarm as a real failure. **The values here were compared against the observer for the first time on 2026-09-16**, during `write-and-rehearse-the-rebuild-runbook`'s rehearsal, and **both tables had drifted** — this one's graces and the Alertmanager one's. Where the observer carried a value at all it was the tighter one and these tables held the looser, so what was written down had been read from intent rather than from the service.
+
+**One row was not observed and is set from intent, and that is stated rather than hidden.** At that reading `main-staging-alertmanager` **did not exist** — both hosts were feeding production's check, which is what `give-staging-its-own-dead-mans-switch-check` was opened and closed on the same evening. Staging's row below therefore carries production's observed values rather than its own, and the check itself was created that evening by its first ping, which by this table's own preamble means it came into existence on the **vendor's default**. **Its settings at the observer are still owed a read**, and until that happens this one row is a claim rather than a record. The comparison was made **before** that rehearsal destroyed anything, which is what makes the observer the authority here: a disagreement found afterwards would more likely be the rebuild having reset a check to the vendor's default, and `docs/runbook-rebuild.md`'s phase 12 says so and corrects in the other direction.
+
+**The Alertmanager grace is 2 minutes rather than 5 for a reason worth stating, since the sentence under that table was written to justify the old pair.** The Watchdog pings every 2 minutes and the period is 5, so the check already tolerates two missed pings before the grace begins; 2 minutes of grace alarms after about seven minutes of silence where 5 would take ten. For the alarm that exists for when everything else is down, the tighter of the two is the right one.
 
 The host slug is templated from `inventory_hostname`, which is why the two servers are named differently in their `terraform.tfvars` — sharing a name would merge them into one check, where the live host's weekly success would keep it green while the other's timer was dead.
 
@@ -1111,10 +1119,10 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 | Check (slug) | Reported by | Period | Grace |
 |---|---|---|---|
-| `main-production-alertmanager` | Alertmanager's Watchdog on the production host, every 2 minutes | 5 minutes | 5 minutes |
-| `main-staging-alertmanager` | Alertmanager's Watchdog on the staging host, every 2 minutes | 5 minutes | 5 minutes |
+| `main-production-alertmanager` | Alertmanager's Watchdog on the production host, every 2 minutes | 5 minutes | 2 minutes |
+| `main-staging-alertmanager` | Alertmanager's Watchdog on the staging host, every 2 minutes | 5 minutes | 2 minutes |
 
-The service must expect pings at least as often as the Watchdog sends them but tolerate one missed, which is what those two values are. §7.1 creates these checks and points here for their settings.
+The service must expect pings at least as often as the Watchdog sends them but tolerate one missed; the paragraph below says what the current pair does and why it is the tighter of the two considered. §7.1 creates these checks and points here for their settings.
 
 **Both tables are the one place this repository records what a check's settings should be**, which *A Host's Rebuild Procedure Is Recorded, and Its Rehearsal State With It* (`openspec/specs/iac-server-lifecycle/spec.md`) requires of every check a host of this repository reports to, not only the ones listed today. `docs/runbook-rebuild.md` cites these tables rather than copying them when it re-reads the settings after a rebuild. **A check added later is added here**, in the change that adds it: a check whose intended settings are written down nowhere cannot be told apart from one the observer has silently reset to its own default.
 

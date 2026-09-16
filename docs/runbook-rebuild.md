@@ -2,7 +2,7 @@
 
 This is the sequence that takes a host of this repository from a destroyed server back to serving what it served before. It is written to be followed in order, under time pressure, by someone who has not read `docs/bootstrap-a-new-host.md` and is not going to read it now.
 
-The commands are written for **`main-staging`**, because that is the stack the rehearsal will be performed against. **Until the record at the end of this document carries a date, every command here has been read back against the file that declares it and the sequence has not been executed** — treat it accordingly. Where production differs, the difference is stated at the phase it belongs to rather than collected somewhere else.
+The commands are written for **`main-staging`**, because that is the stack the rehearsal at the end of this document was performed against, and a command that has actually been executed is worth more than a parameterised one that has not. Where production differs, the difference is stated at the phase it belongs to rather than collected somewhere else — and production has never been rebuilt, so those statements are read rather than run.
 
 **What this document does not hold.** Two recipes belong to other documents and are cited rather than copied here, because a copy of a procedure touching a credential drifts and both copies read as authoritative: the database provisioning recipe, which lives in `docs/onboard-an-application.md`, and the two manual steps of the platform stack, which live in `platform/README.md`. What this document keeps of each is what is genuinely sequence — that it is owed, at which point, and with which secret. The checks' intended settings are likewise a register kept once, in `docs/bootstrap-a-new-host.md`'s Appendix A, and this document cites it rather than restating the values.
 
@@ -10,9 +10,11 @@ The commands are written for **`main-staging`**, because that is the stack the r
 
 **This covers the `server_enabled` toggle route**, which is phases 3 and 4. A host rebuilt by *replacing* the server instead enters at phase 5 and follows the rest unchanged — what differs is only the destroy and recreate pair, and what the volume does under it, which phase 3 states.
 
+**Read the rehearsal record at the end before you start.** It says when this was last run, against which stack, and what it was wrong about — and a procedure whose last rehearsal is old is a procedure to read sceptically rather than to follow at speed.
+
 ## 1. Know what you are about to lose, and what will start alarming
 
-**Credential:** the operator inspection key, held in `~/.ssh` on your workstation; `gh`'s own token there; and this stack's read-only Hetzner token, held in `ansible/.envrc` on that workstation. **Phase 2 is what proves that token** — if the inventory read below fails on authentication rather than on the host, go there first and come back. `ansible/.envrc` is per working tree, so a tree cloned since the last rebuild does not have it however well the main checkout is provisioned.
+**Credential:** the operator inspection key, held in `~/.ssh` on your workstation; `gh`'s own token there; this stack's read-only Hetzner token, held in `ansible/.envrc` on that workstation; and the **heartbeat observer's own account**, for the period-and-grace read below. **Phase 2 is what proves that token** — if the inventory read below fails on authentication rather than on the host, go there first and come back. `ansible/.envrc` is per working tree, so a tree cloned since the last rebuild does not have it however well the main checkout is provisioned.
 
 Do this before anything else. Everything below it is recoverable; the contents of this phase are not, and two of them are the kind of loss nobody discovers until weeks later.
 
@@ -29,6 +31,14 @@ Do this before anything else. Everything below it is recoverable; the contents o
 
 Do not mute either. A check muted for a rebuild is one nobody re-arms, and an unarmed dead-man's-switch is the failure this entire mechanism exists to prevent.
 
+**Expect the host key to be rejected three separate times later, and know now that it is not a fault.** A rebuilt host is a new machine presenting a new key on every identity you reach it by, and each one fails only when that identity is first used — spread across phases 7, 8 and 10, which is why it otherwise reads as three unrelated problems:
+
+- **the public address**, where Hetzner hands the same one back — which it may do, and did in the rehearsal, when the destroy and the create are minutes apart;
+- **the tailnet name**, at phase 8;
+- **the tailnet address**, behind any `~/.ssh/config` alias — accepting the key under the *name* does not record it for the *address*, so this one fails separately after the other two are cleared.
+
+`ssh-keygen -R <the identity>` clears each, and you accept the new key on the next connection. Do not disable the check to get past it.
+
 **Then capture the pre-state**, because "serving what it served before" is not checkable afterwards unless you wrote down what "before" was:
 
 ```sh
@@ -36,7 +46,7 @@ ssh shatynska-main-staging 'hostname; docker ps --format "{{.Names}}\t{{.Status}
 ssh shatynska-main-staging 'docker exec platform-prometheus-1 wget -qO- \
   "http://localhost:9090/api/v1/targets?state=active"' | \
   python3 -c 'import json,sys; [print(t["labels"]["job"], t["health"]) for t in json.load(sys.stdin)["data"]["activeTargets"]]'
-curl -sS -o /dev/null -w '%{http_code}\n' https://commerce-ops.main-staging.fincci.bike
+curl -sS -o /dev/null -w '%{http_code}\n' https://commerce-ops.main-staging.fincci.bike/health
 cd ansible && ansible-inventory -i inventory/main-staging.hcloud.yml --list | \
   python3 -c 'import json,sys; print(json.load(sys.stdin)["_meta"]["hostvars"]["main-staging"]["hcloud_ipv4"])'
 ssh shatynska-main-staging 'ls -l /dev/disk/by-id/ | grep HC_Volume'
@@ -46,7 +56,15 @@ ssh shatynska-main-staging 'ls -l /dev/disk/by-id/ | grep HC_Volume'
 
 **`terraform output` is not the way to read these**, and it is worth knowing before you reach for it: every stack declares an HCP Terraform backend, so `terraform output` needs `terraform init` first, and on a workstation whose HCP credential belongs to another organisation `init` fails with *organization "shatynska" at host app.terraform.io not found*. The inventory read above needs only the read-only Hetzner token. The volume id is on the host as `scsi-0HC_Volume_<id>`, and after the rebuild it is in the apply run's log or the Hetzner console.
 
-Record the container set and their health, the active scrape targets, the public IPv4, the volume id, the host's tailnet address, and every hostname that resolves to this server. Also read this stack's two checks at the heartbeat observer and write down the period and the grace each currently carries — phase 12 compares against them, and the register is a claim about the observer's configuration until somebody has actually looked.
+**Probe `/health`, not `/`, and know what a bare 404 does not prove.** This application answers **404** at `/` by design — it has no route there — so `/` reads like a failure and tells you nothing. Worse, **Traefik's own 404 is indistinguishable by status code**: a router that never matched, because DNS is stale or the certificate did not issue or the application's labels did not come back, answers 404 too. The discriminator is the `server:` header — the application answers `server: uvicorn`, Traefik answers its own. So probe a path the application really serves, and where you do read a 404, read the header with it:
+
+```sh
+curl -sS -D- -o /dev/null https://commerce-ops.main-staging.fincci.bike | grep -i '^server:'
+```
+
+Record the container set and their health, the active scrape targets, the public IPv4, the volume id, the host's tailnet address, and every hostname that resolves to this server. `dig` may not be installed; `python3 -c 'import socket; print(socket.gethostbyname("<name>"))'` answers the same question.
+
+**Tell whoever owns each application on this host that the window is opening.** Their deploys fail for its whole length, and the failure looks like a network fault in *their* repository rather than like something you did: the deploy job cannot reach a host that does not exist, and cannot reach a rebuilt one until the converge puts it back on the tailnet. Two `commerce-ops` deploys failed exactly that way during the rehearsal recorded below. Nothing here notices or reports it, and `docs/backlog.md` `announce-a-rebuild-to-the-applications-that-hold-databases` is the entry for making it a mechanism rather than a message. Also read this stack's two checks at the heartbeat observer and write down the period and the grace each currently carries — phase 12 compares against them, and the register is a claim about the observer's configuration until somebody has actually looked.
 
 ## 2. Confirm the credentials the sequence needs, by using them
 
@@ -55,10 +73,16 @@ Record the container set and their health, the active scrape targets, the public
 Three of the phases below fail late and confusingly if a credential has gone stale, and all three can be checked in under a minute now:
 
 ```sh
-cd ansible && ansible-inventory -i inventory/main-staging.hcloud.yml --graph
+cd ansible
+source .envrc
+ansible-inventory -i inventory/main-staging.hcloud.yml --graph
 ```
 
-That proves the read-only Hetzner token in `ansible/.envrc` parses and reaches the right project. A failure here names the source it could not parse rather than resolving to an environment with no host in it.
+**`source .envrc` rather than `direnv allow`, and the difference matters when you are pasting a block.** `.envrc` is plain exports, so sourcing it works in any shell, immediately. `direnv allow` only *authorises* the file — the export happens the next time direnv's hook fires, which is at your next interactive prompt, so in a pasted block the line after it still runs without the token, and in a shell with no direnv hook installed it never fires at all.
+
+**Do not skip this. It is the step most often skipped and the one the rehearsal was caught by.** `ansible/.envrc` is per working tree and is not loaded by being present: without it the run fails with `Invalid Hetzner Cloud API Token: unable to authenticate` and `Completely failed to parse inventory source`. That is what an unprovisioned shell looks like, and meeting it here costs a minute where meeting it at phase 7 costs a half-finished converge. **If the file does not exist at all** — a working tree cloned since the last rebuild has none — copy `ansible/.envrc.example` and fill in both read-only tokens before going on.
+
+That proves the read-only Hetzner token parses and reaches the right project. A failure names the source it could not parse rather than resolving to an environment with no host in it — `ansible.cfg`'s `any_unparsed_is_failed` is what makes that true, and without it the play would report success having converged nothing, which is byte-identical to a play against the host you have just destroyed.
 
 **The Vault password.** Decrypt something with it rather than believing you have it. **Not with `ansible-vault view`**: this repository encrypts individual values with `encrypt_string`, so `group_vars/staging.yml` is plaintext YAML holding two `!vault |` scalars, and `view` rejects it with *Input is not vault encrypted data* whether your password is right or wrong. Force the decryption through a lookup instead, which is what the converge workflow's own preflight does:
 
@@ -70,7 +94,11 @@ ansible staging -i inventory/main-staging.hcloud.yml -c local -m debug \
 
 Run it only once the `--graph` above has listed a host: `ansible <group>` against a group matching nothing reports success having run nothing, which is a pre-flight that cannot fail. `SUCCESS` and a number means the password decrypted the file. A wrong one fails with *Attempt to use undecryptable variable*. The `| to_json` is what forces every value to be rendered, so do not drop it — without it the encrypted scalars are never touched and the check passes on any password at all.
 
-**The Tailscale auth key is the one that bites.** It is reusable and expires after ninety days, and a rebuild is typically when that expiry is discovered. Check its expiry in the Tailscale admin console and mint a fresh one if it has lapsed — phase 7 passes it on the command line, there is no prompt for it, and the role has no default, so a missing key fails inside `tailscale` after two roles have already changed the host.
+**The Tailscale auth key is the one that bites.** It is reusable and expires after ninety days, and a rebuild is typically when that expiry is discovered.
+
+**There may be more than one, and only their descriptions tell them apart.** `docs/bootstrap-a-new-host.md` §5.3 records one reusable key serving both hosts, and permits a second outright — "if you want to revoke one host's join without touching the other" — so a tailnet holding one key per stack is correct and is not what this phase assumes. Read the descriptions; take this stack's. **Where it is unclear, generate a fresh one**: it costs nothing, and a single-use key is burnt by the first join, so a rebuilt host needs one anyway.
+
+Check its expiry in the Tailscale admin console and mint a fresh one if it has lapsed — phase 7 passes it on the command line, there is no prompt for it, and the role has no default, so a missing key fails inside `tailscale` after two roles have already changed the host.
 
 You also need push access to this repository, and — for phase 15 — access to the application's own repository. Confirm both now.
 
@@ -89,6 +117,8 @@ server_enabled = false
 **Read the plan comment before merging.** It should destroy exactly three things — the server, its firewall, and the volume — and leave `hcloud_ssh_key.this` alone, which is not gated on the toggle and is deliberately owned by the stack so that it outlives the server. Record the whole plan summary rather than only those three.
 
 **The volume goes with the server on this route**, and that is the answer for the toggle route specifically: the volume has no location of its own, so its `count` depends on both toggles. A *replace* of the server is a different question — the volume's count does not turn on the server's identity, so a replace leaves it as an attachment whose `server_id` changes — and nothing in this repository has observed that route. Do not read the toggle's answer across to it.
+
+**A red check on this pull request is worth reading twice before you act on it.** `validate` initialises and validates *every* stack, not only the one you touched, so it can fail on a registry timeout against a stack this change does not go near — `could not connect to registry.terraform.io: read: connection reset by peer` is what that looks like. Check which stack the failure names: one you did not touch is the registry, and a re-run of the failed job is the whole remedy. This is the pull request whose merge destroys a host, so it is the worst one to misread as "something about my change is wrong".
 
 Merging applies immediately: `main-staging`'s GitHub Environment requires no reviewer, and its `pipeline.yml` sets `destroy_policy_gate: false`.
 
@@ -119,7 +149,9 @@ The volume id is in the apply run's log, or in the Hetzner console. Re-enabling 
 
 **Credential:** the DNS provider's own account, held in the password manager.
 
-The server's address changed, and there is no floating IP. The records live at a third-party DNS provider and in no repository — deliberately, because the zone carries live mail that an NS migration would move.
+**First check whether the address actually changed, because it may not have.** Compare what phase 4 read back with what phase 1 recorded. There is no floating IP, so the address is the server's own — but Hetzner hands the same one back when the destroy and the create are close together, and it did exactly that in the rehearsal below. **If the address is unchanged, this phase is a no-op and you should skip it**: every record already points where it should, and re-entering a correct value at a DNS provider can only introduce an error.
+
+If it did change: the records live at a third-party DNS provider and in no repository — deliberately, because the zone carries live mail that an NS migration would move.
 
 Edit, at the provider, every record aimed at this server: the wildcard `*.main-staging.<base domain>`, the bare `main-staging.<base domain>`, and any short alias pointing at it. `docs/bootstrap-a-new-host.md` §4.4 gives the zone's shape; **neither it nor this document is a register of the zone's contents** — read the zone at the provider and edit what is actually there, rather than working from the list phase 1 had you record or from any example here.
 
@@ -147,7 +179,13 @@ Record the host key first, or the play stops at connection time before a single 
 ssh -i ~/.ssh/shatynska-root root@<the new public ipv4>
 ```
 
-A brand-new public address usually carries no `known_hosts` entry, so this connection is the easy one. **The invalidated entries bite later**, at the first connection by a name you have used before — phase 8's `root@main-staging` over the tailnet, and every later `shatynska-main-staging`. Phase 8 says what to do about them; the note is here only so it is not a surprise there.
+**This is where the host key is first rejected, and it surprised the rehearsal.** A genuinely new address carries no `known_hosts` entry — but the address may have been reused, and then the entry is stale and this connection fails with `REMOTE HOST IDENTIFICATION HAS CHANGED!`. That is what happened. Clear it and accept the new key:
+
+```sh
+ssh-keygen -R <the public ipv4>
+```
+
+Phase 1 lists all three surfaces this happens on; this is the first of them, not the exception to them.
 
 Then converge:
 
@@ -174,11 +212,13 @@ Afterwards, in the Tailscale admin console: confirm the host is listed under the
 The rebuild cost the host its converge key, and nothing reinstalls it. Run this from a machine on the tailnet — the same route CI takes:
 
 ```sh
-ssh-copy-id -i ~/.ssh/shatynska-ansible-ci-main-staging.pub \
+ssh-copy-id -f -i ~/.ssh/shatynska-ansible-ci-main-staging.pub \
   -o IdentityFile=~/.ssh/shatynska-root root@main-staging
 ```
 
-**This is the first command that reaches the host by a name it has used before**, so it is where the rebuild's invalidated host key surfaces: `main-staging` is the same tailnet name on a new machine, and `ansible.cfg` sets `host_key_checking = True`. Expect `Host key verification failed` or `REMOTE HOST IDENTIFICATION HAS CHANGED`; clear the stale entry with `ssh-keygen -R main-staging` and accept the new one. The same applies to the `shatynska-main-staging` alias later phases use. Do not disable the check to get past it.
+**`-f` is load-bearing and is not a convenience.** Without it `ssh-copy-id` refuses with `ERROR: failed to open ID file '…/shatynska-ansible-ci-main-staging': No such file` — it wants the **private** half to verify the pair even when handed the public one, and that half was deleted when it was stored. So the command fails for precisely the operator who followed the bootstrap, and the error names a file they were told to remove. `-f` skips the verification and installs the public key, which is all this step needs.
+
+**This reaches the host by its tailnet name, which is the second of the three host-key surfaces phase 1 lists** — `main-staging` is the same name on a new machine, and `ansible.cfg` sets `host_key_checking = True`. Expect `Host key verification failed` or `REMOTE HOST IDENTIFICATION HAS CHANGED`; clear it with `ssh-keygen -R main-staging` and accept the new one. **The third surface is separate and catches people out**: the `shatynska-main-staging` alias resolves to the tailnet *address*, and accepting the key under the name does not record it for the address, so `ssh-keygen -R <the tailnet ipv4>` is owed as well. Do not disable the check to get past any of them.
 
 Then prove the key is usable, by making the pipeline use it:
 
@@ -242,9 +282,11 @@ ssh shatynska-main-staging 'docker ps --format "{{.Names}}\t{{.Status}}"'
 
 ## 11. Redo the two manual steps the automation deliberately does not do
 
-**Credential:** `PLATFORM_POSTGRES_USER` and `PLATFORM_POSTGRES_EXPORTER_PASSWORD`, held in the password manager — **not** read back from the GitHub Environment, which is write-only once a secret is set. This is the one phase that needs a secret's *value* in hand rather than a job that holds it, so if the password manager does not have it, rotate it in both places rather than guessing.
+**Credential:** the operator inspection key, held in `~/.ssh`, to reach the host — and nothing you have to look up. The values this step needs are `PLATFORM_POSTGRES_USER` and `PLATFORM_POSTGRES_EXPORTER_PASSWORD`, whose canonical home is the password manager since an Environment secret cannot be read back; but the running exporter already holds the second, which is how `platform/README.md` has you take it.
 
 The shared instance came back empty, so the monitoring role it holds came back with it. Both steps are `platform/README.md`'s, under *Monitoring and alerting*, and are performed from there rather than copied here. What matters at this point in the sequence:
+
+**You do not need to fetch the password.** `platform/README.md` gives the form that reads it from the exporter container, which is already running with that stack's value and is the authoritative copy — so the secret is never fetched, pasted or mistyped. Use that, and do not paste a password into this shell.
 
 - **The `pgexporter` monitoring role** must be recreated inside the new Postgres container, with this stack's own exporter password. **Nothing alerts if you skip it**: the exporter answers HTTP 200 with `pg_up 0`, and the alert that would catch a dead target fires on the target being absent, not on it being wrong. Its check is `pg_up 1` and `pg_exporter_last_scrape_error 0`.
 - **The dead-man's-switch registration** is already done on a rebuild — the check exists and its URL is unchanged. What is owed is confirming pings have resumed, which is phase 12.
@@ -296,7 +338,18 @@ On `main-staging` there is exactly one such application, `commerce-ops`. The `pl
 
 **Credential:** held in that application's own repository, one set per deploy target — nothing in this repository can reach them.
 
-Nothing here can trigger these. For each application on this host, go to that application's own Actions and run its deploy for this target. For `commerce-ops` that is its own repository and its `staging` environment.
+Nothing here can trigger these. For each application on this host, go to that application's own Actions. **How you start it is that application's business and may not be a button**: `commerce-ops`'s `Deploy` workflow triggers on `push` to `main` and declares no `workflow_dispatch`, so there is no Run workflow to click and looking for one wastes time.
+
+**Re-running the last `Deploy` run is the route that belongs in a rebuild** — it redeploys the commit already on `main`, where pushing would mean inventing a commit to trigger a deploy:
+
+```sh
+gh run list --repo <org>/<app> --workflow Deploy --limit 3
+gh run rerun <id> --repo <org>/<app>
+```
+
+**A failed run from during the window is expected and is the one to re-run.** A deploy that landed while the host was destroyed or not yet on the tailnet fails at `Connect to the tailnet` with `Ping host *** did not respond`. That is this rebuild's doing, not a fault in that application.
+
+**If the last run is too old to re-run**, GitHub having dropped that ability with the run's logs, the remaining route is a push to that repository's `main` — and the two conditions correlate, since a host rebuilt after a long quiet period is one whose last deploy is old. The obligation is unchanged either way: this phase is that application's to satisfy, and this document can only say that it is owed.
 
 If a deploy fails at connection time, phase 9's `DEPLOY_HOST` is the first thing to check. If it starts and then fails against the database, phase 14 either did not run for that application or its rotation half-completed — the recipe's own failure section covers that case.
 
@@ -307,7 +360,7 @@ If a deploy fails at connection time, phase 9's `DEPLOY_HOST` is the first thing
 Against what phase 1 recorded, not against what looks reasonable:
 
 ```sh
-curl -sS -o /dev/null -w '%{http_code}\n' https://commerce-ops.main-staging.fincci.bike
+curl -sS -o /dev/null -w '%{http_code}\n' https://commerce-ops.main-staging.fincci.bike/health
 ssh shatynska-main-staging 'docker ps --format "{{.Names}}\t{{.Status}}"'
 ```
 
@@ -321,9 +374,33 @@ A host that is up and serving nothing it served before has not finished this seq
 
 ## Rehearsal record
 
-Last rehearsed: never
+Last rehearsed: 2026-09-16
+Duration: 57 minutes
+Stack: main-staging
+Corrected: twelve steps, listed below
 
-This procedure has been collated from the pieces that were already written down, and every command in it was read back against the file that declares it — but the sequence as a whole has not yet been run against a host. Until the line above carries a date, this document is a plan and not evidence.
+Performed against `main-staging` by the `server_enabled` toggle route, from the merge that destroyed the server to the confirmation that the host was serving what it served before.
+
+**Phase 2 was skipped**, and the run met at phase 7 exactly what phase 2 exists to catch — that is correction 8 below, and it is the clearest evidence in this record that phase 2 earns its place. Every other phase was performed in order. Where the text was wrong, the step above is what was corrected, and this list says what was wrong with it.
+
+1. **The serving probe read `/`**, which this application answers 404 by design — and Traefik's own 404, from a router that never matched, is indistinguishable by status code. Phases 1 and 16 now probe `/health` and read the `server:` header.
+2. **`dig` was not installed** on the operator's workstation. A `python3` one-liner is given instead.
+3. **Phase 1's credential line omitted the heartbeat observer's account**, which the same phase needs for the period-and-grace read.
+4. **`validate` failed transiently on a stack the change did not touch.** It validates every stack; the remedy is a re-run, and phase 3 now says so — it is the pull request whose merge destroys a host and the worst one to misread.
+5. **The public address did not change.** Hetzner handed the same one back seven minutes after the destroy, so phase 5 was a no-op. It is written as conditional now, because a slower rebuild would get a new one.
+6. **The host key was rejected three times, not once** — at the reused public address, at the tailnet name, and at the tailnet address behind a local alias, which the name's entry does not cover. Said once in phase 1 with all three named.
+7. **There was one auth key per stack**, which §5.3 permits, where phase 2 assumed the documented single key. Descriptions are what tell them apart.
+8. **The converge failed at inventory parse** because `direnv` was not active. Phase 2 now leads with `source .envrc`, which works in a pasted block where `direnv allow` does not, and names the failure it prevents.
+9. **`ssh-copy-id` refused** without the private half the bootstrap has you delete. `-f` is what it needs, and it is now in the command.
+10. **Phase 11 did not need the password manager.** The exporter container already holds the value; it is read on the host and piped into `psql`, never entering a shell history.
+11. **Phase 15 named a button that does not exist.** That application's deploy has no `workflow_dispatch`; re-running the last run is the route.
+12. **The rebuild broke two deploys in another repository**, failing at `Connect to the tailnet` with a cause that reads as a network fault in *their* history. Phase 1 now says to tell each application's owner the window is opening.
+
+**One thing the rehearsal confirmed rather than corrected**, recorded because its absence would read as an omission: the tailnet address moved even though the public one did not, and phase 9's three holders — the two Environment secrets and `~/.ssh/config` — were all owed. That step was already right, because code review had found the third holder missing before the rehearsal ran.
+
+**What the rehearsal found beyond the sequence, before anything was destroyed.** Three live defects, none of which any check in this repository could have reached, because all three lived in per-stack GitHub Environment secrets that no committed file can see: both hosts pinged one dead-man's-switch check, so production's liveness alarm was masked; both posted alerts through one webhook into one channel in the **staging** workspace, so production's alerts had never reached the Slack its operator watches; and a rotated secret does not reach its container on a deploy, which is why the first two survived being fixed until the config block was edited. The first two are fixed. The third is `docs/backlog.md` `make-a-rotated-secret-reach-its-inline-config`.
+
+**What the duration does and does not say.** Fifty-seven minutes is one operator on one stack with this document in front of them. It is not the number for an unrehearsed rebuild, and it is not production's: production has a reviewer on both applies, a `destroy-override` label to apply before merging, delete protection to clear, and an application whose durable data no backup covers.
 
 ### How this record is written
 

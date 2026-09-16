@@ -485,6 +485,12 @@ Revert both local edits afterwards. Use the read-only Hetzner token; this is a `
 
 The requirement this protects is *Conditional Prod Volume Creation* in `openspec/specs/iac-data-volumes/spec.md`, and the two reads above are literally its scenarios *Volume toggle disabled creates nothing* and *Disabling the server also removes the volume* — both of which say `terraform plan` SHALL show the volume planned for destruction. The specification states them; nothing has ever run them.
 
+**Half of it was observed on 2026-09-16, on staging, and the observation cost no destruction.** `write-and-rehearse-the-rebuild-runbook`'s rehearsal set `server_enabled = false` on `main-staging` and read the pull request's own plan comment: `Plan: 0 to add, 0 to change, 3 to destroy` — the server, its firewall and the volume together, with `hcloud_ssh_key.this` refreshed and not destroyed. The apply that followed destroyed the volume **first**, after 9 seconds, before the server it was attached to, which is a stronger statement than this entry's own wording and which no plan would have shown.
+
+**So the home this entry could not find is the pull request's plan job**, and it was available all along: a plan against live state, run by the pipeline, published as a comment, needing no local HCP credential. That answers the open question above for whoever takes the rest.
+
+**What remains is production's, and it is the half that matters.** The reads above were against `main-staging`, whose loss is tolerable and whose volume held nothing durable. This entry is about `main-production`, where the same two toggles gate a volume that no backup covers. Nothing observed on staging licenses a claim about it: same expression, different stack, different consequence.
+
 Worth doing before the coupling is next relied on — a volume that survived its server would be an orphaned resource with no location, which is the failure the coupling exists to prevent and which nothing has yet observed being prevented.
 
 ## 31. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
@@ -910,3 +916,90 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 **Why it is recorded now.** It has always been true, and until recently a converge dispatch was a rare act. `docs/runbook-rebuild.md` phase 8 makes one a routine step of every rebuild — it is how the converge key is proved usable — so the odds of somebody dispatching from the branch they are working on went up. The runbook says `--ref main` and says the discipline is the operator's rather than the workflow's, which is honest and is not a guard.
 
 **What a change owes.** The guard itself is a near-copy of `platform-deploy.yml`'s, and the reasoning is already written there; the decisions are what to do about the two differences. That workflow's guard runs in a job whose only input is the repository, while `host-converge.yml`'s `discover` already reads each stack's `pipeline.yml` — so the guard must come before that read rather than beside it. And a refusal message has to say what to do instead, which for a converge is "merge it", not "dispatch it from `main`" — a converge of unreviewed Ansible has no legitimate form. `.github/tests` is where the assertion belongs, beside the one that reads `platform-deploy.yml`'s guard today.
+
+---
+
+## 55. make-a-rotated-secret-reach-its-inline-config
+
+**Not blocked, and it is a live defect. Found 2026-09-16 while closing `give-staging-its-own-dead-mans-switch-check`, by checking whether the fix had actually landed rather than by reading the deploy's result.**
+
+**A platform secret interpolated into an inline `configs:` content block does not reach the container, and the deploy reports success.** Measured: staging's `PLATFORM_DEADMANSWITCH_URL` was replaced at 19:45:05Z, `platform-deploy.yml` was dispatched for `main-staging` at 19:45:23Z and completed green — and `platform-alertmanager-1` was still up eleven hours afterwards, still pinging the old URL. Nothing failed. Nothing said the change had not applied.
+
+**The cause is the one input the checksum mechanism cannot see.** `apply-shipped-config-on-deploy` added `platform.config-checksum` because Docker Compose does not recreate a container when an inline config's *content* changes. That label is a literal committed beside the service, computed from the committed config text, and a static check asserts the two agree. A secret is not part of that text: `alertmanager_config` carries `url: ${DEADMANSWITCH_URL}`, so replacing the secret moves the *rendered* config and moves neither the committed text nor the label. `docker compose up -d --wait` then sees a service definition identical to the running one and leaves it alone.
+
+So the mechanism is exactly as sound as it was designed to be, for committed edits, and blind in the neighbouring case. **The affected values are every secret interpolated into an inline config**, which today is at least `DEADMANSWITCH_URL` and `SLACK_API_URL` in `alertmanager_config` — that is, the dead-man's-switch and the alert routing, both of which fail silently and both of which are the things that tell you something else has failed.
+
+**The immediate consequence, stated because it will be met before this entry is taken.** Rotating `PLATFORM_SLACK_WEBHOOK_URL` does not take effect on a deploy. The old webhook keeps being used until that container is recreated by something else, and if the old one has been revoked, alert delivery is silently dead while every check stays green.
+
+**What a change owes.** The decision is what makes a rotation observable, and the options differ in what they cost rather than in difficulty: a deploy-time step that force-recreates the services whose configs interpolate a secret; a checksum computed over the *rendered* config at deploy time rather than committed, which ends the static check but catches both cases; or a probe after the deploy that asserts the running container's config carries the value just shipped, in the shape `make-a-shared-instance-reset-visible-to-its-applications` used. Whichever is chosen, the test belongs where a static read cannot reach — this is a property of a running container, so `.github/tests` is the wrong home for it and Molecule cannot see a secret either.
+
+**Until it lands**, a secret rotation is followed by a hand recreation of the affected service on that host, and the operator confirms the value arrived rather than reading the deploy's green.
+
+---
+
+## 56. perform-the-stack-separation-check-that-was-never-run
+
+**Not blocked. Found 2026-09-16 by the rehearsal's pre-state capture, which read the running containers rather than the documents — three live defects, of which two were fixed the same day.** What remains is the Grafana admin password and the absence of any repeatable check; the account below is kept whole because the three share one cause and one blind spot.
+
+`docs/bootstrap-a-new-host.md` §7.5 already carries the check that catches this, and says why it matters: *"the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports."* **It had never been performed, and when it was, both halves failed.** Its alert half passes now, since 2026-09-16; its Grafana half still fails. Measured by comparing hashes of the values the running containers actually hold, so no value is reproduced here:
+
+| Per-stack value | The two hosts hold |
+|---|---|
+| `PLATFORM_DEADMANSWITCH_URL` | the same — fixed 2026-09-16, see below |
+| `PLATFORM_SLACK_WEBHOOK_URL` | the same, and both configs named the same channel `#alerts` **in the same workspace** — fixed 2026-09-16, see below |
+| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | the same |
+| `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | **different** |
+
+**Confirmed by delivery, not only by comparison.** On 2026-09-16 a probe was posted through the webhook each running container actually holds, one per host. Both arrived in the **staging** workspace's `#alerts`, seconds apart and indistinguishable from one another; the operator confirmed nothing arrived in the production Slack. So production's alerts do not reach the workspace its operator watches, and had not since that host was stood up. That is stage 7.5's check being performed for the first time and failing.
+
+The last row is the tell. It differs because `provision-commerce-ops-database-in-the-shared-instance` separated it by hand on 2026-09-15 and recorded doing so; the other three were never swept, and nothing since has looked. One value was fixed and its three siblings were left, which is what an un-run check looks like from the outside.
+
+**What each one costs, since they fail differently:**
+
+- **The Slack webhook** defeats attribution. Nothing labels an alert with the host it came from — the channel *is* the attribution, which is why Appendix A says a channel per stack. Today an alert in `#alerts` could be either host, and the operator has no way to tell which from the alert itself.
+- **The Grafana password** means one leaked credential opens both dashboards, including production's. It also silently defeats the one check §7.5 offers for telling the two stacks apart.
+- **The dead-man's-switch** masked production's own liveness. Fixed on the day this entry was written, and it is the reason the rest of this entry is narrower than it was.
+
+**Why no mechanism could have caught any of them.** All four are GitHub Environment secrets. A committed file cannot see what an Environment holds, still less that two Environments hold one value, so `.github/tests` cannot reach it and neither can a reviewer; Molecule converges a container and never sees a secret. The only check that reaches it is an operator comparing the running hosts, which is what §7.5 asks for and what nobody did. That is worth stating plainly rather than filed as an oversight: **this class of defect is invisible to every automated guard this repository has**, and its only defence is a manual step in a document read once.
+
+**Two of the three were fixed on 2026-09-16, as a fix rather than as a change**, by `apply-the-per-stack-alert-routing` (PR #244): each stack now holds its own Slack webhook in its own workspace, and its own dead-man's-switch URL. §7.5's check was then performed for the first time and **passed** — one probe to each host, one message arriving in each workspace, neither in both, confirmed by the operator. The ping URLs and the Slack workspace ids were confirmed distinct on both hosts before the probes were sent.
+
+**What remains is the Grafana admin password and the absence of any repeatable check.** Both hosts still hold one admin password, so one leaked credential opens production's dashboard; that needs no container recreation and was left out deliberately to keep the urgent fix small.
+
+**What a change owes.** Give each stack its own Grafana admin password, and then decide where the separation is asserted, because a runbook step performed once is what let three values sit shared for weeks. Two things to decide inside that: whether `#alerts` stays production's and staging gets a new channel or both move, since the existing channel's history is production's; and whether the separation is worth asserting somewhere repeatable rather than in a runbook step — a probe comparing hashes across hosts is the shape that would work, and it needs a home, because it is a property of two running hosts and neither `.github/tests` nor Molecule can hold it.
+
+**Sequencing note, because it bites.** Replacing any of these three secrets does not reach the running container on a deploy — `make-a-rotated-secret-reach-its-inline-config` is why, and it covers the webhook and the dead-man's-switch. Plan the recreation as part of the work rather than discovering it afterwards.
+
+---
+
+## 57. decide-whether-the-data-volume-should-survive-a-server-toggle
+
+**Not blocked, and deliberately not yet worth doing. Recorded 2026-09-16 from a question asked during `write-and-rehearse-the-rebuild-runbook`'s rehearsal, once the destroy had shown what the coupling actually does.**
+
+Each stack couples its data volume to its server: `count = var.volume_enabled && var.server_enabled ? 1 : 0`. So `server_enabled = false` discards the volume and everything on it. That was decided deliberately — `add-prod-data-volume`'s design records it as an accepted consequence rather than an oversight, and states the part that matters more: *"Unlike the server, Hetzner volumes have no automatic-backup equivalent, so this destroy has no data-durability net."* The server's automatic backups reach the root disk alone, so a store on the volume sits outside the only copy this host takes.
+
+**The rehearsal made it concrete.** The apply of 2026-09-16 destroyed the volume **first**, after 9 seconds, before the server it was attached to — which is a stronger statement than the documented coupling, that being only about the volume's inability to exist without the server. Anyone planning around "detach it and keep it" needs that ordering, and nothing here had said it, because nothing had run it.
+
+**What decoupling would take, and what it would cost.** Give the volume a `location` of its own instead of deriving it from `server_id`, and gate it on `volume_enabled` alone; the module omits `location` today precisely because the provider derives it from the attachment and requires the two to agree. Hetzner volumes can exist detached — it is this repository's module that cannot express one.
+
+The money is not the obstacle and should not be cited as one: a detached 10 GB volume is on the order of tens of cents a month. What it costs instead is the toggle's meaning. `terraform/stacks/main-staging/variables.tf` calls `server_enabled` *"the way to stop paying for staging without deleting its configuration"*, and a volume that survives makes "off" no longer free and no longer clean — a resource nothing reclaims, accumulating quietly across every cycle.
+
+**Why it is not worth doing now.** Under *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) nothing on that volume is durable: Prometheus's database is bounded by its own retention, Grafana's provisioned state is reproduced by a redeploy, and the shared instance admits no durable data at all. There is nothing there to protect, so decoupling would buy protection for data that does not exist.
+
+**The trigger is durable data landing on that host, not cost and not convenience.** At that point two things are owed together — the decoupling *and* a real backup — and **the decoupling alone is the more dangerous half**, because a volume that survives a toggle looks like protection while remaining unprotected against deletion, corruption, and the region. Whoever takes this should deliver both or neither. The production divergence that requirement already records — `commerce-ops`'s own PostgreSQL, which nothing backs up — is the first candidate to make the trigger real.
+
+---
+
+## 58. set-staging-alertmanager-to-its-register-values
+
+**Not blocked, and it is a live misconfiguration rather than a plan. Recorded 2026-09-16, from the code review of `write-and-rehearse-the-rebuild-runbook`'s rehearsal, which caught it in the rehearsal's own data.**
+
+`main-staging-alertmanager` was created on the evening of 2026-09-16 by its own first ping, as part of closing the shared dead-man's-switch defect — and `docs/bootstrap-a-new-host.md`'s Appendix A says what that means: *"A check comes into existence at its job's first ping and carries the vendor's default period until it is corrected here."* **Nobody has corrected it there.** So staging's dead-man's-switch is running on the observer's defaults rather than on the 5 minutes / 2 minutes Appendix A records for it, and that row is a claim rather than a record — Appendix A now says so in as many words.
+
+**What it costs is the mechanism itself.** This is the alarm for when everything else is down. A default period longer than the reporter's means silence goes unnoticed for as long as the default allows; a default shorter than it means a healthy host alarms. Neither is knowable without looking, which is the point: the one check whose job is to notice that nothing is reporting is itself unverified.
+
+**The fix is one operator action:** read `main-staging-alertmanager`'s period and grace at the observer, set them to what Appendix A's second table records, and — where the observer turns out to hold something better — correct the table instead, in its own pull request, saying which of the two was wrong. `docs/runbook-rebuild.md`'s phase 12 has the tie-break: before a destroy the observer is the authority and the register is corrected; after one the register is right and the observer is what you fix. This is neither, being a check that never existed before, so the register's values are intent and the observer's are the vendor's.
+
+**Its own entry rather than folded into `perform-the-stack-separation-check-that-was-never-run`**, which is the cluster it came from. That entry's remaining work is the shared Grafana password and the design of a repeatable check, and both want thought; this wants a minute and a browser. Folded in, a one-minute action would sit behind a change that needs design and inherit its priority.
+
+**It is recorded here rather than left as a note in Appendix A**, and the reason is this repository's own measurement: `perform-the-stack-separation-check-that-was-never-run` records that *"a runbook step performed once is what let three values sit shared for weeks"*, and that this class of defect *"is invisible to every automated guard this repository has"*. A note in a document read once per rebuild is that same shape. An entry survives the change that found it, which a disclosure inside that change's task list does not.
