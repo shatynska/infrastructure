@@ -16,7 +16,16 @@ check() { # check <path> <rendering> <value> -- verdict line; 1 corrupt, 2 did n
   # empty: "resolves to EMPTY" is round 2's whole result and the basis on which
   # single-quoting was rejected, so the two states are told apart here rather
   # than collapsed into one CORRUPT row.
-  if ! got_b64="$(./probe --path "$path" "$rendering" "$value")"; then
+  local status=0
+  got_b64="$(./probe --path "$path" "$rendering" "$value")" || status=$?
+  # A REFUSAL is a result -- it is round 2's whole finding -- and only an
+  # outage is not. Collapsing them is how the committed harness came to print
+  # its own corrected table as "not a result".
+  if [ "$status" = 4 ]; then
+    printf '  REFUSED %-22q -- the parser rejected the file\n' "$value"
+    return 3
+  fi
+  if [ "$status" != 0 ]; then
     printf '  ERROR   %-22q -- the probe did not complete\n' "$value"
     return 2
   fi
@@ -32,24 +41,30 @@ check() { # check <path> <rendering> <value> -- verdict line; 1 corrupt, 2 did n
 
 sweep() { # sweep <path> <rendering> <values...>
   local path="$1" rendering="$2"; shift 2
-  local fails=0 errors=0 total=0 status
+  local fails=0 errors=0 refused=0 total=0 status
   echo "--- path=$path rendering=$rendering ---"
   for v in "$@"; do
     total=$((total + 1))
     check "$path" "$rendering" "$v" && status=0 || status=$?
     [ "$status" = 1 ] && fails=$((fails + 1))
     [ "$status" = 2 ] && errors=$((errors + 1))
+    [ "$status" = 3 ] && refused=$((refused + 1))
   done
+  local line="    $fails silently altered, $refused refused, of $total"
   if [ "$errors" -gt 0 ]; then
-    echo "    $fails corrupt of $total -- AND $errors DID NOT RUN, so this table is not a result"
-  else
-    echo "    $fails corrupt of $total"
+    line="$line -- AND $errors DID NOT RUN, so this table is not a result"
   fi
+  echo "$line"
 }
 
 ROUND1=( 'ab$c#d' '"abc"def' 'A1+b/c=' 'x`id -u`y' 'a$(id -u)b' 'p@ss$word' 'a$$b'
          'one two' 'has#hash' 'trail   ' 'back\nslash' '${PATH}' )
-ROUND2=( "a'b" "it's" "a\"b'c\$d" '' 'a=b=c' $'line1\nline2' '\' "trailing'" )
+ROUND2=( "a'b" "it's" "a\"b'c\$d" '' 'a=b=c' $'line1\nline2' '\' "trailing'"
+         # The two that pin round 2's conclusion: a CLOSED apostrophe followed
+         # by a space-preceded `#`, which single-quoting truncates SILENTLY.
+         # Without them the corpus holds the apostrophe's neighbours constant
+         # and invites the generalisation that it only ever refuses.
+         "secret' #1" "a' #b" )
 ROUND3_EXTRA=( ' leading' 'trailing ' $'tab\there' 'pct%s%d' 'bang!bang' 'unicode-ключ-é'
                'ends-with$' 'ends-with"' 'ends-with\' 'starts-with#' '#!/bin/sh' 'a`b`c'
                '$' '$$' '\\' '"' "'" '"$"' 'x' 'a\$b' '$\' )

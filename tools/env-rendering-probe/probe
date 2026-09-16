@@ -5,7 +5,9 @@
 # Renders a one-variable `.env` the way the named candidate rendering would,
 # runs it through Compose, and prints the base64 of what the container process
 # actually received. Prints nothing and exits non-zero if the run did not
-# complete -- see "THE THIRD STATE" below, which is the reason that matters.
+# complete. Exit 4 is a REFUSAL (the parser rejected the file -- a result in
+# its own right), 6 is anything else (an outage -- not a result at all). See
+# "THE THIRD STATE" below, which is the reason the two must not be one.
 #
 # WHY BASE64, AND WHY FROM INSIDE THE CONTAINER. Base64 so that whitespace,
 # line breaks and non-ASCII survive the comparison rather than being eaten by
@@ -66,8 +68,11 @@ workflow_render() {
   local extracted
   extracted="$(mktemp)"
   python3 - "$extracted" <<'PY' || { echo "probe: could not extract the render step from the workflow" >&2; exit 3; }
-import pathlib, sys, yaml
-root = pathlib.Path(__file__).resolve()
+import pathlib, sys
+try:
+    import yaml
+except ImportError:
+    sys.exit("probe needs PyYAML to read the workflow: pip install pyyaml")
 wf = pathlib.Path("../../.github/workflows/platform-deploy.yml").resolve()
 doc = yaml.safe_load(wf.read_text())
 bodies = [
@@ -135,15 +140,20 @@ if [ "$status" -ne 0 ]; then
   # rejects a file it cannot parse -- "unterminated quoted value" -- and reads
   # nothing, which is loud rather than silent and is not the same result as a
   # parser yielding an empty string.
-  reason="$(grep -o 'unterminated quoted value.*' "$err" | head -1)"
-  if [ -n "$reason" ]; then
-    echo "probe: REFUSED -- $reason" >&2
-  else
-    echo "probe: the container run did not complete:" >&2
-    sed 's/^/  /' "$err" >&2
+  # Compose reports a file it cannot parse in more than one wording --
+  # "unterminated quoted value" and `unexpected character … in variable name`
+  # are both real, measured -- and every one of them is prefixed "failed to
+  # read <path>". Keying on that prefix rather than on one error's text is what
+  # stops four refusals out of five being reported as a Docker outage.
+  if grep -q 'failed to read' "$err"; then
+    echo "probe: REFUSED -- $(sed -n 's/.*failed to read[^:]*: //p' "$err" | head -1)" >&2
+    rm -f "$err"
+    exit 4
   fi
+  echo "probe: the container run did not complete:" >&2
+  sed 's/^/  /' "$err" >&2
   rm -f "$err"
-  exit 4
+  exit 6
 fi
 rm -f "$err"
 

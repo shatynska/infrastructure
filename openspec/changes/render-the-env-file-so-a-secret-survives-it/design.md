@@ -6,13 +6,13 @@ Everything below rests on one measurement, taken because the backlog entry this 
 
 **Where the measurement is taken.** From inside a running container, reading the environment the service process actually received, encoded as base64 so that whitespace and control characters survive the comparison. Not from `docker compose config`: that command escapes a literal `$` as `$$` in its own output, so it reports a value that looks corrupted when it is not and vice versa — which is how this entry's first diagnosis went wrong twice, in opposite directions.
 
-**Every table below was re-taken on 2026-09-16 after the harness was found defective, and three of them changed.** The first version discarded Compose's standard error and compared its standard output alone, so a run Compose **refused** — it rejects a file it cannot parse and reads nothing — was recorded as a value that came back *empty*. It also let a refused run leave a container behind that a later invocation could read, which put a value from one round into another round's table. Both are fixed: each invocation now takes a Compose project of its own, and the container echoes back a nonce the caller checks, so an answer that did not come from the run that asked for it is refused rather than reported. What follows is the re-taken data, and **where a round's conclusion changed, the old one is stated alongside it** rather than replaced — the correction is the more useful record.
+**Every table below was re-taken on 2026-09-16 after the harness was found defective, and five of them changed — rounds 1, 2, 3, 4 and 6, with Decision 9's table gaining a column of its own.** Round 2 then changed a second time, and Decision 2's reasoning with it; the corrections live beside the claims they correct, in rounds 2, 3, 4 and 6 and in Decisions 2 and 9. The first version discarded Compose's standard error and compared its standard output alone, so a run Compose **refused** — it rejects a file it cannot parse and reads nothing — was recorded as a value that came back *empty*. It also let a refused run leave a container behind that a later invocation could read, which put a value from one round into another round's table. Both are fixed: each invocation now takes a Compose project of its own, and the container echoes back a nonce the caller checks, so an answer that did not come from the run that asked for it is refused rather than reported. What follows is the re-taken data, and **where a round's conclusion changed, the old one is stated alongside it** rather than replaced — the correction is the more useful record.
 
 **The harness** is committed, as `tools/env-rendering-probe/` at the repository root, and this section is its findings rather than its description. It is not a test and sits in none of `AGENTS.md`'s three test rows: it spawns a container, which the static suite may not, and its subject is a workflow's output rather than an Ansible role's behaviour on a host. It is committed because Decision 6 makes this measurement the change's only behavioural evidence, and evidence a reader cannot re-take is evidence only about its author — the standard this repository's own rule on correcting an archived record already applies to a figure. It is also the starting point for the deploy-time round trip that Decision 6 defers.
 
 **Versions.** Docker Compose **v5.4.0**, Docker Engine 29.7.2, on the authoring workstation, 2026-09-16. The production host was read the same day and runs Compose **v5.5.0** on the same engine. The skew is stated rather than resolved — see Decision 6.
 
-**Counts.** Round 1 ran 12 values against 5 renderings; round 2 ran 8 against one; round 3 ran those 20 against 4 escaping candidates, then 21 further values and 10 adversarial ones against the two survivors; round 4 ran 15 against the other consumption path; round 5 ran 13 against the current rendering alone; round 6 ran 6 more against it, in positions round 5 held constant; round 7 ran 3 to settle a clause round 6 had inferred. Every round was then re-taken against the corrected harness, and the counts here are the re-taken ones. The tables for rounds 1 to 4 are **excerpts** chosen to show the distinct behaviours; rounds 5 and 6 are given in full, because what they establish is partly which positions were *not* tested. The full value lists are in the committed harness.
+**Counts.** Round 1 ran 12 values against 5 renderings; round 2 ran 10 against one; round 3 ran those 20 against 4 escaping candidates, then 21 further values and 10 adversarial ones against the two survivors; round 4 ran 15 against the other consumption path; round 5 ran 13 against the current rendering alone; round 6 ran 6 more against it, in positions round 5 held constant; round 7 ran 3 to settle a clause round 6 had inferred. Every round was then re-taken against the corrected harness, and the counts here are the re-taken ones. The tables for rounds 1 to 4 are **excerpts** chosen to show the distinct behaviours; rounds 5 and 6 are given in full, because what they establish is partly which positions were *not* tested. The full value lists are in the committed harness.
 
 ### Round 1: quoting alone
 
@@ -35,7 +35,7 @@ Single-quoting survived all twelve. **So the backlog entry's claim that single-q
 
 ### Round 2: what single-quoting breaks on
 
-All 8 values.
+All 10 values — 8 originally, plus the two the round-2 code review added to pin the conclusion below.
 
 | Value stored | `'…'` |
 |---|---|
@@ -48,24 +48,33 @@ All 8 values.
 | `line1⏎line2` | intact |
 | `a=b=c` | intact |
 
-**This round's conclusion changed when it was re-taken, and the change matters more than the table.** It previously read that these five resolve to **empty**, and that single-quoting therefore "converts one silent corruption into another". That was the defective harness: Compose does not yield an empty value for `PROBE='a'b'` or `PROBE='\'`, it **refuses the whole file** — `failed to read .env: unterminated quoted value` — and exits non-zero, reading nothing at all.
+| `secret' #1` | **`secret`** — silently |
+| `a' #b` | **`a`** — silently |
 
-So single-quoting has **no silent failure mode**. It yields the value or it stops the deploy, loudly, with a message naming the cause. Zero of the twenty values in rounds 1 and 2 are silently altered by it. That is a better failure than the one this change is fixing, and Decision 2 is rewritten around what is actually wrong with it.
+**This round has been wrong twice, in opposite directions, and both errors are kept because the pair is more instructive than either.**
+
+*The first version* said the five refused values resolve to **empty**, and concluded that single-quoting "converts one silent corruption into another". That was the defective harness reading a refusal as an empty result: Compose does not yield an empty value for `PROBE='a'b'`, it **refuses the whole file** and exits non-zero, reading nothing.
+
+*The second version* corrected that and then over-corrected, concluding that single-quoting therefore has **no silent failure mode at all**. It has one. The last two rows are it: a closed apostrophe followed by a space-preceded `#` leaves a well-formed line whose remainder is an inline comment, so `secret' #1` arrives as `secret`, exit zero, nothing said. Those two values were added to the corpus by the review that found them, so the claim is now pinned by a measurement rather than by prose.
+
+**Both errors are the same error**, and this document names it three paragraphs later in Decision 9: varying one thing while holding another constant, then concluding about the thing varied. Round 5 held the *position* and concluded about the character. The original rounds 1 and 2 corpus held the apostrophe's *neighbours* constant — no value in it put a quote next to a space-preceded `#` — and the conclusion drawn was about the character again.
+
+So the true statement is the narrow one: **single-quoting has both failure modes.** It refuses an unbalanced quote, loudly, and it truncates silently where a closed quote is followed by a space-preceded `#`. Decision 2 rejects it on what is wrong with both.
 
 ### Round 3: escaping
 
-Four candidates, over the 20 values of rounds 1 and 2 combined:
+Four candidates, over the 20 values of rounds 1 and 2 as they then stood:
 
 | Rendering | Silently altered | Refused |
 |---|---|---|
-| `'…'` with `'` → `\'` | 0 of 20 | 1 — a value that is a lone `\` |
-| `'…'` with `'` → `'\''` | 0 of 20 | 5 |
-| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`$$` | **0 of 20** | **none** |
-| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`\$` | **0 of 20** | **none** |
+| `'…'` with `'` → `\'` | 0 of 22 | 1 — a value that is a lone `\` |
+| `'…'` with `'` → `'\''` | 0 of 22 | 7 |
+| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`$$` | **0 of 22** | **none** |
+| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`\$` | **0 of 22** | **none** |
 
-The two single-quoted rows previously read as 1 and 6 *corrupt*; re-taken, they alter nothing and are refused instead. The escaping rows are unchanged, and they are the only two that neither alter a value nor refuse one.
+The two single-quoted rows previously read as 1 and 6 *corrupt*; re-taken, they alter nothing and are refused instead — and escaping the apostrophe is also what stops round 2's silent truncation, since an apostrophe that cannot close the quoted region cannot hand the remainder to a comment. The escaping rows are the only two that neither alter a value nor refuse one.
 
-The two survivors were then run against 21 further values — leading and trailing whitespace, a tab, `%`, `!`, non-ASCII, a value that is exactly `$`, one that is exactly `"`, one that is exactly `'`, one that is a lone `\`, two random `openssl rand -base64` outputs — and against 10 adversarial values mixing backslash, dollar and quote adjacently, which is where an escaper with its substitutions in the wrong order fails: `a\$b`, `\\$`, `$\`, `"\$"`, `\$$`, `$$\\`, `a\\"$b`. **Both survived all 51 values**, altering none and being refused for none.
+The two survivors were then run against the same 22, then against 21 further values — leading and trailing whitespace, a tab, `%`, `!`, non-ASCII, a value that is exactly `$`, one that is exactly `"`, one that is exactly `'`, one that is a lone `\`, two random `openssl rand -base64` outputs — and against 10 adversarial values mixing backslash, dollar and quote adjacently, which is where an escaper with its substitutions in the wrong order fails: `a\$b`, `\\$`, `$\`, `"\$"`, `\$$`, `$$\\`, `a\\"$b`. **Both survived all 53 values** — the 22 of rounds 1 and 2, 21 further, 10 adversarial — altering none and being refused for none.
 
 ### Round 4: the other consumption path
 
@@ -80,9 +89,12 @@ Previously recorded as 9 altered; two of those nine were refusals.
 
 The path corrupts the same way and the same rule fixes it, so §4.4 carries the same sentence as the workflow.
 
-**A second claim in this paragraph is withdrawn on the re-take.** It said the paths differ — that a value of exactly `"` or exactly `'` resolves empty here and is yielded there. Neither half survives: both values are **refused** rather than emptied, and they are refused on *both* paths. Every value measured on both paths agreed on both. So the honest statement is the weaker one: no difference between the two entry points has been measured, and the rule was established separately on each rather than carried across, which is worth doing whether or not a difference turns up.
+**Two claims once stood in this paragraph and both are withdrawn**, in the order they were found:
 
-**A claim that stood in this paragraph until round 5 measured it is withdrawn.** It said an apostrophe survives the raw rendering on this path and is destroyed on the other. It is not: it survives both. What destroys it is the **single-quoted** candidate of round 2, which is a rendering this design rejects — two rows of one table read as though they belonged to one column. The correction is recorded rather than made silently, because this document is the change's only behavioural evidence and a reader has no way to tell a corrected claim from one that was always right.
+1. *Withdrawn when round 5 was run.* It said an apostrophe survives the raw rendering on this path and is destroyed on the interpolation path. It survives both. What destroys it is the **single-quoted** candidate of round 2, a rendering this design rejects — two rows of one table read as though they belonged to one column.
+2. *Withdrawn when the harness was repaired.* It said the paths differ, a value of exactly `"` or `'` resolving empty here and being yielded there. Neither half holds: both are **refused** rather than emptied, and refused on *both* paths.
+
+So no difference between the two entry points has been measured at all. The rule was still established separately on each rather than inferred from one, which is worth doing whether or not a difference turns up. Both withdrawals are recorded rather than made silently, because this document is the change's only behavioural evidence and a reader has no other way to tell a corrected claim from one that was always right.
 
 ### Round 5: what the rendering being replaced actually corrupts
 
@@ -135,18 +147,20 @@ The `openssl rand` instruction is kept all the same. It was never wrong, it cost
 
 ### Decision 2: Double quotes with three escapes, not single quotes
 
-**This decision's conclusion is unchanged and its reason has been replaced**, because the reason rested on a measurement the harness got wrong. The superseded argument was that single-quoting fails into an **empty** value, silently, and so trades one silent corruption for another. Round 2 re-taken says otherwise: single-quoting alters nothing at all. It either yields the value or it makes Compose **refuse the file** — `unterminated quoted value` — and exit non-zero.
+**This decision's conclusion has never changed and its reason has now been rewritten twice**, which is worth saying plainly because the two rewrites went in opposite directions. The first reason was that single-quoting fails into an **empty** value silently — false, that was a refusal misread. The second was that it therefore never fails silently at all — also false, and the counter-example is in round 2: `secret' #1` arrives as `secret`, exit zero.
 
-So the comparison is between a rendering that handles every value and a rendering that handles most values and **stops the deploy** for the rest. That is still decisive, for two reasons that survive the correction:
+What single-quoting actually does is **both**: it refuses the file where a quote is unbalanced, and it truncates silently where a closed quote is followed by a space-preceded `#`. So the comparison is between a rendering that handles every value and one that, for some values, either stops the deploy or corrupts the credential without saying so. That is decisive three times over:
 
 - **The deploy it stops is the one that cannot be fixed by the operator.** Two of the seven secrets are issued by a vendor. A webhook URL that happens to contain an apostrophe is not something anyone here can re-generate, so the refusal is not a prompt to fix the value — it is an outage of the deploy path for that stack until the vendor is persuaded to issue a different URL. Decision 1 rejects a deliberate refusal on exactly this ground; a refusal arriving as a side effect of the quoting style is the same cost without the intent.
 - **It fails at the wrong moment.** The value is accepted into the Environment, renders fine, and stops the *deploy* — so the failure surfaces on the next unrelated change to `platform/`, attributed to that change, on a stack whose secrets nobody touched.
 
-The escaping has neither failure, at no cost but two more substitutions. **What the correction does remove is any claim that single-quoting is dangerous**: it is not, it is merely brittle, and a reader who finds this decision later should not carry away that a single-quoted `.env` silently corrupts anything. It does not.
+- **It corrupts silently in the case nobody looked at.** A password containing an apostrophe and a spaced `#` is not exotic — both characters are in the printable set a person picks from — and the result is a truncated credential that starts its service and reports healthy, which is the exact failure this whole change exists to remove.
+
+The escaping has none of the three, at no cost but two more substitutions. Both of this decision's superseded reasons are kept above rather than deleted, because a reader who finds only the current one cannot tell which parts of it were checked.
 
 ### Decision 3: `$$` for the dollar, not `\$`
 
-Both measured identical over 51 values, so the choice is made on which one is the parser's own rule rather than on a result. Measured outside quotes, where the question separates them:
+Both measured identical over 53 values, so the choice is made on which one is the parser's own rule rather than on a result. Measured outside quotes, where the question separates them:
 
 | `.env` line | Received |
 |---|---|
