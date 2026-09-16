@@ -114,7 +114,7 @@ services:
     # HOST. PostgreSQL refuses to start against a PGDATA initialised by an
     # earlier major: it does not upgrade in place and it does not damage the
     # directory -- it exits, `up -d --wait` blocks and then fails, and the
-    # deploy job goes red with the instance gone. The volume is discarded
+    # deploy job goes red with the instance gone. The store is cleared
     # deliberately, by an operator, before the deploy that carries the new
     # major reaches the host -- README.md, "Upgrading the PostgreSQL major
     # version", is that procedure, and editing the major below without it is
@@ -136,17 +136,27 @@ services:
       # `pg_upgrade --link` without crossing a mount boundary
       # (docker-library/postgres#1259). Mounted at the 17-and-earlier
       # `/var/lib/postgresql/data`, the entrypoint refuses and the container
-      # exits 1 -- against an empty volume as much as a populated one, so a
-      # discarded volume does not avoid it.
+      # exits 1 -- against an empty store as much as a populated one, so
+      # clearing the store does not avoid it.
       #
-      # Mounting the parent is also what keeps a forgotten discard LOUD. The
+      # Mounting the parent is also what keeps a forgotten clear LOUD. The
       # entrypoint's old-database detection runs only while PGDATA is its own
       # default, and it scans /var/lib/postgresql, .../data and
       # .../*/docker for a PG_VERSION: an earlier major's directory inside
-      # this volume is found and named, and the container refuses rather than
+      # this store is found and named, and the container refuses rather than
       # initialising an empty cluster beside it. Pinning PGDATA back to the
       # old path would start just as well and switch that detection off.
-      - postgres_data:/var/lib/postgresql
+      #
+      # THE SOURCE IS A DIRECTORY ANSIBLE CREATES, NOT A NAMED VOLUME, and
+      # the two halves have to stay in step: `platform_data_volume_subdirs`
+      # in each stack's group_vars creates this path on the mounted `main`
+      # volume, owned by this image's own uid, and the converge that does so
+      # has to reach a host before this deploy does. Docker does not fail on
+      # a missing bind source -- it creates one, empty, on the root disk --
+      # so the failure of that ordering is an instance that comes up healthy
+      # holding no application database at all
+      # (move-the-shared-database-onto-the-data-volume).
+      - /mnt/main/postgres:/var/lib/postgresql
     networks:
       - platform_edge
       # add-platform-monitoring: a private link to postgres-exporter only
@@ -448,7 +458,6 @@ networks:
 
 volumes:
   traefik_letsencrypt:
-  postgres_data:
 
 configs:
   prometheus_config:
