@@ -87,3 +87,29 @@ The pre-state capture found more than it was looking for, and the fixes were tak
 **What was done.** PR #244 edited the config block, which moved the checksum, which recreated the container — using the mechanism as designed rather than working around it, and recording at the point of use why a rotation needs it. After the deploy: both Alertmanagers recreated (44 seconds and one minute old), the Slack workspace ids distinct, the ping URLs distinct, and a probe from each host arriving in its own workspace and in neither other. **That is `docs/bootstrap-a-new-host.md` §7.5's check, performed for the first time since the system was built, and passing.**
 
 **Why it belongs in this log.** None of it is the rebuild, and all of it is the rehearsal: every one of these is a per-stack GitHub Environment secret, which no committed file can see, so no test in this repository and no reviewer could have reached any of them. The only mechanism that does is an operator comparing two running hosts — which is the class of step the runbook exists to make someone actually perform.
+
+## Phase 3 applied — the destroy, 2026-09-16T20:20:30Z → 20:21:42Z
+
+**72 seconds**, merge to `Apply complete`. Unattended: no reviewer on that Environment, no `destroy-override` label, exactly as the runbook says of this stack.
+
+    module.volume[0].hcloud_volume.this:   Destruction complete after 9s
+    module.server[0].hcloud_server.this:   Destruction complete after 16s
+    module.server[0].hcloud_firewall.this: Destruction complete after 1s
+
+    Apply complete! Resources: 0 added, 0 changed, 3 destroyed.
+
+Confirmed from outside rather than from the green: `ssh` to the tailnet address times out, and `https://commerce-ops.main-staging.fincci.bike` returns `000`.
+
+**The volume is destroyed first, not last.** The plan said the three go together and the apply says the volume goes *before* the server it is attached to. That is a stronger statement than the coupling as documented — which is about the volume being unable to exist without the server — and it is the detail a reader planning around "detach the volume and keep it" would need. Nothing in this repository said it, because nothing had run it.
+
+## Phase 4 — the recreate, opened 2026-09-16T20:23Z
+
+PR #245. Waiting on the operator's merge.
+
+### Running timings
+
+| Phase | Wall clock |
+|---|---|
+| 1 — pre-state capture | ~9 min, including the three defects it surfaced |
+| *interlude* — alert-routing defects found and fixed | ~30 min, not part of the sequence |
+| 3 — destroy, merge to apply complete | 1 min 12 s |
