@@ -116,11 +116,30 @@ readonly ROOT_SQL="select (exists (select 1 from pg_roles where rolname = :'app'
 # when what is broken is the instance, and would fail the one scenario this
 # change most exists for. Only a runtime that cannot be asked at all belongs
 # here: no binary, no daemon, no permission to reach it.
+# EVERY PATTERN HERE MUST BE SOMETHING ONLY THE RUNTIME ITSELF SAYS. `docker
+# exec` relays the CONTAINER's stderr, so a pattern that could come from inside
+# reaches back across the very boundary this function draws. `No such file or
+# directory` was in this list for one commit and is the worked example: it is
+# what `psql` says when the container is up and the server is not accepting
+# connections yet --
+#
+#   psql: error: connection to server on socket
+#   "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+#
+# measured against postgres:18.6 -- which is exactly the requirement's "is
+# restarting" arm, and must answer `unreachable`. Refusing it would report the
+# probe broken during a restart, a crash with the container still up, or the
+# initialising window right after a volume re-create.
+#
+# `command not found` stays: on the host it is bash's wording when `docker` is
+# absent, and from inside the container it means the image has no `psql`, which
+# is a broken image rather than a statement about the database. Both are
+# refusals.
 runtime_unusable() {
   case "$1" in
     *'Cannot connect to the Docker daemon'* \
       | *'permission denied while trying to connect'* \
-      | *'command not found'* | *'No such file or directory'*)
+      | *'command not found'*)
       return 0
       ;;
   esac

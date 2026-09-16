@@ -282,6 +282,13 @@
         app: commerce-ops
         expect: [refuse]
         text: '{"password": "x\u0000'' ; drop table t; --", "table": "alembic_version"}'
+      # Its sibling and NOT a second regression test: this one already
+      # refused before the NUL fix, because the identifier pattern is
+      # anchored at the end of the string and a NUL is not in it.
+      # `nul-in-password` is the case that discriminates, because there the
+      # NUL lands in a field no shape check reads. Kept for the symmetry, so
+      # a later reader does not conclude the framing is guarded on one side
+      # only.
       - name: nul-in-table
         app: commerce-ops
         expect: [refuse]
@@ -1782,6 +1789,80 @@
       loop_control:
         label: "{{ item.item.app }}"
 
-    - name: Start the shared instance again, so a re-run of this scenario begins from a known state
-      ansible.builtin.command: docker start platform-postgres-1
+    # ----------------------------------------------------------------
+    # Scenario: A stopped instance is not reported as a destroyed database --
+    # the "is restarting" arm, which the phase above does NOT reach.
+    #
+    # `docker stop` yields `Container ... is not running`, a message the runtime
+    # speaks for itself. This phase is the other shape: the container is UP and
+    # the server inside it is not accepting connections, which is what a
+    # restart, a crash with the container still running, and the initialising
+    # window right after a volume re-create all look like. There `docker exec`
+    # succeeds and relays the INSTANCE's own stderr --
+    #
+    #   psql: error: connection to server on socket
+    #   "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+    #
+    # -- and a probe classifying that as a runtime failure refuses where the
+    # requirement says `unreachable`. That is a real regression this change
+    # shipped for one commit and its own code review caught; nothing here
+    # exercised it, which is why this phase exists.
+    #
+    # The fixture replaces the instance with a container of the SAME NAME, from
+    # the same image, running `sleep` instead of the server -- the only way to
+    # hold the container up with nothing listening, since the real container's
+    # PID 1 is the server and stopping it stops the container.
+    # ----------------------------------------------------------------
+    - name: Fixture -- replace the instance with a container that is up and serving nothing
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker rm -f platform-postgres-1 >/dev/null 2>&1 || true
+        docker run -d --name platform-postgres-1 --network platform_edge \
+          {{ probe_postgres_image | quote }} sleep 600
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Probe an instance whose container is up and whose server is not accepting connections
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/populated.json') | quote }}
+          | /usr/local/bin/deploy-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_h
+      changed_when: false
+      failed_when: false
+
+    - name: Assert a server that is not accepting connections answers unreachable, and is not a refusal
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_phase_h.rc == 0
+          - deploy_user_probe_phase_h.stdout | trim == "unreachable"
+        fail_msg: >-
+          With the container up and the server not accepting connections, the
+          probe answered '{{ deploy_user_probe_phase_h.stdout }}' (rc
+          {{ deploy_user_probe_phase_h.rc }}) rather than `unreachable`. This is
+          the requirement's "is restarting" arm. A non-zero exit with no token
+          means the probe classified the INSTANCE's own stderr, relayed through
+          `docker exec`, as a failure of the container runtime -- so a probe
+          during any restart reports itself broken instead of reporting that the
+          instance could not be reached.
+
+    - name: Fixture -- put the real instance back
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker rm -f platform-postgres-1 >/dev/null 2>&1 || true
+        docker run -d \
+          --name platform-postgres-1 \
+          --network platform_edge \
+          --restart unless-stopped \
+          -e POSTGRES_USER={{ probe_superuser | quote }} \
+          -e POSTGRES_PASSWORD={{ probe_superuser_password | quote }} \
+          -v platform_postgres_data:/var/lib/postgresql \
+          {{ probe_postgres_image | quote }}
+      args:
+        executable: /bin/bash
       changed_when: false
