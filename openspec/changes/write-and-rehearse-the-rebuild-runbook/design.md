@@ -43,7 +43,7 @@ One fact about the observer bears on it too: the stack's `PLATFORM_DEADMANSWITCH
 
 ### The runbook covers both stacks, with `main-staging` as the worked example
 
-Commands are written out for `main-staging`, because that is what the rehearsal ran and a command that was actually executed is worth more than a parameterised one that was not. Production's divergences are named inline at the steps where they differ: its Environment requires a reviewer, its `destroy_policy_gate` applies so the merged pull request needs the `destroy-override` label, its server carries `delete_protection` and `backups`, and it holds `commerce-ops`'s own unbacked PostgreSQL.
+Commands are written out for `main-staging`, because that is the stack the rehearsal will be performed against, and a command that has actually been executed is worth more than a parameterised one that has not. **The tense matters and it caught us**: this sentence was written when the rehearsal was assumed to precede the merge, the runbook inherited it near-verbatim, and the document then asserted its commands had been run while its own record read `Last rehearsed: never`. Code review found it. Until the record carries a date, both documents say the sequence has not been executed. Production's divergences are named inline at the steps where they differ: its Environment requires a reviewer, its `destroy_policy_gate` applies so the merged pull request needs the `destroy-override` label, its server carries `delete_protection` and `backups`, and it holds `commerce-ops`'s own unbacked PostgreSQL.
 
 *Alternative considered: one document per stack.* Rejected — two documents whose steps are the same in all but five places is the drift problem again, deliberately created.
 
@@ -126,6 +126,16 @@ The module is built on `test_the_bootstrap_documents_static_conventions.py`'s sh
 `platform/README.md`'s declaration file lives at `/var/lib/platform-maintenance/shared-postgres-window` — on the host. An application probing during a rebuild does not read `window-open`; it reads nothing, because the host it would probe is gone. So the mechanism that announces a destructive act on the shared instance cannot announce the most destructive one there is.
 
 That gap is not closed here. It is recorded in `docs/backlog.md` as a change of its own, and the runbook's announcement step is prose addressed to the operator rather than a declaration any application can read.
+
+### A rules edit this change made, recorded because the proposal did not carry it
+
+`AGENTS.md`'s citation rules accepted one interval: a change introducing a **new capability** cites `openspec/specs/<capability>/spec.md` before archiving creates it. This change hits the neighbouring case — a new requirement in an **existing** capability — where the path resolves already and the requirement's name does not until archive. `docs/bootstrap-a-new-host.md`'s register block cites the new requirement by name, so the case had to be settled rather than worked around.
+
+It was first worked around, and that was the wrong move: the citation was weakened to a bare path, which makes the sentence no truer, drops it out of `test_the_retired_requirement_names_are_gone.py`'s sweep, and breaks the citation table's own requirement that a requirement citation carry the requirement's name. So the paragraph is widened instead, to cover both forms and to say that neither is weakened to a bare path to dodge the interval.
+
+The interval stays tied to **the citing change's own delta**. It is not a licence to cite a requirement nobody has written, and the widened wording says so.
+
+This is scope the proposal did not name. It is recorded here rather than folded in silently, and it is small and bounded — one paragraph of a rules file, made necessary by a citation this change ships.
 
 ## Risks / Trade-offs
 

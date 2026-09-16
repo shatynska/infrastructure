@@ -121,7 +121,9 @@ The volume id is in the apply run's log, or in the Hetzner console. Re-enabling 
 
 The server's address changed, and there is no floating IP. The records live at a third-party DNS provider and in no repository — deliberately, because the zone carries live mail that an NS migration would move.
 
-Edit, at the provider, every record aimed at this server: the wildcard `*.main-staging.<base domain>`, the bare `main-staging.<base domain>`, and any short alias pointing at it. `docs/bootstrap-a-new-host.md` §4.4 gives the zone's shape; **it does not give the live values, and neither does anything else here** — read the zone at the provider rather than trusting any written record of it.
+Edit, at the provider, every record aimed at this server: the wildcard `*.main-staging.<base domain>`, the bare `main-staging.<base domain>`, and any short alias pointing at it. `docs/bootstrap-a-new-host.md` §4.4 gives the zone's shape; **neither it nor this document is a register of the zone's contents** — read the zone at the provider and edit what is actually there, rather than working from the list phase 1 had you record or from any example here.
+
+The distinction, since this document does name one live hostname: a **published application hostname** is a fact about what the system serves, and phase 16 has to check it. The zone's **records and the addresses they carry** are the provider's, change on every rebuild, and are written down nowhere here on purpose.
 
 Certificates reissue on their own once the applications redeploy, provided the names resolve to the new address first. Doing this now rather than later is what keeps phase 16 from failing on a certificate that could not be issued.
 
@@ -145,7 +147,7 @@ Record the host key first, or the play stops at connection time before a single 
 ssh -i ~/.ssh/shatynska-root root@<the new public ipv4>
 ```
 
-**The old entry in `known_hosts` is now wrong**, and this is the failure most likely to cost you time here: the address may be new, but if anything resolves to a name you have connected to before, `ansible.cfg` sets `host_key_checking = True` and the run dies with `Host key verification failed`. Remove the stale entry rather than disabling the check.
+A brand-new public address usually carries no `known_hosts` entry, so this connection is the easy one. **The invalidated entries bite later**, at the first connection by a name you have used before — phase 8's `root@main-staging` over the tailnet, and every later `shatynska-main-staging`. Phase 8 says what to do about them; the note is here only so it is not a surprise there.
 
 Then converge:
 
@@ -167,17 +169,24 @@ Afterwards, in the Tailscale admin console: confirm the host is listed under the
 
 ## 8. Hand the converge back to the pipeline
 
-**Credential:** the converge keypair, held in `~/.ssh`, and the stack's GitHub Environment.
+**Credential:** the converge key's **public** half and the operator root key, both held in `~/.ssh`. The private half is deliberately **not** on your workstation — stage 0.3 has you delete it once it is stored, and from then on it lives write-only in the stack's GitHub Environment. That is what decides how this phase is checked.
 
-The rebuild cost the host its converge key, and nothing reinstalls it. Run both lines from a machine on the tailnet — the same route CI takes:
+The rebuild cost the host its converge key, and nothing reinstalls it. Run this from a machine on the tailnet — the same route CI takes:
 
 ```sh
 ssh-copy-id -i ~/.ssh/shatynska-ansible-ci-main-staging.pub \
   -o IdentityFile=~/.ssh/shatynska-root root@main-staging
-ssh -i ~/.ssh/shatynska-ansible-ci-main-staging root@main-staging true
 ```
 
-**The second line is the check and it is not optional**: a key installed but not usable fails the pipeline rather than this phase, where you are watching.
+**This is the first command that reaches the host by a name it has used before**, so it is where the rebuild's invalidated host key surfaces: `main-staging` is the same tailnet name on a new machine, and `ansible.cfg` sets `host_key_checking = True`. Expect `Host key verification failed` or `REMOTE HOST IDENTIFICATION HAS CHANGED`; clear the stale entry with `ssh-keygen -R main-staging` and accept the new one. The same applies to the `shatynska-main-staging` alias later phases use. Do not disable the check to get past it.
+
+Then prove the key is usable, by making the pipeline use it:
+
+```sh
+gh workflow run host-converge.yml --ref main -f stack=main-staging
+```
+
+**That dispatch is the check and it is not optional**: a key installed but not usable fails at the next merge touching `ansible/`, long after you have stopped watching. It is also the only check available to you, and the reason is worth stating so that nobody restores the shorter one: the obvious test is `ssh -i ~/.ssh/shatynska-ansible-ci-main-staging root@main-staging true`, and **you cannot run it** — that private half was deleted when it was stored, and the only copy is the Environment secret the pipeline reads. The dispatch exercises exactly that copy, which is the one that has to work.
 
 The Environment secrets survive a rebuild and do not need re-entering, so there is no `gh secret set` here — phase 9 is where one is. If you are rebuilding a host whose keypair was also lost and you re-enter `ANSIBLE_SSH_PRIVATE_KEY`, note that `--env` takes the **GitHub Environment's** name, which is `main-staging` — the stack's name, not the Ansible group `staging` that the `--vault-id` and `group_vars` take. A mistyped value fails with a `404` rather than silently.
 
@@ -229,7 +238,7 @@ ssh shatynska-main-staging 'docker ps --format "{{.Names}}\t{{.Status}}"'
 
 ## 11. Redo the two manual steps the automation deliberately does not do
 
-**Credential:** `PLATFORM_POSTGRES_USER` and `PLATFORM_POSTGRES_EXPORTER_PASSWORD`, held in the stack's GitHub Environment.
+**Credential:** `PLATFORM_POSTGRES_USER` and `PLATFORM_POSTGRES_EXPORTER_PASSWORD`, held in the password manager — **not** read back from the GitHub Environment, which is write-only once a secret is set. This is the one phase that needs a secret's *value* in hand rather than a job that holds it, so if the password manager does not have it, rotate it in both places rather than guessing.
 
 The shared instance came back empty, so the monitoring role it holds came back with it. Both steps are `platform/README.md`'s, under *Monitoring and alerting*, and are performed from there rather than copied here. What matters at this point in the sequence:
 
