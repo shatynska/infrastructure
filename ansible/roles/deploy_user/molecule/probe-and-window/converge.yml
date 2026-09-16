@@ -1,0 +1,96 @@
+---
+# Converges Docker Engine first (verify.yml stands a real PostgreSQL fixture up
+# inside the instance and the probe reaches it through a throwaway client
+# container, so the runtime is not optional here), then `deploy_user` with a
+# `deploy_apps` list carrying the new optional `probe_public_key` field.
+#
+# Role variable interface, as the sibling scenarios' converge files record it
+# and as this change's tasks.md 3.1 extends it:
+#   - `deploy_apps`: list of {name, public_key}, no default, plus an OPTIONAL
+#     `probe_public_key`.
+#   - `ghcr_pull_token` / `ghcr_pull_username`: no default; left entirely
+#     undefined here, which `ghcr-credential-absent` establishes is a supported
+#     converge. Nothing in this scenario asserts anything about GHCR, and a
+#     scenario that reached ghcr.io would fail for a reason this change has
+#     nothing to do with.
+#
+# THE FOUR ENTRIES ARE EACH DOING A JOB, and none is decoration:
+#
+#   platform       Declares a probe key and has no role or database of its own
+#                  in the instance -- which is true of the real `platform`
+#                  entry too, and is why tasks.md 4.1 keeps it. It is the entry
+#                  that reaches `absent` WITHOUT any correct credential
+#                  existing anywhere, and the one that shows `window-open`
+#                  winning over an instance that holds nothing for it.
+#   commerce-ops   The application with a role, a database and a marker table.
+#                  Every token that requires a successful connection is reached
+#                  through it.
+#   probe-denied   Role and database both exist, and its CONNECT privilege is
+#                  revoked by the fixture. Its connection fails with a message
+#                  the token set does not classify (`permission denied for
+#                  database`), which is the only way to reach the
+#                  unclassified-failure scenario against a real instance rather
+#                  than by stubbing one.
+#   no-probe-app   Declares NO probe key. The requirement makes a probe key
+#                  optional per application, and "the converge SHALL install
+#                  its deploy entry as before, install no probe entry and no
+#                  probe sudoers rule, and SHALL NOT fail" is only observable
+#                  against an entry that omits the field.
+#
+# EVERY KEY BELOW IS A DUMMY, in the same shape and spirit as the sibling
+# scenarios' -- no private half exists for any of them, here or anywhere. The
+# `authorized_keys` binding this scenario asserts is a content check over what
+# the role rendered, not an SSH session, exactly as `default`'s is; the trailing
+# comment on each key is what verify.yml identifies its line by.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+        probe_public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformProbeKeyNotARealCredent
+          platform-probe-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+        probe_public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsProbeKeyNotARealCre
+          commerce-ops-probe-molecule@ci
+      - name: probe-denied
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeProbeDeniedKeyNotARealCredenti
+          probe-denied-molecule@ci
+        probe_public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeProbeDeniedProbeKeyNotARealCre
+          probe-denied-probe-molecule@ci
+      - name: no-probe-app
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeNoProbeAppKeyNotARealCredentia
+          no-probe-app-molecule@ci
+    # FIXTURE ONLY, and identical to `default`'s for the same reason: under the
+    # default overlayfs snapshotter a nested container fails to mount at all
+    # inside this instance. vfs is slower but mounts anywhere. These options are
+    # merged UNDER the `docker` role's own log ceiling, so this fixture cannot
+    # unset the thing that role exists to guarantee. See `default`'s converge.yml
+    # for the timing note about dockerd being restarted onto vfs by the external
+    # role's `meta: flush_handlers` -- nothing in this scenario's `prepare.yml`
+    # pulls or builds an image, so it is safe as written here too.
+    docker_daemon_extra_options:
+      storage-driver: vfs
+      features:
+        containerd-snapshotter: false
+  roles:
+    - role: docker
+    - role: deploy_user
