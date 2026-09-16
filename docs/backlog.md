@@ -934,3 +934,21 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 **What a change owes.** Create a check per stack at the observer, put each stack's own ping URL in that stack's `PLATFORM_DEADMANSWITCH_URL`, redeploy each platform stack so the receiver is re-rendered, and then reconcile Appendix A against what the observer actually carries rather than the other way round. Two decisions sit inside that: whether the existing check keeps production or is renamed, since a rename carries the ping history and a new check does not; and what the graces should actually be, since the observed 2 minutes and 2 hours may be better values than the recorded ones rather than drift from them — the register is a claim nobody has checked, not a specification anyone wrote to.
 
 **Worth doing before the next rebuild of either host**, because the rebuild runbook's phase 12 re-reads each of a host's checks against the register, and on staging there is no check to re-read.
+
+---
+
+## 56. make-a-rotated-secret-reach-its-inline-config
+
+**Not blocked, and it is a live defect. Found 2026-09-16 while closing `give-staging-its-own-dead-mans-switch-check`, by checking whether the fix had actually landed rather than by reading the deploy's result.**
+
+**A platform secret interpolated into an inline `configs:` content block does not reach the container, and the deploy reports success.** Measured: staging's `PLATFORM_DEADMANSWITCH_URL` was replaced at 19:45:05Z, `platform-deploy.yml` was dispatched for `main-staging` at 19:45:23Z and completed green — and `platform-alertmanager-1` was still up eleven hours afterwards, still pinging the old URL. Nothing failed. Nothing said the change had not applied.
+
+**The cause is the one input the checksum mechanism cannot see.** `apply-shipped-config-on-deploy` added `platform.config-checksum` because Docker Compose does not recreate a container when an inline config's *content* changes. That label is a literal committed beside the service, computed from the committed config text, and a static check asserts the two agree. A secret is not part of that text: `alertmanager_config` carries `url: ${DEADMANSWITCH_URL}`, so replacing the secret moves the *rendered* config and moves neither the committed text nor the label. `docker compose up -d --wait` then sees a service definition identical to the running one and leaves it alone.
+
+So the mechanism is exactly as sound as it was designed to be, for committed edits, and blind in the neighbouring case. **The affected values are every secret interpolated into an inline config**, which today is at least `DEADMANSWITCH_URL` and `SLACK_API_URL` in `alertmanager_config` — that is, the dead-man's-switch and the alert routing, both of which fail silently and both of which are the things that tell you something else has failed.
+
+**The immediate consequence, stated because it will be met before this entry is taken.** Rotating `PLATFORM_SLACK_WEBHOOK_URL` does not take effect on a deploy. The old webhook keeps being used until that container is recreated by something else, and if the old one has been revoked, alert delivery is silently dead while every check stays green.
+
+**What a change owes.** The decision is what makes a rotation observable, and the options differ in what they cost rather than in difficulty: a deploy-time step that force-recreates the services whose configs interpolate a secret; a checksum computed over the *rendered* config at deploy time rather than committed, which ends the static check but catches both cases; or a probe after the deploy that asserts the running container's config carries the value just shipped, in the shape `make-a-shared-instance-reset-visible-to-its-applications` used. Whichever is chosen, the test belongs where a static read cannot reach — this is a property of a running container, so `.github/tests` is the wrong home for it and Molecule cannot see a secret either.
+
+**Until it lands**, a secret rotation is followed by a hand recreation of the affected service on that host, and the operator confirms the value arrived rather than reading the deploy's green.
