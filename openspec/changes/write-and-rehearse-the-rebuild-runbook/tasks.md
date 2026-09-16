@@ -25,11 +25,12 @@
 ## 4. Implement against the derived tests
 
 - [x] 4.1 Run the derived module and make the document satisfy it. Verify with `python3 -m unittest discover --start-directory .github/tests` from the repository root that every previously failing assertion now passes, and that none was made to pass by weakening it.
-- [ ] 4.2 Check each derived assertion really catches what it claims, by breaking its property in the working tree, reading the failure, and restoring. Verify the restore is exact — do this against committed content, not an uncommitted tree.
+- [x] 4.2 Check each derived assertion really catches what it claims, by breaking its property in the working tree, reading the failure, and restoring. Verify the restore is exact — do this against committed content, not an uncommitted tree.
+  - Done against the committed tree at `c27a2f3`, four breaks, each firing exactly one failure and each restored from the commit: a phase's `Credential:` line deleted; a credential named with no holder (`the DNS provider account.`); `Last rehearsed: never` blanked to `Last rehearsed:`; and a check's name changed in Appendix A's new table. The 51 detector-fires cases cover the matchers; these four cover the property assertions that read committed files.
 
 ## 5. Verify and ship the document
 
-- [ ] 5.1 Run the verification relevant to what changed — `python3 -m unittest discover --start-directory .github/tests`, `openspec validate --all`, and `pre-commit run --all-files` — and report each result. Verify the static suite's count exceeds the green baseline recorded in task 1.2 by the number of assertions derived.
+- [x] 5.1 Run the verification relevant to what changed — `python3 -m unittest discover --start-directory .github/tests`, `openspec validate --all`, and `pre-commit run --all-files` — and report each result. Verify the static suite's count exceeds the green baseline recorded in task 1.2 by the number of assertions derived.
 - [ ] 5.2 Commit the implementation, dispatch `ai-toolkit:change-code-reviewer` over the committed diff, and act on its findings. Verify the review's verdict permits proceeding.
 - [ ] 5.3 Open the runbook's pull request, let continuous integration run, and wait for the operator's confirmation that it merged. Verify from the pull request's own state, not from branch ancestry.
 
