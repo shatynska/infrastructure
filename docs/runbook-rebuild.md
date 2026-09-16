@@ -12,7 +12,7 @@ The commands are written for **`main-staging`**, because that is the stack the r
 
 ## 1. Know what you are about to lose, and what will start alarming
 
-**Credential:** the operator inspection key, held in `~/.ssh` on your workstation; `gh`'s own token there; and this stack's read-only Hetzner token, held in `ansible/.envrc` on that workstation.
+**Credential:** the operator inspection key, held in `~/.ssh` on your workstation; `gh`'s own token there; and this stack's read-only Hetzner token, held in `ansible/.envrc` on that workstation. **Phase 2 is what proves that token** — if the inventory read below fails on authentication rather than on the host, go there first and come back. `ansible/.envrc` is per working tree, so a tree cloned since the last rebuild does not have it however well the main checkout is provisioned.
 
 Do this before anything else. Everything below it is recoverable; the contents of this phase are not, and two of them are the kind of loss nobody discovers until weeks later.
 
@@ -42,6 +42,8 @@ cd ansible && ansible-inventory -i inventory/main-staging.hcloud.yml --list | \
 ssh shatynska-main-staging 'ls -l /dev/disk/by-id/ | grep HC_Volume'
 ```
 
+**Read `hcloud_ipv4` and not `ansible_host`.** They are the same value on a workstation and are not the same field: `ansible_host` is composed from `HCLOUD_CONNECT_WITH`, which the converge workflow sets to `hostname`, so a shell with that variable exported hands back a name where phases 7 and 9 need an address.
+
 **`terraform output` is not the way to read these**, and it is worth knowing before you reach for it: every stack declares an HCP Terraform backend, so `terraform output` needs `terraform init` first, and on a workstation whose HCP credential belongs to another organisation `init` fails with *organization "shatynska" at host app.terraform.io not found*. The inventory read above needs only the read-only Hetzner token. The volume id is on the host as `scsi-0HC_Volume_<id>`, and after the rebuild it is in the apply run's log or the Hetzner console.
 
 Record the container set and their health, the active scrape targets, the public IPv4, the volume id, the host's tailnet address, and every hostname that resolves to this server. Also read this stack's two checks at the heartbeat observer and write down the period and the grace each currently carries — phase 12 compares against them, and the register is a claim about the observer's configuration until somebody has actually looked.
@@ -66,7 +68,7 @@ ansible staging -i inventory/main-staging.hcloud.yml -c local -m debug \
   -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" --vault-id staging@prompt
 ```
 
-`SUCCESS` and a number means the password decrypted the file. A wrong one fails with *Attempt to use undecryptable variable*. The `| to_json` is what forces every value to be rendered, so do not drop it — without it the encrypted scalars are never touched and the check passes on any password at all.
+Run it only once the `--graph` above has listed a host: `ansible <group>` against a group matching nothing reports success having run nothing, which is a pre-flight that cannot fail. `SUCCESS` and a number means the password decrypted the file. A wrong one fails with *Attempt to use undecryptable variable*. The `| to_json` is what forces every value to be rendered, so do not drop it — without it the encrypted scalars are never touched and the check passes on any password at all.
 
 **The Tailscale auth key is the one that bites.** It is reusable and expires after ninety days, and a rebuild is typically when that expiry is discovered. Check its expiry in the Tailscale admin console and mint a fresh one if it has lapsed — phase 7 passes it on the command line, there is no prompt for it, and the role has no default, so a missing key fails inside `tailscale` after two roles have already changed the host.
 
@@ -104,13 +106,7 @@ server_enabled = true
 
 Over phases 3 and 4 together the net change to `terraform.tfvars` is zero, which is how you can tell you have finished them correctly.
 
-The apply creates a new server and a new volume. **Both have new identities**: a new public IPv4, and a new volume id — the on-host device path is derived from that id, which is why the mount is by-id and why nothing needs editing for it. Record both:
-
-```sh
-cd terraform/stacks/main-staging && terraform output
-```
-
-Read the new address the same way phase 1 did, from the inventory rather than from `terraform output`:
+The apply creates a new server and a new volume. **Both have new identities**: a new public IPv4, and a new volume id — the on-host device path is derived from that id, which is why the mount is by-id and why nothing needs editing for it. Record both, reading the address the same way phase 1 did:
 
 ```sh
 cd ansible && ansible-inventory -i inventory/main-staging.hcloud.yml --list | \
@@ -219,6 +215,8 @@ gh run list --workflow platform-deploy.yml --event workflow_dispatch --limit 3 \
   --json databaseId,status,createdAt
 ```
 
+Take the id of the run whose `createdAt` is after your dispatch, and watch that one: `gh run watch <id>`.
+
 It runs only from the default branch, and refuses before naming any Environment if dispatched from another.
 
 **Ordering matters here and only in one direction: the converge must have happened first**, and phases 7 and 8 are why it has. The host layer creates what the platform layer mounts. A deploy that lands before the converge binds a path that does not exist yet, and Docker creates it as an empty root-owned directory on the root disk rather than failing — so every container comes up healthy and empty, the later converge mounts the volume over the top, and nothing about the symptom points at the cause.
@@ -248,7 +246,9 @@ For each of this host's two checks — `main-staging-alertmanager` and `main-sta
 
 `main-staging-alertmanager` should clear on its own within a few minutes of phase 10 completing. `main-staging-prune-host-images` will not; phase 13 is what clears it.
 
-Where what you find at the observer differs from what the register claims, the observer is the authority on its own configuration — correct the register, in its own pull request, and say which of the two was wrong.
+**Where what you find at the observer differs from what the register records, the register is what is right and the observer is what you correct.** That is the whole reason this phase exists: a check re-created by its own first ping carries the vendor's default, so a disagreement here is the expected damage of a rebuild rather than news about what the settings should be. Set the observer to the register's values. Do not edit the register to match what you found — that writes the vendor default into the one place this repository says what a check's settings should be, and the next rebuild then has nothing to compare against.
+
+The opposite reading applies only at phase 1, before anything is destroyed: a disagreement *there* is between two claims about a running system, and is worth settling in the register's own pull request before you go on.
 
 ## 13. Trigger one image prune, so its check goes green
 

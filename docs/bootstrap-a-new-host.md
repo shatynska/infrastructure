@@ -1116,7 +1116,7 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 The service must expect pings at least as often as the Watchdog sends them but tolerate one missed, which is what those two values are. §7.1 creates these checks and points here for their settings.
 
-**Both tables are the one place this repository records what a check's settings should be**, and `openspec/specs/iac-server-lifecycle/spec.md` is where that obligation is stated — for every check a host of this repository reports to, not only the ones listed today. `docs/runbook-rebuild.md` cites these tables rather than copying them when it re-reads the settings after a rebuild. **A check added later is added here**, in the change that adds it: a check whose intended settings are written down nowhere cannot be told apart from one the observer has silently reset to its own default.
+**Both tables are the one place this repository records what a check's settings should be**, which *A Host's Rebuild Procedure Is Recorded, and Its Rehearsal State With It* (`openspec/specs/iac-server-lifecycle/spec.md`) requires of every check a host of this repository reports to, not only the ones listed today. `docs/runbook-rebuild.md` cites these tables rather than copying them when it re-reads the settings after a rebuild. **A check added later is added here**, in the change that adds it: a check whose intended settings are written down nowhere cannot be told apart from one the observer has silently reset to its own default.
 
 ## Appendix B. Rebuilding an existing host
 
