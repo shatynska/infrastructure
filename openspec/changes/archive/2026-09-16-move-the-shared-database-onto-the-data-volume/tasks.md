@@ -62,12 +62,12 @@
 
 ## 7. Reclaiming the old store
 
-- [ ] 7.1 Leave `platform_postgres_data` in place until both hosts have been verified at the new location and the operator is satisfied. It is the rollback: re-pointing the Compose bind restores the original bytes.
-- [ ] 7.2 Once satisfied, remove it on each host: `docker volume rm platform_postgres_data`. **Check** `docker volume ls --filter name=platform_postgres_data` lists no volume, and the instance is still serving.
+- [x] 7.1 Leave `platform_postgres_data` in place until both hosts have been verified at the new location and the operator is satisfied. It is the rollback: re-pointing the Compose bind restores the original bytes.
+- [x] 7.2 Once satisfied, remove it on each host: `docker volume rm platform_postgres_data`. **Check** `docker volume ls --filter name=platform_postgres_data` lists no volume, and the instance is still serving. Done on both hosts on 2026-09-16, the operator choosing to remove rather than hold the rollback a further day: the volume is gone on each, and each instance answered with its three databases immediately afterwards.
 
 ## 8. Archive
 
-- [ ] 8.1 Bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request for it.
+- [x] 8.1 Bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request for it.
 
 ## Not performed
 

@@ -287,7 +287,7 @@ This requirement is satisfied by metrics the reverse proxy already publishes abo
 
 ### Requirement: A Destructive Window on the Shared Instance Is Announced to the Applications That Hold Databases in It
 
-The shared PostgreSQL instance is disposable by design: *Single Shared PostgreSQL Instance, Per-Application Databases* holds nothing durable in it precisely so that its volume can be discarded, and discarding it destroys every application role and database it held. That act SHALL be announced to the applications it reaches, and this host SHALL make available to every application holding a database in the instance a means of determining, before it delivers anything, whether the database it is configured for still exists.
+The shared PostgreSQL instance is disposable by design: *Single Shared PostgreSQL Instance, Per-Application Databases* holds nothing durable in it precisely so that its store can be discarded, and discarding it destroys every application role and database it held. **The store is named here by what it holds rather than by the form it takes**: it has been a named volume and is a directory on the attached data volume, and a procedure that clears a directory destroys exactly what a procedure that removed a volume destroyed. A requirement whose trigger named the form would have stopped binding at the moment the form changed, which is a silent way for an announcement obligation to lapse. That act SHALL be announced to the applications it reaches, and this host SHALL make available to every application holding a database in the instance a means of determining, before it delivers anything, whether the database it is configured for still exists.
 
 What is obliged is the availability of that means, not any application's use of it: an application that does not take it up is choosing the position every application is in today, and this requirement is not met or unmet by that choice. It is unmet if the means does not exist, or exists and cannot be reached by an application entitled to it.
 
@@ -313,7 +313,7 @@ Whether an application actually consults the announcement is that application's 
 - **AND** it SHALL report absence only from a reading of the instance that succeeded, never from an instance it could not read
 
 #### Scenario: The announcement outlives what it announces
-- **WHEN** the volume holding the shared instance's data is discarded during the window
+- **WHEN** the store holding the shared instance's data is discarded, cleared or re-initialised during the window
 - **THEN** the declaration SHALL still be readable afterwards
 
 #### Scenario: Prose alone does not discharge the announcement
