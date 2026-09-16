@@ -657,16 +657,6 @@ Noticed during `close-ci-verification-gaps`, neither a verification gap. A third
 - **The destroy-policy gate's inspection logic is inline workflow shell.** Moving it into a version-controlled script with executable fixtures would make the highest-consequence logic in this repository reviewable and testable as code — `design.md` Decision 5 of that change names this as considered and deferred on merit-vs-scope grounds, not as rejected. Four fixtures already exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are described in that change's `tasks.md` 1.1; the structural tests in `.github/tests/test_ci_configuration.py` currently assert the routes are closed, not that each is reached.
 - **`actionlint` is named as a verification means but nothing installs it.** Three tasks in `close-ci-verification-gaps` cite it, and it was run manually from a scratch install. Adding it to `.pre-commit-config.yaml` would close that permanently — but it exits non-zero on two pre-existing `SC2016:info` findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the job-summary step — both single-quoted literal markdown in an `echo`, and both intentional). So landing the hook means dispositioning those two first, by fixing or ignoring them. That is the same trap this change refused to lay for the next person when `ansible-lint` failed on pre-existing violations, and it wants its own decision rather than being folded in.
 
-## 43. lint-the-repository's-shell-scripts
-
-**Not blocked; recorded rather than folded into `namespace-the-molecule-suite-per-working-tree`**, which added the script that makes this worth doing.
-
-`ansible/scripts/run-molecule` is this repository's first committed shell script, and nothing checks it. `.pre-commit-config.yaml` carries hooks for Terraform, Ansible, secrets and commit messages, and none for shell. That change's own test-authoring step declined to verify the script with ShellCheck for the reason `AGENTS.md` gives about unpinned tools: an ad-hoc invocation of a linter this repository does not pin is unrepeatable, and a check that cannot be reached is indistinguishable from one that passed. Its `tasks.md` discloses the refusal under `## Not performed`.
-
-The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a decision about whether `.github/tests` should assert that the hook exists — the same shape as the pins that suite already reads.
-
-**"Worth doing before there is a second script" is no longer available**, which is the only part of this entry that has changed. `make-a-shared-instance-reset-visible-to-its-applications` added two more — `ansible/roles/deploy_user/files/app-probe` and `files/deploy-probe` — and they are not like `run-molecule`: they run as `root` on every host, one of them on input from an application's key, so they are the scripts where an unchecked quoting mistake costs the most. Both were run through ShellCheck by hand during that change and by its code review, and both were clean; that is exactly the unrepeatable ad-hoc invocation this entry exists to replace. Note also that `ansible-lint`'s `files: ^ansible/` does not lint them as shell, so nothing in CI reads them today.
-
 ## 44. catch-up-the-drifted-galaxy-pins
 
 **Not blocked.** Recorded 2026-09-08, from an inventory taken while archiving `open-autoupdate-pr-with-app-token`.
