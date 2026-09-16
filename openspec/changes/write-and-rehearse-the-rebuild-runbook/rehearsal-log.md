@@ -170,3 +170,24 @@ Read back from the inventory, as the runbook says rather than from `terraform ou
 8. **Neither phase 2 nor phase 7 says how the token gets into the shell.** Phase 2 runs the inventory read and says a failure "names the source it could not parse", and phase 7 gives the `ansible-playbook` line — but neither mentions `direnv allow` or `source .envrc`, and `ansible/.envrc` is **per working tree**, so a tree cloned since the last rebuild has no token at all however well the main checkout is provisioned. Phase 1's credential line was corrected to say that during code review; phases 2 and 7, which are where it is actually used, were not.
 
    The fix is one clause in phase 2: the read is run after `direnv allow` in `ansible/`, or after `source .envrc`, and the failure above is what an unprovisioned shell looks like.
+
+## Phase 7 applied — the workstation converge, 2026-09-16T~20:58Z
+
+    localhost      : ok=2    changed=0   unreachable=0 failed=0
+    main-staging   : ok=100  changed=56  unreachable=0 failed=0
+
+Verified on the host afterwards: `hostname` is `shatynska-main-staging`; `/mnt/main` is mounted on the new volume `scsi-0HC_Volume_106886751` and is empty (2.1M of 9.8G used, which is the volume loss made visible); `prune-host-images.timer` exists and is scheduled.
+
+**The tailnet address changed: `100.85.219.36` → `100.95.46.64`.** So the rebuild moved the tailnet address and did *not* move the public one — the opposite of what the runbook expects, in both halves.
+
+## Phase 8 — the converge key, 2026-09-16T20:59Z
+
+### Divergence found in phase 8 — the phase's own command is broken as written
+
+9. **`ssh-copy-id -i …pub` fails for the operator who followed the bootstrap's instruction.** It refuses with `ERROR: failed to open ID file '…/shatynska-ansible-ci-main-staging': No such file`, because it wants the **private** half to verify the pair even when handed the public one. `-f` is what skips that check, and the error names it.
+
+   This is the second half of a defect whose first half code review found and I mis-answered. Review established that the phase's *verification* step needed a private half that stage 0.3 has the operator delete; the fix replaced that step with a pipeline dispatch, and I wrote — in the report and in the correction — that *"`ssh-copy-id` is unaffected; it uses the `.pub`, which survives."* **That is false**, and it was reasoned rather than run. The phase's very first command fails for exactly the reader the rest of the phase was corrected to serve.
+
+   The fix is one character: `ssh-copy-id -f -i ~/.ssh/<key>.pub …`. Confirmed working here — the key installed and the pipeline dispatch that follows is what proves it usable.
+
+   Worth keeping as the clearest case the rehearsal produced. A defect was found by review, correctly. The correction was reviewed and agreed. The correction was still wrong, in a way only running it could show, and it was wrong in the same place and for the same underlying reason as the original.
