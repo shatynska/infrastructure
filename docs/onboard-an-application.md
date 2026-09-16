@@ -47,6 +47,16 @@ Passphrase-less, because continuous integration cannot type one. One key per app
 
 **The comment convention, and the committed entries that predate it.** An application's key carries `<app>-deploy-<stack>` and the platform's carries `deploy@platform-<stack>`, so an entry says which cell it authorises. The committed entries predate both this convention and the move onto the host axis, and they are inconsistent in two different ways: production's carry no per-target segment at all — `deploy@platform` and `commerce-ops-deploy` in `ansible/inventory/host_vars/main-production.yml` — while staging's carry the environment rather than the stack, `deploy@platform-staging` and `commerce-ops-deploy-staging` in `main-staging.yml`. All four are left as they are: rewriting a committed comment converges both hosts to change a label nothing reads, and a key is identified by the fingerprint above. Read them as history rather than as competing conventions.
 
+### 2.1a Generate that cell's probe key, if it will have a database
+
+An application given a database in the shared instance also gets a **second** keypair, for the read-only probe its deploy calls before it delivers (§4.5). Skip it if the application keeps no relational data on this host.
+
+    ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-probe-<stack> -N "" -C "<app>-probe-<stack>"
+
+**A second key rather than a second command on the first.** An `authorized_keys` entry carries one `command=`, so a key that could both deliver and probe would be a key bound to neither. The probe key grants strictly less than the deploy key beside it: it can answer one token about that application's own database and can neither deliver, deploy, nor write anything anywhere.
+
+Everything §2.1 says about where the private half goes applies here unchanged.
+
 ### 2.2 Add the entry, and let a converge install it
 
 Add to `deploy_apps` in `ansible/inventory/host_vars/<server name>.yml` — the vars file of the host that stack provisions, whose name is the `name` its `terraform.tfvars` declares. **Not `group_vars/<environment>.yml`**: an entry there would authorise this key on every host in the environment, and `.github/tests` fails the pull request for a stack whose host has no vars file at all.
@@ -54,7 +64,10 @@ Add to `deploy_apps` in `ansible/inventory/host_vars/<server name>.yml` — the 
 ```yaml
 - name: <app>
   public_key: "ssh-ed25519 AAAA... <app>-deploy-<stack>"
+  probe_public_key: "ssh-ed25519 AAAA... <app>-probe-<stack>"
 ```
+
+`probe_public_key` is optional — omit it for an application with no database and the converge installs the deploy entry as before, with no probe entry and no probe `sudoers` rule.
 
 Open a pull request and merge it. Merging to `main` with anything under `ansible/` changed runs the gated host converge, which installs `/opt/<app>`, the forced-command `authorized_keys` line, and the `sudoers` rule that lets that key trigger `app-deploy <app>` and nothing else. Production's converge waits for your approval; nothing announces that it is waiting, so watch for it.
 
@@ -131,7 +144,7 @@ Expected output: `gh`'s confirmation that the secret was set, then `SET` four ti
 - **Where the password comes from, and who has it afterwards.** `openssl rand -hex 32` generates it inside the block, and nobody holds it: it reaches `gh` and `psql` over standard input only, so it is in no shell history and no process listing on either machine, and the subshell it lives in exits. What survives is the encrypted Environment secret in the application's repository and a hash in PostgreSQL. There is no third copy to look it up in, by design — if you need the value again, you rotate rather than recover.
 - **It differs per application and per host.** Each application gets a role, a database and a password of its own, and each **deploy target** is an independent run of this block: staging's `commerce-ops` password and production's are two unrelated values, even though both are stored under the same secret name in their respective Environments. That is what makes one leaked credential reach one host.
 - **It is never `PLATFORM_POSTGRES_PASSWORD`.** That is the instance superuser's password, it belongs to this repository's own stack secrets, and it never reaches an application. The name the application reads is the one you put in the `secret=` assignment — `SHARED_POSTGRES_PASSWORD` for `commerce-ops`, chosen because that repository's `POSTGRES_PASSWORD` was already taken by something else. Any name free in that Environment, its repository and its organisation will do.
-- **What to do when it is lost or leaked.** Rotate: the same block with `rotate=yes` on the assignment line. The application picks the new password up on its next deploy; connections it opens before then are refused. There is nothing else to clean up, because nothing else holds the old value.
+- **What to do when it is lost or leaked.** Rotate: the same block with `rotate=yes` on the assignment line. The application picks the new password up on its next deploy; connections it opens before then are refused. There is nothing else to clean up, because nothing else holds the old value. **This block is also `absent`'s remedy** (§4.5) — with one exception: the `platform` entry's probe answers `absent` permanently and by design, because the stack holds no role or database of that name, so never run this block for it.
 
 ### 3.4 What each part of the block is for
 
@@ -169,10 +182,11 @@ The whole table repeats per Environment, and every row after the first takes tha
 | `TAILSCALE_OAUTH_CLIENT_ID`, `TAILSCALE_OAUTH_SECRET` | The same OAuth client as the host bootstrap's tailnet stage, or a second one with the same tag |
 | `DEPLOY_HOST` | That target's server's tailnet IPv4, same value as that stack's `PLATFORM_DEPLOY_HOST` |
 | `<APP>_DEPLOY_SSH_KEY` | The private half of **that target's** key from §2.1 — one per application per environment, never one shared; delete the local file after storing |
+| `<APP>_PROBE_SSH_KEY` | The private half of **that target's** probe key from §2.1a, where the application has one — a second secret beside the deploy key, never the same value, and stored and deleted on the same terms. Omit the row for an application with no database |
 | The shared-instance database password, under the name §3.2 gave it — `SHARED_POSTGRES_PASSWORD` for `commerce-ops` | Written by §3.2's recipe, with that target's own independently generated value — never set by hand here, and never under a name the Environment already holds |
 | The application's own settings | Whatever the application needs |
 
-**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance.
+**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance. An application with a probe key has **two** private halves to store and delete per Environment, and their fingerprints are what tells them apart — storing the deploy key under the probe's name yields a deploy that cannot probe and a probe that can deploy, which is the one confusion here worth checking for twice.
 
 ### 4.3 Anything it persists has to say why it needs no backup
 
@@ -195,6 +209,38 @@ The host extracts exactly those two files into `/opt/<app>` and runs `docker com
 **The rule was measured on `env_file:`, which is the path this section instructs**, and not carried across from the platform stack's `${VAR}` interpolation. They are different entry points into the parser; no difference between them has been measured, and each was established on its own rather than inferred from the other. The escaping holds on both.
 
 **Two things this repository cannot do for you.** The values also have to reach the shell safely — bring every secret into the step through its `env:` block rather than interpolating `${{ secrets.X }}` into a `run:` body, where GitHub substitutes the raw text and bash then reads a backtick or `$(…)` as script. And an escaped value is a string GitHub's log masking, registered against the secret's own form, does not cover: write it to the file and print it nowhere.
+
+### 4.5 Probing the database before the deploy delivers
+
+An application with a database in the shared instance should ask, before it delivers anything, whether that database is still there. It is a separate key (§2.1a), whose private half goes in the same Environment as the deploy key, and one `ssh` call:
+
+```sh
+printf '%s' "$(jq -nc --arg p "$SHARED_POSTGRES_PASSWORD" '{password: $p, table: "alembic_version"}')" \
+  | ssh -i ~/.ssh/probe_key deploy@${{ secrets.DEPLOY_HOST }}
+```
+
+The key file is written from `<APP>_PROBE_SSH_KEY` (§4.2) exactly as the deploy job writes its own from `<APP>_DEPLOY_SSH_KEY`, and it is a **different** key: the deploy key cannot probe and the probe key cannot deliver.
+
+There is no command to send: that key's forced command on the host is `/usr/local/bin/deploy-probe <app>`, which is the only thing it can run. The application name comes from there rather than from anything the caller says, so nothing is passed on the command line and the password never reaches a process listing on either machine.
+
+**What it reads.** One JSON object on standard input. `password` and `table` are required — `table` being whatever row-bearing table means "this database has been migrated" for this application, `alembic_version` for an Alembic consumer. It may also carry `role` and `database`, which must equal the application's own name; they are accepted so a consumer that sends them is not refused for being explicit, never as a source of either name. Any other field is ignored, so this contract can gain one without breaking a consumer. The name in `table` must be an optionally schema-qualified identifier — `public.alembic_version` is fine, anything else is refused.
+
+**What it answers.** Exactly one token on standard output, and **exit status 0 if and only if it emitted one**. A non-zero exit with no token is a failed probe — a malformed object, a name outside the identifier shape, or an error the probe would not guess about — and is not an answer about your database. Read the exit status first.
+
+| Token | What it means | What a deploy should do |
+|---|---|---|
+| `window-open` | An operator has declared a maintenance window on this host. | Do not deliver. Retry later. |
+| `unreachable` | The instance could not be reached, or its own state could not be read. | Do not deliver. Retry, and alert if it persists. |
+| `absent` | Your role or your database does not exist in the instance. | Do not deliver. The database was destroyed and not re-provisioned; this needs an operator, not a retry. |
+| `credential-refused` | Your role and database exist and the password was refused. | Do not deliver. Your secret is stale — rotate it. |
+| `empty` | Connected; the table you named does not exist or holds no row. | Deliver. A first deploy, or a database awaiting its first migration. |
+| `populated` | Connected; that table exists and holds at least one row. | Deliver. |
+
+**Match the whole of standard output against the whole token set, and refuse an answer you do not recognise.** A guard that tests whether the output *contains* a token reads `unpopulated` and `depopulated` as `populated`, and five of these six tokens are refusals — so a loose match can only ever fail in the one direction that delivers. A guard enumerating a subset of the six is fine and is the safer shape, provided the tokens it does not enumerate refuse rather than fall through: a consumer that knows only `populated`, `empty`, `credential-refused` and `unreachable` still stops correctly on `window-open` and `absent`, but its message will not say why, so enumerate all six where you can.
+
+**`absent` and `credential-refused` are the pair this exists to separate.** PostgreSQL reports an absent role and a wrong password identically, which is why a reset shared instance surfaced in `commerce-ops` on 2026-09-15 as `password authentication failed` four and a half hours after its cause. The probe resolves `absent` from the host, without your credential, so it answers in exactly the case where your credential can tell you nothing.
+
+**One exception to `absent`'s remedy.** The `platform` entry in `deploy_apps` carries a probe key and holds no role or database of its own in the shared instance, so **its** probe answers `absent` permanently and correctly. That is the operator's check that a window declaration is in force, not a database to re-provision — never run §3.2's block with `rotate=yes` for it. For every other application, `absent` means what the table above says.
 
 ## 5. The public hostname
 

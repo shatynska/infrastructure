@@ -1,0 +1,81 @@
+---
+# Molecule scenario for the two ADDED requirements "An Application Can Probe
+# Its Own Database Through a Read-Only Forced Command" and "The Host Carries an
+# Operator-Declared Maintenance Window for the Shared Instance"
+# (openspec/specs/iac-host-configuration/spec.md), and for the host-side half of
+# the ADDED requirement "A Destructive Window on the Shared Instance Is
+# Announced to the Applications That Hold Databases in It"
+# (openspec/specs/iac-platform-services/spec.md).
+#
+# Derived from those delta specifications BEFORE any implementation of them
+# existed, by an author who has not read the implementation. Every task in
+# verify.yml fails today, and that is the intended state: neither
+# `deploy-probe`, `app-probe` nor `/var/lib/platform-maintenance/` exists in
+# this tree. The change `make-a-shared-instance-reset-visible-to-its-
+# applications` carries the test-plan.md holding the scenario-accounting table,
+# each assertion's specified/derived classification, and the cases deliberately
+# left uncovered. Read it before changing anything here.
+#
+# WHY A SCENARIO OF ITS OWN, AND ONLY ONE
+# ---------------------------------------
+# `default`, `ghcr-credential-absent` and `ghcr-credential-rejected` are
+# existing, load-bearing tests and this pass is additive only -- it edits none
+# of their playbooks. A new scenario is therefore the only place this change's
+# coverage can go.
+#
+# It is ONE new scenario rather than three, and that is deliberate. Everything
+# here needs a real container runtime inside the Molecule instance and a real
+# PostgreSQL fixture standing in for the shared instance, which is the whole
+# cost; splitting the window cases out would pay it twice for nothing. Molecule
+# runs exactly one `converge` per scenario, but verify.yml may do as it likes
+# to the fixture afterwards -- and it does: the probe's six tokens are only
+# distinguishable by putting the instance through the states that produce them
+# (healthy, unreachable over the application's own network, discarded and
+# re-initialised, stopped), which is a sequence rather than four converges.
+#
+# THE NAME SORTS AFTER EVERY EXISTING SCENARIO, AND THAT IS LOAD-BEARING.
+# `molecule test --all` runs a role's scenarios in sorted order and STOPS AT
+# THE FIRST FAILURE, so a new scenario sorting before `default` would leave
+# every existing one neither executed nor listed in the SCENARIO RECAP while
+# this change is still red. `probe-and-window` sorts after `default`,
+# `ghcr-credential-absent` and `ghcr-credential-rejected`, so a red run here
+# hides nothing. This is the risk that change's design.md names for itself.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  # Instance name namespaced per working tree, with a default Docker refuses,
+  # and an explicit `hostname` because the driver would otherwise derive one
+  # from the name and cross the 64-byte limit. See
+  # ansible/roles/docker/molecule/default/molecule.yml for the full account --
+  # every scenario must agree on the variable.
+  - name: deploy_user-probe-window-instance-${INFRA_WORKTREE_NS:-unset:run-via-ansible/scripts/run-molecule}
+    hostname: deploy-user-probe-window
+    # Digest-pinned. See ansible/roles/docker/molecule/default/molecule.yml for
+    # why a digest and not a version tag, and for how to refresh it -- every
+    # scenario must carry the same one, and
+    # test_ci_configuration.py's TestMoleculeScenarioImagesArePinnedByDigest
+    # fails a scenario that disagrees.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+verifier:
+  name: ansible

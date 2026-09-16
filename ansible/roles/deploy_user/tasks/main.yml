@@ -281,6 +281,116 @@
   loop_control:
     label: "{{ item.name }}"
 
+# The read-only database probe and the window it reports
+# (make-a-shared-instance-reset-visible-to-its-applications). See
+# iac-host-configuration's "An Application Can Probe Its Own Database Through a
+# Read-Only Forced Command" and "The Host Carries an Operator-Declared
+# Maintenance Window for the Shared Instance", and this role's README.
+
+# The declaration an operator raises before a destructive window on the shared
+# instance and withdraws once it is serving again.
+#
+# root-owned, group `docker`, group-WRITABLE and world-READABLE, and each half
+# of that is deliberate. `ops_user` grants an operator account the `docker`
+# group and NO sudoers rule of any kind -- that omission is its requirement --
+# so `docker` is the only capability an operator holds, and an operator in the
+# middle of a window cannot wait on a pipeline. Granting that group write access
+# adds no capability: this role's sibling records `docker` membership as
+# root-equivalent by escalation, so this makes an already-available act
+# convenient rather than newly possible. World-readable so that nothing about
+# who may READ the declaration depends on group membership.
+#
+# It lives here rather than in the volume it announces, which is discarded
+# during the window, and rather than under /opt/platform, which is deploy:deploy
+# 0750 and which an operator cannot read.
+# The `docker` group is ordinarily created by the Docker Engine package, and on
+# every real host it already exists by the time this role runs -- host-baseline
+# converges `docker` first, because `app-deploy` needs the runtime. Declaring it
+# here is a no-op there, and is what keeps this role from hard-failing with
+# `chgrp failed: failed to look up group docker` on a host converged without the
+# runtime: without it, adding the directory below would have made `deploy_user`
+# newly undeployable on its own, which it has never been. An empty `docker`
+# group on a runtime-less host grants nobody anything, and Docker's own
+# packaging adopts an existing group rather than replacing it.
+- name: Ensure the group an operator holds exists before anything is bound to it
+  ansible.builtin.group:
+    name: docker
+    state: present
+
+- name: Ensure the directory holding the shared instance's maintenance declaration exists
+  ansible.builtin.file:
+    path: /var/lib/platform-maintenance
+    state: directory
+    owner: root
+    group: docker
+    mode: "0775"
+
+- name: Install the probe's input parser
+  ansible.builtin.copy:
+    src: app-probe-input.py
+    dest: /usr/local/lib/app-probe-input.py
+    owner: root
+    group: root
+    mode: "0644"
+
+# root:root 0755 -- the privileged half, reached only through the per-application
+# sudoers rule below. It is where every token is decided, the window included.
+- name: Install the privileged probe script
+  ansible.builtin.copy:
+    src: app-probe
+    dest: /usr/local/bin/app-probe
+    owner: root
+    group: root
+    mode: "0755"
+
+# deploy:deploy 0755 -- the SSH-layer half, exactly as deploy-receive is. It
+# holds no privilege and reaches the runtime only through `sudo`.
+- name: Install the unprivileged probe script
+  ansible.builtin.copy:
+    src: deploy-probe
+    dest: /usr/local/bin/deploy-probe
+    owner: deploy
+    group: deploy
+    mode: "0755"
+
+# One file per application that declares a probe key, each an exact,
+# fully-qualified line -- no wildcard, no argument forwarding. This is the
+# second of the two independent layers that bound a probe key to its own
+# application, and it is what makes the application name unreachable as client
+# data. `visudo` validates it because a malformed file in /etc/sudoers.d/ breaks
+# `sudo` for every account on the host, the deploy path included.
+- name: Render each application's sudoers.d NOPASSWD rule for app-probe
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/app-probe-{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0440"
+    content: |
+      deploy ALL=(root) NOPASSWD: /usr/local/bin/app-probe {{ item.name }}
+    validate: "visudo -cf %s"
+  loop: "{{ deploy_apps | selectattr('probe_public_key', 'defined') | selectattr('probe_public_key', 'truthy') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# A probe key is OPTIONAL per application: an entry omitting `probe_public_key`
+# gets its deploy entry as before, no probe entry, no probe sudoers rule, and no
+# failure. `restrict` for the same reason the deploy key carries it -- the
+# requirement states it over EVERY key on this account, not over deploy keys --
+# and a separate key because one authorized_keys entry carries one `command=`,
+# so a key that could do both would be a key bound to neither.
+- name: Install each application's forced-command, forwarding-restricted probe authorized_keys entry
+  ansible.posix.authorized_key:
+    user: deploy
+    key: "{{ item.probe_public_key }}"
+    key_options: 'restrict,command="/usr/local/bin/deploy-probe {{ item.name }}"'
+  # `truthy` as well as `defined`: an entry carrying `probe_public_key: ""` is a
+  # typo, not a declaration, and without this it would reach `authorized_key`
+  # as an empty key. `.github/tests` catches it in the committed inventory; the
+  # role should not depend on that to refuse it.
+  loop: "{{ deploy_apps | selectattr('probe_public_key', 'defined') | selectattr('probe_public_key', 'truthy') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 # Read-only (`read:packages`-scoped), shared across every application --
 # not a per-application credential, since it grants no capability beyond
 # reading package contents (design.md's GHCR decision).
