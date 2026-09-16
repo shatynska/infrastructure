@@ -363,7 +363,7 @@ services:
       # alertmanager_config alone, so editing the routing tree replaces this
       # container and nothing else. Regenerate it when that config changes; the
       # static check names the correct value.
-      platform.config-checksum: "a9cea23fda3b"
+      platform.config-checksum: "23ee71e2892b"
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
     configs:
@@ -696,6 +696,22 @@ configs:
                 {{ .Annotations.description }}
 
                 {{ end -}}
+        # BOTH VALUES BELOW ARE PER-STACK AND NEITHER IS VISIBLE TO ANY CHECK
+        # HERE. They interpolate that stack's own Environment secret, so two
+        # Environments holding one value is indistinguishable from two holding
+        # their own -- which is the state both hosts were in until 2026-09-16,
+        # when the alert routing and the dead-man's-switch were found shared.
+        # docs/bootstrap-a-new-host.md stage 7.5 carries the only check that
+        # reaches it: the test alert must arrive in one channel rather than
+        # both. Nothing automated can perform it.
+        #
+        # AND A ROTATION OF EITHER DOES NOT REACH THIS CONTAINER ON A DEPLOY.
+        # The config-checksum label above is computed from this committed text,
+        # so a secret change moves the rendered config and moves neither the
+        # text nor the label, and `up -d --wait` leaves the container running
+        # on the old value -- reporting success. Editing this block is what
+        # applies a rotation, because it moves the checksum. See
+        # docs/backlog.md `make-a-rotated-secret-reach-its-inline-config`.
         - name: deadmansswitch
           webhook_configs:
             - url: ${DEADMANSWITCH_URL}
