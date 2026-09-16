@@ -19,7 +19,7 @@ The three conventions, and why none survives without a check:
   from being published. Three of the five key rows carried one; two of those
   were found only by sweeping after a reviewer reported the third.
   `docs/onboard-an-application.md` generates one more, per application per
-  environment, and is read here for that reason: the rule is a property of the
+  stack, and is read here for that reason: the rule is a property of the
   command, not of the document that first stated it.
 
 - **Every key name either document prints is matched by `.gitignore`'s
@@ -144,8 +144,13 @@ BLOCK_CLOSING = "!*.pub"
 # would go stale in exactly the way this module exists to prevent:
 #
 #   <environment>  the `group_vars` files other than `all.yml`, which is what an
-#                  environment IS here: the axis a deploy key's authorising
-#                  entry sits on.
+#                  environment IS here: the axis a converge's target group, its
+#                  vault-id label and its baseline variables sit on. It is NOT
+#                  the axis a deploy key's authorising entry sits on -- that
+#                  moved to the host, and every key this scheme generates now
+#                  carries <stack>. The expansion is kept because a workstation
+#                  may still hold a key generated under the old spelling, and a
+#                  pattern that stopped covering it would uncover a real file.
 #   <stack>        the directories under `terraform/stacks/`.
 #
 # The other two name things this repository does not own. `<company>` is a

@@ -206,22 +206,178 @@ def _is_literal(value) -> bool:
     return isinstance(value, str) and "{{" not in value and "}}" not in value
 
 
-def role_directories(root: Path) -> set[str]:
-    """Every role directory, whether or not it carries scenarios.
+#: The manifest that says which role directories hold installed Galaxy
+#: content. Read rather than guessed at -- see `galaxy_role_directories`.
+GALAXY_MANIFEST = "ansible/requirements.yml"
 
-    Dotted names are excluded, which is how the Galaxy-installed
-    `geerlingguy.docker` stays invisible: it is gitignored, so a check that saw
-    it would report one result on a provisioned working tree and another on a
-    runner that has installed nothing. The same rule `role_names()` in
-    `.github/tests` uses, and the same rule the workflow's own discovery uses.
+
+def _role_name_from_source(source: str) -> str:
+    """A `src` resolved to the directory name, by `ansible-galaxy`'s own rule.
+
+    MIRRORS `RoleRequirement.repo_url_to_role_name`, ORDER INCLUDED. Ansible
+    strips `.git` from the trailing path segment and only then splits on the
+    comma, so `.../ansible-role-docker.git,8.0.0` installs to
+    `ansible-role-docker.git`: at the moment the suffix is tested for, the
+    string still ends in the version, so the test does not match and the
+    suffix survives. Stripping the version first -- which reads more sensibly
+    and is what both copies of this did until
+    `unify-the-two-role-exclusion-rules` checked -- names a directory that is
+    never created, so the role is not excluded and its scenarios reach the
+    matrix.
+
+    A source carrying neither `://` nor `@` is returned unchanged, which is
+    Ansible's own first line.
+    """
+    if "://" not in source and "@" not in source:
+        return source
+    trailing = source.split("/")[-1]
+    if trailing.endswith(".git"):
+        trailing = trailing[: -len(".git")]
+    if trailing.endswith(".tar.gz"):
+        trailing = trailing[: -len(".tar.gz")]
+    if "," in trailing:
+        trailing = trailing.split(",")[0]
+    return trailing
+
+
+def _galaxy_directory_name(entry, position: int) -> str:
+    """Resolve one `roles:` entry to the directory `ansible-galaxy` installs it
+    under: `role:` or `name:` where given, else the `src` resolved as above.
+
+    THE SAME RESOLUTION `.github/tests` PERFORMS, deliberately duplicated. This
+    module is production code and cannot import the test suite; the suite is
+    what checks this module, and a suite taking this module as its own
+    authority for the rule would be checking nothing. The two copies are bound
+    by a test that resolves one manifest through both -- see
+    `test_the_matrix_runs_the_roles_a_pull_request_owes.py`,
+    `TestTheSelectorEnumeratesRolesLikeTheRestOfTheSuite`.
+
+    THAT BINDING HOLDS THE COPIES TO EACH OTHER AND NOT TO ANSIBLE, which is
+    its limit and worth stating where the duplication is: both were wrong
+    together about the two spellings below until each was checked against
+    `RoleRequirement`, and the binding was green throughout.
+    """
+    if isinstance(entry, str):
+        # `role_yaml_parse`'s string branch: `src[,version[,name]]`, where an
+        # explicit third field wins and the comma is split BEFORE the name is
+        # derived.
+        fields = entry.strip().split(",")
+        if len(fields) > 3:
+            raise DerivationRefused(
+                f"{GALAXY_MANIFEST} roles[{position}] is not a role line "
+                f"ansible-galaxy accepts -- `role_name[,version[,name]]` takes at "
+                f"most two commas: {entry!r}"
+            )
+        if len(fields) == 3 and fields[2].strip():
+            return fields[2].strip()
+        source = fields[0]
+    elif isinstance(entry, dict):
+        # `role:` is a spelling `role_yaml_parse` accepts and rewrites to
+        # `name`. Refusing it failed the discovery job on a manifest
+        # `ansible-galaxy` reads without complaint.
+        if entry.get("role"):
+            name = str(entry["role"])
+            if "," in name:
+                raise DerivationRefused(
+                    f"{GALAXY_MANIFEST} roles[{position}] uses the `role:` key with a "
+                    f"comma in it, which ansible-galaxy rejects as an old-style "
+                    f"requirement: {entry!r}"
+                )
+            return name
+        if entry.get("name"):
+            return str(entry["name"])
+        source = entry.get("src")
+    else:
+        source = None
+    if not isinstance(source, str) or not source.strip():
+        raise DerivationRefused(
+            f"{GALAXY_MANIFEST} roles[{position}] gives none of `name`, `src` or "
+            f"`role`, so the directory ansible-galaxy installs it under cannot be "
+            f"named and which roles are this repository's own is unknown. Refused "
+            f"rather than treated as installing nothing: {entry!r}"
+        )
+    source = source.strip()
+    if "+" in source:
+        source = source.partition("+")[2]
+    basename = _role_name_from_source(source)
+    if not basename:
+        raise DerivationRefused(
+            f"{GALAXY_MANIFEST} roles[{position}] has a `src` that resolves to no "
+            f"directory name: {entry!r}"
+        )
+    return basename
+
+
+def galaxy_role_directories(root: Path) -> set[str]:
+    """Directory names under `ansible/roles/` holding installed Galaxy content.
+
+    A MANIFEST THIS CANNOT READ IS REFUSED, not treated as installing nothing.
+    The polarity is `_documents`', for its reason rather than by analogy: an
+    unreadable file whose contribution is taken as empty is indistinguishable
+    from one that genuinely contributes nothing, and here that silently widens
+    the enumeration to include somebody else's roles -- whose scenarios the
+    matrix would then run.
+
+    This is not in tension with THE POLARITY IS TO RUN, NOT TO SKIP above.
+    That governs a selection which is merely under-determined, where widening
+    costs runner time and nothing else. It has never governed a tree this
+    module cannot read.
+    """
+    manifest = Path(root) / GALAXY_MANIFEST
+    if not manifest.is_file():
+        raise DerivationRefused(
+            f"{GALAXY_MANIFEST} does not exist, so which role directories hold "
+            f"installed Galaxy content cannot be derived and which roles are this "
+            f"repository's own is unknown. Refused rather than falling back to an "
+            f"empty exclusion, which would hand the matrix somebody else's scenarios"
+        )
+    try:
+        parsed = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
+        raise DerivationRefused(
+            f"{GALAXY_MANIFEST} cannot be read or parsed ({error}), so which roles "
+            f"are this repository's own is unknown. Refused rather than treated as "
+            f"installing nothing"
+        ) from None
+    if not isinstance(parsed, dict):
+        raise DerivationRefused(
+            f"{GALAXY_MANIFEST} is not a mapping, so it declares no `roles:` list to "
+            f"derive the exclusion from"
+        )
+    entries = parsed.get("roles")
+    if entries is None:
+        return set()
+    if not isinstance(entries, list):
+        raise DerivationRefused(
+            f"{GALAXY_MANIFEST}'s `roles:` is not a list, so its entries cannot be "
+            f"resolved to directory names"
+        )
+    return {_galaxy_directory_name(entry, position) for position, entry in enumerate(entries)}
+
+
+def role_directories(root: Path) -> set[str]:
+    """Every role directory of THIS REPOSITORY'S OWN, whether or not it carries
+    scenarios.
+
+    Installed Galaxy content is excluded, derived from `ansible/requirements.yml`.
+    That is how the Galaxy-installed `geerlingguy.docker` stays invisible: it is
+    gitignored, so a derivation that saw it would report one result on a
+    provisioned working tree and another on a runner that has installed nothing.
+
+    The same rule `role_names()` in `.github/tests` uses -- one enumeration
+    across both trees, which is what the requirement asks for and what the
+    agreement test in that suite holds this to. It is NOT the rule the
+    workflow's own shell discovery uses: that is a third implementation, still
+    reading the directory name, and `docs/backlog.md` carries the entry for it.
     """
     directory = Path(root) / ROLES_DIRECTORY
     if not directory.is_dir():
         return set()
+    installed = galaxy_role_directories(root)
     return {
         child.name
         for child in directory.iterdir()
-        if child.is_dir() and "." not in child.name
+        if child.is_dir() and not child.name.startswith(".") and child.name not in installed
     }
 
 
@@ -707,7 +863,8 @@ def derive_graph(root) -> dict[str, set[str]]:
     """
     root = Path(root)
     graph: dict[str, set[str]] = {}
-    for role in sorted(role_directories(root)):
+    known = role_directories(root)
+    for role in sorted(known):
         edges: set[str] = set()
         _refuse_routes_out_of_a_roles_own_files(root, role)
         _refuse_redirected_scenario_plays(root, role)
@@ -743,24 +900,36 @@ def derive_graph(root) -> dict[str, set[str]]:
         # here instead would name only this directory: the edge set is
         # flattened by now and provenance is gone.
         #
-        # Two edges are dropped rather than recorded. An external, dotted
-        # Galaxy role is content this repository neither authors nor tests, so
-        # it contributes nothing and is not a refusal -- `docker`'s
-        # `meta/main.yml` names one today, and it is installed under a dotted
-        # directory this module never enumerates. And a role's edge to ITSELF,
-        # which nearly every converge declares, carries no information a reverse
-        # closure can use: a role is always in its own closure as the seed, so
-        # a self-edge would only make every role look like its own converger.
+        # Two edges are dropped rather than recorded. An edge naming anything
+        # that is not one of THIS REPOSITORY'S OWN role directories is content
+        # this repository neither authors nor tests, so it contributes nothing
+        # and is not a refusal -- `docker`'s `meta/main.yml` names the
+        # installed `geerlingguy.docker` today, which the manifest excludes
+        # from the enumeration above. And a role's edge to ITSELF, which nearly
+        # every converge declares, carries no information a reverse closure can
+        # use: a role is always in its own closure as the seed, so a self-edge
+        # would only make every role look like its own converger.
+        #
+        # MEMBERSHIP, NOT A DOT IN THE NAME. The test was the directory-name
+        # heuristic `unify-the-two-role-exclusion-rules` removed from the
+        # enumeration, and leaving it here would have made this module
+        # inconsistent with itself in the one direction that matters: a
+        # `meta/main.yml` dependency on vendored, unpinned, dotted content
+        # would be dropped, while the enumeration above has just established
+        # that such content IS one of this repository's own roles and that the
+        # matrix owes its changes a run.
         #
         # What is NOT closed here: a plain literal naming no role directory at
         # all -- a typo -- contributes nothing and is not refused. Refusing it
         # would be the consistent polarity, and it is not done because the name
         # may legitimately be external content installed under a name this
         # module cannot see. Such a name fails at converge time, loudly, in
-        # Molecule's own words rather than these.
-        graph[role] = {
-            edge for edge in edges if "." not in edge and edge != role
-        }
+        # Molecule's own words rather than these. Dropping it here rather than
+        # carrying it inertly loses nothing: `reverse_closure` compares targets
+        # only against graph KEYS and `attribute` seeds only from this same
+        # enumeration, so both ends of every comparison are drawn from it and a
+        # target outside it could never be reached however long it sat there.
+        graph[role] = {edge for edge in edges if edge in known and edge != role}
     return graph
 
 
