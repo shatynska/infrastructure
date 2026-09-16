@@ -35,7 +35,7 @@ Single-quoting survived all twelve. **So the backlog entry's claim that single-q
 
 ### Round 2: what single-quoting breaks on
 
-All 10 values — 8 originally, plus the two the round-2 code review added to pin the conclusion below.
+All 10 values.
 
 | Value stored | `'…'` |
 |---|---|
@@ -47,19 +47,20 @@ All 10 values — 8 originally, plus the two the round-2 code review added to pi
 | `` (empty) | intact |
 | `line1⏎line2` | intact |
 | `a=b=c` | intact |
+| `secret' #1` † | **`secret`** — silently |
+| `a' #b` † | **`a`** — silently |
 
-| `secret' #1` | **`secret`** — silently |
-| `a' #b` | **`a`** — silently |
+† Added 2026-09-16 by the code review that found them. The original eight held the apostrophe's *neighbours* constant — no value among them put a quote next to a space-preceded `#` — which is what let a wrong conclusion be drawn from them twice.
 
-**This round has been wrong twice, in opposite directions, and both errors are kept because the pair is more instructive than either.**
+**Single-quoting has both failure modes.** It **refuses** the file where a quote is unbalanced — Compose rejects what it cannot parse, exits non-zero and reads nothing, which is loud — and it **truncates silently** where a closed apostrophe is followed by a space-preceded `#`, because what remains is a well-formed line whose tail is an inline comment: `secret' #1` arrives as `secret`, exit zero, nothing said. Decision 2 rejects it on both, and on a third ground of its own.
 
-*The first version* said the five refused values resolve to **empty**, and concluded that single-quoting "converts one silent corruption into another". That was the defective harness reading a refusal as an empty result: Compose does not yield an empty value for `PROBE='a'b'`, it **refuses the whole file** and exits non-zero, reading nothing.
+**How this round reached that, having been wrong twice in opposite directions**, kept because the pair is more instructive than either and because a reader cannot otherwise tell which parts of the claim above were checked:
 
-*The second version* corrected that and then over-corrected, concluding that single-quoting therefore has **no silent failure mode at all**. It has one. The last two rows are it: a closed apostrophe followed by a space-preceded `#` leaves a well-formed line whose remainder is an inline comment, so `secret' #1` arrives as `secret`, exit zero, nothing said. Those two values were added to the corpus by the review that found them, so the claim is now pinned by a measurement rather than by prose.
+*The first version* said the five refused values resolve to **empty**, and concluded that single-quoting "converts one silent corruption into another". That was the defective harness reading a refusal as an empty result.
 
-**Both errors are the same error**, and this document names it three paragraphs later in Decision 9: varying one thing while holding another constant, then concluding about the thing varied. Round 5 held the *position* and concluded about the character. The original rounds 1 and 2 corpus held the apostrophe's *neighbours* constant — no value in it put a quote next to a space-preceded `#` — and the conclusion drawn was about the character again.
+*The second version* corrected that and over-corrected, concluding that single-quoting therefore has **no silent failure mode at all**. The last two rows are the counter-example, and they are in the corpus rather than in this prose so that re-running the round contradicts the wrong claim rather than leaving it to be re-derived.
 
-So the true statement is the narrow one: **single-quoting has both failure modes.** It refuses an unbalanced quote, loudly, and it truncates silently where a closed quote is followed by a space-preceded `#`. Decision 2 rejects it on what is wrong with both.
+**Both errors are one error**, which Decision 9 names a few paragraphs down: varying one thing while holding another constant, then concluding about the thing varied. Round 5 held the *position* and concluded about the character. This round's original corpus held the apostrophe's *neighbours* and did it again.
 
 ### Round 3: escaping
 
@@ -147,16 +148,15 @@ The `openssl rand` instruction is kept all the same. It was never wrong, it cost
 
 ### Decision 2: Double quotes with three escapes, not single quotes
 
-**This decision's conclusion has never changed and its reason has now been rewritten twice**, which is worth saying plainly because the two rewrites went in opposite directions. The first reason was that single-quoting fails into an **empty** value silently — false, that was a refusal misread. The second was that it therefore never fails silently at all — also false, and the counter-example is in round 2: `secret' #1` arrives as `secret`, exit zero.
+Round 2 is the measurement and carries the account of how it was reached, including the two wrong versions this decision's reasoning was written on before it. What that round establishes is that single-quoting has **both** failure modes — a refusal on an unbalanced quote, and a silent truncation where a closed apostrophe meets a space-preceded `#`. This decision's conclusion has never changed; its reasoning has been rewritten twice under it.
 
-What single-quoting actually does is **both**: it refuses the file where a quote is unbalanced, and it truncates silently where a closed quote is followed by a space-preceded `#`. So the comparison is between a rendering that handles every value and one that, for some values, either stops the deploy or corrupts the credential without saying so. That is decisive three times over:
+The comparison is therefore between a rendering that handles every value and one that, for some values, either stops the deploy or corrupts the credential without saying so. That is decisive three times over:
 
 - **The deploy it stops is the one that cannot be fixed by the operator.** Two of the seven secrets are issued by a vendor. A webhook URL that happens to contain an apostrophe is not something anyone here can re-generate, so the refusal is not a prompt to fix the value — it is an outage of the deploy path for that stack until the vendor is persuaded to issue a different URL. Decision 1 rejects a deliberate refusal on exactly this ground; a refusal arriving as a side effect of the quoting style is the same cost without the intent.
 - **It fails at the wrong moment.** The value is accepted into the Environment, renders fine, and stops the *deploy* — so the failure surfaces on the next unrelated change to `platform/`, attributed to that change, on a stack whose secrets nobody touched.
-
 - **It corrupts silently in the case nobody looked at.** A password containing an apostrophe and a spaced `#` is not exotic — both characters are in the printable set a person picks from — and the result is a truncated credential that starts its service and reports healthy, which is the exact failure this whole change exists to remove.
 
-The escaping has none of the three, at no cost but two more substitutions. Both of this decision's superseded reasons are kept above rather than deleted, because a reader who finds only the current one cannot tell which parts of it were checked.
+The escaping has none of the three, at no cost but two more substitutions.
 
 ### Decision 3: `$$` for the dollar, not `\$`
 
