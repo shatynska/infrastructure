@@ -21,6 +21,24 @@ updates:
       interval: "weekly"
 
   - package-ecosystem: "docker-compose"
+    # The `.env` rendering probe's own image. It is not a stack this
+    # repository deploys -- nothing runs it in CI and no host receives it --
+    # but *Automated Dependency Updates* covers every Compose file in the tree
+    # declaring a service image, not every file that is deployed, and the
+    # CI-configuration suite reports one in an unnamed directory as uncovered.
+    # Covering it is also better than the alternative that was considered:
+    # the probe's README used to say nothing refreshed its pin, which is a
+    # resigned note where a weekly pull request was available for one entry.
+    #
+    # It holds TWO Compose files, one per consumption path, and both are
+    # fetched: the fetcher's filename pattern is satisfied by a name
+    # CONTAINING "compose", which `interpolation.compose.yaml` and
+    # `env-file.compose.yaml` both do.
+    directory: "/tools/env-rendering-probe"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker-compose"
     # The shared platform stack's image pins. The directory is listed
     # explicitly because there is no alternative: Dependabot's Compose file
     # fetcher lists the contents of the configured directory and does not

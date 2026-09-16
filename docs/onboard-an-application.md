@@ -190,6 +190,12 @@ tar -czf - docker-compose.yml .env | ssh -i ~/.ssh/deploy_key deploy@${{ secrets
 
 The host extracts exactly those two files into `/opt/<app>` and runs `docker compose pull && docker compose up -d --wait`; the job fails if any service does not become healthy.
 
+**Render that `.env` with the values escaped, and take the rule from `platform-deploy.yml` rather than writing one.** A `.env` file has a parser, and it processes what it reads: it expands `$`, honours a quote that OPENS a value, begins an inline comment at a space-preceded `#`, truncates at a line break, and strips leading and trailing whitespace. So a secret written into the file unaltered is not what the service receives, and the failure is silent — the container starts, reports healthy, and fails at whatever needed the credential. Write each assignment as `NAME="<value>"` with `\` → `\\`, `"` → `\"` and `$` → `$$` applied inside it **in that order**, through one helper every value goes through; `.github/workflows/platform-deploy.yml`'s *Render .env from secrets* step in the infrastructure repository is the worked form, and `tools/env-rendering-probe/` there is the harness that established the rule.
+
+**The rule was measured on `env_file:`, which is the path this section instructs**, and not carried across from the platform stack's `${VAR}` interpolation. They are different entry points into the parser; no difference between them has been measured, and each was established on its own rather than inferred from the other. The escaping holds on both.
+
+**Two things this repository cannot do for you.** The values also have to reach the shell safely — bring every secret into the step through its `env:` block rather than interpolating `${{ secrets.X }}` into a `run:` body, where GitHub substitutes the raw text and bash then reads a backtick or `$(…)` as script. And an escaped value is a string GitHub's log masking, registered against the secret's own form, does not cover: write it to the file and print it nowhere.
+
 ## 5. The public hostname
 
 A DNS `A` record for the hostname, added where `docs/bootstrap-a-new-host.md`'s DNS stage records this repository's zone and its nameservers. Traefik requests the certificate on the first request to it.

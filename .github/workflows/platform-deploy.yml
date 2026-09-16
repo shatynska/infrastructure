@@ -501,15 +501,60 @@ jobs:
       # exactly that state -- see docs/backlog.md
       # `alert-on-the-exporter-being-unable-to-read-postgres`.
       #
-      # THIS STEP CLOSES THE SHELL AND NOT THE PARSER BELOW IT. Compose reads
-      # the file this writes, and its own dotenv parser expands `$` in a value
-      # whatever is written here -- measured from inside a container, a secret
-      # stored as `ab$c#d` still reaches the service as `ab#d`. So the backtick
-      # case is genuinely shut and the `$` case is not. Do not read the `env:`
-      # block below as making these secrets safe to contain any character:
-      # docs/backlog.md `render-the-env-file-so-a-secret-survives-it` is the
-      # remaining half, and until it lands these are generated with the
-      # `openssl rand` commands, whose alphabets avoid the problem.
+      # THIS STEP CLOSES THE SHELL, AND THE `render` HELPER BELOW CLOSES THE
+      # PARSER. Compose reads the file this writes with a dotenv parser of its
+      # own, and that parser processes what it reads: it expands `$`, honours a
+      # quote that OPENS a value, begins an inline comment at a space-preceded
+      # `#`, truncates at a line break, and strips leading and trailing
+      # whitespace. So a value written into the file unaltered is not delivered
+      # unaltered, and the failure is silent -- the service starts, reports
+      # healthy, and fails at whatever needed the credential.
+      #
+      # THE RULE WAS MEASURED, NOT REASONED. Each value is wrapped in double
+      # quotes with `\` -> `\\`, `"` -> `\"` and `$` -> `$$` applied IN THAT
+      # ORDER; escaping the quotes or dollars first would double a backslash
+      # the escaper itself introduced. Measured against 51 values on this
+      # interpolation path and 15 on the `env_file:` path applications use, it
+      # returns the stored value byte for byte in every case.
+      # `tools/env-rendering-probe/` is the harness, committed so the evidence
+      # can be re-taken rather than trusted; the change
+      # `render-the-env-file-so-a-secret-survives-it` carries the measurement.
+      #
+      # `$$` RATHER THAN `\$` BECAUSE IT IS THE PARSER'S OWN ESCAPE. Both were
+      # measured identical inside double quotes; outside them `a$$b` yields
+      # `a$b` while `a\$b` yields `a\`, so the backslash form is a consequence
+      # of double-quote processing rather than a rule about `$`. It is also the
+      # form `platform/docker-compose.yml` already uses (`pg_isready -U
+      # $$POSTGRES_USER`).
+      #
+      # THE OBLIGATION STOPS AT THE PARSER. Two of these values are afterwards
+      # interpolated into the content of an embedded Alertmanager YAML config
+      # and one into a Traefik `command:` argument; nothing here escapes for
+      # those contexts. See the requirement and `docs/backlog.md`.
+      #
+      # WHAT THE SHELL LAYER BOUGHT, KEPT HERE BECAUSE IT IS STILL TRUE AND IS
+      # WHY THE `env:` BLOCK EXISTS. This step once rendered with
+      # `echo "NAME=${{ secrets.X }}"`. GitHub substitutes a secret's raw text
+      # into the `run:` body, so bash read it as script:
+      #
+      #   ab$c#d      renders  ab#d       -- `$c` expanded to nothing
+      #   "abc"def    renders  abcdef     -- the shell ate the quotes
+      #   x`id -u`y   renders  x1000y     -- A COMMAND RAN
+      #
+      # The third is the one that matters most: a secret carrying a backtick or
+      # `$(…)` is executed by this job's shell, which at that moment holds this
+      # stack's tailnet OAuth client and the deploy key below. Every value now
+      # reaches the script through `env:`, and `.github/tests` refuses any
+      # workflow that interpolates a secret into a `run:` body. RE-QUOTING IN
+      # THAT LAYER DOES NOT WORK -- `echo "N='<secret>'"` still rendered
+      # `ab$c#d` as `ab#d`, measured -- and that result says nothing about the
+      # file layer, where quoting is exactly what does work. Reading it as
+      # though it did is what left this gap open for a day.
+      #
+      # THE ESCAPED FORM IS NEVER PRINTED. GitHub registers its log masking
+      # against each secret's own value, so the escaped variant is a different
+      # string that masking does not cover. It goes into the file and nowhere
+      # else.
       - name: Render .env from secrets
         env:
           ACME_EMAIL: ${{ secrets.PLATFORM_ACME_EMAIL }}
@@ -523,16 +568,66 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+
+          # Names only, never values -- see the requirement's report clause.
+          altered=''
+
+          # The single escaping point. Every value written into the file goes
+          # through this and nothing else writes into it, so a ninth value
+          # added later is escaped by construction rather than by whoever adds
+          # it remembering to. No `$(…)` anywhere in this step: command
+          # substitution strips trailing newlines and a secret may end in one.
+          render() {
+            local name="$1"
+            local value="$2"
+
+            # Membership is justified by a position in which the PREVIOUS
+            # rendering corrupted the value -- a `$` anywhere, a `"` or `'`
+            # opening it, a `#` preceded by a space, a line break anywhere,
+            # edge whitespace. Detection is by presence ANYWHERE, deliberately:
+            # testing position here would re-derive the parser's rules in a
+            # place nothing can exercise them, and those rules are not
+            # guessable (a space before a `#` begins a comment; a tab does
+            # not). The `\` is a margin with no measured corrupting position,
+            # kept because it is the character whose treatment differs most
+            # between contexts. Over-reporting costs one look at a credential
+            # that is fine.
+            case "$value" in
+              *'\'*|*'"'*|*"'"*|*'$'*|*'#'*|*$'\n'*|[[:space:]]*|*[[:space:]])
+                altered="$altered $name"
+                ;;
+            esac
+
+            local escaped="$value"
+            escaped="${escaped//\\/\\\\}"
+            escaped="${escaped//\"/\\\"}"
+            escaped="${escaped//\$/\$\$}"
+            printf '%s="%s"\n' "$name" "$escaped"
+          }
+
           {
-            printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL"
-            printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
-            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
-            printf 'POSTGRES_EXPORTER_PASSWORD=%s\n' "$POSTGRES_EXPORTER_PASSWORD"
-            printf 'SLACK_WEBHOOK_URL=%s\n' "$SLACK_WEBHOOK_URL"
-            printf 'DEADMANSWITCH_URL=%s\n' "$DEADMANSWITCH_URL"
-            printf 'GRAFANA_ADMIN_PASSWORD=%s\n' "$GRAFANA_ADMIN_PASSWORD"
-            printf 'GRAFANA_BIND_ADDRESS=%s\n' "$GRAFANA_BIND_ADDRESS"
+            render ACME_EMAIL "$ACME_EMAIL"
+            render POSTGRES_USER "$POSTGRES_USER"
+            render POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+            render POSTGRES_EXPORTER_PASSWORD "$POSTGRES_EXPORTER_PASSWORD"
+            render SLACK_WEBHOOK_URL "$SLACK_WEBHOOK_URL"
+            render DEADMANSWITCH_URL "$DEADMANSWITCH_URL"
+            render GRAFANA_ADMIN_PASSWORD "$GRAFANA_ADMIN_PASSWORD"
+            render GRAFANA_BIND_ADDRESS "$GRAFANA_BIND_ADDRESS"
           } >platform/.env
+
+          # A value named here was being altered by the rendering this step
+          # replaces, so whatever was provisioned from it -- the database role
+          # `initdb` created at this instance's first boot, most sharply -- is
+          # keyed to the altered form and stops matching now that the correct
+          # one is delivered. The empty case says so explicitly: an absent
+          # notice and a notice reporting nothing read alike, and only one of
+          # them is evidence.
+          if [ -n "$altered" ]; then
+            echo "::warning::the rendering this replaces would have altered these values, so anything provisioned from one is keyed to the altered form and needs rotating:$altered"
+          else
+            echo "::notice::the rendering this replaces would have altered no rendered value"
+          fi
 
       # ssh-keyscan below is trust-on-first-use on EVERY run, which verifies
       # nothing about the host's identity. Accepted deliberately, because the

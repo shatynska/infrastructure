@@ -1,0 +1,17 @@
+# The path `docs/onboard-an-application.md` section 4.4 instructs application
+# repositories to use: `env_file:` on the service, with no interpolation into
+# this file at all. A different parser entry point from
+# `interpolation.compose.yaml`, and round 4 of the change
+# `render-the-env-file-so-a-secret-survives-it`'s design.md is what establishes
+# that the same escaping rule holds on both.
+services:
+  probe:
+    image: alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+    env_file:
+      - .env
+    # The nonce is echoed back with the value so the caller can prove the
+    # answer came from the run it started. Without it, output read from any
+    # other container -- a stale one, a concurrent one -- is a plausible
+    # value rather than a detectable error, which is how a batch run
+    # produced rows carrying values from an entirely different round.
+    command: ["sh", "-c", "printf %s:%s \"$$NONCE\" \"$$(printf %s \"$$PROBE\" | base64 -w0)\""]
