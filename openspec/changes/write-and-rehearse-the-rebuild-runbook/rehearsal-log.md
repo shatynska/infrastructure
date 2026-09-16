@@ -145,3 +145,11 @@ Read back from the inventory, as the runbook says rather than from `terraform ou
 | 3 — destroy, merge to apply complete | 1 min 12 s |
 | 4 — recreate, merge to apply complete | 1 min 22 s |
 | 5 — DNS | **not needed** — the address was reused |
+
+### Divergence found before phase 7
+
+7. **The runbook speaks of "the" Tailscale auth key; this deployment has one per stack.** Phase 2 says to check "the reusable auth key", following `docs/bootstrap-a-new-host.md` §5.3, which records that one reusable key serves both hosts. The tailnet here holds **two** auth keys, and the operator could not tell which was wanted — they are distinguished only by their description, one of which names staging.
+
+   That is not a defect in the deployment: §5.3 permits a second key outright, for the reason this one exists — *"if you want to revoke one host's join without touching the other."* It is a gap in the runbook, which assumes the documented default and gives a reader with the permitted variant nothing to choose by. Phase 2 should name the description as the discriminator, and say that a fresh key is the cheap answer when it is unclear — a single-use key is burnt by the first join, so a rebuilt host needs one anyway.
+
+   Cost: a few minutes of the operator's time, at a phase whose entire purpose is to prevent exactly that later.
