@@ -616,17 +616,28 @@ jobs:
             render GRAFANA_BIND_ADDRESS "$GRAFANA_BIND_ADDRESS"
           } >platform/.env
 
-          # A value named here was being altered by the rendering this step
-          # replaces, so whatever was provisioned from it -- the database role
-          # `initdb` created at this instance's first boot, most sharply -- is
-          # keyed to the altered form and stops matching now that the correct
-          # one is delivered. The empty case says so explicitly: an absent
-          # notice and a notice reporting nothing read alike, and only one of
-          # them is evidence.
+          # A value named here CARRIES a character the previous rendering
+          # alters in some position -- it does not establish that this value
+          # was altered, because detection is by presence and the set is a
+          # superset of what corrupts (the backslash is in it as a stated
+          # margin with no measured corrupting position at all). The first
+          # real firing, on 2026-09-16, was exactly that case: both stacks
+          # named GRAFANA_ADMIN_PASSWORD and neither recreated a container,
+          # so nothing had been corrupted and nothing needed rotating. The
+          # message said it did. That is why it now says what it detects and
+          # names the test that settles it.
+          #
+          # Where a value WAS being altered, whatever was provisioned from it
+          # -- the database role `initdb` created at first boot, most sharply
+          # -- is keyed to the altered form and stops matching now that the
+          # correct one is delivered. The empty case is stated explicitly: an
+          # absent notice and a notice reporting nothing read alike, and only
+          # one of them is evidence.
           if [ -n "$altered" ]; then
-            echo "::warning::the rendering this replaces would have altered these values, so anything provisioned from one is keyed to the altered form and needs rotating:$altered"
+            echo "::warning::these rendered values carry a character the rendering this replaces alters in SOME position:$altered"
+            echo "::notice::that is not yet evidence any of them WAS altered -- detection is by presence, never by position, because testing position here would re-derive the parser's rules where nothing can exercise them. To tell: a value whose parsed form changed also changed its service definition, so this deploy recreated that service's container. Read the deploy output above -- Recreated, not Running. Rotate only a value whose container was recreated, together with whatever was provisioned from it. One exception: a value interpolated into an embedded configuration replaces no container, so that test cannot see it."
           else
-            echo "::notice::the rendering this replaces would have altered no rendered value"
+            echo "::notice::no rendered value carries a character the rendering this replaces could alter"
           fi
 
       # ssh-keyscan below is trust-on-first-use on EVERY run, which verifies
