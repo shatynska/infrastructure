@@ -349,6 +349,8 @@ gh run rerun <id> --repo <org>/<app>
 
 **A failed run from during the window is expected and is the one to re-run.** A deploy that landed while the host was destroyed or not yet on the tailnet fails at `Connect to the tailnet` with `Ping host *** did not respond`. That is this rebuild's doing, not a fault in that application.
 
+**If the last run is too old to re-run**, GitHub having dropped that ability with the run's logs, the remaining route is a push to that repository's `main` — and the two conditions correlate, since a host rebuilt after a long quiet period is one whose last deploy is old. The obligation is unchanged either way: this phase is that application's to satisfy, and this document can only say that it is owed.
+
 If a deploy fails at connection time, phase 9's `DEPLOY_HOST` is the first thing to check. If it starts and then fails against the database, phase 14 either did not run for that application or its rotation half-completed — the recipe's own failure section covers that case.
 
 ## 16. Confirm the host is serving what it served before
@@ -388,7 +390,7 @@ Performed against `main-staging` by the `server_enabled` toggle route, from the 
 5. **The public address did not change.** Hetzner handed the same one back seven minutes after the destroy, so phase 5 was a no-op. It is written as conditional now, because a slower rebuild would get a new one.
 6. **The host key was rejected three times, not once** — at the reused public address, at the tailnet name, and at the tailnet address behind a local alias, which the name's entry does not cover. Said once in phase 1 with all three named.
 7. **There was one auth key per stack**, which §5.3 permits, where phase 2 assumed the documented single key. Descriptions are what tell them apart.
-8. **The converge failed at inventory parse** because `direnv` was not active. Phase 2 now names `direnv allow` as the step it is, and the failure it prevents.
+8. **The converge failed at inventory parse** because `direnv` was not active. Phase 2 now leads with `source .envrc`, which works in a pasted block where `direnv allow` does not, and names the failure it prevents.
 9. **`ssh-copy-id` refused** without the private half the bootstrap has you delete. `-f` is what it needs, and it is now in the command.
 10. **Phase 11 did not need the password manager.** The exporter container already holds the value; it is read on the host and piped into `psql`, never entering a shell history.
 11. **Phase 15 named a button that does not exist.** That application's deploy has no `workflow_dispatch`; re-running the last run is the route.

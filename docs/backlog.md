@@ -939,14 +939,14 @@ So the mechanism is exactly as sound as it was designed to be, for committed edi
 
 ## 56. perform-the-stack-separation-check-that-was-never-run
 
-**Not blocked, and it is three live defects rather than a plan. Found 2026-09-16 by the rehearsal's pre-state capture, which read the running containers rather than the documents.**
+**Not blocked. Found 2026-09-16 by the rehearsal's pre-state capture, which read the running containers rather than the documents — three live defects, of which two were fixed the same day.** What remains is the Grafana admin password and the absence of any repeatable check; the account below is kept whole because the three share one cause and one blind spot.
 
-`docs/bootstrap-a-new-host.md` §7.5 already carries the check that catches this, and says why it matters: *"the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports."* **It was never performed. Both halves fail.** Measured by comparing hashes of the values the running containers actually hold, so no value is reproduced here:
+`docs/bootstrap-a-new-host.md` §7.5 already carries the check that catches this, and says why it matters: *"the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports."* **It had never been performed, and when it was, both halves failed.** Its alert half passes now, since 2026-09-16; its Grafana half still fails. Measured by comparing hashes of the values the running containers actually hold, so no value is reproduced here:
 
 | Per-stack value | The two hosts hold |
 |---|---|
 | `PLATFORM_DEADMANSWITCH_URL` | the same — fixed 2026-09-16, see below |
-| `PLATFORM_SLACK_WEBHOOK_URL` | the same, and both configs name the same channel `#alerts` **in the same workspace** |
+| `PLATFORM_SLACK_WEBHOOK_URL` | the same, and both configs named the same channel `#alerts` **in the same workspace** — fixed 2026-09-16, see below |
 | `PLATFORM_GRAFANA_ADMIN_PASSWORD` | the same |
 | `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | **different** |
 

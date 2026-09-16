@@ -158,7 +158,11 @@ Read back from the inventory, as the runbook says rather than from `terraform ou
 
 ## Phase 12 — the observer, confirmed 2026-09-16T~21:20Z
 
-Both of this stack's checks confirmed green by the operator, on the settings the pre-destroy read recorded: `main-staging-alertmanager` and `main-staging-prune-host-images`. **The rebuild reset neither**, which is the failure this phase exists to catch and which did not happen — the prune's reporter answering `OK` rather than `Created` at 21:10 says the same thing from the host's side, since `create=1` would have brought a new check into existence carrying the observer's default.
+Both of this stack's checks confirmed green by the operator. **The two are not equally well evidenced and the difference is worth keeping.**
+
+`main-staging-prune-host-images` was read before the destroy and read again after, on the same settings — so of that check it can be said that **the rebuild reset nothing**, which is the failure this phase exists to catch. The prune reporter's `OK` rather than `Created` at 21:10 says the same thing from the host's side: `create=1` would have brought a new check into existence on the observer's default.
+
+`main-staging-alertmanager` cannot be spoken of that way, because at the pre-destroy read **it did not exist** — both hosts were feeding production's check. It was created that evening by its own first ping, after the fix, which means it came into existence carrying the vendor's default until someone set it. It is green; its period and grace at the observer have not been read. **That read is still owed**, and Appendix A's row for it is set from production's observation rather than from its own.
 
 So the register is corrected against the **pre-destroy** reading, and the post-rebuild reading is what establishes that the rebuild changed nothing to correct against.
 

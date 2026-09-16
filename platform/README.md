@@ -172,15 +172,30 @@ GRANT pg_monitor TO pgexporter;
 
 ```sh
 ssh <operator>@<host> 'sh -s' <<'SH'
+set -eu
 pw=$(docker exec platform-postgres-exporter-1 printenv DATA_SOURCE_PASS)
-printf '%s\n' "SET log_statement = 'none';" \
+[ -n "$pw" ] || { echo "no DATA_SOURCE_PASS from the exporter container" >&2; exit 1; }
+printf '%s\n' \
+  "SET log_statement = 'none';" \
+  "SET log_min_error_statement = 'panic';" \
+  "SET log_min_duration_statement = -1;" \
+  "SET log_min_duration_sample = -1;" \
+  "SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'pgexporter') AS create_role \gset" \
+  "\if :create_role" \
   "CREATE ROLE pgexporter WITH LOGIN PASSWORD '$pw';" \
+  "\else" \
+  "ALTER ROLE pgexporter WITH LOGIN PASSWORD '$pw';" \
+  "\endif" \
   "GRANT pg_monitor TO pgexporter;" \
 | docker exec -i platform-postgres-1 sh -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'
 SH
 ```
 
-Two things this does not do. It does not make the value *correct*: where the Environment secret is wrong, the role and the exporter agree with each other and are both wrong, and the `pg_up` check below is what establishes otherwise. And it interpolates the password into a single-quoted SQL literal, so a value containing `'` would break it — the generated alphabet does not produce one, and a hand-chosen password might, in which case type it rather than pipe it.
+**All four `SET`s are load-bearing and none is decoration.** They are the same four `docs/onboard-an-application.md` §3.2 sets, for the reason §3.4 gives: every log setting that writes statement text is off for the session, so a failing statement cannot put the password into `docker logs` — **which every `docker`-group account on that host can read**. Dropping three of them, keeping only `log_statement`, leaves the default `log_min_error_statement = error`, and then the one statement carrying the password is exactly the one that gets logged.
+
+**The `\if` is what makes a re-run safe**, and a re-run is an ordinary event here rather than a mistake — a partial attempt, or a second pass over a host. Without it a re-run raises `role "pgexporter" already exists`, which is an error, which is the statement the settings above exist to keep out of the log. With it, the block converges: it creates the role or it resets its password.
+
+**Two things this still does not do.** It does not make the value *correct*: where the Environment secret is wrong, the role and the exporter agree with each other and are both wrong, and the `pg_up` check below is what establishes otherwise. And it interpolates the password into a single-quoted SQL literal, so a value containing `'` would break it — the generated alphabet does not produce one, and a hand-chosen password might, in which case type it rather than pipe it.
 
 **That each stack's password is its own is a claim nothing checks**, and it was false until 2026-09-15 — both stacks held one value, found only because two hosts' error output quoted the same prefix. Compare them without printing either, from a session on each host:
 
