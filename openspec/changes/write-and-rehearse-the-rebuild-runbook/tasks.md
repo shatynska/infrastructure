@@ -45,7 +45,7 @@
 - [x] 6.4 Open and merge the `server_enabled = true` pull request. Verify the apply created the server and the volume, and record the new public IPv4 and the new volume id.
 - [x] 6.5 Perform the remaining phases in the runbook's order, timing each: DNS, the stale tailnet peer, the workstation converge, key-expiry and the converge key, the two address updates, the platform deploy dispatch, both manual steps from `platform/README.md`, the observer phase, the prune activation, the database re-provisioning by `docs/onboard-an-application.md`'s recipe with `rotate=yes`, and the application's own deploy. Verify each phase by the check the runbook gives for it, and record the wall clock and every divergence as each phase completes rather than at the end.
 - [x] 6.6 Confirm the host is serving what it served before: `commerce-ops.main-staging.fincci.bike` answers over TLS on a reissued certificate, eight `platform-*` containers are healthy, all five scrape targets are up, and both of the stack's heartbeat checks are green on the period and grace the register records — a check re-created by its own first ping carries the observer's default instead, which is the failure this step exists to catch. Verify each and record which, if any, could not be reached.
-  - The heartbeat half was confirmed by the operator at ~21:20Z: both checks green, on the settings the pre-destroy read recorded. The prune reporter's `OK` rather than `Created` at 21:10 is the host-side evidence of the same thing — a re-created check would have carried the observer's default.
+  - The heartbeat half was confirmed by the operator at ~21:20Z: both checks green — the prune **on the settings the pre-destroy read recorded**, the Alertmanager check on settings **not yet read**, since it did not exist at that reading. See `rehearsal-log.md`'s phase 12, which keeps the two apart for that reason. The prune reporter's `OK` rather than `Created` at 21:10 is the host-side evidence for its half: a re-created check would have carried the observer's default.
 
 ## 7. Fold the rehearsal into the document
 
@@ -54,7 +54,7 @@
 - [x] 7.3 Add a dated note to `docs/backlog.md` `exercise-the-volume-server-coupling-against-live-state` recording that staging's coupling was observed live on the rehearsal date **via the `server_enabled` toggle route**, that the replace route remains unobserved, and that production's coupling remains unexercised. Verify the entry is not deleted — it is about production's coupling, which this did not exercise.
 - [x] 7.4 Where the observer's settings turned out to differ from what the register claims, correct the register against what task 6.1 read — the observer is the authority on its own configuration, and the register is a claim about it until compared. Verify the corrected values against that reading, and where they already agreed, record that they did rather than leaving the comparison unreported.
   - Corrected against the **pre-destroy** reading, which is the direction the runbook's own phase 12 permits: a disagreement found before anything is destroyed is between two claims about a running system, where one found afterwards is most likely the rebuild having reset a check. Both tables had drifted, both in the same direction — the observer held the tighter value in every case.
-- [ ] 7.5 Where the rehearsal could not complete a step, disclose it under `## Not performed` with a `Reason:` line, rather than ticking it or deleting it. Verify the `Reason:` label is present and non-empty.
+- [x] 7.5 Where the rehearsal could not complete a step, disclose it under `## Not performed` with a `Reason:` line, rather than ticking it or deleting it. Verify the `Reason:` label is present and non-empty.
 - [ ] 7.6 Re-run the verification, commit, dispatch the code reviewer over the committed diff, and open the rehearsal pull request. Verify the operator confirms it merged.
 
 ## 8. Archive
@@ -67,3 +67,8 @@
 **After the archive record's pull request merges**, and once every other pull request this change opened has merged and nothing uncommitted or unpushed remains, the branch is removed locally and on the remote and the working tree is removed from the repository's main checkout. Those acts happen after the commit that writes this file, so they cannot be tasks in it and are recorded here in prose instead. Read each merge from the pull request's own state rather than from branch ancestry.
 
 The Molecule namespace this change took is not reclaimed by any of that; this change runs no Molecule scenario, so it leaves no container and no loop association behind. `docker ps` and `losetup -a` are what answer that, rather than this sentence.
+
+## Not performed
+
+- 6.1, in part — `main-staging-alertmanager`'s period and grace at the observer were not read.
+  Reason: at the pre-destroy read that check did not exist. Both hosts were feeding production's check, which is the defect `give-staging-its-own-dead-mans-switch-check` was opened and closed on the same evening; staging's was created afterwards by its own first ping and so carries the observer's default until someone sets it. The rest of 6.1 was performed. Appendix A's row for that check is labelled a claim rather than a record, and the action is `docs/backlog.md` `set-staging-alertmanager-to-its-register-values`.
