@@ -2,6 +2,8 @@
 
 Measures what Compose's dotenv parser yields for a value written into a `.env` file, by reading the environment a container process actually received.
 
+**Three outcomes, not two.** A value comes back intact, comes back altered, or does not come back because Compose **refused** the file — it rejects one it cannot parse (`unterminated quoted value`) and reads nothing. The first version of this harness discarded Compose's stderr and so reported a refusal as a value that came back empty, which put a wrong conclusion into a design document; `triage` exists to tell the three apart and `probe` now exits non-zero rather than printing an empty result. A run also proves its own answer: the container echoes back a nonce, so output from any other container is refused instead of being reported as a plausible value.
+
 It exists because `.github/workflows/platform-deploy.yml` renders eight values into `platform/.env` from a stack's GitHub Environment secrets, and that file has a parser: it expands `$`, honours a quote that opens a value, begins an inline comment at a space-preceded `#`, truncates at a line break, and strips edge whitespace. A value written unaltered is not delivered unaltered, and the failure is silent. The escaping the render step applies was chosen by running this, and the change `render-the-env-file-so-a-secret-survives-it` carries the results as its `design.md`.
 
 ## What this is not
@@ -27,7 +29,7 @@ Needs Docker and a Compose that can reach the pinned image once.
 
 ## Two paths, and why both are here
 
-`interpolation.compose.yaml` is how the platform stack consumes `.env`: parsed, then interpolated as `${VAR}` into the Compose file. `env-file.compose.yaml` is how `docs/onboard-an-application.md` §4.4 tells application repositories to consume theirs: `env_file:` on the service, no interpolation. They are different entry points into the parser and were measured separately rather than assumed to agree — round 4 is that measurement. They do agree on the escaping rule, and they differ on at least one thing: a value that is exactly `"` or exactly `'` resolves empty on the `env_file:` path and is yielded intact on the interpolation path.
+`interpolation.compose.yaml` is how the platform stack consumes `.env`: parsed, then interpolated as `${VAR}` into the Compose file. `env-file.compose.yaml` is how `docs/onboard-an-application.md` §4.4 tells application repositories to consume theirs: `env_file:` on the service, no interpolation. They are different entry points into the parser and were measured separately rather than assumed to agree — round 4 is that measurement. They agree on the escaping rule, and no difference between them has been measured — every value run through both returned the same result on each. They are still measured separately rather than one being inferred from the other.
 
 ## Versions
 

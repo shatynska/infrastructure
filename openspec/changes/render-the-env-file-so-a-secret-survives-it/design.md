@@ -6,20 +6,22 @@ Everything below rests on one measurement, taken because the backlog entry this 
 
 **Where the measurement is taken.** From inside a running container, reading the environment the service process actually received, encoded as base64 so that whitespace and control characters survive the comparison. Not from `docker compose config`: that command escapes a literal `$` as `$$` in its own output, so it reports a value that looks corrupted when it is not and vice versa — which is how this entry's first diagnosis went wrong twice, in opposite directions.
 
+**Every table below was re-taken on 2026-09-16 after the harness was found defective, and three of them changed.** The first version discarded Compose's standard error and compared its standard output alone, so a run Compose **refused** — it rejects a file it cannot parse and reads nothing — was recorded as a value that came back *empty*. It also let a refused run leave a container behind that a later invocation could read, which put a value from one round into another round's table. Both are fixed: each invocation now takes a Compose project of its own, and the container echoes back a nonce the caller checks, so an answer that did not come from the run that asked for it is refused rather than reported. What follows is the re-taken data, and **where a round's conclusion changed, the old one is stated alongside it** rather than replaced — the correction is the more useful record.
+
 **The harness** is committed, as `tools/env-rendering-probe/` at the repository root, and this section is its findings rather than its description. It is not a test and sits in none of `AGENTS.md`'s three test rows: it spawns a container, which the static suite may not, and its subject is a workflow's output rather than an Ansible role's behaviour on a host. It is committed because Decision 6 makes this measurement the change's only behavioural evidence, and evidence a reader cannot re-take is evidence only about its author — the standard this repository's own rule on correcting an archived record already applies to a figure. It is also the starting point for the deploy-time round trip that Decision 6 defers.
 
 **Versions.** Docker Compose **v5.4.0**, Docker Engine 29.7.2, on the authoring workstation, 2026-09-16. The production host was read the same day and runs Compose **v5.5.0** on the same engine. The skew is stated rather than resolved — see Decision 6.
 
-**Counts.** Round 1 ran 12 values against 5 renderings; round 2 ran 8 against one; round 3 ran those 20 against 4 escaping candidates, then 21 further values and 10 adversarial ones against the two survivors; round 4 ran 15 against the other consumption path; round 5 ran 13 against the current rendering alone; round 6 ran 6 more against it, in positions round 5 held constant; round 7 ran 3 to settle a clause round 6 had inferred. The tables for rounds 1 to 4 are **excerpts** chosen to show the distinct behaviours; rounds 5 and 6 are given in full, because what they establish is partly which positions were *not* tested. The full value lists are in the committed harness.
+**Counts.** Round 1 ran 12 values against 5 renderings; round 2 ran 8 against one; round 3 ran those 20 against 4 escaping candidates, then 21 further values and 10 adversarial ones against the two survivors; round 4 ran 15 against the other consumption path; round 5 ran 13 against the current rendering alone; round 6 ran 6 more against it, in positions round 5 held constant; round 7 ran 3 to settle a clause round 6 had inferred. Every round was then re-taken against the corrected harness, and the counts here are the re-taken ones. The tables for rounds 1 to 4 are **excerpts** chosen to show the distinct behaviours; rounds 5 and 6 are given in full, because what they establish is partly which positions were *not* tested. The full value lists are in the committed harness.
 
 ### Round 1: quoting alone
 
-Excerpt, 8 of 12 values. `raw` is what the workflow does today.
+Excerpt, 8 of 12 values; `raw` corrupts 6 of the 12 and is what the workflow does today. **Refused** means Compose rejected the file and read nothing — loud, and not the same outcome as a value coming back altered.
 
 | Value stored | `raw` | `"…"` | `'…'` |
 |---|---|---|---|
 | `ab$c#d` | `ab#d` | `ab#d` | intact |
-| `"abc"def` | `abc` | *empty* | intact |
+| `"abc"def` | `abc` | **refused** | intact |
 | `p@ss$word` | `p@ss` | `p@ss` | intact |
 | `a$$b` | `a$b` | `a$b` | intact |
 | `trail   ` | `trail` | intact | intact |
@@ -37,40 +39,48 @@ All 8 values.
 
 | Value stored | `'…'` |
 |---|---|
-| `a'b` | *empty* |
-| `it's` | *empty* |
-| `a"b'c$d` | *empty* |
-| `trailing'` | *empty* |
-| `\` | *empty* |
+| `a'b` | **refused** |
+| `it's` | **refused** |
+| `a"b'c$d` | **refused** |
+| `trailing'` | **refused** |
+| `\` | **refused** |
 | `` (empty) | intact |
 | `line1⏎line2` | intact |
 | `a=b=c` | intact |
 
-A value containing the quote character terminates its own quoting and the assignment is then malformed — and the variable resolves to **empty** rather than to anything the parser complains about. That is the same silent class this change exists to end, reached by a different route, so single-quoting is not merely incomplete: it converts one silent corruption into another. `'\''`, the shell's way out, does not help — the parser is not a shell, and the six quote-carrying values among the twenty all came back empty under it.
+**This round's conclusion changed when it was re-taken, and the change matters more than the table.** It previously read that these five resolve to **empty**, and that single-quoting therefore "converts one silent corruption into another". That was the defective harness: Compose does not yield an empty value for `PROBE='a'b'` or `PROBE='\'`, it **refuses the whole file** — `failed to read .env: unterminated quoted value` — and exits non-zero, reading nothing at all.
+
+So single-quoting has **no silent failure mode**. It yields the value or it stops the deploy, loudly, with a message naming the cause. Zero of the twenty values in rounds 1 and 2 are silently altered by it. That is a better failure than the one this change is fixing, and Decision 2 is rewritten around what is actually wrong with it.
 
 ### Round 3: escaping
 
 Four candidates, over the 20 values of rounds 1 and 2 combined:
 
-| Rendering | Corrupt |
-|---|---|
-| `'…'` with `'` → `\'` | 1 of 20 — a value that is a lone `\` |
-| `'…'` with `'` → `'\''` | 6 of 20 |
-| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`$$` | **0 of 20** |
-| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`\$` | **0 of 20** |
+| Rendering | Silently altered | Refused |
+|---|---|---|
+| `'…'` with `'` → `\'` | 0 of 20 | 1 — a value that is a lone `\` |
+| `'…'` with `'` → `'\''` | 0 of 20 | 5 |
+| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`$$` | **0 of 20** | **none** |
+| `"…"` with `\`→`\\`, `"`→`\"`, `$`→`\$` | **0 of 20** | **none** |
 
-The two survivors were then run against 21 further values — leading and trailing whitespace, a tab, `%`, `!`, non-ASCII, a value that is exactly `$`, one that is exactly `"`, one that is exactly `'`, one that is a lone `\`, two random `openssl rand -base64` outputs — and against 10 adversarial values mixing backslash, dollar and quote adjacently, which is where an escaper with its substitutions in the wrong order fails: `a\$b`, `\\$`, `$\`, `"\$"`, `\$$`, `$$\\`, `a\\"$b`. **Both survived all 51 values.**
+The two single-quoted rows previously read as 1 and 6 *corrupt*; re-taken, they alter nothing and are refused instead. The escaping rows are unchanged, and they are the only two that neither alter a value nor refuse one.
+
+The two survivors were then run against 21 further values — leading and trailing whitespace, a tab, `%`, `!`, non-ASCII, a value that is exactly `$`, one that is exactly `"`, one that is exactly `'`, one that is a lone `\`, two random `openssl rand -base64` outputs — and against 10 adversarial values mixing backslash, dollar and quote adjacently, which is where an escaper with its substitutions in the wrong order fails: `a\$b`, `\\$`, `$\`, `"\$"`, `\$$`, `$$\\`, `a\\"$b`. **Both survived all 51 values**, altering none and being refused for none.
 
 ### Round 4: the other consumption path
 
 The platform stack reads `.env` through `${VAR}` interpolation into the Compose file and through nothing else, which is what rounds 1 to 3 measure. `docs/onboard-an-application.md` §4.4 instructs application repositories to consume their own `.env` through `env_file:` on the service instead — a different path, and one this change corrects the instruction for, so the rule had to be established there rather than assumed to carry across. 15 values, against a service declaring `env_file:` and no `environment:`:
 
-| Rendering | Corrupt |
-|---|---|
-| `NAME=value` | **9 of 15** |
-| `NAME="escaped"` | **0 of 15** |
+| Rendering | Silently altered | Refused |
+|---|---|---|
+| `NAME=value` | **7 of 15** | 2 |
+| `NAME="escaped"` | **0 of 15** | **none** |
 
-The path corrupts the same way and the same rule fixes it, so §4.4 carries the same sentence as the workflow. One difference from the interpolation path is worth recording, because it means the paths are genuinely distinct rather than the same code twice: a value that is exactly `"` or exactly `'` resolves **empty** here, where the interpolation path yields it. That does not change the conclusion, and it is what would have made "the rule obviously carries across" a wrong inference.
+Previously recorded as 9 altered; two of those nine were refusals.
+
+The path corrupts the same way and the same rule fixes it, so §4.4 carries the same sentence as the workflow.
+
+**A second claim in this paragraph is withdrawn on the re-take.** It said the paths differ — that a value of exactly `"` or exactly `'` resolves empty here and is yielded there. Neither half survives: both values are **refused** rather than emptied, and they are refused on *both* paths. Every value measured on both paths agreed on both. So the honest statement is the weaker one: no difference between the two entry points has been measured, and the rule was established separately on each rather than carried across, which is worth doing whether or not a difference turns up.
 
 **A claim that stood in this paragraph until round 5 measured it is withdrawn.** It said an apostrophe survives the raw rendering on this path and is destroyed on the other. It is not: it survives both. What destroys it is the **single-quoted** candidate of round 2, which is a rendering this design rejects — two rows of one table read as though they belonged to one column. The correction is recorded rather than made silently, because this document is the change's only behavioural evidence and a reader has no way to tell a corrected claim from one that was always right.
 
@@ -100,12 +110,12 @@ Round 5 tested each character in one or two positions and drew a conclusion abou
 
 | Value stored | Current rendering | New rendering |
 |---|---|---|
-| `'abc'def` | **`abc`** — the leading `'` opens a quoted region and the remainder is discarded | intact |
-| `'unclosed` | **empty** | intact |
+| `'abc'def` | **`abc`** — the leading `'` opens a quoted region and the remainder is discarded, **silently** | intact |
+| `'unclosed` | **refused** — the file is rejected and nothing is read | intact |
 | `secret #1` | **`secret`** — the space-preceded `#` begins an inline comment | intact |
 | `secret⇥#tab` | intact — a **tab** before the `#` does not begin one | intact |
 | `\leading` | intact | intact |
-| `"opens` | **empty** | intact |
+| `"opens` | **refused** | intact |
 
 **The apostrophe and the hash both corrupt, and round 5 released them.** `'abc'def` is the exact twin of round 1's `"abc"def` → `abc`, and round 1's whole `'…'` column — the basis of the rejected candidate in Decision 2 — is the demonstration that this parser honours a leading single quote. The evidence that these two are positional was on the page before round 5 was run.
 
@@ -125,7 +135,14 @@ The `openssl rand` instruction is kept all the same. It was never wrong, it cost
 
 ### Decision 2: Double quotes with three escapes, not single quotes
 
-Single-quoting is simpler, needs one substitution rather than three, and survived every value in round 1. It is rejected because of round 2: a value containing `'` resolves to **empty**, silently. The comparison that matters is not how many values each survives but what each does when it fails, and this one fails into exactly the state — a service starting with an empty credential — that *An Incomplete Per-Stack Secret Set Is Reported by Name* (`openspec/specs/iac-platform-deploy-pipeline/spec.md`) exists to make impossible for an absent secret. Reintroducing it for a present one is not a trade worth one substitution.
+**This decision's conclusion is unchanged and its reason has been replaced**, because the reason rested on a measurement the harness got wrong. The superseded argument was that single-quoting fails into an **empty** value, silently, and so trades one silent corruption for another. Round 2 re-taken says otherwise: single-quoting alters nothing at all. It either yields the value or it makes Compose **refuse the file** — `unterminated quoted value` — and exit non-zero.
+
+So the comparison is between a rendering that handles every value and a rendering that handles most values and **stops the deploy** for the rest. That is still decisive, for two reasons that survive the correction:
+
+- **The deploy it stops is the one that cannot be fixed by the operator.** Two of the seven secrets are issued by a vendor. A webhook URL that happens to contain an apostrophe is not something anyone here can re-generate, so the refusal is not a prompt to fix the value — it is an outage of the deploy path for that stack until the vendor is persuaded to issue a different URL. Decision 1 rejects a deliberate refusal on exactly this ground; a refusal arriving as a side effect of the quoting style is the same cost without the intent.
+- **It fails at the wrong moment.** The value is accepted into the Environment, renders fine, and stops the *deploy* — so the failure surfaces on the next unrelated change to `platform/`, attributed to that change, on a stack whose secrets nobody touched.
+
+The escaping has neither failure, at no cost but two more substitutions. **What the correction does remove is any claim that single-quoting is dangerous**: it is not, it is merely brittle, and a reader who finds this decision later should not carry away that a single-quoted `.env` silently corrupts anything. It does not.
 
 ### Decision 3: `$$` for the dollar, not `\$`
 
@@ -187,11 +204,13 @@ So the render step reports it. After rendering, it names — on standard output,
 | Member | The position that justifies it |
 |---|---|
 | `$` | anywhere unquoted — expanded |
-| `"` | opening the value — quoted region, remainder discarded |
+| `"` | opening the value — quoted region, remainder discarded, silently |
 | `'` | opening the value — the same, measured in round 6 |
 | `#` | preceded by a space — begins an inline comment |
 | A line break | anywhere — the value is truncated at it |
 | Leading or trailing whitespace | by definition — stripped |
+
+**Both quote characters earn their place on a silent position, not on a refusal.** `'abc'def` yields `abc` and `"abc"def` yields `abc`, with nothing said; an *unterminated* quote is refused instead, loudly, and would need no report to be noticed. The set is built from what goes unnoticed, which is what the report exists for — a member whose only failure mode is a refused deploy would be noise in it.
 
 **Detection is by presence anywhere in the value, not by position.** A member earns its place by having *a* position in which it corrupts; the notice then reports the character wherever it appears. The asymmetry is deliberate and is the rule to keep: positional detection would be a second place where this parser's rules are re-derived, in workflow code no test in this repository can exercise, and the rules are not what anyone would guess — round 6 measured a space before a `#` beginning a comment and a tab before it not doing so. Over-reporting a mid-value apostrophe costs one operator a look at a credential that turns out to be fine. Re-deriving the rule costs the thing this whole change exists to remove.
 

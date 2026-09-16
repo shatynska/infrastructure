@@ -10,9 +10,16 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-check() { # check <path> <rendering> <value> -- prints a verdict line, returns 1 if corrupt
+check() { # check <path> <rendering> <value> -- verdict line; 1 corrupt, 2 did not run
   local path="$1" rendering="$2" value="$3" got_b64 want_b64 got
-  got_b64="$(./probe --path "$path" "$rendering" "$value")"
+  # A run that did not complete must not be reported as a value that came back
+  # empty: "resolves to EMPTY" is round 2's whole result and the basis on which
+  # single-quoting was rejected, so the two states are told apart here rather
+  # than collapsed into one CORRUPT row.
+  if ! got_b64="$(./probe --path "$path" "$rendering" "$value")"; then
+    printf '  ERROR   %-22q -- the probe did not complete\n' "$value"
+    return 2
+  fi
   want_b64="$(printf '%s' "$value" | base64 -w0)"
   got="$(printf '%s' "$got_b64" | base64 -d 2>/dev/null)"
   if [ "$got_b64" = "$want_b64" ]; then
@@ -25,13 +32,19 @@ check() { # check <path> <rendering> <value> -- prints a verdict line, returns 1
 
 sweep() { # sweep <path> <rendering> <values...>
   local path="$1" rendering="$2"; shift 2
-  local fails=0 total=0
+  local fails=0 errors=0 total=0 status
   echo "--- path=$path rendering=$rendering ---"
   for v in "$@"; do
     total=$((total + 1))
-    check "$path" "$rendering" "$v" || fails=$((fails + 1))
+    check "$path" "$rendering" "$v" && status=0 || status=$?
+    [ "$status" = 1 ] && fails=$((fails + 1))
+    [ "$status" = 2 ] && errors=$((errors + 1))
   done
-  echo "    $fails corrupt of $total"
+  if [ "$errors" -gt 0 ]; then
+    echo "    $fails corrupt of $total -- AND $errors DID NOT RUN, so this table is not a result"
+  else
+    echo "    $fails corrupt of $total"
+  fi
 }
 
 ROUND1=( 'ab$c#d' '"abc"def' 'A1+b/c=' 'x`id -u`y' 'a$(id -u)b' 'p@ss$word' 'a$$b'
