@@ -494,8 +494,14 @@ def duplicate_public_half_offences(authorisations) -> list:
             if key:
                 holders.setdefault(key_material(key), []).append(f"{host}/{application}")
     return sorted(
-        f"{names} authorise one public half ending {material[-24:]!r}, so one leaked "
-        "private half deploys to more than one host"
+        (
+            f"{names} carry one malformed deploy-key entry, {material[-24:]!r}, which is not "
+            "a public half at all -- nothing else in this module checks an entry's shape, "
+            "so this is the only report it gets"
+            if len(material.split()) < 2
+            else f"{names} authorise one public half ending {material[-24:]!r}, so one "
+            "leaked private half deploys to more than one host"
+        )
         for material, names in holders.items()
         if len(names) > 1
     )

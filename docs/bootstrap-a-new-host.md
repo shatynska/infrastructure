@@ -599,7 +599,7 @@ deploy_apps:
 
 One entry to begin with: `platform`, whose `public_key` is the `.pub` of **that stack's** platform deploy key from §0.3. **Each stack gets its own keypair** — one leaked private half must deploy to one host. Applications are added here as they are onboarded, one entry per application, by `docs/onboard-an-application.md`.
 
-**Check:** `ssh-keygen -lf ~/.ssh/<company>-platform-<stack>.pub` prints a fingerprint equal to the material you just pasted. §6.4 asks for the same figure before storing the private half, so keep it.
+**Check:** `ssh-keygen -lf ~/.ssh/<company>-platform-<stack>` prints a fingerprint equal to the material you just pasted. §6.4 asks for the same figure before storing the private half, and names the same file — `-lf` reads a fingerprint from either half of a passphrase-less keypair, and naming one of them in both places is what makes the two figures comparable at a glance rather than merely equal.
 
 
 **The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`). **Rotating it means re-encrypting one block per stack, each under that stack's own Vault password** — two edits, not one, and you need both passwords to hand.
