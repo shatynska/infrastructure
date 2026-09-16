@@ -910,3 +910,27 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 **Why it is recorded now.** It has always been true, and until recently a converge dispatch was a rare act. `docs/runbook-rebuild.md` phase 8 makes one a routine step of every rebuild — it is how the converge key is proved usable — so the odds of somebody dispatching from the branch they are working on went up. The runbook says `--ref main` and says the discipline is the operator's rather than the workflow's, which is honest and is not a guard.
 
 **What a change owes.** The guard itself is a near-copy of `platform-deploy.yml`'s, and the reasoning is already written there; the decisions are what to do about the two differences. That workflow's guard runs in a job whose only input is the repository, while `host-converge.yml`'s `discover` already reads each stack's `pipeline.yml` — so the guard must come before that read rather than beside it. And a refusal message has to say what to do instead, which for a converge is "merge it", not "dispatch it from `main`" — a converge of unreviewed Ansible has no legitimate form. `.github/tests` is where the assertion belongs, beside the one that reads `platform-deploy.yml`'s guard today.
+
+---
+
+## 55. give-staging-its-own-dead-mans-switch-check
+
+**Not blocked, and it is a live defect rather than a plan. Found 2026-09-16 by the pre-state capture of `write-and-rehearse-the-rebuild-runbook`'s rehearsal, before anything was destroyed.**
+
+**Both hosts ping the same dead-man's-switch check.** The `deadmansswitch` receiver in each host's running `alertmanager.yml` carries the same `hc-ping.com` URL — verified by comparing a hash of the two, so the value itself is not reproduced here. At the observer there is one check, `main-production-alertmanager`; `main-staging-alertmanager` does not exist.
+
+**What that costs is the whole point of the mechanism.** `platform/README.md` states it in as many words: *"One check per host: a single check fed by two hosts stays green while either one is alive, which is the opposite of what this exists to notice."* Production's dead-man's-switch is therefore masked — if the production host dies, staging's Watchdog keeps the shared check green every two minutes and nothing reports it. The alarm for when everything is down is the one alarm that cannot currently fire, and it has been in that state since staging began running the platform stack on 2026-09-13.
+
+**It is a secret-level mistake rather than a code one**, which is why nothing caught it: `PLATFORM_DEADMANSWITCH_URL` is a per-stack GitHub Environment secret, the workflow reads whichever value that Environment holds, and no committed file can see that two Environments hold the same one. `.github/tests` cannot reach it; a reviewer cannot either. `docs/bootstrap-a-new-host.md` §7.1 says to create a check per stack and the deployment did not.
+
+**Three register divergences were found in the same read**, and they are the same class — the register claims what nobody has compared against the observer:
+
+| Check | Appendix A records | The observer carries |
+|---|---|---|
+| `main-production-alertmanager` | 5 minutes / 5 minutes | 5 minutes / **2 minutes** |
+| `main-staging-alertmanager` | 5 minutes / 5 minutes | **does not exist** |
+| `main-staging-prune-host-images` | 7 days / 2 days | 7 days / **2 hours** |
+
+**What a change owes.** Create a check per stack at the observer, put each stack's own ping URL in that stack's `PLATFORM_DEADMANSWITCH_URL`, redeploy each platform stack so the receiver is re-rendered, and then reconcile Appendix A against what the observer actually carries rather than the other way round. Two decisions sit inside that: whether the existing check keeps production or is renamed, since a rename carries the ping history and a new check does not; and what the graces should actually be, since the observed 2 minutes and 2 hours may be better values than the recorded ones rather than drift from them — the register is a claim nobody has checked, not a specification anyone wrote to.
+
+**Worth doing before the next rebuild of either host**, because the rebuild runbook's phase 12 re-reads each of a host's checks against the register, and on staging there is no check to re-read.
