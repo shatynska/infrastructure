@@ -485,6 +485,12 @@ Revert both local edits afterwards. Use the read-only Hetzner token; this is a `
 
 The requirement this protects is *Conditional Prod Volume Creation* in `openspec/specs/iac-data-volumes/spec.md`, and the two reads above are literally its scenarios *Volume toggle disabled creates nothing* and *Disabling the server also removes the volume* — both of which say `terraform plan` SHALL show the volume planned for destruction. The specification states them; nothing has ever run them.
 
+**Half of it was observed on 2026-09-16, on staging, and the observation cost no destruction.** `write-and-rehearse-the-rebuild-runbook`'s rehearsal set `server_enabled = false` on `main-staging` and read the pull request's own plan comment: `Plan: 0 to add, 0 to change, 3 to destroy` — the server, its firewall and the volume together, with `hcloud_ssh_key.this` refreshed and not destroyed. The apply that followed destroyed the volume **first**, after 9 seconds, before the server it was attached to, which is a stronger statement than this entry's own wording and which no plan would have shown.
+
+**So the home this entry could not find is the pull request's plan job**, and it was available all along: a plan against live state, run by the pipeline, published as a comment, needing no local HCP credential. That answers the open question above for whoever takes the rest.
+
+**What remains is production's, and it is the half that matters.** The reads above were against `main-staging`, whose loss is tolerable and whose volume held nothing durable. This entry is about `main-production`, where the same two toggles gate a volume that no backup covers. Nothing observed on staging licenses a claim about it: same expression, different stack, different consequence.
+
 Worth doing before the coupling is next relied on — a volume that survived its server would be an orphaned resource with no location, which is the failure the coupling exists to prevent and which nothing has yet observed being prevented.
 
 ## 31. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it

@@ -1098,10 +1098,12 @@ The checks it addresses, and the settings each needs at the observer. A check co
 |---|---|---|---|
 | `infrastructure-drift` | `.github/workflows/drift.yml`, nightly | 1 day | 12 hours |
 | `infrastructure-pre-commit-autoupdate` | `.github/workflows/pre-commit-autoupdate.yml`, weekly | 7 days | 2 days |
-| `main-production-prune-host-images` | `prune-host-images.service` on the production host, weekly | 7 days | 2 days |
-| `main-staging-prune-host-images` | `prune-host-images.service` on the staging host, weekly | 7 days | 2 days |
+| `main-production-prune-host-images` | `prune-host-images.service` on the production host, weekly | 7 days | 2 hours |
+| `main-staging-prune-host-images` | `prune-host-images.service` on the staging host, weekly | 7 days | 2 hours |
 
 The graces are set against **observed** scheduling, not against the `cron:` line: GitHub starts these runs hours after the minute they name — over four hours late, consistently, on the nightly — so a tolerance derived from the declared time would alarm on a healthy system.
+
+**That reasoning is about GitHub-hosted runs and does not reach the prune, whose grace was corrected on 2026-09-16 from 2 days to 2 hours.** `prune-host-images.timer` is `Sun *-*-* 04:00:00 UTC` with `RandomizedDelaySec=3600`, so its lateness is bounded at **one hour by construction** — the live timer has fired at 04:28 and 04:34 — and two hours covers that with an hour to spare. Two days was this table copying the paragraph above it across a reporter the paragraph is not about, and it is a blind spot rather than a tolerance. **The values here were compared against the observer for the first time on 2026-09-16**, during `write-and-rehearse-the-rebuild-runbook`'s rehearsal; both graces in this table and both in the one below were what the observer already carried, and this table was what had drifted.
 
 The host slug is templated from `inventory_hostname`, which is why the two servers are named differently in their `terraform.tfvars` — sharing a name would merge them into one check, where the live host's weekly success would keep it green while the other's timer was dead.
 
@@ -1111,8 +1113,8 @@ The host slug is templated from `inventory_hostname`, which is why the two serve
 
 | Check (slug) | Reported by | Period | Grace |
 |---|---|---|---|
-| `main-production-alertmanager` | Alertmanager's Watchdog on the production host, every 2 minutes | 5 minutes | 5 minutes |
-| `main-staging-alertmanager` | Alertmanager's Watchdog on the staging host, every 2 minutes | 5 minutes | 5 minutes |
+| `main-production-alertmanager` | Alertmanager's Watchdog on the production host, every 2 minutes | 5 minutes | 2 minutes |
+| `main-staging-alertmanager` | Alertmanager's Watchdog on the staging host, every 2 minutes | 5 minutes | 2 minutes |
 
 The service must expect pings at least as often as the Watchdog sends them but tolerate one missed, which is what those two values are. §7.1 creates these checks and points here for their settings.
 
