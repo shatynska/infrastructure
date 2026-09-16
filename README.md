@@ -183,6 +183,8 @@ Every periodic job — the nightly drift check, the weekly hook autoupdate, and 
 
 The three checks, the slug each reports under, and the period and grace that decide when silence becomes an alarm are listed once, in `docs/bootstrap-a-new-host.md`'s Appendix A, beside the `HEARTBEAT_PING_KEY` secret they are addressed with. They are the observer's configuration, not this repository's, so nothing here can verify them.
 
+**Each stack's dead-man's-switch is not a periodic job and is not one of those three**, but its settings are kept in the same place: Appendix A carries a second table for the `<stack>-alertmanager` checks, which Alertmanager's Watchdog feeds continuously rather than on a schedule and which a ping URL of their own addresses. Both tables together are where a check's intended settings live, and `docs/runbook-rebuild.md` re-reads them against the observer after a rebuild.
+
 ### Re-enabling the drift-detection workflow
 
 GitHub automatically disables `schedule`-triggered workflows after 60 days without any repository activity. If the nightly drift check appears to have stopped running, check **Actions → Drift Detection → ⋯ → Enable workflow**, then trigger it once manually (`workflow_dispatch`) to confirm it runs clean.
