@@ -115,6 +115,10 @@ from pathlib import Path
 
 import yaml
 
+from test_a_stack_and_its_environment_are_named_separately import (
+    stack_names,
+    stack_tfvars,
+)
 from test_ci_configuration import (
     PLATFORM_DEPLOY,
     ROOT,
@@ -144,9 +148,6 @@ from test_environment_agnostic_pipeline import (
 # Identifiers this file names, and why each is a constraint of the test layer
 # rather than a property the specification states.
 # --------------------------------------------------------------------------
-
-HOST_VARS_DIR = ROOT / "ansible" / "inventory" / "host_vars"
-STACKS_DIR = ROOT / "terraform" / "stacks"
 
 # The Terraform variable a stack declares its server's name in. That name is
 # the Hetzner server name, is what `inventory_hostname` resolves to under the
@@ -182,13 +183,13 @@ PLATFORM_KEY_HINT = "platform"
 PLATFORM_KEY_FALLBACK = "deploys_platform"
 
 # The application name a host's deploy-key authorisations enumerate. DERIVED
-# from the committed tree: it is the name `ansible/inventory/group_vars/*.yml`
+# from the committed tree: it is the name `ansible/inventory/host_vars/*.yml`
 # already lists in `deploy_apps`, and the name of the `platform/` directory
 # whose stack definition this deploy delivers. The requirement says "the
 # platform application" and fixes no string.
 PLATFORM_APPLICATION = "platform"
 
-# The list a `group_vars` file enumerates a host's deploy-key authorisations in,
+# The list a host's own vars file enumerates its deploy-key authorisations in,
 # and the keys naming each application and its key within it. DERIVED from the
 # committed files for the same reason.
 DEPLOY_APPS_FIELD = "deploy_apps"
@@ -419,27 +420,21 @@ def declared_servers(root: Path | None = None) -> dict:
     """Stack -> the server name its `terraform.tfvars` declares, or `None`.
 
     `None` rather than an omission, so that a stack declaring no server is
-    reported as such rather than read as a stack that does not exist. The read
-    is a line match rather than an HCL parse, which is the tool every other
-    static read of a `.tfvars` in this suite uses and is what keeps this module
-    free of a Terraform binary.
+    reported as such rather than read as a stack that does not exist.
+
+    THE SUITE'S EXISTING READER, not a second one. `stack_tfvars` handles the
+    spellings a hand-rolled line match does not -- a `//` trailing comment, a
+    nested `name` in an object value earlier in the file -- and this module is
+    not the only one resolving which host answers a stack: the change's own
+    derived module reads the same field through the same function. Two readers
+    of one fact can resolve different hosts for one stack with only one of them
+    going red, which is the failure this delegation removes rather than
+    documents.
     """
-    base = (ROOT if root is None else root) / "terraform" / "stacks"
     found: dict = {}
-    if not base.is_dir():
-        return found
-    for directory in sorted(p for p in base.iterdir() if p.is_dir()):
-        tfvars = directory / "terraform.tfvars"
-        found[directory.name] = None
-        if not tfvars.is_file():
-            continue
-        for line in tfvars.read_text(encoding="utf-8").splitlines():
-            match = re.match(
-                rf'^\s*{SERVER_NAME_FIELD}\s*=\s*"([^"]+)"\s*(?:#.*)?$', line
-            )
-            if match:
-                found[directory.name] = match.group(1)
-                break
+    for stack in stack_names(root):
+        value = stack_tfvars(stack, root).get(SERVER_NAME_FIELD)
+        found[stack] = value if isinstance(value, str) and value.strip() else None
     return found
 
 
@@ -823,7 +818,7 @@ def shared_key_offences(keys) -> list:
     application."""
     if not keys:
         return [
-            "no group_vars file enumerates a public half for the platform application, "
+            "no host vars file enumerates a public half for the platform application, "
             "so this comparison reads nothing"
         ]
     shared: dict = {}
@@ -2606,21 +2601,24 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         self.assertEqual([], deploy_account_offences(workflow))
 
     def test_two_hosts_authorising_one_key_are_reported(self) -> None:
-        offences = shared_key_offences({"production": "ssh-ed25519 AAAA", "staging": "ssh-ed25519 AAAA"})
+        offences = shared_key_offences(
+            {"main-production": "ssh-ed25519 AAAA", "main-staging": "ssh-ed25519 AAAA"}
+        )
         self.assertEqual(1, len(offences), offences)
-        self.assertIn("production", offences[0])
-        self.assertIn("staging", offences[0])
+        self.assertIn("main-production", offences[0])
+        self.assertIn("main-staging", offences[0])
 
     def test_two_hosts_authorising_two_keys_are_not_reported(self) -> None:
         self.assertEqual(
             [],
             shared_key_offences(
-                {"production": "ssh-ed25519 AAAA", "staging": "ssh-ed25519 BBBB"}
+                {"main-production": "ssh-ed25519 AAAA", "main-staging": "ssh-ed25519 BBBB"}
             ),
         )
 
     def test_no_authorised_key_at_all_is_reported_rather_than_passed_over(self) -> None:
         self.assertIn("reads nothing", shared_key_offences({})[0])
+        self.assertIn("host vars", shared_key_offences({})[0])
 
     def test_a_committed_env_file_is_reported(self) -> None:
         directory = Path(tempfile.mkdtemp(prefix="platform-tree-"))

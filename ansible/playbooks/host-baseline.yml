@@ -175,7 +175,8 @@
     # scratch -- `deploy_apps` moved onto the host axis, so a new stack now
     # arrives without it even in an environment whose baseline is complete,
     # which makes that case more frequent rather than less. Both existing
-    # group_vars files say where the list went. Revisit when a partially-converged host
+    # group_vars files say where the list went. Revisit when a
+    # partially-converged host
     # actually costs something, or when a third requirement comes to rest on
     # the play-scope half; two do already, the other being *Platform Data
     # Volume Is Mounted at a Fixed Host Path*.
