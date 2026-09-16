@@ -149,10 +149,12 @@ REPLACEMENTS = {
 #
 #   `docs/change-queue.md` -- now `docs/backlog.md` -- WAS EXEMPT AND IS NOT
 #       ANY MORE, which is the
-#       exemption machinery working rather than a loosening. Entry 63 named all
-#       four retired literals as the work it described, and a queue entry is
-#       deleted only when its change archives -- so the file had to be exempt
-#       across the whole of that change and no longer. The assertion below
+#       exemption machinery working rather than a loosening. The queue entry
+#       for `rename-the-external-services` named all four retired literals as
+#       the work it described, and such an entry is deleted only when its
+#       change archives -- so the file had to be exempt across the whole of
+#       that change and no longer. That entry is gone now, which is why it is
+#       named by its change rather than by itself. The assertion below
 #       requires a whole-path exemption to still CONTAIN a retired name, so
 #       deleting that entry in the archive commit turned it red and the repair
 #       was to delete the exemption in that same commit. It is swept from here

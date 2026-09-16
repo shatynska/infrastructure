@@ -8,7 +8,7 @@ An entry carries a number, the change's name, and — where it has one — what 
 
 **Related entries sit together, and the order is not arbitrary.** The file was regrouped and renumbered from 1 on 2026-09-15; before that a new entry was appended and the order said nothing on its own. It says something now: entries changing the same part of the system are adjacent — host access, the converge and its roles, monitoring, deploys and secrets, the shared database, Terraform, the test suites, the pins, the specifications, and operating the host, in that sequence — and within a run an entry another depends on tends to come first. **Put a new entry beside the ones it belongs with rather than at the end of the file**, and renumber from 1 when you do, so the numbers stay contiguous: a gap means an entry was deleted and nobody renumbered. Where one entry actually waits on another, the entry says so.
 
-**The number is an identifier, not a priority, and it is not stable.** This file has been renumbered from 1 twice now and may be again, so a number written elsewhere — in a source comment, a specification, an archived change record — may no longer name the entry it was written for. The names are stable; **cite an entry by name, never by number.** The 2026-09-15 renumbering swept every live citation in the tree onto names for that reason; what still cites a number is inside an archived change record, which is not edited to follow a later renumbering.
+**The number is an identifier, not a priority, and it is not stable.** This file has been renumbered from 1 several times now and will be again — twice on 2026-09-16 alone — so a number written elsewhere — in a source comment, a specification, an archived change record — may no longer name the entry it was written for. The names are stable; **cite an entry by name, never by number.** The 2026-09-15 renumbering swept every live citation in the tree onto names for that reason; what still cites a number is inside an archived change record, which is not edited to follow a later renumbering.
 
 **Where one batch of these came from.** A second full review on 2026-09-08, at trunk `74c7101`, was made to judge whether this repository's shape can be reused for a second, company-owned host, and a number of the entries below came out of it. It opened with two that are gone from this file — logical off-host backups of the shared database, and a decision on the database model — resolved together by `scope-the-shared-database-to-non-durable-data`: reading the host showed the instance those two argued over holds no application data at all, and that what this host needs is a stated boundary rather than a backup pipeline. Only what applies to **this** host is recorded here; the company-only findings — repository visibility, a second approver, an organisation-owned repository — are not this repository's concern. That review's verdict repeated the first audit's: the architecture is sound, and what it found is operational rather than structural. It read the live host as well as the tree, so where an entry cites a host fact, that is what the host showed on 2026-09-08 rather than an inference from the code.
 
@@ -393,29 +393,7 @@ Bounded in the meantime by how rotation actually happens here: it is a manual ac
 
 **It reaches further than PostgreSQL.** Any window that leaves the host's state deliberately out of step with the committed definition has this shape — the platform stack is deployed wholesale on every merge, so a deploy is always able to undo a hand-made state. This entry is about that class, and the PostgreSQL window is the instance that has actually been walked.
 
-## 24. render-the-env-file-so-a-secret-survives-it
-
-**Not blocked. Narrowed rather than closed**: the pull request that fixed the shell layer on 2026-09-15 deleted this entry as done, and was wrong to — there are two layers, and only one of them is shut.
-
-**Layer one, closed.** `platform-deploy.yml` rendered `.env` with `echo "NAME=${{ secrets.X }}"`. GitHub substitutes a secret's raw text into the `run:` body, so bash read it as script: `ab$c#d` rendered `ab#d`, `"abc"def` rendered `abcdef`, and ``x`id -u`y`` rendered `x1000y` — **a command ran**, in a job holding that stack's tailnet OAuth client and deploy SSH key. Every value now reaches that script through the step's `env:` block, and `.github/tests` refuses any workflow that interpolates a secret, a workflow input or a `github.event` value into a `run:` body.
-
-**Layer two, open, and it is what this entry now is.** Compose's own `.env` parser expands `$` inside the value. Measured **from inside a running container** on 2026-09-15, against a `.env` rendered exactly as the fixed workflow now renders it:
-
-| Secret as stored | What the container process receives |
-|---|---|
-| `ab$c#d` | `ab#d` — `$c` expanded to nothing |
-| `"abc"def` | `abc` — leading quote consumed, remainder dropped |
-| `A1+b/c=` | `A1+b/c=` — intact, and this is what `openssl rand -base64` produces |
-
-A wrong credential here is silent: the service starts, reports healthy, and fails only at whatever needed the credential — which postgres-exporter did for an unknown period (`alert-on-the-exporter-being-unable-to-read-postgres`). It reaches the seven secrets the render step writes.
-
-**Two remedies were tried and neither is established.** Single-quoting the rendered line does not stop the expansion — measured, same `ab#d`. Escaping `$` as `$$`, Compose's documented escape, was attempted and **not** measured cleanly, because the test harness's own `$$` expanded to the shell's PID; treat it as unverified rather than as ruled out. It is the first thing to try, and it needs a real measurement.
-
-**Measure from inside a container, not with `docker compose config`.** That command escapes a literal `$` as `$$` in its own output, so it reports a value that looks corrupted when it is not, and vice versa. Reading it instead of the container is how this entry's first diagnosis went wrong — twice, in opposite directions: once blaming Compose alone, then bash alone. It is both.
-
-**Until it closes**, generate these with the `openssl rand` commands `docs/bootstrap-a-new-host.md` §0 gives, whose alphabets contain neither character. That instruction is also in `platform/README.md`, beside the manual role step that pastes one.
-
-## 25. assert-no-secret-is-built-into-a-url
+## 24. assert-no-secret-is-built-into-a-url
 
 **Not blocked. Split out of the fix that motivated it, deliberately, and the reason is the entry's main content.** Recorded 2026-09-15.
 
@@ -432,7 +410,7 @@ A wrong credential here is silent: the service starts, reports healthy, and fail
 
 **And it must not be able to pass having read nothing.** Seven such interpolations exist today; assert a floor, or moving them into `env_file:` satisfies the check silently.
 
-## 26. automate-per-application-database-provisioning
+## 25. automate-per-application-database-provisioning
 
 **Not blocked; recorded because its obligation is due and unmet.** *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) obliges automating how an application's database and role are provisioned in the shared instance and how the role's password reaches the application. That obligation's trigger — the first application given a database there — fired on 2026-09-13 with `commerce-ops` on the staging host, and production's database followed by the same recipe. `provision-commerce-ops-database-in-the-shared-instance` provisioned both by hand, by the recipe now in `docs/onboard-an-application.md`, and recorded the obligation in that requirement as a stated divergence rather than building the mechanism.
 
@@ -442,7 +420,7 @@ A wrong credential here is silent: the service starts, reports healthy, and fail
 
 **Archiving it obliges a delta elsewhere.** The requirement's paragraph "One divergence is stated rather than hidden, as of 2026-09-13" says it is replaced when this mechanism lands, and nothing else would prompt that; that recipe then becomes whatever the mechanism makes of it.
 
-## 27. make-a-shared-instance-reset-visible-to-its-applications
+## 26. make-a-shared-instance-reset-visible-to-its-applications
 
 **Not blocked. Recorded 2026-09-15 from an incident, by the session that triaged it, and not folded into `automate-per-application-database-provisioning` because it is the half of the problem that survives `automate-per-application-database-provisioning` being built.**
 
@@ -456,7 +434,7 @@ A wrong credential here is silent: the service starts, reports healthy, and fail
 
 **It also moved the production cutover backwards, and no other entry says so.** `classify-commerce-ops-production-data-for-the-shared-instance`'s cutover, and `move-production-into-the-shared-instance` with it, depend on the production role and database that `provision-commerce-ops-database-in-the-shared-instance` provisioned and deliberately kept unused; both are gone. That was repaired later the same day: the operator re-ran the recipe in `docs/onboard-an-application.md` against production with `rotate=yes`, `SHARED_POSTGRES_PASSWORD` set at 21:04:52Z, and the role and database were verified read-only — owned by `commerce-ops`, `PUBLIC` revoked, `pgexporter` holding no `CONNECT`, and no statement text in `platform-postgres-1`'s log. The cutover's precondition is restored; what this entry is about is that nothing but a report from the other repository would have said it was lost. Production's application itself was untouched — it still runs its own `commerce-ops-postgres-1` on `postgres:16-alpine` with `commerce-ops_commerce_ops_pgdata`, healthy and five days up at 18:47Z — which is the only reason the window cost staging alone. Once `classify-commerce-ops-production-data-for-the-shared-instance` lands and production's data moves in, the same window deletes it, exactly as `platform/README.md` and `classify-commerce-ops-production-data-for-the-shared-instance` both already say.
 
-## 28. classify-commerce-ops-production-data-for-the-shared-instance
+## 27. classify-commerce-ops-production-data-for-the-shared-instance
 
 **Not blocked; recorded because it is a specification change, decided by the operator after the change that provisioned the database had merged.** On 2026-09-14 the operator decided that production's `commerce-ops` leaves its private PostgreSQL for the database `provision-commerce-ops-database-in-the-shared-instance` provisioned in production's shared instance, and moves to Supabase only later (`move-commerce-ops-durable-data-to-supabase`). Its data includes the hand-curated rows that entry records — durable under *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) as it stands, which keeps durable data out of the shared instance unconditionally, because holding none is what lets that instance go without a backup. Asked whether to keep the private database until Supabase, or to admit the data only with an off-host backup and a rehearsed restore, the operator chose to classify `commerce-ops`'s production data as tolerable to lose, to the operator, with no backup — a temporary decision, taken because the application is at a very early, experimental stage, and ending with its move to Supabase.
 
@@ -464,7 +442,7 @@ A wrong credential here is silent: the service starts, reports healthy, and fail
 
 **What the operator accepted, and what it must not become.** The shared instance is treated as disposable: a PostgreSQL major upgrade discards its volume, and a rebuild recreates it empty. Once `commerce-ops`'s production data is there, either deletes it for good. `platform/README.md`'s *Upgrading the PostgreSQL major version* already says so, in the terms this entry has to meet — it tells the operator that production's database is empty and reserved for a cutover waiting on this change, and that from the moment this lands and the data moves in, discarding that volume deletes it for good. **This change owes the same sentence to the rebuild runbook**, which does not yet carry it, and owes that procedure a re-read to confirm it still says what is true once this lands. The classification names one application on one host and must not be read as permission for any other application's durable data.
 
-## 29. move-commerce-ops-durable-data-to-supabase
+## 28. move-commerce-ops-durable-data-to-supabase
 
 **Not blocked, and its middle step is not this repository's to do — recorded because `openspec/specs/iac-safety-hardening/spec.md` names it as a divergence and nothing else tracks it.**
 
@@ -481,7 +459,7 @@ The resolution, as the operator decided on 2026-09-14, comes in two stages (`pro
 
 **The later move to Supabase**, recorded so it is not re-derived: use its session pooler — `aws-1-eu-west-1.pooler.supabase.com:5432` with user `postgres.<ref>`, which answered `pg_isready` from a container on staging's `platform_edge` on 2026-09-14. Supabase's direct connection is IPv6-only and `platform_edge` has IPv6 disabled, the transaction pooler on port 6543 cannot carry the worker's `LISTEN/NOTIFY`, and the Free plan has no backups.
 
-## 30. exercise-the-volume-server-coupling-against-live-state
+## 29. exercise-the-volume-server-coupling-against-live-state
 
 **Not blocked; recorded because an archived change is where it would be lost.** Recovered 2026-09-08 by `make-openspec-validation-a-usable-gate` while settling the red archived records. `add-prod-data-volume`'s task 3.5 was left unticked with the note *"Still open; consider doing this as a follow-up plan-only check"* — real outstanding work, sitting in prose inside a change that had already been archived, which is precisely where nobody would look for it. That task is now disclosed under that change's `## Not performed`; the work it names is here.
 
@@ -498,7 +476,7 @@ The requirement this protects is *Conditional Prod Volume Creation* in `openspec
 
 Worth doing before the coupling is next relied on — a volume that survived its server would be an orphaned resource with no location, which is the failure the coupling exists to prevent and which nothing has yet observed being prevented.
 
-## 31. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
+## 30. say-what-a-stale-saved-plan-is-and-how-to-recover-from-it
 
 **Not blocked. Recorded 2026-09-12, from the same merge.**
 
@@ -523,7 +501,7 @@ That is the gate working — *Gated Production Apply Applies the Reviewed Plan* 
 
 **Not in scope here:** auto-replanning on staleness. That would apply a plan no human reviewed, which is the requirement this entry exists to respect.
 
-## 32. factor-the-four-stack-discovery-bodies
+## 31. factor-the-four-stack-discovery-bodies
 
 **Not blocked. Recorded when the fourth one was written.**
 
@@ -535,7 +513,7 @@ The existing comment in those three anticipated this: *"Copies are not the only 
 
 Weigh it against the cost this repository has already paid twice for touching gated workflows: the diff restructures the production apply path, and the identity assertion has to be replaced rather than merely retargeted.
 
-## 33. matrix-the-molecule-suite-over-scenarios-and-bound-each-job
+## 32. matrix-the-molecule-suite-over-scenarios-and-bound-each-job
 
 **Not blocked; recorded rather than folded into `promote-molecule-to-a-required-check`**, whose proposal names it as a non-goal. That change decides which job is required and reshapes the workflow's triggers; this one changes what a job *is*. Landing both in one diff would mean the change that picks the registered context also redefines the thing being registered.
 
@@ -561,7 +539,7 @@ No workflow in `.github/workflows/` declares `timeout-minutes` anywhere, so ever
 
 `cache-the-apt-index-within-a-converge` has since lowered both the baseline and the ceiling, so the durations this one chooses against are the ones measured after it and not the ones quoted above. They are independent in mechanism and not in the number.
 
-## 34. test-a-play-at-play-scope
+## 33. test-a-play-at-play-scope
 
 Recorded 2026-09-10 by `configure-the-staging-host`, whose `design.md` Decision 10 found the gap and whose test author independently confirmed it.
 
@@ -578,7 +556,7 @@ What a play-scope harness would cover, beyond this one guard: any play-level beh
 
 Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and whatever runner it needs, which is why it was not invented inside a change whose diff most needed reading closely.
 
-## 35. tighten-the-refusal-scenario-s-own-filesystem-assert
+## 34. tighten-the-refusal-scenario-s-own-filesystem-assert
 
 **Not blocked. Recorded 2026-09-12 by `namespace-the-molecule-loop-devices`, whose code review found it in a file that change edits but in a line it does not author.**
 
@@ -588,7 +566,7 @@ Not blocked. The cost is a fourth row in `AGENTS.md`'s test-command table and wh
 
 **A second, separate hazard in the same assert, which tightening the predicate does NOT close.** Each play redeclares its loop-minor offset by hand, so `verify.yml` and `prepare.yml` could drift apart. A drifted `verify` probes an unassociated minor, gets rc 2, and passes — under `rc != 2` exactly as under `rc != 0`. Whoever takes this entry should fix the rc-1 case and record the drift as still open, rather than closing one believing it closed the other. Deriving both from one place, or asserting in `verify` that the device is the one `prepare` associated, are the two shapes available.
 
-## 36. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
+## 35. adopt the stubbed-runtime rig for the two guards Molecule cannot reach
 
 `prune-unreferenced-host-images-periodically` shipped two guards that no assertion covers: local images are enumerated *before* the keep set is computed, and each tag is re-resolved immediately before removal. Both are observable only when the host's images change midway through a run, and a black-box Molecule scenario has no seam at which to change them. They are also the two that close the concurrent-deploy window against `app-deploy`, so the least-verified part of that design is the part facing the only actor competing with it.
 
@@ -596,7 +574,7 @@ Its code review built a rig that supplies the seam — a stubbed `docker` on `PA
 
 Adopting it would also cover the two abandon branches added by that review's own fix, which are likewise unasserted.
 
-## 37. hold-the-whole-static-suite-to-its-own-constraints
+## 36. hold-the-whole-static-suite-to-its-own-constraints
 
 **Not blocked; small, and recorded by `alert-on-certificate-expiry`, which is the change that made it untrue.**
 
@@ -624,7 +602,7 @@ Worth doing before the next person meets it: this failure reads as "your tree is
 
 **It is also a race, not only a false positive.** That directory is *live* while Molecule runs — the ephemeral `tmp/` is created and removed under it — so running this suite during a Molecule run produces an intermittent error on top of the steady failure, as a file the walker has listed disappears before it is read. Observed 2026-09-11 while both ran at once, and not reproducible afterwards, which is the worst shape for anyone trying to diagnose it. Reading tracked files removes the race with the false positive, since nothing under that directory is tracked.
 
-## 38. widen-what-the-pull-request-identity-checks-can-read
+## 37. widen-what-the-pull-request-identity-checks-can-read
 
 **Not blocked.** Recorded as declined until 2026-09-13.
 
@@ -641,7 +619,7 @@ None is a defect in what the tests assert; each is a limit on the shapes they ca
 
 The first of the four is the one most likely to bite: it fires the first time a workflow here opens a pull request with `gh` instead of an action, and it fires as a red build on a correct change.
 
-## 39. assert-the-autoupdate-workflow-s-two-unchecked-properties
+## 38. assert-the-autoupdate-workflow-s-two-unchecked-properties
 
 **Not blocked.** Recorded as declined until 2026-09-13, though with its own successor already named: "a small change of its own that adds the scenario and has the assertion derived from it".
 
@@ -656,7 +634,7 @@ Neither is a live risk today: the App's own scope is exactly the two permissions
 
 The workflow header says plainly which of its claims the suite does not stand behind, and that note is what this entry replaces.
 
-## 40. assert-every-role-has-a-mock_roles-entry
+## 39. assert-every-role-has-a-mock_roles-entry
 
 **Not blocked; recorded rather than folded into `bound-host-log-growth-and-add-swap`, which is the change that hit it.** Adding the missing entry belonged to that change; asserting the invariant is a different concern, and the `.github/tests` suite is not that change's subject.
 
@@ -668,7 +646,7 @@ This is a **static read of a committed file** -- the set of directories under `a
 
 Worth doing because the cost is paid by whoever adds the *next* role, not by whoever left the list short, and because the failure arrives as a message pointing somewhere else.
 
-## 41. assert-every-tfvars-assigns-its-required-variables
+## 40. assert-every-tfvars-assigns-its-required-variables
 
 Recorded 2026-09-10 by `add-a-staging-environment`'s code review, which found the gap by falling into it.
 
@@ -678,7 +656,7 @@ That places it squarely in `.github/tests`, whose subject is any property that i
 
 **Not blocked.** It was left out of `add-a-staging-environment` because the gap it covers was that change's own disclosed, in-flight state — writing the check that fails the tree you are still assembling is a different change than the one that assembled it.
 
-## 42. assert-markdown-prose-is-not-hard-wrapped
+## 41. assert-markdown-prose-is-not-hard-wrapped
 
 Recorded 2026-09-11, alongside the fix that removed the hard wraps this entry exists to keep out. `AGENTS.md`'s "Throughout" section now states the rule — *"Do not hard-wrap prose. Keep each paragraph on a single line whatever its length"* — and nothing checks it.
 
@@ -692,14 +670,14 @@ The rule makes the assertion crisp rather than heuristic: under "one line per pa
 
 Not blocked. One new module in `.github/tests`, whose constraints it fits: a static read of committed files, no network, no credential, no container.
 
-## 43. two-deferred-ci-items
+## 42. two-deferred-ci-items
 
 Noticed during `close-ci-verification-gaps`, neither a verification gap. A third was here until 2026-09-15, when the operator took it as a fix: `.github/workflows/pre-commit-autoupdate.yml` installed `pre-commit` with a bare `pip install` and now installs from `.github/requirements-ci.txt`, which pins it. The reasoning moved into that manifest's own header, where the next person to read the pin will meet it — the point being narrower than ordinary pinning, since an autoupdate resolving a different `pre-commit` could rewrite `.pre-commit-config.yaml` differently from what any check had exercised.
 
 - **The destroy-policy gate's inspection logic is inline workflow shell.** Moving it into a version-controlled script with executable fixtures would make the highest-consequence logic in this repository reviewable and testable as code — `design.md` Decision 5 of that change names this as considered and deferred on merit-vs-scope grounds, not as rejected. Four fixtures already exist (clean, destructive, malformed, valid-JSON-that-is-not-a-plan) and are described in that change's `tasks.md` 1.1; the structural tests in `.github/tests/test_ci_configuration.py` currently assert the routes are closed, not that each is reached.
 - **`actionlint` is named as a verification means but nothing installs it.** Three tasks in `close-ci-verification-gaps` cite it, and it was run manually from a scratch install. Adding it to `.pre-commit-config.yaml` would close that permanently — but it exits non-zero on two pre-existing `SC2016:info` findings (`pr-validation.yml`, the plan-comment step; `apply.yml`, the job-summary step — both single-quoted literal markdown in an `echo`, and both intentional). So landing the hook means dispositioning those two first, by fixing or ignoring them. That is the same trap this change refused to lay for the next person when `ansible-lint` failed on pre-existing violations, and it wants its own decision rather than being folded in.
 
-## 44. lint-the-repository's-shell-scripts
+## 43. lint-the-repository's-shell-scripts
 
 **Not blocked; recorded rather than folded into `namespace-the-molecule-suite-per-working-tree`**, which added the script that makes this worth doing.
 
@@ -709,7 +687,7 @@ The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a decis
 
 **"Worth doing before there is a second script" is no longer available**, which is the only part of this entry that has changed. `make-a-shared-instance-reset-visible-to-its-applications` added two more — `ansible/roles/deploy_user/files/app-probe` and `files/deploy-probe` — and they are not like `run-molecule`: they run as `root` on every host, one of them on input from an application's key, so they are the scripts where an unchecked quoting mistake costs the most. Both were run through ShellCheck by hand during that change and by its code review, and both were clean; that is exactly the unrepeatable ad-hoc invocation this entry exists to replace. Note also that `ansible-lint`'s `files: ^ansible/` does not lint them as shell, so nothing in CI reads them today.
 
-## 45. catch-up-the-drifted-galaxy-pins
+## 44. catch-up-the-drifted-galaxy-pins
 
 **Not blocked.** Recorded 2026-09-08, from an inventory taken while archiving `open-autoupdate-pr-with-app-token`.
 
@@ -729,7 +707,7 @@ Four majors is a migration rather than a version bump, which is why this is an e
 
 **The stale caveat that used to sit here was taken as a fix on 2026-09-15.** Four of the five pins carried a comment saying the version "was chosen without the ability to query Galaxy from this environment (no network access) -- confirm it resolves", when all five had been confirmed against the Galaxy API on 2026-09-08 and every one resolved. Those four comments are gone and the confirmation is recorded in `ansible/requirements.yml`'s own header, which is where a reader meets the pins. What is left here is the migration, which is not a comment edit.
 
-## 46. cover-the-unwatched-manifests-and-settle-the-watcher
+## 45. cover-the-unwatched-manifests-and-settle-the-watcher
 
 **Not blocked; the same shape as `cover-platform-images-with-dependabot`**, whose entry was deleted from this file when that change landed.
 
@@ -757,7 +735,7 @@ Self-hosted Renovate is the interesting middle: it would reuse the `infrastructu
 
 **The condition this waited on is met.** It said: do not add a fifth automation to a repository where nothing notices a red scheduled run, which is the lesson `open-autoupdate-pr-with-app-token` was. Something notices now — `notice-when-a-periodic-job-stops-reporting` gives every scheduled workflow a heartbeat check whose silence alarms, and its own coverage test obliges any workflow added later to carry one. The trust cost argued above is what remains to weigh.
 
-## 47. rename-the-requirements-that-read-narrower-than-they-are
+## 46. rename-the-requirements-that-read-narrower-than-they-are
 
 **Not blocked.**
 
@@ -795,7 +773,7 @@ The first two describe a mechanism both environments now use: staging declares `
 
 **It became live rather than theoretical on 2026-09-13, and the paragraph above is why it was deferred rather than a reason still standing.** Staging took the platform stack that day and a `commerce-ops` database in its shared instance the next, so it holds stores: `platform_postgres_data`, `platform_traefik_letsencrypt` and the anonymous volume Alertmanager's image declares. "This host" is now wrong about which host a durability obligation binds rather than merely imprecise, which is the condition this paragraph named. It waits on nothing.
 
-## 48. sweep-the-stale-scenario-titles-and-check-them
+## 47. sweep-the-stale-scenario-titles-and-check-them
 
 **Not blocked. Recorded 2026-09-13 by `correct-the-documents-against-the-tree`, which swept the requirement half of this defect and measured the scenario half rather than folding it in.**
 
@@ -809,20 +787,7 @@ A citation in this repository names a requirement and, very often, a scenario in
 
 **Do the check with the sweep, not after it.** `.github/tests/test_the_retired_requirement_names_are_gone.py` already reads every tracked file, already flattens each one so a title wrapped across a comment's line break is found, and already derives its subject from committed specifications. The scenario predicate is the inverse of its current one — a cited title that is **not** among the live scenario titles, rather than a name that **is** among the retired ones — so it needs a reader of its own rather than a second literal. Its false-positive risk is the thing to measure first: a quoted phrase that is not a citation at all looks exactly like a citation of a scenario that does not exist.
 
-## 49. stop-citing-backlog-entries-by-number
-
-**Not blocked. Recorded 2026-09-16 by `bound-a-deploy-key-to-one-host-when-an-environment-holds-two-stacks`, whose own renumbering of this file is what makes the case rather than an argument about it.**
-
-This file's preamble says to cite an entry **by name, never by number**, because the numbers are not stable and it has been renumbered from 1 three times now. Two committed citations still use numbers, and both were already wrong before that renumbering rather than broken by it:
-
-- **`.github/dependabot.yml`** cites "Entries 43-16 of docs/backlog.md". There is no entry 43 and there never has been under the current scheme; the range reads as a typo for something, and nothing in the tree says what.
-- **`.github/workflows/ansible-verify.yml`** says "**one** scenario does exactly that with `ansible/inventory/group_vars/<environment>.yml`". Three do — `hardening/absent-ssh-cidrs`, `image_prune/absent-heartbeat-key` and `hostname/absent-company`, the last against `group_vars/all.yml`. That one is a miscount rather than a numeric citation, and it is here because it was found by the same sweep.
-
-**The entry is the rule, not the two lines.** Fixing the two and stopping there re-creates the defect at the next renumbering, which this file's own rule guarantees will happen. What is owed is a check: `.github/tests` is the only mechanism in this repository that reads committed files at repository scope, and a sweep for `docs/backlog.md` cited with a number — or for an entry name that no heading matches — is a static read of committed files, which is exactly that suite's subject. `rename-the-requirements-that-read-narrower-than-they-are` and `sweep-the-stale-scenario-titles-and-check-them` are the same shape of problem and the same shape of answer; taking all three together is cheaper than taking them apart.
-
-Nothing here is a correctness defect in the pipeline. It is a reader sent to an entry that does not exist.
-
-## 50. separate-history-from-rationale-in-source-comments
+## 48. separate-history-from-rationale-in-source-comments
 
 **No longer blocked.** It waited on the citation-form decision and on the sweep that followed it; both were delivered by `decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which also converted every citation in the comment blocks below. What remains here is the separation this change deliberately did not do: it changed citation *form* only, and left the prose around it alone.
 
@@ -840,7 +805,7 @@ What remains is the pass itself, which needs instances of its own found rather t
 
 The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-13; it was 48 against 90 when this entry was written, so the ratio has worsened rather than held. This is a style question with a real maintenance cost, not a cosmetic one.
 
-## 51. record-the-hostname-scheme
+## 49. record-the-hostname-scheme
 
 **Recorded 2026-09-14 by `expose-staging-on-the-web`, which wrote down the DNS the scheme produces and not the scheme.** The public names this repository's hosts serve follow `<service>.<server>.BASE_DOMAIN` — `<app>.main-production.BASE_DOMAIN`, `<app>.main-staging.BASE_DOMAIN` — resolved by one wildcard `A` record per server, with a short alias directly under `BASE_DOMAIN` as a record of its own. The rule was decided in the `commerce-ops` repository, whose `deploy-commerce-ops-to-staging` handoff names `docs/naming-conventions.md` here as its home. That file names servers, stacks, keys and the OS hostname, and not the public names under them.
 
@@ -848,7 +813,7 @@ The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-
 
 Not blocked. It touches `docs/` and no mechanism.
 
-## 52. reclaim-a-multiply-referenced-untagged-image
+## 50. reclaim-a-multiply-referenced-untagged-image
 
 **Not blocked. Recorded 2026-09-15 by `report-refused-removals-in-the-host-prune`, which made the condition visible and deliberately did not remove it.**
 
@@ -861,7 +826,7 @@ Removing it needs one of two things, and both are changes to **what the run remo
 
 **Neither host is known to carry such an image**, so this is not urgent. What makes it worth keeping is that the condition is now legible: when `refused` reads non-zero for this reason on a real host, this entry is what it points at.
 
-## 53. write-and-rehearse-the-rebuild-runbook
+## 51. write-and-rehearse-the-rebuild-runbook
 
 **Not blocked; recorded because every piece exists and nobody has run them in sequence.**
 
@@ -869,7 +834,7 @@ Recovering this host from nothing is: a Terraform apply through the gated pipeli
 
 A `docs/runbook-rebuild.md` that lists them in order, names the secret each step needs, and records the last rehearsal's date and duration is the deliverable. The rehearsal is the point; the document is how it survives. Staging is where the rehearsal can happen without touching prod: converged since 2026-09-10 and carrying the platform stack since 2026-09-13, so the thing this entry once waited on is in place and the rehearsal is now merely unscheduled.
 
-## 54. unify-the-workflows-own-role-discovery
+## 52. unify-the-workflows-own-role-discovery
 
 **Not blocked.** Recorded by `unify-the-two-role-exclusion-rules`, which settled every *Python* enumeration of this repository's own roles on `ansible/requirements.yml` and deliberately left this one behind.
 
@@ -883,7 +848,7 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 
 **One assertion in that module still encodes the removed heuristic**, and it is a separate, smaller thing. `test_an_external_galaxy_dependency_contributes_no_edge_and_is_not_refused` filters the derived graph's targets with `if "." in target`. It passes today only because its fixture builds no dotted role directory; under the unified rule a vendored dotted directory the manifest does not name *is* one of this repository's own roles and should contribute an edge, at which point the test fails for a reason that is not a defect. `unify-the-two-role-exclusion-rules` deliberately did not touch it — its plan named it as the guard on the edge-filter change and required it to pass unaltered, which is what established that the change was behaviour-preserving. Rewriting it means choosing a new way to express "an edge to content this repository does not carry", and that is the same question this entry asks of the workflow.
 
-## 55. bind-the-galaxy-name-resolution-to-ansible-itself
+## 53. bind-the-galaxy-name-resolution-to-ansible-itself
 
 **Not blocked.** Recorded by `unify-the-two-role-exclusion-rules`, which found the resolution wrong in two places at once and could not write the check that would have caught it.
 
@@ -898,7 +863,7 @@ Both were corrected against Ansible 2.21.3, and the expected values in every fix
 
 So the check belongs in the tier that already has the pinned Ansible: a scenario under `ansible/roles/*/molecule/`, or a step in `ansible-verify.yml` after `ansible/requirements-test.txt` is installed. Adding `ansible-core` to `.github/requirements-ci.txt` instead is the other option and is a change to what that suite is, not a rider on one — it would put a heavyweight dependency behind every check in the repository's only static tier.
 
-## 57. read-the-rendered-env-back-through-the-host-s-own-parser
+## 54. read-the-rendered-env-back-through-the-host-s-own-parser
 
 **Not blocked. Recorded 2026-09-16 by `render-the-env-file-so-a-secret-survives-it`, which measured a rule and could not arrange for anything to notice if it stops holding.**
 
@@ -910,7 +875,7 @@ That change escapes each value written into `platform/.env` so that Compose's do
 
 `tools/env-rendering-probe/` is where it starts from: the harness, its two consumption paths and the value corpus are committed, so this is a matter of running an existing measurement in a new place rather than building one. The probe's own README carries the versions each recorded round was taken against.
 
-## 58. escape-a-value-for-the-configuration-it-is-interpolated-into
+## 55. escape-a-value-for-the-configuration-it-is-interpolated-into
 
 **Not blocked. Recorded 2026-09-16 by `render-the-env-file-so-a-secret-survives-it`, whose obligation deliberately stops one layer short of this.**
 
