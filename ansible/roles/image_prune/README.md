@@ -16,7 +16,7 @@ Age is never consulted. `docker image prune --filter until=` selects on an image
 
 ## `deploy_apps` — the one required input
 
-Read from the same inventory variable `deploy_user` reads (the targeted environment's `ansible/inventory/group_vars/<environment>.yml`), **not copied into a second one**: a divergence between two such lists would offer a live application's images for removal.
+Read from the same inventory variable `deploy_user` reads (the target host's own `ansible/inventory/host_vars/<server name>.yml`), **not copied into a second one**: a divergence between two such lists would offer a live application's images for removal.
 
 An empty list is a supplied value, not a missing one. The role accepts it; the script then abandons its run and reports that the enumeration names no application, because with nothing enumerated the keep set would reduce to the images containers currently hold — which is `docker image prune -a`, weekly, reporting success.
 

@@ -6,14 +6,14 @@ Adding one service to a host that already runs the platform stack. `docs/bootstr
 
 ## The unit of work is a cell, not an application
 
-An application is onboarded **per deploy target**: `commerce-ops` on staging and `commerce-ops` on production are two runs of this document, not one. Each cell needs a keypair of its own, an entry in that environment's `group_vars`, a deploy job in the application's own repository, and that repository's Environment for that target.
+An application is onboarded **per deploy target**: `commerce-ops` on staging and `commerce-ops` on production are two runs of this document, not one. Each cell needs a keypair of its own, an entry in that host's own vars file, a deploy job in the application's own repository, and that repository's Environment for that target.
 
 Two axes are in play and they are not the same axis, which is the single thing most worth getting right before you start:
 
-- **The environment** — `production`, `staging` — is what the infrastructure side sits on. `deploy_apps` lives in `ansible/inventory/group_vars/<environment>.yml`, so an application's deploy key, its `authorized_keys` line and its `sudoers` rule are one set per application per environment.
-- **The stack** — `main-production`, `main-staging` — is what this repository's own GitHub Environments, Hetzner projects and Terraform state sit on. The application's repository never sees a stack name.
+- **The stack** — `main-production`, `main-staging` — is what the infrastructure side sits on, and what this repository's own GitHub Environments, Hetzner projects and Terraform state sit on. A stack provisions one host, and `deploy_apps` lives in that host's own `ansible/inventory/host_vars/<server name>.yml`, so an application's deploy key, its `authorized_keys` line and its `sudoers` rule are one set per application per host. The application's repository never sees a stack name.
+- **The environment** — `production`, `staging` — is what the *baseline* sits on: the Ansible group a converge targets, the `--vault-id` label, and `ansible/inventory/group_vars/<environment>.yml`, which carries what is true of every host in that environment whichever tenant owns it. Nothing you do in this procedure is written there.
 
-Today each environment holds exactly one stack, so the two coincide and nothing distinguishes them. They stop coinciding the moment a second tenant exists, and `docs/naming-conventions.md` is where the scheme is written down.
+Today each environment holds exactly one stack, so the two coincide and nothing distinguishes them. They stop coinciding the moment a second tenant exists — two stacks, two hosts, one environment — which is exactly why an application's deploy key is not written on the environment axis: one entry there would authorise it on both hosts. `docs/naming-conventions.md` is where the scheme is written down, and *A Host-Scoped Variable Lives in the Host's Own Vars File* (`openspec/specs/iac-host-configuration/spec.md`) is the requirement.
 
 **What repeats, and what does not:**
 
@@ -39,28 +39,28 @@ One pass per environment the application deploys to.
 
     ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-<environment> -N "" -C "<app>-deploy-<environment>"
 
-Passphrase-less, because continuous integration cannot type one. One key per application per environment, never one shared: the public half is committed in that environment's `group_vars`, and one leaked private half must deploy to one host.
+Passphrase-less, because continuous integration cannot type one. One key per application per stack, never one shared: the public half is committed in that host's own vars file, and one leaked private half must deploy to one host.
 
-**Into `~/.ssh/`, never into this checkout.** The key has no passphrase, and a routine `git add -A` in a repository directory is one command away from publishing it. Write the path out in full rather than generating where you happen to be standing. What stands behind you if you slip is `gitleaks`, which reads the content at commit time — and only once `pre-commit install` has been run, per README's Local setup. `.gitignore`'s private-key block is a second net for this key — `/*-staging` and `/*-production`, anchored to the repository root, match `<company>-<app>-<environment>` — and it is a net rather than a floor all the same: it catches the key only where the slip lands in a checkout's root, and an ignored key is still sitting on your disk.
+**Into `~/.ssh/`, never into this checkout.** The key has no passphrase, and a routine `git add -A` in a repository directory is one command away from publishing it. Write the path out in full rather than generating where you happen to be standing. What stands behind you if you slip is `gitleaks`, which reads the content at commit time — and only once `pre-commit install` has been run, per README's Local setup. `.gitignore`'s private-key block is a second net for this key — `/*-staging` and `/*-production`, anchored to the repository root, match `<company>-<app>-<stack>` — and it is a net rather than a floor all the same: it catches the key only where the slip lands in a checkout's root, and an ignored key is still sitting on your disk.
 
-**Check:** `ssh-keygen -lf ~/.ssh/<company>-<app>-<environment>.pub` prints a fingerprint. Keep it — §2.2 commits the public half and §4.2 stores the private one, and the fingerprint is how you tell two of these apart afterwards. The comment is a label for a human reading the file and nothing reads it mechanically.
+**Check:** `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` prints a fingerprint. Keep it — §2.2 commits the public half and §4.2 stores the private one, and the fingerprint is how you tell two of these apart afterwards. The comment is a label for a human reading the file and nothing reads it mechanically.
 
-**The comment convention, and the two committed entries that predate it.** An application's key carries `<app>-deploy-<environment>` and the platform's carries `deploy@platform-<environment>`, so a `group_vars` entry says which cell it authorises. Production's two entries are older than the second host and carry no environment segment at all — `deploy@platform` and `commerce-ops-deploy` in `ansible/inventory/group_vars/production.yml`, against `deploy@platform-staging` and `commerce-ops-deploy-staging` in `staging.yml`. They are left as they are: rewriting a committed comment converges both hosts to change a label nothing reads, and a key is identified by the fingerprint above. Read production's two as legacy rather than as a second convention.
+**The comment convention, and the committed entries that predate it.** An application's key carries `<app>-deploy-<stack>` and the platform's carries `deploy@platform-<stack>`, so an entry says which cell it authorises. The committed entries predate both this convention and the move onto the host axis, and they are inconsistent in two different ways: production's carry no per-target segment at all — `deploy@platform` and `commerce-ops-deploy` in `ansible/inventory/host_vars/main-production.yml` — while staging's carry the environment rather than the stack, `deploy@platform-staging` and `commerce-ops-deploy-staging` in `main-staging.yml`. All four are left as they are: rewriting a committed comment converges both hosts to change a label nothing reads, and a key is identified by the fingerprint above. Read them as history rather than as competing conventions.
 
 ### 2.2 Add the entry, and let a converge install it
 
-Add to `deploy_apps` in `ansible/inventory/group_vars/<environment>.yml`:
+Add to `deploy_apps` in `ansible/inventory/host_vars/<server name>.yml` — the vars file of the host that stack provisions, whose name is the `name` its `terraform.tfvars` declares. **Not `group_vars/<environment>.yml`**: an entry there would authorise this key on every host in the environment, and `.github/tests` fails the pull request for a stack whose host has no vars file at all.
 
 ```yaml
 - name: <app>
-  public_key: "ssh-ed25519 AAAA... <app>-deploy-<environment>"
+  public_key: "ssh-ed25519 AAAA... <app>-deploy-<stack>"
 ```
 
 Open a pull request and merge it. Merging to `main` with anything under `ansible/` changed runs the gated host converge, which installs `/opt/<app>`, the forced-command `authorized_keys` line, and the `sudoers` rule that lets that key trigger `app-deploy <app>` and nothing else. Production's converge waits for your approval; nothing announces that it is waiting, so watch for it.
 
 **The order matters and it only works one way round.** The entry needs a converge before the application's own deploy can authenticate, so an application repository that is ready first waits on an infrastructure pull request — never the reverse.
 
-**An entry with nothing deployed behind it is a normal state, not a fault.** Between this step and the application's first deploy, the host authorises a key for an application whose images it has never pulled. Such an application contributes nothing to the image prune's keep set, which is correct: the prune enumerates applications from this version-controlled list and protects the images each one currently references, and an application referencing none protects none. *Unreferenced Host Images Are Pruned on a Schedule* (`openspec/specs/iac-host-configuration/spec.md`) is the requirement.
+**An entry with nothing deployed behind it is a normal state, not a fault.** Between this step and the application's first deploy, the host authorises a key for an application whose images it has never pulled. Such an application contributes nothing to the image prune's keep set, which is correct: the prune enumerates applications from that version-controlled list and protects the images each one currently references, and an application referencing none protects none. *Unreferenced Host Images Are Pruned on a Schedule* (`openspec/specs/iac-host-configuration/spec.md`) is the requirement.
 
 **Check**, from a session on that host: `sudo ls /opt/<app>` exists, and `sudo grep <app> /etc/sudoers.d/app-deploy-<app>` shows the fully-qualified invocation.
 
