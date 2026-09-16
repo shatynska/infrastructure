@@ -153,7 +153,7 @@
     # changes the host with every role ahead of the one that refuses. That gap
     # is declined rather than pending, and this ordering is its stated
     # mitigation. TWO GAPS, one decision at two depths. PLAY SCOPE: against a
-    # host whose group_vars omits `deploy_apps`, a real run installs Docker,
+    # host whose own vars file omits `deploy_apps`, a real run installs Docker,
     # runs the whole of `hardening` including `Enable UFW` and joins the tailnet
     # before `deploy_user`'s assertion is reached -- so *A Role's Absent
     # Required Input Is Reported by Name*, whose wording reads naturally as the
@@ -162,18 +162,21 @@
     # mapping -- and nothing about the elements, so `deploy_apps: ["platform"]`
     # passes and then fails at `item.name`. Neither is closed for the same
     # reason: what they produce is a PARTIALLY-CONVERGED host, not a damaged
-    # one. Every role here is idempotent, so the recovery is to correct
-    # group_vars and re-run, which is what an operator does on seeing the
+    # one. Every role here is idempotent, so the recovery is to correct that
+    # file and re-run, which is what an operator does on seeing the
     # refusal anyway -- while a play-scope fix would restate every role's
     # required inputs in a second place that nothing keeps in step with the
     # roles, buying an earlier refusal at the cost of a new drift class. Do not
     # read the guard play above as this fix: it is about NO host resolving at
     # all, which is upstream of every role. NO LIVE CASE TODAY -- this sentence
-    # used to name staging, whose group_vars left `deploy_apps` unset
-    # deliberately; it is supplied there now, and every environment this
-    # repository has supplies it. The next case is the next environment's
-    # group_vars written from scratch, which is where that file's own comment
-    # now sends whoever writes one. Revisit when a partially-converged host
+    # used to name staging, whose variables left `deploy_apps` unset
+    # deliberately; it is supplied there now, and every host this repository
+    # has supplies it. The next case is the next HOST's vars file written from
+    # scratch -- `deploy_apps` moved onto the host axis, so a new stack now
+    # arrives without it even in an environment whose baseline is complete,
+    # which makes that case more frequent rather than less. Both existing
+    # group_vars files say where the list went. Revisit when a
+    # partially-converged host
     # actually costs something, or when a third requirement comes to rest on
     # the play-scope half; two do already, the other being *Platform Data
     # Volume Is Mounted at a Fixed Host Path*.

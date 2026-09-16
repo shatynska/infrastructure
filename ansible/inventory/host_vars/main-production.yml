@@ -1,0 +1,49 @@
+---
+# Variables of ONE HOST -- the server `terraform/stacks/main-production` names,
+# and no other. The filename is that server's Hetzner name, which is what
+# `inventory_hostname` resolves to under the `hcloud` plugin and what the
+# stack's `terraform.tfvars` declares as `name`; the three are one string by
+# obligation rather than by coincidence, and `.github/tests` compares them.
+#
+# WHY THIS FILE EXISTS AT ALL, when `group_vars/production.yml` would resolve
+# for this host just as well today. A group is an ENVIRONMENT, and an
+# environment may hold two stacks -- `main-production` and a second tenant's
+# `analytics-production` -- reading one file. Everything here is a value whose
+# effect stops at one host, so a second tenant's host must not receive it. See
+# "A Host-Scoped Variable Lives in the Host's Own Vars File"
+# (openspec/specs/iac-host-configuration/spec.md), which states the test:
+# a variable belongs here wherever a second host of a different tenant in the
+# same environment would need a different value or none at all.
+#
+# WHAT STAYS IN `group_vars/production.yml` rather than moving here: the
+# environment-wide baseline -- `ansible_user`, the volume subdirectories, the
+# registry credential, the heartbeat project key -- which is true of every host
+# in this environment whichever tenant owns it. That file also still carries
+# three values whose axis is questionable, named in the requirement above as
+# placements this repository has not corrected; do not read their presence
+# there as licence to add a fourth.
+
+# Per-application deploy public keys (add-per-app-deploy-keys). Safe to
+# commit -- these are public keys, not secrets; only each private half is
+# sensitive, and that never appears here. `platform`'s private half lives in
+# this repository's own main-production GitHub Environment as
+# PLATFORM_DEPLOY_SSH_KEY; `commerce-ops`'s lives in that application's own
+# repository's Environment secret.
+#
+# ONE LEAKED PRIVATE HALF MUST REACH ONE HOST, which is the whole reason this
+# list sits in a host's file. The same application deploying to two hosts does
+# so with two keypairs, one enumerated in each host's own file -- compare
+# `main-staging.yml`, whose entries carry the same two names and neither of
+# these keys.
+#
+# `platform`'s entry is the same keypair that has authenticated this host since
+# the change add-per-app-deploy-keys restricted its authorized_keys entry to
+# deploy-receive rather than rotating it. Nothing about that changed when this
+# list moved files: a key is identified by its fingerprint, and both were
+# compared with `ssh-keygen -lf` against what `group_vars/production.yml`
+# carried before the move.
+deploy_apps:
+  - name: platform
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKbTTA4VUQjmUt2+jOE3FxPahMc8i+bRvR6g8f+7/m9M deploy@platform"
+  - name: commerce-ops
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvqBXstDCjAlYAZ3i92iLanC+lDe44eNpS0UGa6N4jw commerce-ops-deploy"
