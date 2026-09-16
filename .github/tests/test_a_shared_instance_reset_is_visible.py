@@ -36,7 +36,7 @@ reach it:
    applications it enumerates; a wildcard committed in the template is invisible
    to a fixture carrying one application per rule.
 4. Every application's probe key is declared beside its deploy key, and the two
-   are distinct. `ansible/inventory/group_vars/` is not read by any Molecule
+   are distinct. `ansible/inventory/host_vars/` is not read by any Molecule
    scenario at all -- and is explicitly excluded from the suite's own change
    detection -- so nothing else in this repository reads it.
 5. The upgrade runbook raises the declaration before its first destructive step
@@ -134,9 +134,21 @@ ONBOARDING = "docs/onboard-an-application.md"
 PLATFORM_COMPOSE = "platform/docker-compose.yml"
 PROBE_SCENARIO = f"{ROLE}/molecule/probe-and-window"
 
-GROUP_VARS = (
-    "ansible/inventory/group_vars/staging.yml",
-    "ansible/inventory/group_vars/production.yml",
+# The files that enumerate the applications a host authorises. They are the
+# HOST's own vars files, not an environment's `group_vars`: an entry there would
+# authorise one key on every host in the environment, and an environment may
+# hold two stacks of different tenants. See *A Host-Scoped Variable Lives in the
+# Host's Own Vars File* (`openspec/specs/iac-host-configuration/spec.md`).
+#
+# This tuple named `group_vars` when these tests were derived, which is where
+# `deploy_apps` lived then; `bound-a-deploy-key-to-one-host-when-an-environment-
+# holds-two-stacks` moved it while this change was being implemented. Only the
+# location changed here -- every assertion below is the one that was derived
+# from the delta, and `declared_applications` still refuses a file that declares
+# no `deploy_apps`, so pointing it at the wrong place cannot pass vacuously.
+HOST_VARS = (
+    "ansible/inventory/host_vars/main-staging.yml",
+    "ansible/inventory/host_vars/main-production.yml",
 )
 
 # The six tokens, in the requirement's own precedence order.
@@ -591,11 +603,11 @@ PRIVATE_KEY_MARKER = "PRIVATE KEY"
 
 
 def declared_applications(root: Path | None = None) -> list[tuple[str, dict]]:
-    """Every `deploy_apps` entry in every committed `group_vars` file, as
+    """Every `deploy_apps` entry in every committed host vars file, as
     (file, entry)."""
     base = _base(root)
     found = []
-    for name in GROUP_VARS:
+    for name in HOST_VARS:
         document = load_tolerant_yaml(base / name)
         entries = document.get("deploy_apps") if isinstance(document, dict) else None
         if not isinstance(entries, list) or not entries:
@@ -1015,7 +1027,7 @@ GOOD_RUNBOOK = f"""## Operating the shared stack
 ## Monitoring and alerting
 """
 
-GOOD_GROUP_VARS = """---
+GOOD_HOST_VARS = """---
 deploy_apps:
   - name: platform
     public_key: "ssh-ed25519 AAAADEPLOYPLATFORM deploy@platform"
@@ -1056,8 +1068,8 @@ def _good_tree() -> dict[str, str]:
         ONBOARDING: GOOD_ONBOARDING,
         f"{PROBE_SCENARIO}/verify.yml": GOOD_SCENARIO,
     }
-    for name in GROUP_VARS:
-        files[name] = GOOD_GROUP_VARS
+    for name in HOST_VARS:
+        files[name] = GOOD_HOST_VARS
     return files
 
 
@@ -1164,7 +1176,7 @@ class TestTheChecksDiscriminate(FixtureTreeMixin, unittest.TestCase):
         appearing in both fields is bound to neither -- and both entries look
         perfectly well-formed."""
         files = _good_tree()
-        files[GROUP_VARS[0]] = GOOD_GROUP_VARS.replace(
+        files[HOST_VARS[0]] = GOOD_HOST_VARS.replace(
             'probe_public_key: "ssh-ed25519 AAAAPROBEPLATFORM probe@platform"',
             'probe_public_key: "ssh-ed25519 AAAADEPLOYPLATFORM deploy@platform"',
         )
@@ -1173,7 +1185,7 @@ class TestTheChecksDiscriminate(FixtureTreeMixin, unittest.TestCase):
 
     def test_an_application_left_without_a_probe_key_is_caught(self) -> None:
         files = _good_tree()
-        files[GROUP_VARS[1]] = GOOD_GROUP_VARS.replace(
+        files[HOST_VARS[1]] = GOOD_HOST_VARS.replace(
             '    probe_public_key: "ssh-ed25519 AAAAPROBECOMMERCE probe@commerce-ops"\n', ""
         )
         root = self.scratch_tree(files)
@@ -1183,7 +1195,7 @@ class TestTheChecksDiscriminate(FixtureTreeMixin, unittest.TestCase):
         """Every assertion over the enumerated applications reports green over an
         empty list, so the reader raises instead of returning one."""
         files = _good_tree()
-        files[GROUP_VARS[0]] = "---\ndeploy_apps: []\n"
+        files[HOST_VARS[0]] = "---\ndeploy_apps: []\n"
         root = self.scratch_tree(files)
         with self.assertRaises(AssertionError):
             probe_key_offences(root)

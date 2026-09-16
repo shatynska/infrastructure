@@ -72,6 +72,6 @@ It sits outside the volume it announces, which is discarded during the window, a
 
 | Variable | Default | Description |
 |---|---|---|
-| `deploy_apps` | *(required, no default)* | List of `{name, public_key}`, each entry optionally carrying `probe_public_key` -- one entry per application allowed to deploy to this host, `platform` included. |
+| `deploy_apps` | *(required, no default)* | List of `{name, public_key}`, each entry optionally carrying `probe_public_key` -- one entry per application allowed to deploy to this host, `platform` included. Supplied from **that host's own** `ansible/inventory/host_vars/<server name>.yml`, never from an environment's `group_vars`: an environment may hold two stacks of different tenants, and an entry there would authorise one key on both their hosts. See *A Host-Scoped Variable Lives in the Host's Own Vars File* (`openspec/specs/iac-host-configuration/spec.md`). |
 | `ghcr_pull_token` | *(required, no default)* | A `read:packages`-scoped GHCR token, shared across every application. |
 | `ghcr_pull_username` | *(required, no default)* | The username paired with `ghcr_pull_token` for `docker login ghcr.io`. |

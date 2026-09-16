@@ -1,0 +1,18 @@
+# The platform stack's own consumption path: `.env` is read by Compose's
+# dotenv parser and interpolated into this file, and the service receives
+# whatever that interpolation produced.
+#
+# Pinned by digest rather than by tag, per this repository's pinning rule, and
+# refreshed weekly by the `.github/dependabot.yml` entry naming this directory.
+services:
+  probe:
+    image: alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+    environment:
+      PROBE: ${PROBE}
+      NONCE: ${NONCE}
+    # The nonce is echoed back with the value so the caller can prove the
+    # answer came from the run it started. Without it, output read from any
+    # other container -- a stale one, a concurrent one -- is a plausible
+    # value rather than a detectable error, which is how a batch run
+    # produced rows carrying values from an entirely different round.
+    command: ["sh", "-c", "printf %s:%s \"$$NONCE\" \"$$(printf %s \"$$PROBE\" | base64 -w0)\""]
