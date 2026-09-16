@@ -44,3 +44,31 @@ Captured by following the merged phase 1. Everything below is what "serving what
 2. **`dig` is not installed on this workstation**, so a reader checking which names resolve has to reach for something else. Not a runbook defect — it names no such command — but phase 5's instruction to read the zone at the provider is the only resolution step it gives, and a local check is worth having. `python3 -c 'import socket; print(socket.gethostbyname(...))'` is what was used here.
 
 3. **Phase 1's own credential line is short by one.** It names the operator inspection key, `gh`'s token and the read-only Hetzner token. The capture also needs the **heartbeat observer's account**, for the period-and-grace read the same phase asks for — which is the one part of phase 1 this session could not perform.
+
+## Phase 3 — the destroy plan, read before merging, 2026-09-16T19:35Z
+
+The plan job of PR #243 (`server_enabled = false` on `main-staging`), read from the pull request's own plan comment. **Nothing has been applied**; this is the plan alone.
+
+    Plan: 0 to add, 0 to change, 3 to destroy.
+
+      # module.server[0].hcloud_firewall.this will be destroyed
+      # module.server[0].hcloud_server.this   will be destroyed
+      # module.volume[0].hcloud_volume.this   will be destroyed
+
+    hcloud_ssh_key.this: Refreshing state... [id=118598421]
+    module.volume[0].hcloud_volume.this: Refreshing state... [id=106839043]
+
+**This is the first live observation of the volume/server coupling**, which `docs/backlog.md` `exercise-the-volume-server-coupling-against-live-state` records as never exercised. It confirms three things and disproves one:
+
+- The toggle destroys the **server, its firewall and the volume together**, exactly as `main.tf`'s `count = var.volume_enabled && var.server_enabled ? 1 : 0` says it must.
+- `hcloud_ssh_key.this` is **refreshed and not destroyed** — it is stack-owned and ungated, and outlives the server as its own file's comment intends.
+- The volume id is `106839043`, matching the `scsi-0HC_Volume_106839043` the phase 1 capture read from the host. The two reads agree, which is what makes either of them worth anything.
+- **`docs/bootstrap-a-new-host.md`'s Appendix B was wrong of this route**, as the change proposed: staging's data volume *is* wiped by a rebuild performed by the toggle. The runbook's phase 3 states the scoped version and is confirmed by this plan.
+
+**The observation cost no destruction.** It is a plan against live state, which is precisely the shape `exercise-the-volume-server-coupling-against-live-state` asks for and could not find a home for — that entry says a local plan cannot be run because the workstation's HCP credential belongs to another organisation, and concludes that "whoever takes this either obtains an HCP credential for this organisation, or finds the reads a home in the pipeline". **The pull-request plan job is that home**, and it was available all along. The entry's remaining half is production's own coupling, which this does not touch.
+
+### Divergence found in phase 3
+
+4. **The destroy pull request's checks can fail transiently, and the runbook does not say so.** `validate` failed on its first run with `could not connect to registry.terraform.io: ... read: connection reset by peer`, while initialising the **`main-production`** stack — a stack the pull request does not touch. `plan (main-staging)` had already passed. A re-run of the failed job was the whole remedy.
+
+   It matters here more than it would elsewhere: this is the pull request whose merge destroys a host, so an operator meeting a red check on it is in exactly the state where reading it as "something about my change is wrong" costs the most. The runbook's phase 3 should say that the check aggregates every stack, that a failure naming a stack the change does not touch is usually the registry rather than the change, and that the remedy is a re-run rather than an edit.
