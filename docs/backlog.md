@@ -952,3 +952,32 @@ So the mechanism is exactly as sound as it was designed to be, for committed edi
 **What a change owes.** The decision is what makes a rotation observable, and the options differ in what they cost rather than in difficulty: a deploy-time step that force-recreates the services whose configs interpolate a secret; a checksum computed over the *rendered* config at deploy time rather than committed, which ends the static check but catches both cases; or a probe after the deploy that asserts the running container's config carries the value just shipped, in the shape `make-a-shared-instance-reset-visible-to-its-applications` used. Whichever is chosen, the test belongs where a static read cannot reach — this is a property of a running container, so `.github/tests` is the wrong home for it and Molecule cannot see a secret either.
 
 **Until it lands**, a secret rotation is followed by a hand recreation of the affected service on that host, and the operator confirms the value arrived rather than reading the deploy's green.
+
+---
+
+## 57. perform-the-stack-separation-check-that-was-never-run
+
+**Not blocked, and it is three live defects rather than a plan. Found 2026-09-16 by the rehearsal's pre-state capture, which read the running containers rather than the documents.**
+
+`docs/bootstrap-a-new-host.md` §7.5 already carries the check that catches this, and says why it matters: *"the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports."* **It was never performed. Both halves fail.** Measured by comparing hashes of the values the running containers actually hold, so no value is reproduced here:
+
+| Per-stack value | The two hosts hold |
+|---|---|
+| `PLATFORM_DEADMANSWITCH_URL` | the same — see `give-staging-its-own-dead-mans-switch-check` |
+| `PLATFORM_SLACK_WEBHOOK_URL` | the same, and both configs name the same channel `#alerts` |
+| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | the same |
+| `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | **different** |
+
+The last row is the tell. It differs because `provision-commerce-ops-database-in-the-shared-instance` separated it by hand on 2026-09-15 and recorded doing so; the other three were never swept, and nothing since has looked. One value was fixed and its three siblings were left, which is what an un-run check looks like from the outside.
+
+**What each one costs, since they fail differently:**
+
+- **The Slack webhook** defeats attribution. Nothing labels an alert with the host it came from — the channel *is* the attribution, which is why Appendix A says a channel per stack. Today an alert in `#alerts` could be either host, and the operator has no way to tell which from the alert itself.
+- **The Grafana password** means one leaked credential opens both dashboards, including production's. It also silently defeats the one check §7.5 offers for telling the two stacks apart.
+- **The dead-man's-switch** masks production's own liveness, and has its own entry.
+
+**Why no mechanism could have caught any of them.** All four are GitHub Environment secrets. A committed file cannot see what an Environment holds, still less that two Environments hold one value, so `.github/tests` cannot reach it and neither can a reviewer; Molecule converges a container and never sees a secret. The only check that reaches it is an operator comparing the running hosts, which is what §7.5 asks for and what nobody did. That is worth stating plainly rather than filed as an oversight: **this class of defect is invisible to every automated guard this repository has**, and its only defence is a manual step in a document read once.
+
+**What a change owes.** Give each stack its own value for the three shared secrets, a channel of its own for the alerts, and then perform §7.5's check and record the date it was performed. Two things to decide inside that: whether `#alerts` stays production's and staging gets a new channel or both move, since the existing channel's history is production's; and whether the separation is worth asserting somewhere repeatable rather than in a runbook step — a probe comparing hashes across hosts is the shape that would work, and it needs a home, because it is a property of two running hosts and neither `.github/tests` nor Molecule can hold it.
+
+**Sequencing note, because it bites.** Replacing any of these three secrets does not reach the running container on a deploy — `make-a-rotated-secret-reach-its-inline-config` is why, and it covers the webhook and the dead-man's-switch. Plan the recreation as part of the work rather than discovering it afterwards.
