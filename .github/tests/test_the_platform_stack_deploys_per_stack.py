@@ -145,7 +145,16 @@ from test_environment_agnostic_pipeline import (
 # rather than a property the specification states.
 # --------------------------------------------------------------------------
 
-GROUP_VARS_DIR = ROOT / "ansible" / "inventory" / "group_vars"
+HOST_VARS_DIR = ROOT / "ansible" / "inventory" / "host_vars"
+STACKS_DIR = ROOT / "terraform" / "stacks"
+
+# The Terraform variable a stack declares its server's name in. That name is
+# the Hetzner server name, is what `inventory_hostname` resolves to under the
+# `hcloud` plugin, and is therefore the stem of that host's vars file -- see
+# "A Host-Scoped Variable Lives in the Host's Own Vars File"
+# (openspec/specs/iac-host-configuration/spec.md). DERIVED from the committed
+# stacks: the requirement obliges the file to exist and fixes no spelling.
+SERVER_NAME_FIELD = "name"
 ENV_EXAMPLE = ROOT / "platform" / ".env.example"
 GITIGNORE = ROOT / ".gitignore"
 
@@ -290,17 +299,22 @@ def opting_in(root: Path | None = None) -> list:
 
 
 # --------------------------------------------------------------------------
-# Reading a host's deploy-key authorisations out of its `group_vars` file
+# Reading a host's deploy-key authorisations out of its own vars file
 # --------------------------------------------------------------------------
 
 
 class AnsibleTolerantLoader(yaml.SafeLoader):
     """`SafeLoader`, plus the two tags Ansible's own YAML carries.
 
-    `ansible/inventory/group_vars/*.yml` carry `!vault` blocks, which
+    `ansible/inventory/`'s vars files carry `!vault` blocks, which
     `yaml.safe_load` refuses -- so a reader built on it would fail to parse the
     very files this module cross-checks, and the change's own design.md names
     that as the cost that lands on whoever writes this check.
+
+    It is kept after the authorisations moved to `host_vars/`, which carry no
+    vaulted value today. A reader that refused one would refuse the first
+    secret-bearing host variable anyone writes, and the requirement above
+    admits that case explicitly rather than forbidding it.
 
     NAMED EXPLICITLY, never a catch-all, which is the whole of the rule this
     copies. `_AnsibleTolerantLoader` in `ansible/scripts/select_molecule_roles.py`
@@ -327,16 +341,16 @@ for _tag in ("!vault", "!unsafe"):
     )
 
 
-class UnreadableGroupVars(AssertionError):
-    """A `group_vars` file that cannot be parsed, refused rather than read as
+class UnreadableInventoryVars(AssertionError):
+    """An inventory vars file that cannot be parsed, refused rather than read as
     authorising nothing -- and rather than read as authorising everything."""
 
 
-def group_variables(path: Path) -> dict:
+def inventory_variables(path: Path) -> dict:
     try:
         document = yaml.load(path.read_text(encoding="utf-8"), Loader=AnsibleTolerantLoader)
     except (yaml.YAMLError, UnicodeDecodeError, OSError) as error:
-        raise UnreadableGroupVars(
+        raise UnreadableInventoryVars(
             f"{path.name}: cannot be parsed ({error}), so which applications this host "
             "authorises a deploy key for is unknown. Refused rather than read as "
             "authorising none"
@@ -344,26 +358,31 @@ def group_variables(path: Path) -> dict:
     if document is None:
         return {}
     if not isinstance(document, dict):
-        raise UnreadableGroupVars(
+        raise UnreadableInventoryVars(
             f"{path.name}: is not a mapping, so it declares no host variables at all"
         )
     return document
 
 
 def authorised_applications(root: Path | None = None) -> dict:
-    """Ansible group -> the applications its `group_vars` file authorises a
+    """Server name -> the applications that host's own vars file authorises a
     deploy key for.
 
-    A group with no file of its own is ABSENT from this mapping, which the
-    cross-check reports by name; that is not the same as a group whose file
+    KEYED ON THE HOST, not on its environment, and that is the whole of what
+    this reader was changed for: an environment may hold two stacks of
+    different tenants, so a group-keyed read answered both their opt-ins with
+    one entry and authorised one key on two hosts.
+
+    A host with no file of its own is ABSENT from this mapping, which the
+    cross-check reports by name; that is not the same as a host whose file
     enumerates nothing, which is a host authorising no application.
     """
-    base = (ROOT if root is None else root) / "ansible" / "inventory" / "group_vars"
+    base = (ROOT if root is None else root) / "ansible" / "inventory" / "host_vars"
     found: dict = {}
     if not base.is_dir():
         return found
     for path in sorted(base.glob("*.yml")):
-        entries = group_variables(path).get(DEPLOY_APPS_FIELD) or []
+        entries = inventory_variables(path).get(DEPLOY_APPS_FIELD) or []
         names = set()
         if isinstance(entries, list):
             for entry in entries:
@@ -376,14 +395,14 @@ def authorised_applications(root: Path | None = None) -> dict:
 
 
 def authorised_keys(root: Path | None = None) -> dict:
-    """Ansible group -> the public half of the key its host authorises for the
-    platform application, for the groups that authorise one."""
-    base = (ROOT if root is None else root) / "ansible" / "inventory" / "group_vars"
+    """Server name -> the public half of the key that host authorises for the
+    platform application, for the hosts that authorise one."""
+    base = (ROOT if root is None else root) / "ansible" / "inventory" / "host_vars"
     found: dict = {}
     if not base.is_dir():
         return found
     for path in sorted(base.glob("*.yml")):
-        entries = group_variables(path).get(DEPLOY_APPS_FIELD) or []
+        entries = inventory_variables(path).get(DEPLOY_APPS_FIELD) or []
         if not isinstance(entries, list):
             continue
         for entry in entries:
@@ -396,9 +415,42 @@ def authorised_keys(root: Path | None = None) -> dict:
     return found
 
 
-def deploy_authorisation_offences(opt_ins, groups, authorisations) -> list:
-    """Why a stack's declaration and its host's `group_vars` file disagree, as
+def declared_servers(root: Path | None = None) -> dict:
+    """Stack -> the server name its `terraform.tfvars` declares, or `None`.
+
+    `None` rather than an omission, so that a stack declaring no server is
+    reported as such rather than read as a stack that does not exist. The read
+    is a line match rather than an HCL parse, which is the tool every other
+    static read of a `.tfvars` in this suite uses and is what keeps this module
+    free of a Terraform binary.
+    """
+    base = (ROOT if root is None else root) / "terraform" / "stacks"
+    found: dict = {}
+    if not base.is_dir():
+        return found
+    for directory in sorted(p for p in base.iterdir() if p.is_dir()):
+        tfvars = directory / "terraform.tfvars"
+        found[directory.name] = None
+        if not tfvars.is_file():
+            continue
+        for line in tfvars.read_text(encoding="utf-8").splitlines():
+            match = re.match(
+                rf'^\s*{SERVER_NAME_FIELD}\s*=\s*"([^"]+)"\s*(?:#.*)?$', line
+            )
+            if match:
+                found[directory.name] = match.group(1)
+                break
+    return found
+
+
+def deploy_authorisation_offences(opt_ins, servers, authorisations) -> list:
+    """Why a stack's declaration and its host's own vars file disagree, as
     messages naming BOTH files; empty where they agree.
+
+    EACH STACK IS ANSWERED BY ITS OWN HOST. Two stacks sharing an environment
+    carry two obligations rather than one between them, which is what the
+    requirement's scenario of that name obliges and what a group-keyed read
+    could not express.
 
     Takes all three sides as arguments rather than reading them, so the
     discriminator at the end of this file can hand it a disagreeing pair. Over
@@ -414,26 +466,27 @@ def deploy_authorisation_offences(opt_ins, groups, authorisations) -> list:
     for stack in sorted(opt_ins):
         if opt_ins.get(stack) is not True:
             continue
-        group = groups.get(stack)
-        if not group:
+        server = servers.get(stack)
+        if not server:
             offences.append(
                 f"terraform/stacks/{stack}/pipeline.yml declares that the shared "
-                "platform stack is deployed to this stack and names no Ansible group, "
-                "so no group_vars file says whether its host authorises the deploy key"
+                "platform stack is deployed to this stack and "
+                f"terraform/stacks/{stack}/terraform.tfvars names no server, so no "
+                "host vars file says whether its host authorises the deploy key"
             )
             continue
-        authorised = authorisations.get(group)
+        authorised = authorisations.get(server)
         if authorised is None:
             offences.append(
                 f"terraform/stacks/{stack}/pipeline.yml opts in to the platform deploy "
-                f"and ansible/inventory/group_vars/{group}.yml does not exist, so the "
+                f"and ansible/inventory/host_vars/{server}.yml does not exist, so the "
                 "deploy would authenticate with a key nothing has told the host to "
                 "accept"
             )
         elif PLATFORM_APPLICATION not in authorised:
             offences.append(
                 f"terraform/stacks/{stack}/pipeline.yml opts in to the platform deploy "
-                f"and ansible/inventory/group_vars/{group}.yml does not enumerate "
+                f"and ansible/inventory/host_vars/{server}.yml does not enumerate "
                 f"`{PLATFORM_APPLICATION}` among `{DEPLOY_APPS_FIELD}` (it names "
                 f"{sorted(authorised)}), so the deploy would fail authenticating after "
                 "the tailnet join and after any approval"
@@ -1083,10 +1136,11 @@ class TestAStackOptingInAuthorisesTheDeployOnItsHost(unittest.TestCase):
     """MODIFIED requirement: Each Stack Declares Its Own Pipeline Configuration --
     "A stack declaring that the platform stack is deployed to it SHALL also
     authorise that deploy on the host, by enumerating the platform application
-    among the deploy-key authorisations in the `group_vars` file of the Ansible
-    group it declares ... a declaration opting in without the corresponding
+    among the deploy-key authorisations in the host vars file of the host that
+    stack provisions ... a declaration opting in without the corresponding
     authorisation SHALL fail the required status check on the pull request,
-    naming both files".
+    naming both files", and "each stack's opt-in SHALL be answered by its own
+    host's authorisation".
 
     THE CHECK LIVES HERE rather than in the workflow's discovery, and that is the
     change's design.md Decision 4: it fails the pull request rather than the
@@ -1112,10 +1166,9 @@ class TestAStackOptingInAuthorisesTheDeployOnItsHost(unittest.TestCase):
     def test_every_opted_in_stacks_host_authorises_the_platform_deploy_key(self) -> None:
         """SPECIFIED -- see the class docstring."""
         self.test_there_is_an_opt_in_to_check()
-        declarations = environment_declarations()
         offences = deploy_authorisation_offences(
             platform_opt_ins(),
-            {name: declaration.target_group for name, declaration in declarations.items()},
+            declared_servers(),
             authorised_applications(),
         )
         self.assertEqual([], offences, "; ".join(offences))
@@ -1134,20 +1187,20 @@ class TestAStackOptingInAuthorisesTheDeployOnItsHost(unittest.TestCase):
         """
         authorisations = authorised_applications()
         prepared = sorted(
-            group
-            for group, applications in authorisations.items()
+            server
+            for server, applications in authorisations.items()
             if PLATFORM_APPLICATION in applications
         )
         self.assertTrue(
             prepared,
-            "no group_vars file authorises the platform deploy key at all, so this "
+            "no host vars file authorises the platform deploy key at all, so this "
             "assertion reads nothing -- and no stack could opt in without failing the "
-            f"check above. The groups read were {sorted(authorisations)}",
+            f"check above. The hosts read were {sorted(authorisations)}",
         )
         declarations = environment_declarations()
         offences = deploy_authorisation_offences(
             {name: None for name in declarations},
-            {name: declaration.target_group for name, declaration in declarations.items()},
+            declared_servers(),
             authorisations,
         )
         self.assertEqual(
@@ -2179,12 +2232,12 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
 
     # -- the vault-tolerant loader ----------------------------------------
 
-    def test_a_vaulted_group_vars_file_is_read_rather_than_refused(self) -> None:
+    def test_a_vaulted_inventory_vars_file_is_read_rather_than_refused(self) -> None:
         """The reason this loader exists: `yaml.safe_load` refuses `!vault`, and a
         reader built on it would fail on the very files this module reads."""
-        directory = Path(tempfile.mkdtemp(prefix="group-vars-"))
+        directory = Path(tempfile.mkdtemp(prefix="inventory-vars-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
-        path = directory / "staging.yml"
+        path = directory / "main-staging.yml"
         path.write_text(
             "deploy_apps:\n  - name: platform\n    public_key: ssh-ed25519 AAAA\n"
             "ghcr_pull_token: !vault |\n  $ANSIBLE_VAULT;1.2;AES256;staging\n  3333\n",
@@ -2192,7 +2245,7 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         )
         self.assertEqual(
             {"platform"},
-            {entry["name"] for entry in group_variables(path)[DEPLOY_APPS_FIELD]},
+            {entry["name"] for entry in inventory_variables(path)[DEPLOY_APPS_FIELD]},
         )
 
     def test_an_unknown_tag_refuses_rather_than_yielding_an_empty_document(self) -> None:
@@ -2201,43 +2254,63 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
         read out of an empty document is an absent list -- so the cross-check would
         pass vacuously on the very pair it compares, failing open on the one guard
         this change adds."""
-        directory = Path(tempfile.mkdtemp(prefix="group-vars-"))
+        directory = Path(tempfile.mkdtemp(prefix="inventory-vars-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
-        path = directory / "production.yml"
+        path = directory / "main-production.yml"
         path.write_text("deploy_apps: !something\n  - name: platform\n", encoding="utf-8")
-        with self.assertRaises(UnreadableGroupVars):
-            group_variables(path)
+        with self.assertRaises(UnreadableInventoryVars):
+            inventory_variables(path)
 
     # -- the declaration/authorisation cross-check ------------------------
 
     def test_an_opt_in_without_an_authorisation_is_reported(self) -> None:
         offences = deploy_authorisation_offences(
-            {"main-staging": True}, {"main-staging": "staging"}, {"staging": {"someapp"}}
+            {"main-staging": True},
+            {"main-staging": "main-staging"},
+            {"main-staging": {"someapp"}},
         )
         self.assertEqual(1, len(offences), offences)
         self.assertIn("terraform/stacks/main-staging/pipeline.yml", offences[0])
-        self.assertIn("ansible/inventory/group_vars/staging.yml", offences[0])
+        self.assertIn("ansible/inventory/host_vars/main-staging.yml", offences[0])
 
-    def test_an_opt_in_whose_group_has_no_group_vars_file_is_reported(self) -> None:
+    def test_an_opt_in_whose_host_has_no_vars_file_is_reported(self) -> None:
         offences = deploy_authorisation_offences(
-            {"main-staging": True}, {"main-staging": "staging"}, {"production": {"platform"}}
+            {"main-staging": True},
+            {"main-staging": "main-staging"},
+            {"main-production": {"platform"}},
         )
         self.assertEqual(1, len(offences), offences)
         self.assertIn("does not exist", offences[0])
 
-    def test_an_opt_in_declaring_no_group_is_reported(self) -> None:
+    def test_an_opt_in_declaring_no_server_is_reported(self) -> None:
         offences = deploy_authorisation_offences(
-            {"main-staging": True}, {"main-staging": None}, {"staging": {"platform"}}
+            {"main-staging": True}, {"main-staging": None}, {"main-staging": {"platform"}}
         )
         self.assertEqual(1, len(offences), offences)
+        self.assertIn("terraform.tfvars names no server", offences[0])
 
     def test_an_authorised_host_whose_stack_opts_in_is_not_reported(self) -> None:
         self.assertEqual(
             [],
             deploy_authorisation_offences(
-                {"main-staging": True}, {"main-staging": "staging"}, {"staging": {"platform"}}
+                {"main-staging": True},
+                {"main-staging": "main-staging"},
+                {"main-staging": {"platform"}},
             ),
         )
+
+    def test_two_stacks_in_one_environment_are_answered_separately(self) -> None:
+        """The failure a group-keyed read could not express: two stacks whose
+        declarations name one environment, one of whose hosts authorises the key.
+        Under the old resolution both resolved to one file and one entry answered
+        both."""
+        offences = deploy_authorisation_offences(
+            {"main-production": True, "analytics-production": True},
+            {"main-production": "main-production", "analytics-production": "analytics-production"},
+            {"main-production": {"platform"}},
+        )
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("analytics-production", offences[0])
 
     def test_the_implication_holds_in_one_direction_only(self) -> None:
         """A host prepared before its deploy path exists is the deliberate state
@@ -2248,8 +2321,8 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             [],
             deploy_authorisation_offences(
                 {"main-staging": False, "main-production": None},
-                {"main-staging": "staging", "main-production": "production"},
-                {"staging": {"platform"}, "production": {"platform"}},
+                {"main-staging": "main-staging", "main-production": "main-production"},
+                {"main-staging": {"platform"}, "main-production": {"platform"}},
             ),
         )
 
