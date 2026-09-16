@@ -113,3 +113,35 @@ PR #245. Waiting on the operator's merge.
 | 1 — pre-state capture | ~9 min, including the three defects it surfaced |
 | *interlude* — alert-routing defects found and fixed | ~30 min, not part of the sequence |
 | 3 — destroy, merge to apply complete | 1 min 12 s |
+
+## Phase 4 applied — the recreate, 2026-09-16T20:27:12Z → 20:28:32Z
+
+**82 seconds**, merge to `Apply complete`.
+
+    module.server[0].hcloud_firewall.this: Creation complete after 1s  [id=11635130]
+    module.server[0].hcloud_server.this:   Creation complete after 18s [id=166213892]
+    module.volume[0].hcloud_volume.this:   Creation complete after 18s [id=106886751]
+
+    Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
+
+Read back from the inventory, as the runbook says rather than from `terraform output`: server id **166213892** (was 165402032), volume id **106886751** (was 106839043), status `running`, reachable as `root` on the public address within nine minutes of creation.
+
+### Divergences found in phase 4
+
+5. **The public IPv4 did not change, and the runbook assumes it always does.** It is `62.238.17.177` before and after — the same address, on a different server. Hetzner handed it back, presumably because the destroy and the create were seven minutes apart and the address was still held for that project. So **phase 5's DNS step was a no-op this time**, and every record aimed at this host was already correct.
+
+   The correction is not "the address does not change" — that is the same error in the other direction, and a slower rebuild would very likely get a different one. It is that the step is **conditional and the condition must be checked rather than assumed**: read the address back, compare it with what phase 1 recorded, and edit DNS only if it moved. As written, phase 5 sends an operator to a DNS provider to re-enter a value that is already right, which is a step that can only introduce an error.
+
+6. **The stale `known_hosts` entry bit at the public address after all — and an earlier correction to this runbook made that harder to see.** Code review found the warning sitting beside the new-public-IP connection and moved it to phase 8's reused tailnet name, on the reasoning that a brand-new address carries no stale entry. That reasoning is sound and its premise was false here: the address was **reused**, so `ssh root@62.238.17.177` failed with `REMOTE HOST IDENTIFICATION HAS CHANGED!` and `ssh-keygen -F` confirms the stale entry was present.
+
+   The honest statement covers both and neither location alone: the entry bites at **any address or name you have connected to before**, and after a quick rebuild the public address may well be one of them. Both phase 7 and phase 8 need it, with `ssh-keygen -R` given for each.
+
+   Worth recording as a process note rather than only as a text fix: this is a correction that was **reviewed, agreed, and wrong**, and nothing but running the sequence would have caught it. The reviewer reasoned from what a rebuild usually does; the rehearsal observed what this one did.
+
+### Running timings
+
+| Phase | Wall clock |
+|---|---|
+| 3 — destroy, merge to apply complete | 1 min 12 s |
+| 4 — recreate, merge to apply complete | 1 min 22 s |
+| 5 — DNS | **not needed** — the address was reused |
