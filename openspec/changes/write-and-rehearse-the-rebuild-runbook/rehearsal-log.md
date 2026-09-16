@@ -217,3 +217,25 @@ Verified on the host afterwards: `hostname` is `shatynska-main-staging`; `/mnt/m
     So the role can be created from the value the container already holds, on the host, without the secret being fetched from a password manager, pasted into a shell, or appearing in any history. That is the same act with fewer places to leak it or mistype it, and it removes the phase's only dependency on a credential the operator has to go and find.
 
     It is worth saying what it does *not* remove: the value still has to be correct in the Environment, and if it is wrong there the exporter and the role will agree with each other and both be wrong. The check is unchanged — `pg_up 1` and `pg_exporter_last_scrape_error 0`.
+
+## Phases 11, 13, 14 applied — 2026-09-16T21:08Z–21:11Z
+
+- **11** — `pgexporter` role created from the value the exporter container already held. `CREATE ROLE`, `GRANT ROLE`, then `pg_up 1` and `pg_exporter_last_scrape_error 0`. All five scrape targets `up`, matching the phase 1 capture exactly.
+- **13** — one prune activation: `considered 8, removed 0, refused 0`, and the reporter answered **`OK`** rather than `Created`, which says the heartbeat check **survived the rebuild** rather than being re-created on the observer's default. N=8 is the platform stack alone, since the application had not redeployed yet — the documented expectation.
+- **14** — the re-provisioning recipe with `rotate=yes`, output exactly as `docs/onboard-an-application.md` §3.2 describes: four `SET`s, `CREATE ROLE`, `CREATE DATABASE`, `REVOKE`. Confirmed afterwards: database `commerce-ops` owned by role `commerce-ops`, Environment secret rotated at 21:10:59Z.
+
+## Phase 15 — the application's own deploy
+
+### Divergence found in phase 15 — the phase assumes a button that does not exist
+
+12. **The runbook says to "go to that application's own Actions and run its deploy for this target". `commerce-ops`'s `Deploy` workflow triggers on `push` to `main` and declares no `workflow_dispatch`**, so there is no Run workflow button and the instruction cannot be followed as written. The operator looked for it and could not find it, which is how this was found.
+
+    The routes that do exist are re-running the last `Deploy` run, or pushing to that repository's `main`. Re-running is the one that belongs in a rebuild: it redeploys the commit already on `main` rather than requiring a commit invented to trigger a deploy. The runbook should say so, and should say that an application may offer neither a dispatch nor a re-run worth having — in which case the step is that application's own to define, and the runbook can only name the obligation.
+
+### Divergence found across the whole window — the rebuild breaks other repositories' deploys, silently to us
+
+13. **Two `commerce-ops` deploys failed during the rebuild window, and nothing in this repository would have told us.** Runs at 20:36 and 20:44, both failing at `Connect to the tailnet` with `❌ Ping host *** did not respond` — the host was destroyed at 20:21 and did not rejoin the tailnet until the converge at ~20:58, and `DEPLOY_HOST` still held the old address until 21:04.
+
+    The runbook warns the operator about alarms the rebuild raises on **this** repository's checks. It says nothing about the deploys of **other** repositories that target the host, which fail for the length of the window and land in those repositories' own histories as red runs with a cause that reads as a network fault.
+
+    Phase 1 should say to tell whoever owns each application that the window is open, for the same reason it says to announce the expected alarms — and phase 15 should note that a failed deploy from during the window is expected and is what the redeploy replaces. `docs/backlog.md` `announce-a-rebuild-to-the-applications-that-hold-databases` is the mechanised version of this and remains open; the runbook step is prose addressed to a human, which is what exists today.
