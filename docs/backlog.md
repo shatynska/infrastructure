@@ -232,18 +232,6 @@ Logs are read by `docker logs` over SSH as `ops-claude`, per container, and are 
 
 Loki with an Alloy (or Promtail) collector reading the Docker socket is the stack-native answer: it joins `platform_monitoring`, Grafana already has the datasource provisioning pattern, retention is bounded the way Prometheus's is, and it stores on `main-data` under a `platform_data_volume_subdirs` entry the way Prometheus does. Its prerequisite in spirit is already delivered: `bound-host-log-growth-and-add-swap` bounded those json-file logs at the daemon, and the collector reads the same ones. Traefik's access log was turned on to stdout on 2026-09-13 alongside the entrypoint-wide TLS defaults, so the HTTP traffic this would aggregate is now being written — and is now what shortens Traefik's own `docker logs` history, which is the argument for doing this rather than a detail of it.
 
-## 15. name-every-alert-in-a-grouped-slack-notification
-
-**Not blocked; recorded rather than folded into `alert-on-certificate-expiry`, which routed around it for its own alert and found the general case in doing so.**
-
-Alertmanager's `slack` receiver renders `{{ .CommonAnnotations.summary }}` and `{{ .CommonAnnotations.description }}`. `CommonAnnotations` holds only the annotation pairs **identical across every alert in the notification's group** -- so any alert whose annotations name a per-series label delivers an empty title and an empty body the moment two of them group together.
-
-`ApplicationHighErrorRate` is in exactly that state and has been since it was written: its summary names the router, `group_by` is `["alertname"]`, and two routers erroring at once -- which a shared Traefik makes correlated rather than independent -- produce a Slack message that says nothing. Nobody has seen it because the alert has not fired on two routers yet.
-
-`alert-on-certificate-expiry` fixed this for its own alert by adding `cn` to `group_by` on that alert's own route, which is correct and minimal for one alert. It does not generalise: every future alert naming a per-series label needs the same treatment, and forgetting is silent.
-
-The general fix is in the receiver, not in a route: render `{{ range .Alerts }}` so a grouped notification lists each alert's own annotations. That changes delivery for **every** alert in the stack, including ones nobody has re-read, which is why it is a change of its own rather than a fold-in. Worth pairing with an assertion that no alert's annotations reference a label absent from its route's `group_by`, which is a static read of the committed file and would catch the next instance instead of waiting for it to fire.
-
 ## 16. label-each-stack-s-alerts-with-the-stack-they-came-from
 
 Recorded 2026-09-13 by `deploy-the-platform-stack-per-environment`, which put the platform stack on a second host and found that nothing distinguishes the two hosts' alerts.
