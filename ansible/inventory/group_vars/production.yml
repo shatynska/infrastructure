@@ -41,10 +41,27 @@ hardening_web_allowed_cidrs:
 # rather than rotating it, is what lets the migration in design.md's Migration Plan
 # proceed without needing a new secret on the platform-deploy.yml side.
 deploy_apps:
+  # `probe_public_key` is the read-only probe's own key
+  # (make-a-shared-instance-reset-visible-to-its-applications). It is a SECOND
+  # key beside the deploy key, never a replacement: one `authorized_keys` entry
+  # carries one `command=`, so a key that could both deliver and probe would be
+  # a key bound to neither. The field is optional per application.
+  #
+  # `platform` carries one deliberately, and it is not a copy-paste. The stack
+  # holds no role and no database named `platform` in the shared instance, so
+  # this probe can only ever answer `window-open` or `absent` -- which makes it
+  # the operator's own check that a maintenance declaration is in force, and the
+  # one place `absent` can be observed without destroying anything. Do not
+  # remove it as an oversight.
+  #
+  # The probe keys carry the environment segment the two deploy keys above
+  # predate; see the comment convention in docs/onboard-an-application.md §2.1.
   - name: platform
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKbTTA4VUQjmUt2+jOE3FxPahMc8i+bRvR6g8f+7/m9M deploy@platform"
+    probe_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII+kIiy21YxT823WXxPV1RVBn1RtCWSZf7ZqWK/8lwMa probe@platform-production"
   - name: commerce-ops
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvqBXstDCjAlYAZ3i92iLanC+lDe44eNpS0UGa6N4jw commerce-ops-deploy"
+    probe_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINXG3KOdEkG/yfHn1yoM89Unnt1m0rx0iWsa6Pi94C6H commerce-ops-probe-production"
 
 # Operator identities allowed an unprivileged, interactive login on this
 # host (add-ops-account). Safe to commit for the same reason deploy_apps's

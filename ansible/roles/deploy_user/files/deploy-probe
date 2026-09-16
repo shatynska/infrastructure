@@ -1,0 +1,43 @@
+#!/bin/bash
+# The unprivileged half of the read-only database probe -- the SSH-layer script
+# an application's probe key is bound to by its `authorized_keys` forced
+# command. It is `deploy`-owned and holds no privilege, exactly as
+# `deploy-receive` does, and it reaches the runtime only through the
+# fully-qualified `sudo` below.
+#
+# It bounds what it reads and forwards it. EVERY ANSWER IS REACHED IN
+# `app-probe`, including whether a window is in force: one place decides, and
+# an answer reached here would be the only one a bug in this script could
+# suppress. The input is validated there too, against the same parser.
+#
+# `deploy` is not in the `docker` group and must not be put there.
+set -uo pipefail
+
+readonly MAX_INPUT=65536
+
+refuse() {
+  printf 'deploy-probe: %s\n' "$1" >&2
+  exit 2
+}
+
+# The forced command supplies exactly one argument. Anything further has been
+# appended by whoever connected, and a probe that accepted an operand would be
+# a probe a client could hand a password on a command line -- which is what
+# reading the input object from standard input exists to avoid.
+if [ "$#" -ne 1 ]; then
+  refuse 'exactly one application name is expected, and it comes from the forced command -- no operand may follow it'
+fi
+app="$1"
+
+# `head -c` stops at the bound rather than reading to end-of-input: an
+# unauthenticated stranger's pipe that is never closed must produce a prompt
+# refusal, not a probe blocked until something kills it.
+input=$(head -c $((MAX_INPUT + 1)))
+if [ "${#input}" -gt "$MAX_INPUT" ]; then
+  refuse "input object is larger than ${MAX_INPUT} bytes"
+fi
+
+# Forwarded unchanged, as the same JSON object, over standard input and never
+# as an argument: `sudo`'s command line is in the host's process listing.
+printf '%s' "$input" | sudo -n /usr/local/bin/app-probe "$app"
+exit "${PIPESTATUS[1]}"

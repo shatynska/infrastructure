@@ -68,10 +68,17 @@ Then, **per host**, in this order, and **take the ungated stacks first** — ste
 
 Each step says where it runs. The on-host commands address the containers and the volume directly rather than through `docker compose`, and that is deliberate: `/opt/platform` is `deploy:deploy` mode `0750` and `ansible/roles/ops_user` grants an operator account the `docker` group and never `deploy`, so it cannot read the Compose file `docker compose` would need — and `docker` group membership is enough for every command below.
 
-1. **On the host — tell the applications that use the instance**, and agree the window with whoever runs them. `\l` in the instance lists who they are:
+1. **On the host — declare the window, then tell the applications that use the instance** and agree it with whoever runs them. `\l` in the instance lists who they are:
 
        ssh <host>
+       touch /var/lib/platform-maintenance/shared-postgres-window
        docker exec platform-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "\l"'
+
+   **The `touch` is the announcement; the sentence to a human is the courtesy.** While that file exists, every application's probe on this host answers `window-open` and an application that consults it before delivering will decline to deliver — see *An Application Can Probe Its Own Database Through a Read-Only Forced Command* (`openspec/specs/iac-host-configuration/spec.md`). It needs no `sudo`: the directory is group-writable by `docker`, which is the group an operator account already holds. It survives step 2, which is the point — everything inside the volume does not.
+
+   **Nothing enforces this step**, exactly as nothing enforced step 5 on 2026-09-15, and the file is the only thing that announces the window to anything that reads it. `docs/backlog.md` `hold-every-platform-deploy-for-the-length-of-a-window` is the entry for the mechanism that would; until it lands, this is a step an operator can skip.
+
+   **Check:** `ls -l /var/lib/platform-maintenance/shared-postgres-window` lists the file. If the directory does not exist, this host has not been converged since that change landed — converge it before opening the window rather than creating the directory by hand.
 
    The `$POSTGRES_USER` is expanded **inside** the container deliberately: that variable is the instance's superuser name from this stack's own `.env`, and it exists in the container's environment and not in the shell you are typing into. Expanded outside, it is empty and `psql` tries to connect as your own account.
 
@@ -110,6 +117,18 @@ Each step says where it runs. The on-host commands address the containers and th
        docker exec platform-postgres-exporter-1 wget -qO- http://localhost:9187/metrics | grep -E '^pg_up |^pg_exporter_last_scrape_error '
 
    `pg_up 1` and `pg_exporter_last_scrape_error 0` is the pass. Anything else means the role or its password is wrong, and it is worth fixing here rather than discovering later — nothing in this stack alerts on it.
+
+   **Then withdraw the window declaration, here and not at the end of step 5:**
+
+       rm /var/lib/platform-maintenance/shared-postgres-window
+
+   **Step 5's own redeploys go through the probe like any other deploy**, so a declaration still standing there would block the step that ends the window — the mechanism deadlocking on itself. Withdrawing it now leaves the gap between here and each application's re-provisioning covered by `absent`, which is the correct answer for that gap and the one the 2026-09-15 incident needed: an application deploying in it is told its database has ceased to exist, rather than that its password is wrong.
+
+   **Check** that the next probe stops reporting the window. From the host, with the `platform` entry's probe key — that entry holds no role or database of its own in the instance, so its answer is `window-open` while the declaration stands and `absent` once it is withdrawn, and both are informative:
+
+       printf '{"password":"x","table":"x"}' | ssh -i ~/.ssh/<company>-platform-probe-<environment> deploy@<host>
+
+   It must print `absent`. If it still prints `window-open`, the file is still there.
 
 5. **From a workstation — re-provision every application database, then redeploy that application.** Each is gone with the volume, which each application's classification tolerates and none can start without. Run the recipe in `docs/onboard-an-application.md` for that host, per application, with `rotate=yes`. **That block is a workstation paste, not an on-host one** — it calls `gh` and then reaches the host over `ssh` itself, so pasted into a session on the host it aborts at the first `gh` under `set -eu`, having changed nothing. The password is generated fresh and delivered to that application's Environment, so only that application's **next deploy** picks it up. Trigger that deploy from the application's own repository; nothing here can. **Check** per application that it comes up and that `\l` in the instance lists its database owned by its own role.
 

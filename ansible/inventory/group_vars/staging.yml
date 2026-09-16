@@ -189,8 +189,21 @@ ghcr_pull_username: shatynska
 # and the keep set stopped being empty.
 #
 deploy_apps:
+  # `probe_public_key` is the read-only probe's own key
+  # (make-a-shared-instance-reset-visible-to-its-applications). It is a SECOND
+  # key beside the deploy key, never a replacement: one `authorized_keys` entry
+  # carries one `command=`, so a key that could both deliver and probe would be
+  # a key bound to neither. The field is optional per application.
+  #
+  # `platform` carries one deliberately, and it is not a copy-paste. The stack
+  # holds no role and no database named `platform` in the shared instance, so
+  # this probe can only ever answer `window-open` or `absent` -- which makes it
+  # the operator's own check that a maintenance declaration is in force, and the
+  # one place `absent` can be observed without destroying anything. Do not
+  # remove it as an oversight.
   - name: platform
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMCOPPlcE5sXqy1//8Cl8S3fac51+ceyD9YBnN4Vwq+ deploy@platform-staging"
+    probe_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOTY67RuUWAQJtMkhRf3Kw/qDTrNqOEC4ESVeCWrDO68 probe@platform-staging"
   # The name is not free: image reclamation identifies an application's images
   # as ghcr.io/<any owner>/<this name>, so it must equal the last segment of
   # the image repository (ghcr.io/<org>/commerce-ops) or it reclaims nothing,
@@ -198,6 +211,7 @@ deploy_apps:
   # keypair for the reason above.
   - name: commerce-ops
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7D0FcW/kPrjuxwDgy6mt27qx3V8I+1sYT3CcOSY5ID commerce-ops-deploy-staging"
+    probe_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJuwWU9SaMU8a9PVOX0luxpczh2ZR6MeRs3paDzFJS13 commerce-ops-probe-staging"
 
 # A genuine secret (a read:packages-scoped GHCR token): Vault-encrypt it in
 # place, never plain text.

@@ -1,0 +1,240 @@
+#!/bin/bash
+# The privileged half of the read-only database probe, installed by
+# `ansible/roles/deploy_user` and reachable only through the fully-qualified
+# `sudoers.d/app-probe-<app>` rule that names one application. It implements
+# "An Application Can Probe Its Own Database Through a Read-Only Forced
+# Command" (openspec/specs/iac-host-configuration/spec.md).
+#
+# It writes NOTHING, in any database, and cannot deliver or deploy.
+#
+# THIS IS WHERE EVERY ANSWER IS REACHED, including the window. The unprivileged
+# half bounds its input and forwards it; putting any part of the decision there
+# would make that answer the only one a bug in the unprivileged half could
+# suppress.
+#
+# Exit zero when and only when one token is written to standard output. Every
+# other outcome exits non-zero, writes no token, and says why on standard error.
+# A consumer is told to read the exit status, so an unclassified failure must
+# never be resolved to the nearest-looking token.
+set -uo pipefail
+
+readonly WINDOW_FILE=/var/lib/platform-maintenance/shared-postgres-window
+readonly INSTANCE=platform-postgres-1
+readonly NETWORK=platform_edge
+readonly MAX_INPUT=65536
+
+# Bounds the whole credential path, the way app-deploy's reclamation step is
+# bounded: a probe against a wedged instance ends in `unreachable` rather than
+# holding an SSH session open. `-k` because SIGTERM is only as strong as the
+# signalled process's willingness to return.
+readonly CONNECT_TIMEOUT=45
+
+refuse() {
+  printf 'app-probe: %s\n' "$1" >&2
+  exit 2
+}
+
+answer() {
+  printf '%s\n' "$1"
+  exit 0
+}
+
+[ "$#" -eq 1 ] || refuse 'exactly one application name is expected, and it comes from the forced command and the sudoers rule that matched -- never from the client'
+app="$1"
+
+# ---------------------------------------------------------------------------
+# 1. `window-open` wins outright, and is decided before anything is read.
+#
+# During a window the instance may look perfectly healthy -- before its volume
+# is discarded, or after it comes back but before any database is
+# re-provisioned -- and an application that delivered on the strength of that
+# would be delivering into something about to be destroyed, or into an instance
+# that does not yet hold its database.
+# ---------------------------------------------------------------------------
+if [ -e "$WINDOW_FILE" ]; then
+  answer window-open
+fi
+
+work=$(mktemp -d) || refuse 'could not create a working directory'
+trap 'rm -rf "$work"' EXIT
+
+# `head -c` stops at the bound instead of reading to end-of-input, which is what
+# makes an oversized object a prompt refusal rather than a probe blocked on a
+# stranger's pipe that is never closed.
+input=$(head -c $((MAX_INPUT + 1)))
+if [ "${#input}" -gt "$MAX_INPUT" ]; then
+  refuse "input object is larger than ${MAX_INPUT} bytes"
+fi
+
+if ! printf '%s' "$input" \
+  | PROBE_APP="$app" python3 /usr/local/lib/app-probe-input.py \
+    >"$work/values" 2>"$work/parse-error"; then
+  refuse "$(tr -d '\n' <"$work/parse-error")"
+fi
+
+# NUL-separated, because a JSON string may legally carry a newline.
+{
+  IFS= read -r -d '' password
+  IFS= read -r -d '' table
+} <"$work/values" || refuse 'the input parser emitted nothing usable'
+
+# ---------------------------------------------------------------------------
+# 2. `unreachable` before `absent`, and the root-side read is where both are
+#    decided.
+#
+# THE ORDER HERE IS THE WHOLE POINT OF THIS SCRIPT. `absent` is an assertion
+# about what the instance holds and may only be made from a reading that
+# succeeded. A stopped, restarting or absent instance is not a database that
+# ceased to exist, and reporting it as one is the dangerous direction: the
+# operator's documented remedy for `absent` re-provisions the role and rotates
+# its password, which breaks a healthy application whose instance was merely
+# down.
+#
+# `$POSTGRES_USER` is expanded INSIDE the container, where it lives, and the
+# connection is over the container's own local socket, which the image trusts.
+# So no superuser credential is read, passed or held anywhere by this script --
+# what it needs is `docker exec`, which is what the sudoers rule grants.
+# ---------------------------------------------------------------------------
+readonly ROOT_SQL="select (exists (select 1 from pg_roles where rolname = :'app') and exists (select 1 from pg_database where datname = :'app'));"
+
+if ! printf '%s\n' "$ROOT_SQL" \
+  | docker exec -i -e PROBE_APP="$app" "$INSTANCE" \
+      bash -c 'psql -X -At -w -v ON_ERROR_STOP=1 -v app="$PROBE_APP" -U "$POSTGRES_USER" -d postgres' \
+    >"$work/exists" 2>"$work/exists-error"; then
+  answer unreachable
+fi
+
+exists=$(tr -d '[:space:]' <"$work/exists")
+case "$exists" in
+  t) ;;
+  f) answer absent ;;
+  # Neither answer means the read did not really happen, whatever its exit
+  # status said. It is not `absent`: nothing was established about the instance.
+  *) answer unreachable ;;
+esac
+
+# ---------------------------------------------------------------------------
+# 3. The credential path, from the network the application itself uses.
+#
+# A throwaway client container on `platform_edge`, NOT a `docker exec` into the
+# server: from inside the server a routing failure, an unresolvable name and a
+# network the application cannot join are all invisible, and `unreachable`
+# would collapse to "postgres is up but refusing its own TCP port".
+#
+# The image is read from the running container rather than written down here.
+# `platform/docker-compose.yml` holds the pin and Dependabot proposes the next
+# one; a second copy in this file would drift silently and be discovered by a
+# probe failing after an upgrade. It also guarantees the client's `psql`
+# matches the server.
+#
+# No fixed `--name`: two probes at once would collide on one, and the collision
+# would surface as an unclassified failure rather than as anything a reader
+# could act on.
+# ---------------------------------------------------------------------------
+if ! image=$(docker inspect "$INSTANCE" --format '{{.Config.Image}}' 2>"$work/inspect-error"); then
+  answer unreachable
+fi
+[ -n "$image" ] || answer unreachable
+
+# BOTH client-supplied values travel on the client container's standard input.
+# The password because it is secret -- an argument would put it in the host's
+# process listing and `-e PGPASSWORD=` would put it in `docker inspect` output,
+# which every `docker`-group account can read. The table name because it is
+# hostile input: interpolated into any command string at any layer, a name
+# carrying a shell metacharacter would be command execution inside a container
+# attached to `platform_edge`, reached before any password is checked.
+#
+# Inside the container the name is dereferenced as a `psql` variable against a
+# fixed SQL literal, so the quoting is `psql`'s rather than a shell's.
+#
+# THE RESOLVING STATEMENT ARRIVES ON `psql`'s STANDARD INPUT, NOT VIA `-c`, and
+# that is not a style choice. `-c` takes "a command string completely parseable
+# by the server", which means psql's own variable interpolation does not run on
+# it: `:'tbl'` reaches the server literally and it answers `syntax error at or
+# near ":"`. Fed on standard input it is interpolated as intended. The client
+# container's own standard input is already at end-of-file by then, the two
+# values having been read off it, so a here-document is free to use it.
+#
+# The second statement interpolates `$rel`, which is NOT the client's string: it
+# is the relation name PostgreSQL's own `regclass` output gives back, already
+# quoted as the server would write it, so `-c` is right for that one.
+#
+# Defined through a quoted here-document because the program below needs single
+# quotes of its own; every expansion in it is the client container's.
+IFS= read -r -d '' CLIENT_PROGRAM <<'CLIENT' || true
+set -u
+IFS= read -r -d "" pw || exit 91
+IFS= read -r -d "" tbl || exit 91
+export PGPASSWORD="$pw"
+rel=$(psql -X -At -w -v ON_ERROR_STOP=1 -v tbl="$tbl" \
+        -h "$PROBE_HOST" -U "$PROBE_ROLE" -d "$PROBE_DB" <<'SQL'
+select coalesce(to_regclass(:'tbl')::text, '');
+SQL
+) || exit $?
+if [ -z "$rel" ]; then
+  printf "empty\n"
+  exit 0
+fi
+row=$(psql -X -At -w -v ON_ERROR_STOP=1 \
+        -h "$PROBE_HOST" -U "$PROBE_ROLE" -d "$PROBE_DB" \
+        -c "select 1 from $rel limit 1") || exit $?
+if [ -n "$row" ]; then printf "populated\n"; else printf "empty\n"; fi
+CLIENT
+readonly CLIENT_PROGRAM
+
+printf '%s\0%s\0' "$password" "$table" \
+  | timeout -k 5 "$CONNECT_TIMEOUT" \
+      docker run --rm -i --network "$NETWORK" \
+        -e PROBE_HOST="$INSTANCE" \
+        -e PROBE_ROLE="$app" \
+        -e PROBE_DB="$app" \
+        "$image" bash -c "$CLIENT_PROGRAM" \
+      >"$work/client" 2>"$work/client-error"
+client_rc=${PIPESTATUS[1]}
+
+client_error=$(cat "$work/client-error")
+
+# The container runtime failing to give this probe a client at all is NOT
+# `unreachable`: that token asserts something about the instance, and nothing
+# was established about it. Checked first, because a runtime error and a
+# connection error can otherwise read alike.
+case "$client_error" in
+  *'Error response from daemon'* | *'Cannot connect to the Docker daemon'* | *'Unable to find image'* | *'docker: '*)
+    refuse "the container runtime could not run the probe's client: ${client_error}"
+    ;;
+esac
+
+# An absent role and a wrong password are byte-identical here, which is why
+# `absent` was decided above and never from this path.
+case "$client_error" in
+  *'password authentication failed for user'*)
+    answer credential-refused
+    ;;
+esac
+
+case "$client_error" in
+  *'could not translate host name'* | *'Connection refused'* | *'No route to host'* \
+    | *'Network is unreachable'* | *'could not connect to server'* \
+    | *'Name or service not known'* | *'Connection timed out'* | *'timeout expired'*)
+    answer unreachable
+    ;;
+esac
+
+# `timeout`'s own status, for an instance that accepted the connection and then
+# stopped answering.
+if [ "$client_rc" -eq 124 ] || [ "$client_rc" -eq 137 ]; then
+  answer unreachable
+fi
+
+if [ "$client_rc" -ne 0 ]; then
+  # `permission denied for database`, a `pg_hba` rejection, a message in a
+  # language this script does not read: a probe that guessed here would turn a
+  # wording change into a wrong answer about somebody's database.
+  refuse "the instance returned an error this probe does not classify (exit ${client_rc}): ${client_error}"
+fi
+
+case "$(tr -d '[:space:]' <"$work/client")" in
+  populated) answer populated ;;
+  empty) answer empty ;;
+  *) refuse "the probe's client returned no answer this probe understands: $(cat "$work/client")" ;;
+esac
