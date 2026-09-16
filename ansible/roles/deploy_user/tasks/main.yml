@@ -368,7 +368,7 @@
     content: |
       deploy ALL=(root) NOPASSWD: /usr/local/bin/app-probe {{ item.name }}
     validate: "visudo -cf %s"
-  loop: "{{ deploy_apps | selectattr('probe_public_key', 'defined') | list }}"
+  loop: "{{ deploy_apps | selectattr('probe_public_key', 'defined') | selectattr('probe_public_key', 'truthy') | list }}"
   loop_control:
     label: "{{ item.name }}"
 
@@ -383,7 +383,11 @@
     user: deploy
     key: "{{ item.probe_public_key }}"
     key_options: 'restrict,command="/usr/local/bin/deploy-probe {{ item.name }}"'
-  loop: "{{ deploy_apps | selectattr('probe_public_key', 'defined') | list }}"
+  # `truthy` as well as `defined`: an entry carrying `probe_public_key: ""` is a
+  # typo, not a declaration, and without this it would reach `authorized_key`
+  # as an empty key. `.github/tests` catches it in the committed inventory; the
+  # role should not depend on that to refuse it.
+  loop: "{{ deploy_apps | selectattr('probe_public_key', 'defined') | selectattr('probe_public_key', 'truthy') | list }}"
   loop_control:
     label: "{{ item.name }}"
 

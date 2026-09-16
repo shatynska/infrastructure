@@ -182,10 +182,11 @@ The whole table repeats per Environment, and every row after the first takes tha
 | `TAILSCALE_OAUTH_CLIENT_ID`, `TAILSCALE_OAUTH_SECRET` | The same OAuth client as the host bootstrap's tailnet stage, or a second one with the same tag |
 | `DEPLOY_HOST` | That target's server's tailnet IPv4, same value as that stack's `PLATFORM_DEPLOY_HOST` |
 | `<APP>_DEPLOY_SSH_KEY` | The private half of **that target's** key from §2.1 — one per application per environment, never one shared; delete the local file after storing |
+| `<APP>_PROBE_SSH_KEY` | The private half of **that target's** probe key from §2.1a, where the application has one — a second secret beside the deploy key, never the same value, and stored and deleted on the same terms. Omit the row for an application with no database |
 | The shared-instance database password, under the name §3.2 gave it — `SHARED_POSTGRES_PASSWORD` for `commerce-ops` | Written by §3.2's recipe, with that target's own independently generated value — never set by hand here, and never under a name the Environment already holds |
 | The application's own settings | Whatever the application needs |
 
-**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance.
+**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance. An application with a probe key has **two** private halves to store and delete per Environment, and their fingerprints are what tells them apart — storing the deploy key under the probe's name yields a deploy that cannot probe and a probe that can deploy, which is the one confusion here worth checking for twice.
 
 ### 4.3 Anything it persists has to say why it needs no backup
 
@@ -218,6 +219,8 @@ printf '%s' "$(jq -nc --arg p "$SHARED_POSTGRES_PASSWORD" '{password: $p, table:
   | ssh -i ~/.ssh/probe_key deploy@${{ secrets.DEPLOY_HOST }}
 ```
 
+The key file is written from `<APP>_PROBE_SSH_KEY` (§4.2) exactly as the deploy job writes its own from `<APP>_DEPLOY_SSH_KEY`, and it is a **different** key: the deploy key cannot probe and the probe key cannot deliver.
+
 There is no command to send: that key's forced command on the host is `/usr/local/bin/deploy-probe <app>`, which is the only thing it can run. The application name comes from there rather than from anything the caller says, so nothing is passed on the command line and the password never reaches a process listing on either machine.
 
 **What it reads.** One JSON object on standard input. `password` and `table` are required — `table` being whatever row-bearing table means "this database has been migrated" for this application, `alembic_version` for an Alembic consumer. It may also carry `role` and `database`, which must equal the application's own name; they are accepted so a consumer that sends them is not refused for being explicit, never as a source of either name. Any other field is ignored, so this contract can gain one without breaking a consumer. The name in `table` must be an optionally schema-qualified identifier — `public.alembic_version` is fine, anything else is refused.
@@ -232,6 +235,8 @@ There is no command to send: that key's forced command on the host is `/usr/loca
 | `credential-refused` | Your role and database exist and the password was refused. | Do not deliver. Your secret is stale — rotate it. |
 | `empty` | Connected; the table you named does not exist or holds no row. | Deliver. A first deploy, or a database awaiting its first migration. |
 | `populated` | Connected; that table exists and holds at least one row. | Deliver. |
+
+**Match the whole of standard output against the whole token set, and refuse an answer you do not recognise.** A guard that tests whether the output *contains* a token reads `unpopulated` and `depopulated` as `populated`, and five of these six tokens are refusals — so a loose match can only ever fail in the one direction that delivers. A guard enumerating a subset of the six is fine and is the safer shape, provided the tokens it does not enumerate refuse rather than fall through: a consumer that knows only `populated`, `empty`, `credential-refused` and `unreachable` still stops correctly on `window-open` and `absent`, but its message will not say why, so enumerate all six where you can.
 
 **`absent` and `credential-refused` are the pair this exists to separate.** PostgreSQL reports an absent role and a wrong password identically, which is why a reset shared instance surfaced in `commerce-ops` on 2026-09-15 as `password authentication failed` four and a half hours after its cause. The probe resolves `absent` from the host, without your credential, so it answers in exactly the case where your credential can tell you nothing.
 

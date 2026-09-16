@@ -66,17 +66,19 @@ if [ "${#input}" -gt "$MAX_INPUT" ]; then
   refuse "input object is larger than ${MAX_INPUT} bytes"
 fi
 
-if ! printf '%s' "$input" \
-  | PROBE_APP="$app" python3 /usr/local/lib/app-probe-input.py \
-    >"$work/values" 2>"$work/parse-error"; then
-  refuse "$(tr -d '\n' <"$work/parse-error")"
+# Read straight off the parser through a process substitution, NUL-separated
+# because a JSON string may legally carry a newline. The values are never
+# written to a file: a command substitution would drop the NUL framing, and a
+# temporary file would put the password on the host's filesystem for the life of
+# the probe -- root-only and trap-removed, but a landing nothing samples and one
+# a SIGKILL would leave behind. The parser refusing writes nothing to standard
+# output, so the first read fails and its diagnostic is what is reported.
+if ! {
+  IFS= read -r -d '' password && IFS= read -r -d '' table
+} < <(printf '%s' "$input" | PROBE_APP="$app" python3 /usr/local/lib/app-probe-input.py 2>"$work/parse-error"); then
+  parse_error=$(tr -d '\n' <"$work/parse-error")
+  refuse "${parse_error:-the input parser emitted nothing usable}"
 fi
-
-# NUL-separated, because a JSON string may legally carry a newline.
-{
-  IFS= read -r -d '' password
-  IFS= read -r -d '' table
-} <"$work/values" || refuse 'the input parser emitted nothing usable'
 
 # ---------------------------------------------------------------------------
 # 2. `unreachable` before `absent`, and the root-side read is where both are
@@ -97,10 +99,42 @@ fi
 # ---------------------------------------------------------------------------
 readonly ROOT_SQL="select (exists (select 1 from pg_roles where rolname = :'app') and exists (select 1 from pg_database where datname = :'app'));"
 
+# A failure of the RUNTIME is not a statement about the instance, and is
+# refused rather than answered -- the same rule step 3 applies to the client
+# container, and the delta states it over both: "any error the token set does
+# not classify, whatever layer raised it". A missing `docker` binary, a daemon
+# that will not answer, or a name that resolves to nothing establish nothing
+# about whether this application's database exists, and `unreachable` asserts
+# that the instance was the thing that could not be reached. An earlier draft
+# collapsed all of these into `unreachable`; the direction was safe but the
+# claim was false.
+# NARROWER THAN THE CLIENT PATH'S LIST, AND THE DIFFERENCE IS LOAD-BEARING.
+# Here the runtime is being asked about the instance, so most of what it can say
+# IS a statement about the instance: `Container ... is not running` and `No such
+# container` are exactly the stopped and absent cases the requirement names, and
+# both must stay `unreachable` -- refusing them would report the probe broken
+# when what is broken is the instance, and would fail the one scenario this
+# change most exists for. Only a runtime that cannot be asked at all belongs
+# here: no binary, no daemon, no permission to reach it.
+runtime_unusable() {
+  case "$1" in
+    *'Cannot connect to the Docker daemon'* \
+      | *'permission denied while trying to connect'* \
+      | *'command not found'* | *'No such file or directory'*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 if ! printf '%s\n' "$ROOT_SQL" \
   | docker exec -i -e PROBE_APP="$app" "$INSTANCE" \
       bash -c 'psql -X -At -w -v ON_ERROR_STOP=1 -v app="$PROBE_APP" -U "$POSTGRES_USER" -d postgres' \
     >"$work/exists" 2>"$work/exists-error"; then
+  exists_error=$(cat "$work/exists-error")
+  if runtime_unusable "$exists_error"; then
+    refuse "the container runtime could not be asked about the instance: ${exists_error}"
+  fi
   answer unreachable
 fi
 

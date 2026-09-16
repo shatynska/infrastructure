@@ -269,6 +269,23 @@
         app: commerce-ops
         expect: [refuse]
         text: ""
+      # Added by this change's own code review, which found it and confirmed it
+      # against the parser. `\u0000` is a legal JSON escape and decodes to a NUL,
+      # which the NUL-framed handover between the parser and the probe cannot
+      # carry: the password's tail arrives in the TABLE slot, having never been
+      # through the identifier shape check, and the real table name is discarded
+      # as an unread third field. The requirement says a name outside that shape
+      # SHALL refuse rather than answer `empty`, and before the fix this answered
+      # `empty`. Written as raw text rather than as an object because the `text`
+      # form is what puts the escape in the file for the probe to decode.
+      - name: nul-in-password
+        app: commerce-ops
+        expect: [refuse]
+        text: '{"password": "x\u0000'' ; drop table t; --", "table": "alembic_version"}'
+      - name: nul-in-table
+        app: commerce-ops
+        expect: [refuse]
+        text: '{"password": "molecule", "table": "alembic\u0000_version"}'
 
   tasks:
     # ================================================================

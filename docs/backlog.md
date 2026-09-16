@@ -705,7 +705,9 @@ Noticed during `close-ci-verification-gaps`, neither a verification gap. A third
 
 `ansible/scripts/run-molecule` is this repository's first committed shell script, and nothing checks it. `.pre-commit-config.yaml` carries hooks for Terraform, Ansible, secrets and commit messages, and none for shell. That change's own test-authoring step declined to verify the script with ShellCheck for the reason `AGENTS.md` gives about unpinned tools: an ad-hoc invocation of a linter this repository does not pin is unrepeatable, and a check that cannot be reached is indistinguishable from one that passed. Its `tasks.md` discloses the refusal under `## Not performed`.
 
-The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a decision about whether `.github/tests` should assert that the hook exists — the same shape as the pins that suite already reads. Small, and worth doing before there is a second script.
+The work is a pinned `shellcheck` hook in `.pre-commit-config.yaml`, and a decision about whether `.github/tests` should assert that the hook exists — the same shape as the pins that suite already reads.
+
+**"Worth doing before there is a second script" is no longer available**, which is the only part of this entry that has changed. `make-a-shared-instance-reset-visible-to-its-applications` added two more — `ansible/roles/deploy_user/files/app-probe` and `files/deploy-probe` — and they are not like `run-molecule`: they run as `root` on every host, one of them on input from an application's key, so they are the scripts where an unchecked quoting mistake costs the most. Both were run through ShellCheck by hand during that change and by its code review, and both were clean; that is exactly the unrepeatable ad-hoc invocation this entry exists to replace. Note also that `ansible-lint`'s `files: ^ansible/` does not lint them as shell, so nothing in CI reads them today.
 
 ## 45. catch-up-the-drifted-galaxy-pins
 

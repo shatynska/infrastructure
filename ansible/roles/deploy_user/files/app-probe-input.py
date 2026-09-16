@@ -76,6 +76,22 @@ def main() -> None:
     if not isinstance(table, str) or not table:
         refuse("input carries no `table`, which is required")
 
+    # A NUL in either value is refused because the framing below cannot carry
+    # one, and the consequence of not refusing is not a truncated password --
+    # it is a DESYNCHRONISED HANDOVER. JSON's own escape for a NUL decodes to one
+    # happily, so a password of `x<NUL>whatever` emits three fields where the
+    # reader expects
+    # two: it takes `x` as the password and `whatever` as the table name, which
+    # never passed the shape check below, while the real table name is silently
+    # discarded as an unread third field. The name would then reach SQL -- still
+    # only as a quoted `to_regclass` argument, so nothing executes, but the
+    # identifier shape this parser exists to enforce would have been bypassed
+    # and the probe would answer `empty` about a name it was supposed to refuse.
+    # Found by the code review of this change and confirmed against this file.
+    for field, value in (("password", password), ("table", table)):
+        if "\0" in value:
+            refuse(f"`{field}` carries a NUL byte, which the probe's framing cannot carry")
+
     # `role` and `database` MAY be sent and SHALL equal the names derived from
     # the forced command's argument. They are accepted so that a consumer
     # sending the fields the original cross-repository contract named is not
