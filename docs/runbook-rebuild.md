@@ -2,15 +2,17 @@
 
 This is the sequence that takes a host of this repository from a destroyed server back to serving what it served before. It is written to be followed in order, under time pressure, by someone who has not read `docs/bootstrap-a-new-host.md` and is not going to read it now.
 
-The commands are written for **`main-staging`**, because that is the stack the rehearsal recorded at the end of this document was performed against, and a command that was actually executed is worth more than a parameterised one that was not. Where production differs, the difference is stated at the phase it belongs to rather than collected somewhere else.
+The commands are written for **`main-staging`**, because that is the stack the rehearsal will be performed against. **Until the record at the end of this document carries a date, every command here has been read back against the file that declares it and the sequence has not been executed** — treat it accordingly. Where production differs, the difference is stated at the phase it belongs to rather than collected somewhere else.
 
 **What this document does not hold.** Two recipes belong to other documents and are cited rather than copied here, because a copy of a procedure touching a credential drifts and both copies read as authoritative: the database provisioning recipe, which lives in `docs/onboard-an-application.md`, and the two manual steps of the platform stack, which live in `platform/README.md`. What this document keeps of each is what is genuinely sequence — that it is owed, at which point, and with which secret. The checks' intended settings are likewise a register kept once, in `docs/bootstrap-a-new-host.md`'s Appendix A, and this document cites it rather than restating the values.
 
-**Five phases need you rather than a pipeline**, and they are 1, 2, 5, 6 and 15. Read those before starting: two of them need a credential that may have expired since it was last used, and one is performed in a repository this one has no authority over.
+**Three phases are the pipeline's — 3, 4 and 10. Every other phase you perform by hand**, and five of them are performed somewhere that is not this repository at all: 5 at the DNS provider, 6 at the tailnet, 12 at the heartbeat observer, 15 in the application's own repository, and 2 partly in your password manager. Read those five before starting: two need a credential that may have expired since it was last used, and one is performed in a repository this one has no authority over.
+
+**This covers the `server_enabled` toggle route**, which is phases 3 and 4. A host rebuilt by *replacing* the server instead enters at phase 5 and follows the rest unchanged — what differs is only the destroy and recreate pair, and what the volume does under it, which phase 3 states.
 
 ## 1. Know what you are about to lose, and what will start alarming
 
-**Credential:** the operator inspection key, held in `~/.ssh` on your workstation, and `gh`'s own token on that workstation.
+**Credential:** the operator inspection key, held in `~/.ssh` on your workstation; `gh`'s own token there; and this stack's read-only Hetzner token, held in `ansible/.envrc` on that workstation.
 
 Do this before anything else. Everything below it is recoverable; the contents of this phase are not, and two of them are the kind of loss nobody discovers until weeks later.
 
@@ -35,14 +37,18 @@ ssh shatynska-main-staging 'docker exec platform-prometheus-1 wget -qO- \
   "http://localhost:9090/api/v1/targets?state=active"' | \
   python3 -c 'import json,sys; [print(t["labels"]["job"], t["health"]) for t in json.load(sys.stdin)["data"]["activeTargets"]]'
 curl -sS -o /dev/null -w '%{http_code}\n' https://commerce-ops.main-staging.fincci.bike
-cd terraform/stacks/main-staging && terraform output
+cd ansible && ansible-inventory -i inventory/main-staging.hcloud.yml --list | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["_meta"]["hostvars"]["main-staging"]["hcloud_ipv4"])'
+ssh shatynska-main-staging 'ls -l /dev/disk/by-id/ | grep HC_Volume'
 ```
+
+**`terraform output` is not the way to read these**, and it is worth knowing before you reach for it: every stack declares an HCP Terraform backend, so `terraform output` needs `terraform init` first, and on a workstation whose HCP credential belongs to another organisation `init` fails with *organization "shatynska" at host app.terraform.io not found*. The inventory read above needs only the read-only Hetzner token. The volume id is on the host as `scsi-0HC_Volume_<id>`, and after the rebuild it is in the apply run's log or the Hetzner console.
 
 Record the container set and their health, the active scrape targets, the public IPv4, the volume id, the host's tailnet address, and every hostname that resolves to this server. Also read this stack's two checks at the heartbeat observer and write down the period and the grace each currently carries — phase 12 compares against them, and the register is a claim about the observer's configuration until somebody has actually looked.
 
 ## 2. Confirm the credentials the sequence needs, by using them
 
-**Credential:** the staging Vault password and the Tailscale auth key, both held in the password manager.
+**Credential:** the staging Vault password and the Tailscale auth key, both held in the password manager, and this stack's read-only Hetzner token, held in `ansible/.envrc`.
 
 Three of the phases below fail late and confusingly if a credential has gone stale, and all three can be checked in under a minute now:
 
@@ -52,11 +58,15 @@ cd ansible && ansible-inventory -i inventory/main-staging.hcloud.yml --graph
 
 That proves the read-only Hetzner token in `ansible/.envrc` parses and reaches the right project. A failure here names the source it could not parse rather than resolving to an environment with no host in it.
 
-**The Vault password.** Decrypt something with it rather than believing you have it:
+**The Vault password.** Decrypt something with it rather than believing you have it. **Not with `ansible-vault view`**: this repository encrypts individual values with `encrypt_string`, so `group_vars/staging.yml` is plaintext YAML holding two `!vault |` scalars, and `view` rejects it with *Input is not vault encrypted data* whether your password is right or wrong. Force the decryption through a lookup instead, which is what the converge workflow's own preflight does:
 
 ```sh
-cd ansible && ansible-vault view inventory/group_vars/staging.yml --vault-id staging@prompt >/dev/null && echo ok
+cd ansible
+ansible staging -i inventory/main-staging.hcloud.yml -c local -m debug \
+  -a "msg={{ hostvars[inventory_hostname] | to_json | length }}" --vault-id staging@prompt
 ```
+
+`SUCCESS` and a number means the password decrypted the file. A wrong one fails with *Attempt to use undecryptable variable*. The `| to_json` is what forces every value to be rendered, so do not drop it — without it the encrypted scalars are never touched and the check passes on any password at all.
 
 **The Tailscale auth key is the one that bites.** It is reusable and expires after ninety days, and a rebuild is typically when that expiry is discovered. Check its expiry in the Tailscale admin console and mint a fresh one if it has lapsed — phase 7 passes it on the command line, there is no prompt for it, and the role has no default, so a missing key fails inside `tailscale` after two roles have already changed the host.
 
@@ -84,7 +94,7 @@ Merging applies immediately: `main-staging`'s GitHub Environment requires no rev
 
 ## 4. Recreate the server
 
-**Credential:** none — the write token is confined to the stack's GitHub Environment, exactly as in phase 3.
+**Credential:** this stack's read-only Hetzner token, held in `ansible/.envrc`, for reading the new address back. The write token that applies the change is confined to the stack's GitHub Environment, exactly as in phase 3.
 
 Open a second pull request setting the same value back to `true`:
 
@@ -100,7 +110,14 @@ The apply creates a new server and a new volume. **Both have new identities**: a
 cd terraform/stacks/main-staging && terraform output
 ```
 
-Re-enabling needs no configuration to be reconstructed. If the plan wants to create anything you did not expect, or wants to re-import a key, stop and read it rather than approving.
+Read the new address the same way phase 1 did, from the inventory rather than from `terraform output`:
+
+```sh
+cd ansible && ansible-inventory -i inventory/main-staging.hcloud.yml --list | \
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["_meta"]["hostvars"]["main-staging"]["hcloud_ipv4"])'
+```
+
+The volume id is in the apply run's log, or in the Hetzner console. Re-enabling needs no configuration to be reconstructed. If the plan wants to create anything you did not expect, or wants to re-import a key, stop and read it rather than approving.
 
 ## 5. Point the DNS at the new address
 
@@ -166,13 +183,13 @@ ssh -i ~/.ssh/shatynska-ansible-ci-main-staging root@main-staging true
 
 **The second line is the check and it is not optional**: a key installed but not usable fails the pipeline rather than this phase, where you are watching.
 
-The Environment secrets survive a rebuild and do not need re-entering. If you are rebuilding a host whose keypair was also lost, `--env` takes the **stack** name, `main-staging` — not the environment name — and a mistyped value fails with a `404` rather than silently.
+The Environment secrets survive a rebuild and do not need re-entering, so there is no `gh secret set` here — phase 9 is where one is. If you are rebuilding a host whose keypair was also lost and you re-enter `ANSIBLE_SSH_PRIVATE_KEY`, note that `--env` takes the **GitHub Environment's** name, which is `main-staging` — the stack's name, not the Ansible group `staging` that the `--vault-id` and `group_vars` take. A mistyped value fails with a `404` rather than silently.
 
 ## 9. Update the two addresses the rebuild invalidated
 
 **Credential:** the stack's GitHub Environment, and the application's own Environment in its own repository.
 
-The host's tailnet address changed, and two secrets hold it:
+The host's tailnet address changed, and **three** things hold it. Two are secrets; the third is on your own workstation and nothing will remind you of it:
 
 ```sh
 gh secret set PLATFORM_DEPLOY_HOST --env main-staging
@@ -182,6 +199,8 @@ That value is read twice by the platform deploy — as the SSH target and as Gra
 
 Then the same address as `DEPLOY_HOST` in each application's own repository, one per deploy target. For `commerce-ops` that is its `staging` Environment. Phase 15 fails at connection time if this is missed, in a way that reads like a network problem.
 
+**Third, your own `~/.ssh/config`.** The `ssh shatynska-main-staging` alias that phases 1, 10 and 16 use is a workstation-local convenience declared in no committed file. If its `HostName` pins the old address, those phases fail with a connection error that reads as the host being down. Update it, or drop the alias and use the tailnet name.
+
 ## 10. Deploy the platform stack
 
 **Credential:** none at your end — the nine `PLATFORM_*` secrets are held in the stack's GitHub Environment and are read only by the deploy job.
@@ -190,7 +209,14 @@ Dispatch the deploy for **this stack alone**. Re-running the last run would rede
 
 ```sh
 gh workflow run platform-deploy.yml --ref main -f stack=main-staging
-gh run watch "$(gh run list --workflow platform-deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+**Take the run id from Actions, or wait for one newer than the dispatch.** `gh workflow run` returns as soon as the dispatch is accepted, before the run exists — so `gh run list --limit 1` immediately afterwards commonly hands back the *previous* run, whose green result reads as this deploy's:
+
+```sh
+sleep 10
+gh run list --workflow platform-deploy.yml --event workflow_dispatch --limit 3 \
+  --json databaseId,status,createdAt
 ```
 
 It runs only from the default branch, and refuses before naming any Environment if dispatched from another.
@@ -236,7 +262,7 @@ ssh -i ~/.ssh/shatynska-root root@main-staging \
    journalctl -u prune-host-images.service -n 25 --no-pager'
 ```
 
-Read it for `prune-host-images: considered N, removed 0, refused 0` with N at least 1. `considered 0` or an `abandoned` line means the keep set is empty, which at this point in the sequence means an enumerated application is rendering no image reference — worth chasing before phase 16.
+Read it for `prune-host-images: considered N, removed 0, refused 0` with N at least 1. An **`abandoned`** line means the keep set is empty, which at this point in the sequence means an enumerated application is rendering no image reference — worth chasing before phase 16. `considered 0` is a different statement: it counts the images the host holds, and `considered 0, removed 0, refused 0` is byte-identical to a healthy run over a host with nothing to reclaim, which is not what you should see here.
 
 Read that journal as `root`. The unprivileged inspection account is in `docker` and in neither `systemd-journal` nor `adm`, so the same command as that account prints `-- No entries --`, which is indistinguishable from a unit that has never run.
 

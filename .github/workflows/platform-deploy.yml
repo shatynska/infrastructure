@@ -33,7 +33,8 @@ on:
   # WHY THIS TRIGGER EXISTS: a rebuilt host needs the stack redeployed to it
   # ALONE. Re-running the last run would redeploy every stack and wake another
   # stack's approval gate for a host that did not change, and
-  # `docs/runbook-rebuild.md`'s rebuild sequence needs the narrower act. It also covers the gap the `paths:` filter leaves: a merge
+  # `docs/runbook-rebuild.md`'s rebuild sequence needs the narrower
+  # act. It also covers the gap the `paths:` filter leaves: a merge
   # that opts a stack in without touching `platform/` starts no run.
   #
   # WHAT IT DOES NOT OPEN, AND THE GUARD THAT MAKES THAT TRUE. A dispatch runs
