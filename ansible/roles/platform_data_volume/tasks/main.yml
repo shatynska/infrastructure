@@ -1,8 +1,8 @@
 ---
 # Mounts the platform's dedicated data volume (the Terraform-provisioned
 # `main` Hetzner Volume) at a fixed host path, formats it if needed,
-# persists the mount across reboot, and creates the subdirectories
-# monitoring's containers bind-mount into — iac-host-configuration's ADDED
+# persists the mount across reboot, and creates the subdirectories the
+# platform stack's containers bind-mount into — iac-host-configuration's ADDED
 # "Platform Data Volume Is Mounted at a Fixed Host Path" requirement
 # (openspec/specs/iac-host-configuration/spec.md, from add-platform-monitoring).
 #
