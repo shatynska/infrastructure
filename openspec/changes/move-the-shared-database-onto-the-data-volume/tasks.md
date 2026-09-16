@@ -67,7 +67,3 @@
 ## 8. Archive
 
 - [ ] 8.1 Bring the branch back to the freshly fetched trunk, commit this change's specification record there, and open the pull request for it.
-
-## Not performed
-
-<!-- Nothing yet. Work declined, unreachable or never captured is disclosed here with a `Reason:` line, never deleted and never ticked. -->
