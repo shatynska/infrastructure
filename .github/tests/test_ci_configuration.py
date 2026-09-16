@@ -3101,7 +3101,7 @@ class TestTheSharedStackPinningCheckIsARealReadOfTheFile(unittest.TestCase):
         directory = Path(tempfile.mkdtemp(prefix="platform-compose-fixture-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         path = directory / "docker-compose.yml"
-        path.write_text("---\nvolumes:\n  postgres_data:\n", encoding="utf-8")
+        path.write_text("---\nvolumes:\n  traefik_letsencrypt:\n", encoding="utf-8")
         with self.assertRaises(AssertionError):
             shared_stack_services_naming_no_release(path)
 
@@ -6011,7 +6011,7 @@ DASHBOARD_PROVIDER_STANDING_SETTINGS = {"allowUiUpdates": True, "disableDeletion
 # which is the point, because the requirement obliges a store added later to
 # state which reason it satisfies.
 CLASSIFIED_STACK_STORES = {
-    "postgres_data": (
+    "/mnt/main/postgres": (
         "non-durable by policy -- Single Shared PostgreSQL Instance, "
         "Per-Application Databases limits it to technical or temporary records"
     ),
@@ -6546,9 +6546,8 @@ class TestTheStoreCensusIsARealReadOfTheFile(unittest.TestCase):
         every change to the stack regardless of what it changed."""
         fixture = self.compose_fixture(
             self.BASE
-            + "  postgres:\n    image: postgres:16.15\n    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+            + "  postgres:\n    image: postgres:18.6\n    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql\n"
             "  prometheus:\n    image: prom/prometheus:v3.7.3\n    volumes:\n      - /mnt/main/prometheus:/prometheus\n",
-            extra="volumes:\n  postgres_data:\n",
         )
         self.assertEqual([], unclassified_stack_declared_stores(fixture))
 
@@ -6558,7 +6557,7 @@ class TestTheStoreCensusIsARealReadOfTheFile(unittest.TestCase):
         directory = Path(tempfile.mkdtemp(prefix="platform-store-fixture-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
         path = directory / "docker-compose.yml"
-        path.write_text("---\nvolumes:\n  postgres_data:\n", encoding="utf-8")
+        path.write_text("---\nvolumes:\n  traefik_letsencrypt:\n", encoding="utf-8")
         with self.assertRaises(AssertionError):
             unclassified_stack_declared_stores(path)
 
@@ -13239,7 +13238,14 @@ class TestNoScenarioReadsAPathTheSuiteIsNoLongerTriggeredBy(unittest.TestCase):
 # empty database every application connects to successfully.
 
 POSTGRES_SERVICE = "postgres"
-POSTGRES_DATA_VOLUME = "postgres_data"
+# The store the shared instance keeps its data in, as the stack names it.
+# It was the named volume `postgres_data` until
+# move-the-shared-database-onto-the-data-volume put it on the attached data
+# volume; what this check is about -- that the mount point is the PARENT and
+# is coupled to the major above -- is unchanged by that, and only the
+# spelling of the source moved. `platform_data_volume_subdirs` in each
+# stack's group_vars is what creates this directory on the host.
+POSTGRES_DATA_SOURCE = "/mnt/main/postgres"
 POSTGRES_PARENT_MOUNT_MAJOR = 18
 POSTGRES_PARENT_MOUNT = "/var/lib/postgresql"
 POSTGRES_LEGACY_MOUNT = "/var/lib/postgresql/data"
@@ -13299,15 +13305,15 @@ def postgres_data_mount_offences(path: Path | None = None) -> list[str]:
         if isinstance(entry, str):
             source, _, rest = entry.partition(":")
             target, _, _ = rest.partition(":")
-            if source == POSTGRES_DATA_VOLUME:
+            if source == POSTGRES_DATA_SOURCE:
                 targets.append(target)
-        elif isinstance(entry, dict) and entry.get("source") == POSTGRES_DATA_VOLUME:
+        elif isinstance(entry, dict) and entry.get("source") == POSTGRES_DATA_SOURCE:
             targets.append(str(entry.get("target", "")))
 
     offences = []
     if not targets:
         offences.append(
-            f"{POSTGRES_SERVICE} mounts no {POSTGRES_DATA_VOLUME!r}, so the instance "
+            f"{POSTGRES_SERVICE} mounts no {POSTGRES_DATA_SOURCE!r}, so the instance "
             f"either keeps its data in the container's writable layer or names it "
             f"something this check cannot follow"
         )
@@ -13315,7 +13321,7 @@ def postgres_data_mount_offences(path: Path | None = None) -> list[str]:
         if target.rstrip("/") != expected:
             offences.append(
                 f"{POSTGRES_SERVICE} pins major {major} and mounts "
-                f"{POSTGRES_DATA_VOLUME} at {target!r}, but {major} requires "
+                f"{POSTGRES_DATA_SOURCE} at {target!r}, but {major} requires "
                 f"{expected!r}"
             )
 
@@ -13361,7 +13367,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         self.addCleanup(shutil.rmtree, directory, True)
         path = directory / "docker-compose.yml"
         path.write_text(
-            "services:\n" + service + "volumes:\n  postgres_data:\n",
+            "services:\n" + service,
             encoding="utf-8",
         )
         return path
@@ -13387,7 +13393,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         `image:` and leaves the mount where the previous major wanted it."""
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:18.6\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql/data\n"
         )
         offenders = postgres_data_mount_offences(fixture)
         self.assertEqual(1, len(offenders), offenders)
@@ -13407,7 +13413,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         application, which connects successfully to an empty database."""
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:16.15\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql\n"
         )
         offenders = postgres_data_mount_offences(fixture)
         self.assertEqual(1, len(offenders), offenders)
@@ -13423,7 +13429,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
             with self.subTest(image=image):
                 fixture = self.compose_fixture(
                     f"  postgres:\n    image: {image}\n"
-                    f"    volumes:\n      - postgres_data:{mount}\n"
+                    f"    volumes:\n      - /mnt/main/postgres:{mount}\n"
                 )
                 self.assertEqual([], postgres_data_mount_offences(fixture))
 
@@ -13433,7 +13439,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:18.6\n"
             "    environment:\n      PGDATA: /var/lib/postgresql/data\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql\n"
         )
         offenders = postgres_data_mount_offences(fixture)
         self.assertEqual(1, len(offenders), offenders)
@@ -13446,7 +13452,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:16.15\n"
             "    environment:\n      PGDATA: /var/lib/postgresql/data\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql/data\n"
         )
         self.assertEqual([], postgres_data_mount_offences(fixture))
 
@@ -13456,7 +13462,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:18.6\n"
             "    env_file:\n      - .env\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql\n"
         )
         offenders = postgres_data_mount_offences(fixture)
         self.assertEqual(1, len(offenders), offenders)
@@ -13468,7 +13474,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:16.15\n"
             "    env_file:\n      - .env\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql/data\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql/data\n"
         )
         self.assertEqual([], postgres_data_mount_offences(fixture))
 
@@ -13486,7 +13492,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         reads a limitation of this one as a broken stack."""
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres@sha256:" + "0" * 64 + "\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql\n"
         )
         with self.assertRaises(AssertionError) as raised:
             postgres_data_mount_offences(fixture)
@@ -13498,7 +13504,7 @@ class TestTheSharedInstanceMountMatchesItsPinnedMajor(unittest.TestCase):
         silently compare the mount against a default."""
         fixture = self.compose_fixture(
             "  postgres:\n    image: postgres:latest\n"
-            "    volumes:\n      - postgres_data:/var/lib/postgresql\n"
+            "    volumes:\n      - /mnt/main/postgres:/var/lib/postgresql\n"
         )
         with self.assertRaises(AssertionError):
             postgres_data_mount_offences(fixture)

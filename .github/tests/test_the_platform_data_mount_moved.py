@@ -388,9 +388,13 @@ class TestEveryHostVolumeBindLiesUnderTheMountTheRoleEstablishes(unittest.TestCa
     creates the missing source as an empty root-owned directory on the root
     disk and the container comes up healthy and empty.
 
-    The two stores this change moves are also two rows of iac-safety-hardening's
-    *No Store on This Host Holds Data Requiring Backup* table, which identifies
-    them by path.
+    The two stores the change this module was written for moves are also two
+    rows of iac-safety-hardening's *No Store on This Host Holds Data Requiring
+    Backup* table, which identifies them by path. There are three such rows
+    now: move-the-shared-database-onto-the-data-volume put the shared
+    PostgreSQL instance's store on the same volume, and the containment check
+    below covers it without an edit, because it reads every host bind the stack
+    declares rather than a list of the ones it knows about.
     """
 
     def test_no_inventory_file_overrides_the_mount_path_the_check_reads(self) -> None:

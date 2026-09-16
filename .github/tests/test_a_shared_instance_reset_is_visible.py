@@ -689,10 +689,25 @@ RAISE_ACT = re.compile(
     rf"\b(touch|install|tee)\b[^\n]*{re.escape(WINDOW_DECLARATION)}|>\s*{re.escape(WINDOW_DECLARATION)}"
 )
 WITHDRAW_ACT = re.compile(rf"\brm\b[^\n]*{re.escape(WINDOW_DECLARATION)}")
-# The step that destroys the data. Either command ends the instance the window
-# is declared over; the earlier of the two is the first destructive step.
+# The step that destroys the data. Any of these ends the instance the window is
+# declared over; the earliest is the first destructive step.
+#
+# EVERY ALTERNATIVE HERE DESTROYS DATA, AND THAT IS THE PROPERTY TO KEEP.
+# `docker rm -f platform-postgres-1` was one of them until
+# move-the-shared-database-onto-the-data-volume, and it never belonged:
+# removing a container destroys nothing, and while it was listed, deleting the
+# real destructive step from the recipe left this pattern matching the
+# container removal on the line above -- so the ordering assertion below would
+# have stayed GREEN while asserting the announcement against a step that
+# destroys nothing. A check that keeps passing as its subject moves out from
+# under it is worse than one that fails.
+#
+# The `docker volume rm` alternative matches nothing in the recipe today. It is
+# kept as a regression guard: a recipe that went back to a named volume would
+# be recognised rather than reported as destroying nothing.
 DESTRUCTIVE_ACT = re.compile(
-    r"docker\s+volume\s+rm\s+\S*postgres\S*|docker\s+rm\s+-f\s+platform-postgres-1"
+    r"docker\s+volume\s+rm\s+\S*postgres\S*"
+    r"|rm\s+-rf[^\n]*/store"
 )
 # The step that re-provisions each application's database, which is what the
 # withdrawal must precede.

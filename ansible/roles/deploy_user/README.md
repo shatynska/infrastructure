@@ -64,7 +64,7 @@ Raise it with `touch` on that path, withdraw it with `rm`. While it exists, ever
 
 **No `sudo` is needed for either**, and none is granted: this role creates `/var/lib/platform-maintenance/` root-owned, group `docker`, mode `0775`, and `docker` is the group an operator account already holds — `ops_user` writes no `sudoers.d` file of any kind and that omission is its requirement. Granting that group write access adds no capability, since that role's own README records `docker` membership as root-equivalent by escalation; it makes an already-available act convenient rather than newly possible. The directory is world-readable so that nothing about who may *read* the declaration depends on group membership.
 
-It sits outside the volume it announces, which is discarded during the window, and outside `/opt/<app>`, which an operator cannot read.
+It sits outside the store it announces, which is destroyed during the window, and outside `/opt/<app>`, which an operator cannot read.
 
 **A declaration left raised fails safe**: applications keep being told a window is open and keep not delivering, which costs a delayed deploy rather than a delivery into a destroyed instance. `platform/README.md`'s *Upgrading the PostgreSQL major version* raises it at step 1 and withdraws it at the end of step 4 — not after step 5, whose own redeploys go through the probe and would otherwise be blocked by the window they are ending.
 
