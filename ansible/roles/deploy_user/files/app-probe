@@ -45,7 +45,7 @@ app="$1"
 # ---------------------------------------------------------------------------
 # 1. `window-open` wins outright, and is decided before anything is read.
 #
-# During a window the instance may look perfectly healthy -- before its volume
+# During a window the instance may look perfectly healthy -- before its store
 # is discarded, or after it comes back but before any database is
 # re-provisioned -- and an application that delivered on the strength of that
 # would be delivering into something about to be destroyed, or into an instance
@@ -129,7 +129,7 @@ readonly ROOT_SQL="select (exists (select 1 from pg_roles where rolname = :'app'
 # measured against postgres:18.6 -- which is exactly the requirement's "is
 # restarting" arm, and must answer `unreachable`. Refusing it would report the
 # probe broken during a restart, a crash with the container still up, or the
-# initialising window right after a volume re-create.
+# initialising window right after the store is re-created.
 #
 # `command not found` stays: on the host it is bash's wording when `docker` is
 # absent, and from inside the container it means the image has no `psql`, which

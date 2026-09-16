@@ -300,7 +300,7 @@
 # convenient rather than newly possible. World-readable so that nothing about
 # who may READ the declaration depends on group membership.
 #
-# It lives here rather than in the volume it announces, which is discarded
+# It lives here rather than in the store it announces, which is destroyed
 # during the window, and rather than under /opt/platform, which is deploy:deploy
 # 0750 and which an operator cannot read.
 # The `docker` group is ordinarily created by the Docker Engine package, and on

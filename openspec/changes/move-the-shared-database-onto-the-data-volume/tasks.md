@@ -51,7 +51,7 @@
 
 ## 6. The mount — merging the second pull request
 
-- [ ] 6.1 Mark the second pull request ready and merge it.
+- [ ] 6.1 Mark the second pull request ready and merge it. **Expect two production approval prompts, not one.** This pull request carries comment-only edits under `ansible/roles/deploy_user/` (task 4.5), so the merge raises `host-converge.yml` as well as `platform-deploy.yml`. The converge changes nothing on either host — the edits are prose inside a role — but it is an approval sitting in the window, and approving it first is the ordering this change relies on anyway. Read the **workflow** name on each prompt; both render the same text.
 - [ ] 6.2 Let staging's platform deploy run. **Do not approve production's yet** — the approval is the last reversible point and costs nothing to defer.
 - [ ] 6.3 Verify staging at the database level rather than the container level: `\l` lists every database in `baseline-staging.md`, each owned by the role `\du` recorded. A healthy container over an empty cluster is what this catches, and the baseline is what makes "every database" decidable.
 - [ ] 6.4 Confirm staging's mount is what the container actually has — `docker inspect platform-postgres-1 --format '{{range .Mounts}}{{.Type}} {{.Source}}{{end}}'` reports a bind from `/mnt/main/postgres` — and that `postgres-exporter` reports `pg_up 1`, since its failure to reconnect is otherwise silent.
