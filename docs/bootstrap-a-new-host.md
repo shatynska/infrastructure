@@ -575,12 +575,32 @@ Edit `ansible/inventory/group_vars/<environment>.yml` — production's and stagi
 |---|---|
 | `hardening_ssh_allowed_cidrs` | Exactly the `ssh_allowed_cidrs` list from **that stack's** `terraform.tfvars`. They are kept in sync by hand; a mismatch makes the host firewall block what the cloud firewall allows. |
 | `hardening_web_allowed_cidrs` | Exactly `web_allowed_cidrs` from that stack's `terraform.tfvars` — `["0.0.0.0/0"]` for both stacks. |
-| `deploy_apps` | **Not in this file.** It belongs in `ansible/inventory/host_vars/<server name>.yml`, the vars file of the host this stack provisions — an entry here would authorise its key on every host in the environment. One entry: `name: platform`, `public_key:` the `.pub` of that stack's platform deploy key. **Each stack gets its own keypair** — one leaked private half must deploy to one host. Applications are added there when they are onboarded, one entry per application; `docs/onboard-an-application.md` is that procedure. |
+| `deploy_apps` | **Not in this file** — §6.1.1 below creates the file it belongs in. |
 | `ops_user_accounts` | One entry: `name: ops-<you>`, `public_key:` the `.pub` of your operator inspection key |
 | `platform_data_volume_subdirs` | Leave as is |
 | `ghcr_pull_username` | The GitHub username whose token is below. For an organisation, a dedicated machine user with read access to the application repositories is cleaner than a person's account. |
 | `ghcr_pull_token` | Vault-encrypted, see below |
 | `image_prune_heartbeat_ping_key` | Vault-encrypted, see below. **The play refuses to run without it** |
+
+#### 6.1.1 Create this host's own vars file
+
+The file above holds what is true of **every** host in that environment. The applications a host authorises to deploy to it are not that: an environment may hold two stacks of different tenants, and one entry in the environment's file would authorise one key on both their hosts. So they go in a file of this host's own, and **you create it — it does not exist until you do**:
+
+    ansible/inventory/host_vars/<server name>.yml
+
+`<server name>` is the `name` that stack's `terraform.tfvars` declares — `main-production` or `main-staging` — which is also the name Hetzner gave the server and the name Ansible resolves it by. The three are one string, and `.github/tests` fails the pull request if a stack's declared server has no file here.
+
+```yaml
+---
+deploy_apps:
+  - name: platform
+    public_key: "ssh-ed25519 AAAA... deploy@platform-<stack>"
+```
+
+One entry to begin with: `platform`, whose `public_key` is the `.pub` of **that stack's** platform deploy key from §0.3. **Each stack gets its own keypair** — one leaked private half must deploy to one host. Applications are added here as they are onboarded, one entry per application, by `docs/onboard-an-application.md`.
+
+**Check:** `ssh-keygen -lf ~/.ssh/<company>-platform-<stack>.pub` prints a fingerprint equal to the material you just pasted. §6.4 asks for the same figure before storing the private half, so keep it.
+
 
 **The GHCR token.** The host must log in to GitHub's container registry to pull private application images. On github.com as the user above: Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate, scope **`read:packages`** only, expiry of your choice (note it in the password manager: when it expires, deploys start failing at `docker compose pull`). **Rotating it means re-encrypting one block per stack, each under that stack's own Vault password** — two edits, not one, and you need both passwords to hand.
 

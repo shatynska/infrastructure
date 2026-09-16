@@ -817,7 +817,20 @@ A citation in this repository names a requirement and, very often, a scenario in
 
 **Do the check with the sweep, not after it.** `.github/tests/test_the_retired_requirement_names_are_gone.py` already reads every tracked file, already flattens each one so a title wrapped across a comment's line break is found, and already derives its subject from committed specifications. The scenario predicate is the inverse of its current one — a cited title that is **not** among the live scenario titles, rather than a name that **is** among the retired ones — so it needs a reader of its own rather than a second literal. Its false-positive risk is the thing to measure first: a quoted phrase that is not a citation at all looks exactly like a citation of a scenario that does not exist.
 
-## 50. separate-history-from-rationale-in-source-comments
+## 50. stop-citing-backlog-entries-by-number
+
+**Not blocked. Recorded 2026-09-16 by `bound-a-deploy-key-to-one-host-when-an-environment-holds-two-stacks`, whose own renumbering of this file is what makes the case rather than an argument about it.**
+
+This file's preamble says to cite an entry **by name, never by number**, because the numbers are not stable and it has been renumbered from 1 three times now. Two committed citations still use numbers, and both were already wrong before that renumbering rather than broken by it:
+
+- **`.github/dependabot.yml`** cites "Entries 43-16 of docs/backlog.md". There is no entry 43 and there never has been under the current scheme; the range reads as a typo for something, and nothing in the tree says what.
+- **`.github/workflows/ansible-verify.yml`** says "**one** scenario does exactly that with `ansible/inventory/group_vars/<environment>.yml`". Three do — `hardening/absent-ssh-cidrs`, `image_prune/absent-heartbeat-key` and `hostname/absent-company`, the last against `group_vars/all.yml`. That one is a miscount rather than a numeric citation, and it is here because it was found by the same sweep.
+
+**The entry is the rule, not the two lines.** Fixing the two and stopping there re-creates the defect at the next renumbering, which this file's own rule guarantees will happen. What is owed is a check: `.github/tests` is the only mechanism in this repository that reads committed files at repository scope, and a sweep for `docs/backlog.md` cited with a number — or for an entry name that no heading matches — is a static read of committed files, which is exactly that suite's subject. `rename-the-requirements-that-read-narrower-than-they-are` and `sweep-the-stale-scenario-titles-and-check-them` are the same shape of problem and the same shape of answer; taking all three together is cheaper than taking them apart.
+
+Nothing here is a correctness defect in the pipeline. It is a reader sent to an entry that does not exist.
+
+## 51. separate-history-from-rationale-in-source-comments
 
 **No longer blocked.** It waited on the citation-form decision and on the sweep that followed it; both were delivered by `decide-archived-change-reference-policy` (archived 2026-09-07, PR #70), which also converted every citation in the comment blocks below. What remains here is the separation this change deliberately did not do: it changed citation *form* only, and left the prose around it alone.
 
@@ -835,7 +848,7 @@ What remains is the pass itself, which needs instances of its own found rather t
 
 The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-13; it was 48 against 90 when this entry was written, so the ratio has worsened rather than held. This is a style question with a real maintenance cost, not a cosmetic one.
 
-## 51. record-the-hostname-scheme
+## 52. record-the-hostname-scheme
 
 **Recorded 2026-09-14 by `expose-staging-on-the-web`, which wrote down the DNS the scheme produces and not the scheme.** The public names this repository's hosts serve follow `<service>.<server>.BASE_DOMAIN` — `<app>.main-production.BASE_DOMAIN`, `<app>.main-staging.BASE_DOMAIN` — resolved by one wildcard `A` record per server, with a short alias directly under `BASE_DOMAIN` as a record of its own. The rule was decided in the `commerce-ops` repository, whose `deploy-commerce-ops-to-staging` handoff names `docs/naming-conventions.md` here as its home. That file names servers, stacks, keys and the OS hostname, and not the public names under them.
 
@@ -843,7 +856,7 @@ The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-
 
 Not blocked. It touches `docs/` and no mechanism.
 
-## 52. reclaim-a-multiply-referenced-untagged-image
+## 53. reclaim-a-multiply-referenced-untagged-image
 
 **Not blocked. Recorded 2026-09-15 by `report-refused-removals-in-the-host-prune`, which made the condition visible and deliberately did not remove it.**
 
@@ -856,7 +869,7 @@ Removing it needs one of two things, and both are changes to **what the run remo
 
 **Neither host is known to carry such an image**, so this is not urgent. What makes it worth keeping is that the condition is now legible: when `refused` reads non-zero for this reason on a real host, this entry is what it points at.
 
-## 53. write-and-rehearse-the-rebuild-runbook
+## 54. write-and-rehearse-the-rebuild-runbook
 
 **Not blocked; recorded because every piece exists and nobody has run them in sequence.**
 
@@ -864,7 +877,7 @@ Recovering this host from nothing is: a Terraform apply through the gated pipeli
 
 A `docs/runbook-rebuild.md` that lists them in order, names the secret each step needs, and records the last rehearsal's date and duration is the deliverable. The rehearsal is the point; the document is how it survives. Staging is where the rehearsal can happen without touching prod: converged since 2026-09-10 and carrying the platform stack since 2026-09-13, so the thing this entry once waited on is in place and the rehearsal is now merely unscheduled.
 
-## 54. unify-the-workflows-own-role-discovery
+## 55. unify-the-workflows-own-role-discovery
 
 **Not blocked.** Recorded by `unify-the-two-role-exclusion-rules`, which settled every *Python* enumeration of this repository's own roles on `ansible/requirements.yml` and deliberately left this one behind.
 
@@ -878,7 +891,7 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 
 **One assertion in that module still encodes the removed heuristic**, and it is a separate, smaller thing. `test_an_external_galaxy_dependency_contributes_no_edge_and_is_not_refused` filters the derived graph's targets with `if "." in target`. It passes today only because its fixture builds no dotted role directory; under the unified rule a vendored dotted directory the manifest does not name *is* one of this repository's own roles and should contribute an edge, at which point the test fails for a reason that is not a defect. `unify-the-two-role-exclusion-rules` deliberately did not touch it — its plan named it as the guard on the edge-filter change and required it to pass unaltered, which is what established that the change was behaviour-preserving. Rewriting it means choosing a new way to express "an edge to content this repository does not carry", and that is the same question this entry asks of the workflow.
 
-## 55. bind-the-galaxy-name-resolution-to-ansible-itself
+## 56. bind-the-galaxy-name-resolution-to-ansible-itself
 
 **Not blocked.** Recorded by `unify-the-two-role-exclusion-rules`, which found the resolution wrong in two places at once and could not write the check that would have caught it.
 

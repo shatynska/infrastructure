@@ -813,6 +813,20 @@ def deploy_account_offences(workflow: dict) -> list:
     return offences
 
 
+def key_material(public_key: str) -> str:
+    """An SSH public key's type and base64 material, without its comment.
+
+    THE COMMENT FIELD IS NOT PART OF THE KEY. Bucketing on the whole string
+    is how the guard below was defeated: two hosts authorising one private
+    half under two comments were not reported. `ssh-keygen -lf` fingerprints
+    the material alone for the same reason. Kept in step with the identically
+    named helper in `test_a_deploy_key_is_bound_to_one_host`, which states the
+    operator behaviour that makes this live rather than theoretical.
+    """
+    fields = public_key.split()
+    return " ".join(fields[:2]) if len(fields) >= 2 else public_key.strip()
+
+
 def shared_key_offences(keys) -> list:
     """Every public half more than one host authorises for the platform
     application."""
@@ -822,13 +836,13 @@ def shared_key_offences(keys) -> list:
             "so this comparison reads nothing"
         ]
     shared: dict = {}
-    for group, key in sorted(keys.items()):
-        shared.setdefault(key, []).append(group)
+    for host, key in sorted(keys.items()):
+        shared.setdefault(key_material(key), []).append(host)
     return sorted(
-        f"{groups} authorise one key ending {key[-24:]!r}, so one stack's compromised "
-        "key deploys to another stack's host"
-        for key, groups in shared.items()
-        if len(groups) > 1
+        f"{hosts} authorise one key ending {material[-24:]!r}, so one stack's "
+        "compromised key deploys to another stack's host"
+        for material, hosts in shared.items()
+        if len(hosts) > 1
     )
 
 
@@ -2613,6 +2627,35 @@ class TestTheseReadsDiscriminate(unittest.TestCase):
             [],
             shared_key_offences(
                 {"main-production": "ssh-ed25519 AAAA", "main-staging": "ssh-ed25519 BBBB"}
+            ),
+        )
+
+    def test_one_key_under_two_comments_is_still_one_key(self) -> None:
+        """The comment field is not part of the key, and bucketing on it defeated
+        this guard. `docs/onboard-an-application.md` instructs a distinct per-target
+        comment, so relabelling is the one edit a careless operator reliably makes
+        when copying a host's file -- and it was the edit that hid the reuse."""
+        material = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKbTTA4VUQjmUt2"
+        offences = shared_key_offences(
+            {
+                "main-production": f"{material} deploy@platform-main-production",
+                "analytics-production": f"{material} deploy@platform-analytics-production",
+            }
+        )
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("main-production", offences[0])
+        self.assertIn("analytics-production", offences[0])
+
+    def test_two_keys_under_one_comment_are_still_two_keys(self) -> None:
+        """The converse, so the fix above is a narrowing of what counts as one key
+        rather than a widening of what counts as a duplicate."""
+        self.assertEqual(
+            [],
+            shared_key_offences(
+                {
+                    "main-production": "ssh-ed25519 AAAAmaterialone deploy@platform",
+                    "main-staging": "ssh-ed25519 AAAAmaterialtwo deploy@platform",
+                }
             ),
         )
 

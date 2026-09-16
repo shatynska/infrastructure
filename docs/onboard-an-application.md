@@ -20,7 +20,7 @@ Today each environment holds exactly one stack, so the two coincide and nothing 
 | Step | How often |
 |---|---|
 | 1. The name | once per application |
-| 2. The deploy authorisation on the host | once per application per environment |
+| 2. The deploy authorisation on the host | once per application per **stack** — a stack is one host, and an environment may hold two |
 | 3. The database | once per application per deploy target, if it needs one at all |
 | 4. The application's own repository | the repository once; the Environment, the secrets and the deploy job once per deploy target |
 | 5. The public hostname | once per deploy target |
@@ -33,11 +33,11 @@ The application's name in `deploy_apps` and the last segment of its image reposi
 
 ## 2. Authorise the deploy on the host
 
-One pass per environment the application deploys to.
+One pass per **stack** the application deploys to, not per environment. Today each environment holds one stack and the two counts are equal; with `main-production` and `analytics-production` in one environment they are not, and a single pass would leave the second host authorising nothing — which is *A Host-Scoped Variable Lives in the Host's Own Vars File*'s "Two stacks share an environment" scenario (`openspec/specs/iac-host-configuration/spec.md`), met from the wrong side.
 
 ### 2.1 Generate that cell's deploy key
 
-    ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-<environment> -N "" -C "<app>-deploy-<environment>"
+    ssh-keygen -t ed25519 -f ~/.ssh/<company>-<app>-<stack> -N "" -C "<app>-deploy-<stack>"
 
 Passphrase-less, because continuous integration cannot type one. One key per application per stack, never one shared: the public half is committed in that host's own vars file, and one leaked private half must deploy to one host.
 
@@ -172,7 +172,7 @@ The whole table repeats per Environment, and every row after the first takes tha
 | The shared-instance database password, under the name §3.2 gave it — `SHARED_POSTGRES_PASSWORD` for `commerce-ops` | Written by §3.2's recipe, with that target's own independently generated value — never set by hand here, and never under a name the Environment already holds |
 | The application's own settings | Whatever the application needs |
 
-**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<environment>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance.
+**Delete each private half from your workstation once it is stored**, and verify before storing that it is the right one: `ssh-keygen -lf ~/.ssh/<company>-<app>-<stack>.pub` must print the fingerprint of the public half you committed in §2.2 — the same command and the same `.pub` target as §2.1's check, so the two figures are comparable at a glance.
 
 ### 4.3 Anything it persists has to say why it needs no backup
 

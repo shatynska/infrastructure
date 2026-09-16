@@ -457,6 +457,23 @@ def repeated_variable_offences(groups, hosts) -> list:
     return offences
 
 
+def key_material(public_key: str) -> str:
+    """An SSH public key's type and base64 material, without its comment.
+
+    THE COMMENT FIELD IS NOT PART OF THE KEY, and bucketing on it is how this
+    guard was defeated. Two hosts authorising one private half under two
+    comments are two hosts authorising one private half; `ssh-keygen -lf`
+    fingerprints the material alone for the same reason. `docs/onboard-an-
+    application.md` instructs a distinct per-target comment, so the one edit a
+    careless operator reliably makes when copying a host's file is the comment
+    -- which, read whole, is exactly the edit that hid the reuse from this
+    check. A degenerate value with fewer than two fields buckets on itself
+    rather than raising, so a malformed entry is compared rather than skipped.
+    """
+    fields = public_key.split()
+    return " ".join(fields[:2]) if len(fields) >= 2 else public_key.strip()
+
+
 def duplicate_public_half_offences(authorisations) -> list:
     """Every public half more than one host authorises.
 
@@ -475,11 +492,11 @@ def duplicate_public_half_offences(authorisations) -> list:
     for host, entries in sorted(authorisations.items()):
         for application, key in sorted(entries.items()):
             if key:
-                holders.setdefault(key, []).append(f"{host}/{application}")
+                holders.setdefault(key_material(key), []).append(f"{host}/{application}")
     return sorted(
-        f"{names} authorise one public half ending {key[-24:]!r}, so one leaked private "
-        "half deploys to more than one host"
-        for key, names in holders.items()
+        f"{names} authorise one public half ending {material[-24:]!r}, so one leaked "
+        "private half deploys to more than one host"
+        for material, names in holders.items()
         if len(names) > 1
     )
 
@@ -1376,6 +1393,42 @@ class TestTheseReadsDiscriminate(HostVarsFixtureMixin, unittest.TestCase):
                 {
                     "alpha-live": {PLATFORM_APPLICATION: self.KEY},
                     "beta-live": {PLATFORM_APPLICATION: self.OTHER},
+                }
+            ),
+        )
+
+    def test_one_key_relabelled_is_still_one_key(self) -> None:
+        """The comment field is not part of the key, and reading the whole string
+        defeated this guard: two hosts authorising one private half under two
+        comments were not reported.
+
+        THIS IS THE LIVE CASE RATHER THAN A CONTRIVED ONE. A second tenant's host
+        vars file is realistically produced by copying an existing one, and
+        `docs/onboard-an-application.md` instructs a distinct per-target comment --
+        so relabelling is the one edit a careless operator reliably makes, and it
+        was exactly the edit that hid the reused material. The document and the
+        check pointed in opposite directions.
+        """
+        material = self.KEY.split()[1]
+        offences = duplicate_public_half_offences(
+            {
+                "alpha-live": {PLATFORM_APPLICATION: f"ssh-ed25519 {material} deploy@platform-alpha"},
+                "beta-live": {PLATFORM_APPLICATION: f"ssh-ed25519 {material} deploy@platform-beta"},
+            }
+        )
+        self.assertEqual(1, len(offences), offences)
+        self.assertIn("alpha-live/platform", offences[0])
+        self.assertIn("beta-live/platform", offences[0])
+
+    def test_two_keys_under_one_comment_are_still_two_keys(self) -> None:
+        """The converse, so the fix above narrows what counts as one key rather
+        than widening what counts as a duplicate."""
+        self.assertEqual(
+            [],
+            duplicate_public_half_offences(
+                {
+                    "alpha-live": {PLATFORM_APPLICATION: f"{self.KEY.rsplit(' ', 1)[0]} shared-label"},
+                    "beta-live": {PLATFORM_APPLICATION: f"{self.OTHER.rsplit(' ', 1)[0]} shared-label"},
                 }
             ),
         )
