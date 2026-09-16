@@ -43,9 +43,12 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Run `ansible/scripts/run-molecule test -s <scenario>` for each `deploy_user` scenario individually and verify each passes; then run `--all` and verify the SCENARIO RECAP names every scenario the role has
+- [x] 6.1 Run `ansible/scripts/run-molecule test -s <scenario>` for each `deploy_user` scenario individually and verify each passes; then run `--all` and verify the SCENARIO RECAP names every scenario the role has
 
-  **Half performed, and the box stays unticked until it is whole.** All four scenarios were run individually against the merged tree on 2026-09-16 and each exited 0 — `default`, `ghcr-credential-absent`, `ghcr-credential-rejected`, `probe-and-window`, every recap `failed=0`. The `--all` run was **not** performed on this workstation: it is unrunnable here, having been killed for memory three times, which is why this repository runs scenarios individually locally and lets `ansible-verify.yml` cover the `--all` path. Tick this only against that CI run, or disclose it under `## Not performed` at archive time with that reason.
+  **Both halves done, the second by CI, and read on a stricter property than the exit status.** All four scenarios were run individually on the workstation against the merged tree, each exiting 0. `--all` is unrunnable there — killed for memory three times — so it was run by `ansible-verify.yml`'s `molecule (deploy_user)` job on pull request #229 (run 35061827962, 18m48s), whose recap names all four scenarios the role has: `default`, `ghcr-credential-absent`, `ghcr-credential-rejected` and `probe-and-window`, every one `failed=0`.
+
+  **Checked as `verify: Executed: Successful` per scenario rather than as an exit status**, and that distinction is not pedantry: a concurrent session met a run that aborted at `idempotence`, never reached `verify` — so asserted nothing — and still exited 0 with `failed=0`. CI reads that job by exit status alone, which is the weaker of the two checks, so its log was read directly for the property that matters. All four carry it; no `Idempotence test failed` line appears. `docs/backlog.md` entry 59 is where moving that check into `ansible/scripts/run-molecule` is proposed.
+
 - [x] 6.2 Run `python3 -m unittest discover --start-directory .github/tests` from the repository root and verify it passes
 - [x] 6.3 Run `pre-commit run --all-files` and verify it passes, the pinned Galaxy role having been installed into this working tree first
 - [x] 6.4 Run `openspec validate --all` and verify it passes
