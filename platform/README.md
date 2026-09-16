@@ -168,6 +168,20 @@ GRANT pg_monitor TO pgexporter;
 
 `pg_monitor` is Postgres's own built-in predefined role: read-only access to the statistics views postgres-exporter's standard collectors query, no table data access, no superuser.
 
+**Take the password from the exporter rather than from the password manager, wherever the exporter is already running** — which it is in both cases this step is reached: after a rebuild, and after a store reset. The container holds that stack's value as `DATA_SOURCE_PASS`, rendered from its Environment secret at deploy time, and that is the authoritative copy: it is exactly what the exporter will present when it connects. Read it on the host and pipe it into `psql` there, and the secret is not fetched, not pasted, not mistyped, and never enters a shell history:
+
+```sh
+ssh <operator>@<host> 'sh -s' <<'SH'
+pw=$(docker exec platform-postgres-exporter-1 printenv DATA_SOURCE_PASS)
+printf '%s\n' "SET log_statement = 'none';" \
+  "CREATE ROLE pgexporter WITH LOGIN PASSWORD '$pw';" \
+  "GRANT pg_monitor TO pgexporter;" \
+| docker exec -i platform-postgres-1 sh -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'
+SH
+```
+
+Two things this does not do. It does not make the value *correct*: where the Environment secret is wrong, the role and the exporter agree with each other and are both wrong, and the `pg_up` check below is what establishes otherwise. And it interpolates the password into a single-quoted SQL literal, so a value containing `'` would break it — the generated alphabet does not produce one, and a hand-chosen password might, in which case type it rather than pipe it.
+
 **That each stack's password is its own is a claim nothing checks**, and it was false until 2026-09-15 — both stacks held one value, found only because two hosts' error output quoted the same prefix. Compare them without printing either, from a session on each host:
 
 ```sh

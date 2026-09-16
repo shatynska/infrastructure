@@ -33,7 +33,17 @@ Captured by following the merged phase 1. Everything below is what "serving what
 
 **Serving:** `https://commerce-ops.main-staging.fincci.bike/` answers **404**, `/health` and `/docs` answer **200**. See the divergence below — the 404 is the application's and is the healthy state.
 
-**Not captured by me:** the two heartbeat checks' period and grace at the observer. That read needs the observer's own account, which this session has no credential for; it is the operator's, and the runbook's phase 1 calls for it. **Until it is done, phase 12's comparison has nothing to compare against beyond what the register claims.**
+**The observer read, performed by the operator at ~19:45Z — before the destroy, which is the only point at which it means anything.** This session holds no credential for the observer, so it was asked for and reported back. What it found:
+
+| Check | Appendix A recorded | The observer carried |
+|---|---|---|
+| `main-production-alertmanager` | 5 minutes / 5 minutes | 5 minutes / **2 minutes** |
+| `main-staging-alertmanager` | 5 minutes / 5 minutes | **did not exist** |
+| `main-staging-prune-host-images` | 7 days / 2 days | 7 days / **2 hours** |
+
+**The timing is what makes this usable, and it is the distinction phase 12 turns on.** A disagreement found *before* the destroy is between two claims about a running system, and the register is the one that can be wrong. A disagreement found *after* it is most likely the rebuild having reset a check to the vendor's default, and there the register is right and the observer is what you correct. These readings are the first kind, which is why Appendix A is corrected against them rather than the other way round.
+
+The middle row is not a drift but an absence, and it is what `give-staging-its-own-dead-mans-switch-check` was opened and closed on.
 
 ### Divergences found in phase 1
 
@@ -145,6 +155,14 @@ Read back from the inventory, as the runbook says rather than from `terraform ou
 | 3 — destroy, merge to apply complete | 1 min 12 s |
 | 4 — recreate, merge to apply complete | 1 min 22 s |
 | 5 — DNS | **not needed** — the address was reused |
+
+## Phase 12 — the observer, confirmed 2026-09-16T~21:20Z
+
+Both of this stack's checks confirmed green by the operator, on the settings the pre-destroy read recorded: `main-staging-alertmanager` and `main-staging-prune-host-images`. **The rebuild reset neither**, which is the failure this phase exists to catch and which did not happen — the prune's reporter answering `OK` rather than `Created` at 21:10 says the same thing from the host's side, since `create=1` would have brought a new check into existence carrying the observer's default.
+
+So the register is corrected against the **pre-destroy** reading, and the post-rebuild reading is what establishes that the rebuild changed nothing to correct against.
+
+**The evidence for the prune's grace**, gathered on the host and recorded here because Appendix A now cites it: `ansible/roles/image_prune/defaults/main.yml` declares `image_prune_on_calendar: "Sun *-*-* 04:00:00 UTC"` and `image_prune_randomized_delay_sec: 3600`, and `systemctl list-timers prune-host-images.timer` on the pre-rebuild host showed `LAST Sun 2026-09-13 04:28:03 UTC` and `NEXT Sun 2026-09-20 04:34:12 UTC` — both inside the hour the jitter bounds. That is what makes two hours a tolerance and two days a blind spot.
 
 ### Divergence found before phase 7
 
@@ -276,6 +294,7 @@ From the merge that destroyed the server to the confirmation that the host was s
 | 9 — the three address holders | ~1 min |
 | 10 — platform deploy | ~2 min |
 | 11 — `pgexporter` role | <1 min |
+| 12 — the observer | ~2 min, operator; the pre-destroy read is in phase 1 |
 | 13 — prune activation | <1 min |
 | 14 — database re-provisioning | <1 min |
 | 15 — the application's own deploy | ~4 min, after the button it names was found not to exist |

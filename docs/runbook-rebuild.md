@@ -33,7 +33,7 @@ Do not mute either. A check muted for a rebuild is one nobody re-arms, and an un
 
 **Expect the host key to be rejected three separate times later, and know now that it is not a fault.** A rebuilt host is a new machine presenting a new key on every identity you reach it by, and each one fails only when that identity is first used — spread across phases 7, 8 and 10, which is why it otherwise reads as three unrelated problems:
 
-- **the public address**, if Hetzner hands the same one back — which it does when the destroy and the create are minutes apart;
+- **the public address**, where Hetzner hands the same one back — which it may do, and did in the rehearsal, when the destroy and the create are minutes apart;
 - **the tailnet name**, at phase 8;
 - **the tailnet address**, behind any `~/.ssh/config` alias — accepting the key under the *name* does not record it for the *address*, so this one fails separately after the other two are cleared.
 
@@ -74,11 +74,13 @@ Three of the phases below fail late and confusingly if a credential has gone sta
 
 ```sh
 cd ansible
-direnv allow          # or: source .envrc — it is plain exports
+source .envrc
 ansible-inventory -i inventory/main-staging.hcloud.yml --graph
 ```
 
-**The first line is not optional and is the step most often skipped.** `ansible/.envrc` is per working tree and is not loaded by being present: without it the run fails with `Invalid Hetzner Cloud API Token: unable to authenticate` and `Completely failed to parse inventory source`. That is what an unprovisioned shell looks like, and meeting it here costs a minute where meeting it at phase 7 costs a half-finished converge.
+**`source .envrc` rather than `direnv allow`, and the difference matters when you are pasting a block.** `.envrc` is plain exports, so sourcing it works in any shell, immediately. `direnv allow` only *authorises* the file — the export happens the next time direnv's hook fires, which is at your next interactive prompt, so in a pasted block the line after it still runs without the token, and in a shell with no direnv hook installed it never fires at all.
+
+**Do not skip this. It is the step most often skipped and the one the rehearsal was caught by.** `ansible/.envrc` is per working tree and is not loaded by being present: without it the run fails with `Invalid Hetzner Cloud API Token: unable to authenticate` and `Completely failed to parse inventory source`. That is what an unprovisioned shell looks like, and meeting it here costs a minute where meeting it at phase 7 costs a half-finished converge. **If the file does not exist at all** — a working tree cloned since the last rebuild has none — copy `ansible/.envrc.example` and fill in both read-only tokens before going on.
 
 That proves the read-only Hetzner token parses and reaches the right project. A failure names the source it could not parse rather than resolving to an environment with no host in it — `ansible.cfg`'s `any_unparsed_is_failed` is what makes that true, and without it the play would report success having converged nothing, which is byte-identical to a play against the host you have just destroyed.
 
@@ -177,7 +179,13 @@ Record the host key first, or the play stops at connection time before a single 
 ssh -i ~/.ssh/shatynska-root root@<the new public ipv4>
 ```
 
-A brand-new public address usually carries no `known_hosts` entry, so this connection is the easy one. **The invalidated entries bite later**, at the first connection by a name you have used before — phase 8's `root@main-staging` over the tailnet, and every later `shatynska-main-staging`. Phase 8 says what to do about them; the note is here only so it is not a surprise there.
+**This is where the host key is first rejected, and it surprised the rehearsal.** A genuinely new address carries no `known_hosts` entry — but the address may have been reused, and then the entry is stale and this connection fails with `REMOTE HOST IDENTIFICATION HAS CHANGED!`. That is what happened. Clear it and accept the new key:
+
+```sh
+ssh-keygen -R <the public ipv4>
+```
+
+Phase 1 lists all three surfaces this happens on; this is the first of them, not the exception to them.
 
 Then converge:
 
@@ -210,7 +218,7 @@ ssh-copy-id -f -i ~/.ssh/shatynska-ansible-ci-main-staging.pub \
 
 **`-f` is load-bearing and is not a convenience.** Without it `ssh-copy-id` refuses with `ERROR: failed to open ID file '…/shatynska-ansible-ci-main-staging': No such file` — it wants the **private** half to verify the pair even when handed the public one, and that half was deleted when it was stored. So the command fails for precisely the operator who followed the bootstrap, and the error names a file they were told to remove. `-f` skips the verification and installs the public key, which is all this step needs.
 
-**This is the first command that reaches the host by a name it has used before**, so it is where the rebuild's invalidated host key surfaces: `main-staging` is the same tailnet name on a new machine, and `ansible.cfg` sets `host_key_checking = True`. Expect `Host key verification failed` or `REMOTE HOST IDENTIFICATION HAS CHANGED`; clear the stale entry with `ssh-keygen -R main-staging` and accept the new one. The same applies to the `shatynska-main-staging` alias later phases use. Do not disable the check to get past it.
+**This reaches the host by its tailnet name, which is the second of the three host-key surfaces phase 1 lists** — `main-staging` is the same name on a new machine, and `ansible.cfg` sets `host_key_checking = True`. Expect `Host key verification failed` or `REMOTE HOST IDENTIFICATION HAS CHANGED`; clear it with `ssh-keygen -R main-staging` and accept the new one. **The third surface is separate and catches people out**: the `shatynska-main-staging` alias resolves to the tailnet *address*, and accepting the key under the name does not record it for the address, so `ssh-keygen -R <the tailnet ipv4>` is owed as well. Do not disable the check to get past any of them.
 
 Then prove the key is usable, by making the pipeline use it:
 
@@ -274,23 +282,11 @@ ssh shatynska-main-staging 'docker ps --format "{{.Names}}\t{{.Status}}"'
 
 ## 11. Redo the two manual steps the automation deliberately does not do
 
-**Credential:** none that you have to go and fetch — see below. The values are `PLATFORM_POSTGRES_USER` and `PLATFORM_POSTGRES_EXPORTER_PASSWORD`, and their canonical home is the password manager, since a GitHub Environment secret cannot be read back once set.
+**Credential:** the operator inspection key, held in `~/.ssh`, to reach the host — and nothing you have to look up. The values this step needs are `PLATFORM_POSTGRES_USER` and `PLATFORM_POSTGRES_EXPORTER_PASSWORD`, whose canonical home is the password manager since an Environment secret cannot be read back; but the running exporter already holds the second, which is how `platform/README.md` has you take it.
 
 The shared instance came back empty, so the monitoring role it holds came back with it. Both steps are `platform/README.md`'s, under *Monitoring and alerting*, and are performed from there rather than copied here. What matters at this point in the sequence:
 
-**Take the password from the container that already has it, rather than from the password manager.** The `postgres-exporter` container is running with it as `DATA_SOURCE_PASS`, rendered from this stack's Environment secret at deploy time — which is the authoritative copy, being exactly what the exporter will present when it connects. Read it on the host and pipe it into `psql` there, and the secret never leaves the host, never enters a shell history and cannot be mistyped:
-
-```sh
-ssh shatynska-main-staging 'sh -s' <<'SH'
-pw=$(docker exec platform-postgres-exporter-1 printenv DATA_SOURCE_PASS)
-printf '%s\n' "SET log_statement = 'none';" \
-  "CREATE ROLE pgexporter WITH LOGIN PASSWORD '$pw';" \
-  "GRANT pg_monitor TO pgexporter;" \
-| docker exec -i platform-postgres-1 sh -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'
-SH
-```
-
-This does not make the value correct — if the Environment secret is wrong, the role and the exporter will agree with each other and both be wrong. The check below is what establishes it.
+**You do not need to fetch the password.** `platform/README.md` gives the form that reads it from the exporter container, which is already running with that stack's value and is the authoritative copy — so the secret is never fetched, pasted or mistyped. Use that, and do not paste a password into this shell.
 
 - **The `pgexporter` monitoring role** must be recreated inside the new Postgres container, with this stack's own exporter password. **Nothing alerts if you skip it**: the exporter answers HTTP 200 with `pg_up 0`, and the alert that would catch a dead target fires on the target being absent, not on it being wrong. Its check is `pg_up 1` and `pg_exporter_last_scrape_error 0`.
 - **The dead-man's-switch registration** is already done on a rebuild — the check exists and its URL is unchanged. What is owed is confirming pings have resumed, which is phase 12.
@@ -379,9 +375,11 @@ A host that is up and serving nothing it served before has not finished this seq
 Last rehearsed: 2026-09-16
 Duration: 57 minutes
 Stack: main-staging
-Corrected: thirteen steps, listed below
+Corrected: twelve steps, listed below
 
-Performed against `main-staging` by the `server_enabled` toggle route, from the merge that destroyed the server to the confirmation that the host was serving what it served before. Every phase was followed as written; where the text was wrong, the step above is what was corrected, and this list says what was wrong with it.
+Performed against `main-staging` by the `server_enabled` toggle route, from the merge that destroyed the server to the confirmation that the host was serving what it served before.
+
+**Phase 2 was skipped**, and the run met at phase 7 exactly what phase 2 exists to catch — that is correction 8 below, and it is the clearest evidence in this record that phase 2 earns its place. Every other phase was performed in order. Where the text was wrong, the step above is what was corrected, and this list says what was wrong with it.
 
 1. **The serving probe read `/`**, which this application answers 404 by design — and Traefik's own 404, from a router that never matched, is indistinguishable by status code. Phases 1 and 16 now probe `/health` and read the `server:` header.
 2. **`dig` was not installed** on the operator's workstation. A `python3` one-liner is given instead.
@@ -392,10 +390,11 @@ Performed against `main-staging` by the `server_enabled` toggle route, from the 
 7. **There was one auth key per stack**, which §5.3 permits, where phase 2 assumed the documented single key. Descriptions are what tell them apart.
 8. **The converge failed at inventory parse** because `direnv` was not active. Phase 2 now names `direnv allow` as the step it is, and the failure it prevents.
 9. **`ssh-copy-id` refused** without the private half the bootstrap has you delete. `-f` is what it needs, and it is now in the command.
-10. **Phase 9's address had a third holder** — `~/.ssh/config`. The tailnet address moved even though the public one did not.
-11. **Phase 11 did not need the password manager.** The exporter container already holds the value; it is read on the host and piped into `psql`, never entering a shell history.
-12. **Phase 15 named a button that does not exist.** That application's deploy has no `workflow_dispatch`; re-running the last run is the route.
-13. **The rebuild broke two deploys in another repository**, failing at `Connect to the tailnet` with a cause that reads as a network fault in *their* history. Phase 1 now says to tell each application's owner the window is opening.
+10. **Phase 11 did not need the password manager.** The exporter container already holds the value; it is read on the host and piped into `psql`, never entering a shell history.
+11. **Phase 15 named a button that does not exist.** That application's deploy has no `workflow_dispatch`; re-running the last run is the route.
+12. **The rebuild broke two deploys in another repository**, failing at `Connect to the tailnet` with a cause that reads as a network fault in *their* history. Phase 1 now says to tell each application's owner the window is opening.
+
+**One thing the rehearsal confirmed rather than corrected**, recorded because its absence would read as an omission: the tailnet address moved even though the public one did not, and phase 9's three holders — the two Environment secrets and `~/.ssh/config` — were all owed. That step was already right, because code review had found the third holder missing before the rehearsal ran.
 
 **What the rehearsal found beyond the sequence, before anything was destroyed.** Three live defects, none of which any check in this repository could have reached, because all three lived in per-stack GitHub Environment secrets that no committed file can see: both hosts pinged one dead-man's-switch check, so production's liveness alarm was masked; both posted alerts through one webhook into one channel in the **staging** workspace, so production's alerts had never reached the Slack its operator watches; and a rotated secret does not reach its container on a deploy, which is why the first two survived being fixed until the config block was edited. The first two are fixed. The third is `docs/backlog.md` `make-a-rotated-secret-reach-its-inline-config`.
 

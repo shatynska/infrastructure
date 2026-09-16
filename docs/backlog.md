@@ -917,6 +917,8 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 
 **What a change owes.** The guard itself is a near-copy of `platform-deploy.yml`'s, and the reasoning is already written there; the decisions are what to do about the two differences. That workflow's guard runs in a job whose only input is the repository, while `host-converge.yml`'s `discover` already reads each stack's `pipeline.yml` — so the guard must come before that read rather than beside it. And a refusal message has to say what to do instead, which for a converge is "merge it", not "dispatch it from `main`" — a converge of unreviewed Ansible has no legitimate form. `.github/tests` is where the assertion belongs, beside the one that reads `platform-deploy.yml`'s guard today.
 
+---
+
 ## 55. make-a-rotated-secret-reach-its-inline-config
 
 **Not blocked, and it is a live defect. Found 2026-09-16 while closing `give-staging-its-own-dead-mans-switch-check`, by checking whether the fix had actually landed rather than by reading the deploy's result.**
