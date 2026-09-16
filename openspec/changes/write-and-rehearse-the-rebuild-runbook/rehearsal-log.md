@@ -191,3 +191,29 @@ Verified on the host afterwards: `hostname` is `shatynska-main-staging`; `/mnt/m
    The fix is one character: `ssh-copy-id -f -i ~/.ssh/<key>.pub …`. Confirmed working here — the key installed and the pipeline dispatch that follows is what proves it usable.
 
    Worth keeping as the clearest case the rehearsal produced. A defect was found by review, correctly. The correction was reviewed and agreed. The correction was still wrong, in a way only running it could show, and it was wrong in the same place and for the same underlying reason as the original.
+
+## Phase 8 confirmed, phase 9 and 10 — 2026-09-16T20:59Z–21:07Z
+
+**Phase 8's dispatch went green**, which is what proves the converge key usable: it is the Environment secret's copy that the pipeline reads, and the only copy that exists.
+
+**Phase 9 — three holders of the tailnet address, and it moved.** `100.85.219.36` → `100.95.46.64`. Updated: `PLATFORM_DEPLOY_HOST` on the `main-staging` Environment, `DEPLOY_HOST` on `commerce-ops`'s `staging` Environment, and `~/.ssh/config`'s alias. The third is the one nothing would have reminded anyone about, and the runbook names it because code review found it missing.
+
+**Phase 10 — all eight platform containers up and healthy within seconds of the deploy.**
+
+### Divergence found across phases 7, 8 and 10 — the host key bites in *three* places, not one
+
+10. The rebuilt host presents a new host key on **every** identity it is reached by, and the runbook treats this as one note in one phase. Observed, in order:
+
+    - `root@62.238.17.177` — the **public address**, reused by Hetzner, so the stale entry was present. `REMOTE HOST IDENTIFICATION HAS CHANGED!`
+    - `root@main-staging` — the **tailnet name**, at phase 8's `ssh-copy-id`.
+    - `shatynska-main-staging` — the `~/.ssh/config` **alias**, which resolves to the tailnet *address*. Accepting the key under the name does **not** record it for the address, so this failed separately, after the other two were already cleared: `Host key verification failed` and an `ssh_askpass` error in a non-interactive shell.
+
+    Three surfaces, three separate `ssh-keygen -R`, and each one only appears when that identity is first used — spread across three phases. The runbook should say that once, early, with all three named: the public address, the tailnet name, and the tailnet address behind any local alias.
+
+### Divergence found in phase 11 — it does not need the password manager at all
+
+11. **`platform/README.md` has the operator type `PLATFORM_POSTGRES_EXPORTER_PASSWORD` into `psql`, and the value is already on the host.** The `postgres-exporter` container is running with it as `DATA_SOURCE_PASS`, rendered from that stack's Environment secret at deploy time — which is the authoritative copy, being exactly what the exporter will present when it connects.
+
+    So the role can be created from the value the container already holds, on the host, without the secret being fetched from a password manager, pasted into a shell, or appearing in any history. That is the same act with fewer places to leak it or mistype it, and it removes the phase's only dependency on a credential the operator has to go and find.
+
+    It is worth saying what it does *not* remove: the value still has to be correct in the Environment, and if it is wrong there the exporter and the role will agree with each other and both be wrong. The check is unchanged — `pg_up 1` and `pg_exporter_last_scrape_error 0`.
