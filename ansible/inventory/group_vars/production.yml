@@ -63,8 +63,9 @@ ops_user_accounts:
     public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICc/YzvZTHHNETGGAy89vD7IpzTU3jDAphOeKD6q5Kiu ops-claude"
 
 # Subdirectories platform_data_volume creates on the mounted `main` volume
-# for platform/docker-compose.yml's Prometheus and Grafana services
-# to bind-mount (add-platform-monitoring). Owner/group match each image's
+# for platform/docker-compose.yml's Prometheus, Grafana and shared
+# PostgreSQL services to bind-mount (add-platform-monitoring, and
+# move-the-shared-database-onto-the-data-volume for the third). Owner/group match each image's
 # own upstream default user, so no `user:` override is needed in the
 # Compose service definitions: 65534/65534 is prom/prometheus's default
 # ("nobody"); 472/472 is grafana/grafana's own documented default; 999/999
