@@ -33,7 +33,7 @@ None. Both halves belong to capabilities this repository already has.
 ## Impact
 
 - `ansible/roles/deploy_user` — two new scripts (`deploy-probe`, `app-probe`), a `sudoers.d` rule per application, a `probe_public_key` field on `deploy_apps`, and `/var/lib/platform-maintenance/`, which holds the window declaration.
-- `ansible/inventory/group_vars/production.yml` and `staging.yml` — a probe public key per application entry.
+- `ansible/inventory/host_vars/main-production.yml` and `main-staging.yml` — a probe public key per application entry, beside the deploy key on the host axis.
 - `platform/README.md` — *Upgrading the PostgreSQL major version*, steps 1, 4 and 5.
 - `docs/onboard-an-application.md` — §2 (the second keypair) and §4 (what the application does with each token).
 - `docs/backlog.md` — entry `make-a-shared-instance-reset-visible-to-its-applications` is deleted when this archives; `automate-per-application-database-provisioning` is untouched and stays owed.
