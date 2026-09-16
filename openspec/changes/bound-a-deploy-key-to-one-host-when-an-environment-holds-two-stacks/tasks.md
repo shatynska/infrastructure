@@ -90,6 +90,8 @@ Recorded here rather than folded into the tasks above, because these are correct
 ## 7. Ship
 
 - [ ] 7.1 Open the pull request once 6.1 to 6.3 pass on the branch head and the code review has cleared. Wait for the operator's confirmation that it merged and that the converge that follows it is healthy.
+
+  **Opened as pull request #223 on 2026-09-16**, from a branch rebased onto a freshly fetched trunk and re-verified after the rebase. Three code-review rounds cleared before opening; the third recommended proceeding. Not ticked until the operator confirms the merge and the converge that follows it.
 - [ ] 7.2 Confirm the effect on both hosts: after the converge, `/opt/<name>`, `/etc/sudoers.d/app-deploy-<name>` and the `authorized_keys` entries on each host are exactly what they were before, since no key material changed. Propose to the operator that the observation be made by comparing each host's `deploy` account `authorized_keys` fingerprints before and after — a change that alters them is a defect, and an unchanged pair is the evidence that a pure relocation was pure. This is an observable gate rather than a waivable one.
 - [ ] 7.3 Archive: bring the branch back to the freshly fetched trunk, commit the specification record, and open the change's own pull request. Delete the backlog entry in that commit (task 5.2).
 
