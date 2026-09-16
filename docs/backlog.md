@@ -964,9 +964,11 @@ So the mechanism is exactly as sound as it was designed to be, for committed edi
 | Per-stack value | The two hosts hold |
 |---|---|
 | `PLATFORM_DEADMANSWITCH_URL` | the same — see `give-staging-its-own-dead-mans-switch-check` |
-| `PLATFORM_SLACK_WEBHOOK_URL` | the same, and both configs name the same channel `#alerts` |
+| `PLATFORM_SLACK_WEBHOOK_URL` | the same, and both configs name the same channel `#alerts` **in the same workspace** |
 | `PLATFORM_GRAFANA_ADMIN_PASSWORD` | the same |
 | `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | **different** |
+
+**Confirmed by delivery, not only by comparison.** On 2026-09-16 a probe was posted through the webhook each running container actually holds, one per host. Both arrived in the **staging** workspace's `#alerts`, seconds apart and indistinguishable from one another; the operator confirmed nothing arrived in the production Slack. So production's alerts do not reach the workspace its operator watches, and had not since that host was stood up. That is stage 7.5's check being performed for the first time and failing.
 
 The last row is the tell. It differs because `provision-commerce-ops-database-in-the-shared-instance` separated it by hand on 2026-09-15 and recorded doing so; the other three were never swept, and nothing since has looked. One value was fixed and its three siblings were left, which is what an un-run check looks like from the outside.
 
