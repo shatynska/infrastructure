@@ -1,0 +1,125 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing
+# here may set up the thing under test. `prepare` runs once, after `create`
+# and before `converge`, and is NOT re-run for the `idempotence` action, so
+# nothing here can mask the role's own non-idempotence.
+#
+# THE SINK IS STARTED BEFORE THE FIRST CONVERGE, not before the first
+# activation. verify.yml asserts that converging the role reported NOTHING --
+# the delta scenario "Installing the report does not activate the unit" -- and
+# that assertion is worth nothing if the sink was not listening at the moment
+# a ping would have arrived. A sink started later would make a converge that
+# DID activate the unit indistinguishable from one that did not.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    # geerlingguy.docker 8.0.0 installs `ca-certificates` and `python3-debian`
+    # with `state: present` and no `update_cache`, which fails against a
+    # freshly created container whose apt cache is empty. Same workaround,
+    # same reason, as this role's `default` scenario.
+    - name: Refresh the apt cache before the docker role installs from it
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+
+    # ================================================================
+    # The local sink. It stands in for the external observer and for nothing
+    # else: it records the request line of every ping it receives and answers
+    # 200 to all of them, so that what a successful, a failed and a killed
+    # activation report can be asserted with no credential and no call to a
+    # third party -- which is what the delta's own scenario "A report is
+    # observable without reaching the external observer" asks for.
+    #
+    # 200 TO EVERYTHING IS DELIBERATE. A sink answering 404 for an unknown
+    # path would make every ping look undeliverable, and the undeliverable-
+    # report arrangement in verify.yml -- which stops this service to produce
+    # exactly that condition -- would then be indistinguishable from the
+    # ordinary case.
+    #
+    # Python's standard library only: this image carries python3 because
+    # Ansible needs it, and a sink pulling anything else would be a second
+    # network dependency inside a scenario whose whole point is not to make a
+    # network call.
+    # ================================================================
+    - name: Install the local sink that stands in for the external observer
+      ansible.builtin.copy:
+        dest: /usr/local/bin/heartbeat-sink
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          """FIXTURE ONLY. Records every request line and answers 200."""
+          import http.server
+          import socketserver
+
+          LOG = "/var/tmp/heartbeat-sink.log"
+          PORT = 8099
+
+
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def _record(self):
+                  with open(LOG, "a", encoding="utf-8") as handle:
+                      handle.write("%s %s\n" % (self.command, self.path))
+                      handle.flush()
+                  body = b"OK\n"
+                  self.send_response(200)
+                  self.send_header("Content-Type", "text/plain")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              do_GET = _record
+              do_POST = _record
+              do_HEAD = _record
+
+              def log_message(self, *args):
+                  return
+
+
+          socketserver.TCPServer.allow_reuse_address = True
+          with socketserver.TCPServer(("127.0.0.1", PORT), Handler) as server:
+              server.serve_forever()
+
+    - name: Create the log the sink appends to
+      ansible.builtin.copy:
+        dest: /var/tmp/heartbeat-sink.log
+        owner: root
+        group: root
+        mode: "0644"
+        content: ""
+        force: false
+
+    - name: Install the sink's unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/heartbeat-sink.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=FIXTURE local sink standing in for the external observer
+
+          [Service]
+          ExecStart=/usr/local/bin/heartbeat-sink
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start the sink
+      ansible.builtin.systemd:
+        name: heartbeat-sink.service
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    # A sink that is not listening records nothing, and every "no report
+    # arrived" assertion in verify.yml would then pass for the wrong reason.
+    # This waits for the port rather than sleeping at it.
+    - name: Wait until the sink is accepting connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8099
+        timeout: 30

@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# SHELLCHECK: SC2016 and SC1003 are suppressed for this file, and only
+# those two. Its arrays are an escaping probe's test data -- every `$`,
+# backtick and backslash in them is meant to stay literal, which is the
+# property being measured, so those two checks fire on the subject
+# rather than on a defect. Every other check still applies here.
+# shellcheck disable=SC2016,SC1003
+#
+# rounds [1|2|3|4|5|6|7|all]
+#
+# Reproduces the rounds recorded in the change
+# `render-the-env-file-so-a-secret-survives-it`'s design.md. Every table in
+# that document comes from here, and the full value lists live here rather
+# than there -- the document shows excerpts for rounds 1 to 4 and the whole
+# set for rounds 5 to 7.
+set -uo pipefail
+cd "$(dirname "$0")" || exit 1
+
+check() { # check <path> <rendering> <value> -- verdict line; 1 corrupt, 2 did not run
+  local path="$1" rendering="$2" value="$3" got_b64 want_b64 got
+  # A run that did not complete must not be reported as a value that came back
+  # empty: "resolves to EMPTY" is round 2's whole result and the basis on which
+  # single-quoting was rejected, so the two states are told apart here rather
+  # than collapsed into one CORRUPT row.
+  local status=0
+  got_b64="$(./probe --path "$path" "$rendering" "$value")" || status=$?
+  # A REFUSAL is a result -- it is round 2's whole finding -- and only an
+  # outage is not. Collapsing them is how the committed harness came to print
+  # its own corrected table as "not a result".
+  if [ "$status" = 4 ]; then
+    printf '  REFUSED %-22q -- the parser rejected the file\n' "$value"
+    return 3
+  fi
+  if [ "$status" != 0 ]; then
+    printf '  ERROR   %-22q -- the probe did not complete\n' "$value"
+    return 2
+  fi
+  want_b64="$(printf '%s' "$value" | base64 -w0)"
+  got="$(printf '%s' "$got_b64" | base64 -d 2>/dev/null)"
+  if [ "$got_b64" = "$want_b64" ]; then
+    printf '  INTACT  %-22q\n' "$value"
+    return 0
+  fi
+  printf '  CORRUPT %-22q -> %q\n' "$value" "$got"
+  return 1
+}
+
+sweep() { # sweep <path> <rendering> <values...>
+  local path="$1" rendering="$2"; shift 2
+  local fails=0 errors=0 refused=0 total=0 status
+  echo "--- path=$path rendering=$rendering ---"
+  for v in "$@"; do
+    total=$((total + 1))
+    check "$path" "$rendering" "$v" && status=0 || status=$?
+    [ "$status" = 1 ] && fails=$((fails + 1))
+    [ "$status" = 2 ] && errors=$((errors + 1))
+    [ "$status" = 3 ] && refused=$((refused + 1))
+  done
+  local line="    $fails silently altered, $refused refused, of $total"
+  if [ "$errors" -gt 0 ]; then
+    line="$line -- AND $errors DID NOT RUN, so this table is not a result"
+  fi
+  echo "$line"
+}
+
+ROUND1=( 'ab$c#d' '"abc"def' 'A1+b/c=' 'x`id -u`y' 'a$(id -u)b' 'p@ss$word' 'a$$b'
+         'one two' 'has#hash' 'trail   ' 'back\nslash' '${PATH}' )
+ROUND2=( "a'b" "it's" "a\"b'c\$d" '' 'a=b=c' $'line1\nline2' '\' "trailing'"
+         # The two that pin round 2's conclusion: a CLOSED apostrophe followed
+         # by a space-preceded `#`, which single-quoting truncates SILENTLY.
+         # Without them the corpus holds the apostrophe's neighbours constant
+         # and invites the generalisation that it only ever refuses.
+         "secret' #1" "a' #b" )
+ROUND3_EXTRA=( ' leading' 'trailing ' $'tab\there' 'pct%s%d' 'bang!bang' 'unicode-ключ-é'
+               'ends-with$' 'ends-with"' 'ends-with\' 'starts-with#' '#!/bin/sh' 'a`b`c'
+               '$' '$$' '\\' '"' "'" '"$"' 'x' 'a\$b' '$\' )
+ROUND3_ADVERSARIAL=( 'a\$b' '\\$' '$\' '"\$"' '\"' '\\' '\$$' '$$\\' 'a\\"$b' '\n$\t"' )
+ROUND4=( 'ab$c#d' '"abc"def' 'A1+b/c=' 'p@ss$word' 'a$$b' 'trail   ' 'back\nslash'
+         '${PATH}' "a'b" 'a\$b' '\' '"' "'" 'one two' 'has#hash' )
+ROUND5=( "a'b" "it's" $'line1\nline2' ' leading' 'trailing ' '#leading-hash' 'mid#hash'
+         'back\slash' 'ends-with\' 'a\b' 'tab\there' $'tab\there' 'plain' )
+ROUND6=( "'abc'def" "'unclosed" 'secret #1' $'secret\t#tab' '\leading' '"opens' )
+ROUND7=( $'trailtab\t' $'\tleadtab' $'trailmix \t ' )
+
+want="${1:-all}"
+
+if [ "$want" = 1 ] || [ "$want" = all ]; then
+  echo "== Round 1: quoting alone =="
+  for r in raw double single dollar-dollar; do sweep interpolation "$r" "${ROUND1[@]}"; done
+fi
+if [ "$want" = 2 ] || [ "$want" = all ]; then
+  echo "== Round 2: what single-quoting breaks on =="
+  sweep interpolation single "${ROUND2[@]}"
+fi
+if [ "$want" = 3 ] || [ "$want" = all ]; then
+  echo "== Round 3: escaping =="
+  for r in single-bs single-shell escaped; do
+    sweep interpolation "$r" "${ROUND1[@]}" "${ROUND2[@]}"
+  done
+  sweep interpolation escaped "${ROUND3_EXTRA[@]}"
+  sweep interpolation escaped "${ROUND3_ADVERSARIAL[@]}"
+fi
+if [ "$want" = 4 ] || [ "$want" = all ]; then
+  echo "== Round 4: the env_file: consumption path =="
+  sweep env-file raw "${ROUND4[@]}"
+  sweep env-file escaped "${ROUND4[@]}"
+fi
+if [ "$want" = 5 ] || [ "$want" = all ]; then
+  echo "== Round 5: what the rendering being replaced corrupts =="
+  sweep interpolation raw "${ROUND5[@]}"
+fi
+if [ "$want" = 6 ] || [ "$want" = all ]; then
+  echo "== Round 6: the positions round 5 held constant =="
+  sweep interpolation raw "${ROUND6[@]}"
+  sweep env-file raw "${ROUND6[@]}"
+  sweep interpolation escaped "${ROUND6[@]}"
+fi
+if [ "$want" = 7 ] || [ "$want" = all ]; then
+  echo "== Round 7: edge tabs =="
+  sweep interpolation raw "${ROUND7[@]}"
+fi

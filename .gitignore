@@ -1,0 +1,126 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Secret-bearing variable files (non-secret terraform.tfvars is committed)
+*.secret.tfvars
+secrets.auto.tfvars
+
+# Local shell env (e.g. direnv's .envrc holding HCLOUD_TOKEN — Read Only
+# only, per AGENTS.md; never the Read & Write token)
+.envrc
+.env
+
+# OS/editor cruft
+.DS_Store
+*.swp
+
+# Working trees. AGENTS.md requires every change to take one — at
+# `.worktrees/<name>` generally, or `.claude/worktrees/<name>` under the Claude
+# Code binding — and each is a full copy of the repository living inside it.
+# Untracked and unignored, they showed up in `git status` and stood one
+# `git add -A` from the main working tree away from being committed wholesale.
+#
+# This does NOT keep them out of the CI-configuration suite's walks: a
+# filesystem walk does not consult git. That is `walked_files()`'s prune list,
+# and `terraform_lockfile_directories()` explains why the two are separate
+# fixes. Only `.claude/worktrees/` is ignored, not `.claude/`, whose
+# `commands/` and `skills/` are committed.
+.worktrees/
+.claude/worktrees/
+
+# The per-working-tree ANSIBLE_HOME that ansible/scripts/run-molecule points
+# Molecule at, holding this tree's own ephemeral directories. Machine state, not
+# repository content — and it must not be shared, which is the whole point.
+.molecule-home/
+
+# Ansible: Galaxy-installed role content, pinned by exact version in that
+# file, not committed itself. Fetched via:
+#   ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
+ansible/roles/geerlingguy.docker/
+
+# Python bytecode from the CI-configuration test suite (.github/tests/).
+__pycache__/
+
+# npm's install tree for .github/package.json, which pins the OpenSpec CLI that
+# pr-validation.yml validates the specification record with. The manifest and
+# its lockfile ARE committed -- they are the pin; what is installed from them
+# is not. `npm ci` recreates this from the lockfile exactly.
+node_modules/
+
+# Private keys. None is ever committed, and nothing else here says so.
+#
+# The hazard is specific rather than general: docs/bootstrap-a-new-host.md
+# stage 0.3 generates passphrase-less keypairs, stage 4.2 runs `git add -A`
+# from this directory, and those two steps are most of a working day apart.
+# docs/onboard-an-application.md generates one more, per application per
+# environment, on its own occasion. gitleaks catches the content at commit time
+# -- but it is a pre-commit hook, and stage 0 runs before `pre-commit install`
+# necessarily has. This is the layer that does not depend on having installed
+# anything.
+#
+# Conventional names, anywhere in the tree:
+*.pem
+*.key
+id_rsa
+id_ecdsa
+id_ed25519
+
+# And this repository's own scheme, which produces names with NO extension --
+# <company>-ops, <company>-root, <company>-platform-<environment>,
+# <company>-ansible-ci-<stack>, <company>-<app>-<environment> -- so no suffix
+# pattern reaches them. Both documents above write each into ~/.ssh/; these
+# catch the relative-path slip that writes one here instead.
+#
+# ANCHORED TO THE ROOT with a leading slash, deliberately. Unanchored, `*-ops`
+# would silently swallow a directory called `commerce-ops` added later, which
+# is the same class of accident this block exists to prevent. The slip lands in
+# the directory the command is run from, and that is this one.
+#
+# TWO PATTERNS PER PURPOSE WOULD GO STALE AGAIN, which is what happened: the
+# scheme renamed <company>-<app>-deploy to <company>-<app>-<environment> and
+# gave the platform key an environment suffix, and no pattern followed. So the
+# two purposes whose names END in an environment are covered by that suffix
+# rather than by a pattern each -- one per environment, not one per purpose --
+# and a third application needs no edit here, nor a fourth key purpose whose
+# name also ends in an environment. One that does not -- a <company>-backup --
+# is matched by nothing and fails the check below until a pattern is added,
+# which is the design rather than a hole in it. The set of environments is this
+# repository's own and small: the files in ansible/inventory/group_vars/ other
+# than all.yml.
+#
+# What that costs is a root-level path ending in `-staging` or `-production`,
+# which would be ignored silently. Nothing here is named that way -- a stack
+# directory lives under terraform/stacks/ -- and
+# .github/tests/test_the_bootstrap_documents_static_conventions.py fails the
+# build if a DIRECTORY at this root ever matches a pattern below. A root-level
+# file that matches is not reported, and must not be: that is the slip these
+# patterns exist to catch. The same module asserts the other direction: that
+# every `ssh-keygen -f` target either runbook prints is matched here. That
+# check, rather than a reader, is what keeps this block in step with the two
+# documents that generate keys.
+/*-ops
+/*-root
+/*-ansible-ci-*
+/*-staging
+/*-production
+
+# Retired spellings, kept rather than removed: each costs nothing, and a
+# workstation still holding a key generated before the rename is exactly the
+# case this block exists for. `/*-platform` is the un-suffixed platform key and
+# `/*-deploy` the <company>-<app>-deploy application key; no document generates
+# either now.
+/*-platform
+/*-deploy
+
+# Public halves are not secret, and one being hidden would be its own defect.
+!*.pub

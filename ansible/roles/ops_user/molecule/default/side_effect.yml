@@ -1,0 +1,149 @@
+---
+# Second converge, run by molecule's default test_sequence between
+# `idempotence` and `verify`. Two of the delta spec's scenarios are about
+# what a *re-run with a changed list* does, so neither is observable from a
+# single converge:
+#
+#   - "Rotating an operator's key removes the previous one"  -> ops-rotate's
+#     public_key changes from its OLD value to a NEW one.
+#   - "Revoking an operator who is currently logged in still completes"
+#     -> ops-revoke is marked `absent`, deliberately WHILE a process it owns
+#     is running (tasks.md 3.2), which is the case design.md says a bare
+#     `state: absent` fails on.
+#
+# ops-claude is carried through this run unchanged, so verify.yml can show
+# that revoking one entry left every other entry alone.
+#
+# This playbook records what it observed into marker files on the instance
+# rather than asserting everything itself: facts do not survive from one
+# playbook run to the next, and verify.yml is where this scenario's
+# assertions are meant to be read. Note the sequencing consequence -- if the
+# re-converge below fails outright, `verify` never runs at all, so the whole
+# scenario reports as a side_effect failure. The rescue block exists to make
+# that failure say which delta-spec scenario it belongs to instead of
+# surfacing as an opaque role error.
+- name: Side effect - rotate one operator's key and revoke another while it is in use
+  hosts: all
+  become: true
+  vars:
+    # Declared at play level rather than as an `include_role` task var.
+    # When this file was written the variable was still named `ops_users`,
+    # which lacks the `ops_user_` prefix ansible-lint's
+    # var-naming[no-role-prefix] wants, and a play-level var is not subject
+    # to that rule -- so this placement was the workaround. The project
+    # resolved the underlying conflict at implementation time by renaming
+    # the variable to `ops_user_accounts`, which carries the prefix; the
+    # placement is kept because it is also simply the clearer way to say
+    # "this play converges the role with a mutated list".
+    ops_user_accounts:
+      - name: ops-claude
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsClaudeKeyOnlyNotARealCreden
+          ops-claude-molecule@ci
+      - name: ops-rotate
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsRotateNewKeyOnlyNotARealCre
+          ops-rotate-new-molecule@ci
+        state: present
+      - name: ops-revoke
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsRevokeKeyOnlyNotARealCreden
+          ops-revoke-molecule@ci
+        state: absent
+  tasks:
+    # ================================================================
+    # Put ops-revoke *in use* before revoking it.
+    #
+    # Started through `su -` rather than a bare backgrounded command so the
+    # process comes up under a full PAM session stack (which is what gives
+    # systemd-logind a session to terminate, the first half of tasks.md
+    # 2.3's termination step). `setsid` plus full fd redirection is what
+    # keeps it alive after this task's connection goes away.
+    #
+    # The live-SSH-session half of the spec's scenario is not reproducible
+    # inside a Molecule container without running sshd and connecting to it;
+    # a live-session process owned by the account is the proxy, and is
+    # exactly what tasks.md 3.2 asks for. See test-manifest.md.
+    # ================================================================
+    - name: Start a long-running process owned by ops-revoke, under a PAM session
+      ansible.builtin.shell: |
+        set -euo pipefail
+        setsid su - ops-revoke -c 'sleep 3600' < /dev/null > /dev/null 2>&1 &
+        sleep 2
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Look up the pid of the process ops-revoke now owns
+      ansible.builtin.command: pgrep -u ops-revoke -x sleep
+      register: ops_user_revoke_live_pid
+      changed_when: false
+      failed_when: false
+
+    - name: Look up ops-revoke's numeric uid before the account is removed
+      ansible.builtin.command: id -u ops-revoke
+      register: ops_user_revoke_uid
+      changed_when: false
+      failed_when: false
+
+    - name: Assert ops-revoke really is in use before revocation is attempted
+      ansible.builtin.assert:
+        that:
+          - ops_user_revoke_live_pid.rc == 0
+          - ops_user_revoke_live_pid.stdout | trim != ""
+          - ops_user_revoke_uid.rc == 0
+        fail_msg: >-
+          No running process owned by ops-revoke could be established before
+          revocation. This is a FIXTURE failure in this scenario's own setup,
+          not evidence about the ops_user role -- without it, "revoking an
+          operator who is currently logged in still completes" would pass
+          vacuously against an idle account, which is precisely the case the
+          scenario exists to rule out.
+
+    - name: Record the pre-revocation pid and uid for verify.yml to read
+      ansible.builtin.copy:
+        dest: "/var/tmp/ops_user_revoke_{{ item.key }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ item.value }}\n"
+      loop:
+        - key: pid
+          value: "{{ ops_user_revoke_live_pid.stdout_lines | first }}"
+        - key: uid
+          value: "{{ ops_user_revoke_uid.stdout | trim }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    # ================================================================
+    # The re-converge itself. One run, no hand-run command on the host --
+    # that "without any hand-run command" clause is part of the scenario,
+    # so the revocation must happen here, through the role, and not through
+    # a `user:`/`pkill` task written by this test.
+    # ================================================================
+    - name: Re-converge ops_user with the rotated key and the revoked entry
+      block:
+        - name: Include the ops_user role with the mutated ops_user_accounts list
+          ansible.builtin.include_role:
+            name: ops_user
+
+        - name: Record that the re-converge completed rather than failing
+          ansible.builtin.copy:
+            dest: /var/tmp/ops_user_revocation_run_completed
+            owner: root
+            group: root
+            mode: "0644"
+            content: "completed\n"
+      rescue:
+        - name: Report which delta-spec scenario this run failed
+          ansible.builtin.fail:
+            msg: >-
+              The second converge failed. The delta spec requires that
+              "removing an entry's account SHALL succeed in a single playbook
+              run even when that entry's holder is logged in at the time" --
+              a run that aborts here is the exact failure design.md predicts
+              from a bare `state: absent` (userdel exit 8 against an in-use
+              account), not an incidental error.

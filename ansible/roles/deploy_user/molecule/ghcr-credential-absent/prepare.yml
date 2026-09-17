@@ -1,0 +1,35 @@
+---
+# FIXTURE ONLY -- nothing here asserts anything about the requirement, and
+# nothing here creates, configures or pre-empts an artifact this scenario's
+# own converge.yml or verify.yml is responsible for (the same constraint
+# tasks.md 3.3 places on the `prepare.yml` files this change adds).
+#
+# Two upstream/base-image gaps, both worked around here for the same
+# reason the change's own prepare files exist:
+#
+#   1. The base image `geerlingguy/docker-ubuntu2204-ansible:latest` ships
+#      with an empty apt cache, so any `state: present` package install
+#      that does not refresh it first fails with "No package matching ...".
+#      Checked against that image as of 2026-09-01.
+#   2. `community.docker.docker_login` (the module this scenario expects
+#      the role to SKIP) needs `requests` on the target. It is installed
+#      here deliberately: if the guard under test is wrong and the login
+#      runs anyway, the resulting failure should be the registry refusing a
+#      credential, not a missing Python library -- a missing library would
+#      make this scenario fail for a reason that has nothing to do with
+#      what it tests. Checked against that image as of 2026-09-01.
+#
+# Molecule runs `prepare` once, after `create` and before `converge`, and
+# does NOT re-run it for the `idempotence` action, so it cannot mask the
+# role's own non-idempotence.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Refresh the apt cache and install the target-side Python dependency
+      ansible.builtin.apt:
+        name:
+          - python3-requests
+        state: present
+        update_cache: true
+        cache_valid_time: 0

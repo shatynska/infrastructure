@@ -1,0 +1,878 @@
+services:
+  traefik:
+    image: traefik:v3.7.13
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      # Only route containers that opt in via a `traefik.enable=true`
+      # label -- an application repo's own service, not this stack's.
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=platform_edge
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # ENTRYPOINT-WIDE DEFAULTS, so that the safe form is what an
+      # application gets by saying nothing. Without these, every router in
+      # every application repository must repeat `entrypoints=websecure`
+      # and `tls.certresolver=letsencrypt` on itself, and one that forgets
+      # is served over plain HTTP with no signal at all -- the failure is
+      # a working site, not a broken one. A router that sets either label
+      # explicitly still wins; these only decide what an unopinionated one
+      # gets.
+      #
+      # The redirect cannot break certificate issuance HERE, and the
+      # reason is worth stating because it usually can: this resolver uses
+      # the TLS-ALPN-01 challenge (`acme.tlschallenge` below), which is
+      # answered on 443. An HTTP-01 resolver answers on 80, and a blanket
+      # redirect of that entrypoint is the classic way to lock yourself
+      # out of renewal. If the challenge type ever changes, this pair has
+      # to be revisited with it.
+      #
+      # `scheme=https` and the permanent (308) status are Traefik's own
+      # defaults for an entrypoint redirection; the scheme is stated
+      # anyway so a reader does not have to know that, and so a future
+      # default cannot move it silently.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.http.tls.certresolver=letsencrypt
+      # Access logging to stdout, where the host's daemon bounds it -- see
+      # "Container Logs Are Bounded by the Host's Daemon Configuration"
+      # (openspec/specs/iac-host-configuration/spec.md) and the 50m x 3
+      # ceiling in ansible/roles/docker/defaults/main.yml, whose own
+      # comment sized itself expecting exactly this ("on a Traefik
+      # fronting a public site 30 MB is plausibly an hour").
+      #
+      # TWO CONSEQUENCES, neither hidden. Traefik's own `docker logs`
+      # history gets shorter, because the ceiling is per container and
+      # access lines will dominate it. And the default CLF format records
+      # client IP addresses, which is personal data under GDPR -- fine for
+      # a personal host, a retention and lawful-basis question for a
+      # company one, and the reason to decide it here rather than discover
+      # it later. `--accesslog.fields.headers.defaultmode=drop` is the
+      # default and stays so; no request headers are recorded.
+      - --accesslog=true
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      # add-platform-monitoring: a separate, unpublished entrypoint for
+      # Traefik's own Prometheus metrics -- reachable only via the Docker
+      # networks below (platform_monitoring for Prometheus's scrape,
+      # platform_edge as an accepted trade-off -- see design.md's
+      # "Traefik's metrics exposure to platform_edge is accepted, not
+      # eliminated"), never published to the host.
+      - --metrics.prometheus=true
+      - --metrics.prometheus.addEntryPointsLabels=true
+      - --metrics.prometheus.addRoutersLabels=true
+      - --metrics.prometheus.addServicesLabels=true
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus.entryPoint=metrics
+      # add-platform-service-healthchecks: enables Traefik's own /ping
+      # endpoint on its implicit internal entrypoint (default port 8080,
+      # unpublished -- same trust boundary as the metrics entrypoint
+      # above), so `traefik healthcheck --ping` below has something to
+      # call. Disabled by default.
+      - --ping=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only: Traefik only needs to list containers and their labels
+      # to build its routing table, per its Docker provider's documented
+      # requirements.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - platform_edge
+      # add-platform-monitoring: joined so Prometheus (platform_monitoring
+      # only) can reach the metrics entrypoint above. Traefik's ports are
+      # reachable from every network it's attached to -- this is a
+      # deliberate, accepted exposure of the metrics endpoint to
+      # platform_edge too, not an oversight (design.md's Decisions).
+      - platform_monitoring
+    healthcheck:
+      # Traefik's own built-in healthcheck subcommand, calling /ping.
+      # docker compose up -d --wait's "reached running" fallback for a
+      # non-healthchecked service does NOT reliably catch a crash-looping
+      # service under restart: unless-stopped (confirmed live --
+      # add-platform-service-healthchecks's design.md) -- this closes that
+      # gap for Traefik specifically.
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    # Exact release, not the `18` series tag: PostgreSQL's release version is
+    # MAJOR.MINOR, so `18` is repointed at every new release and the version
+    # actually running would be a function of when the last deploy happened
+    # rather than of what is committed. (Docker Hub does rebuild an official
+    # tag in place for base-OS patches, so an exact tag is not guaranteed to
+    # be the identical image; the server version is what is pinned.)
+    #
+    # CHANGING THE MAJOR HERE IS NOT AN ORDINARY BUMP, AND MERGING ONE WITHOUT
+    # THE WINDOW IT NEEDS TAKES THE INSTANCE DOWN FOR EVERY APPLICATION ON THE
+    # HOST. PostgreSQL refuses to start against a PGDATA initialised by an
+    # earlier major: it does not upgrade in place and it does not damage the
+    # directory -- it exits, `up -d --wait` blocks and then fails, and the
+    # deploy job goes red with the instance gone. The store is cleared
+    # deliberately, by an operator, before the deploy that carries the new
+    # major reaches the host -- README.md, "Upgrading the PostgreSQL major
+    # version", is that procedure, and editing the major below without it is
+    # the mistake it exists to prevent.
+    #
+    # A major can also move where the image expects its data, which is a
+    # second thing to check and not a restatement of the first: see the
+    # mount below, whose path is coupled to this tag.
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # THE MOUNT POINT IS THE PARENT, NOT `data`, AND THIS IS COUPLED TO THE
+      # MAJOR ABOVE. From 18 the official image declares `VOLUME
+      # /var/lib/postgresql` and defaults `PGDATA` to
+      # /var/lib/postgresql/<major>/docker, so that an upgrade can use
+      # `pg_upgrade --link` without crossing a mount boundary
+      # (docker-library/postgres#1259). Mounted at the 17-and-earlier
+      # `/var/lib/postgresql/data`, the entrypoint refuses and the container
+      # exits 1 -- against an empty store as much as a populated one, so
+      # clearing the store does not avoid it.
+      #
+      # Mounting the parent is also what keeps a forgotten clear LOUD. The
+      # entrypoint's old-database detection runs only while PGDATA is its own
+      # default, and it scans /var/lib/postgresql, .../data and
+      # .../*/docker for a PG_VERSION: an earlier major's directory inside
+      # this store is found and named, and the container refuses rather than
+      # initialising an empty cluster beside it. Pinning PGDATA back to the
+      # old path would start just as well and switch that detection off.
+      #
+      # THE SOURCE IS A DIRECTORY ANSIBLE CREATES, NOT A NAMED VOLUME, and
+      # the two halves have to stay in step: `platform_data_volume_subdirs`
+      # in each stack's group_vars creates this path on the mounted `main`
+      # volume, owned by this image's own uid, and the converge that does so
+      # has to reach a host before this deploy does. Docker does not fail on
+      # a missing bind source -- it creates one, empty, on the root disk --
+      # so the failure of that ordering is an instance that comes up healthy
+      # holding no application database at all
+      # (move-the-shared-database-onto-the-data-volume).
+      - /mnt/main/postgres:/var/lib/postgresql
+    networks:
+      - platform_edge
+      # add-platform-monitoring: a private link to postgres-exporter only
+      # -- see design.md's "postgres-exporter never joins platform_edge at
+      # all". This adds no new exposure to Postgres itself; it's already
+      # reachable from every application on platform_edge.
+      - platform_postgres_metrics
+    # No published host port: per-application databases live inside this
+    # one shared instance (iac-platform-services), reached only via the
+    # platform_edge network, not the host's network interface.
+    healthcheck:
+      # pg_isready is shipped by the official postgres image for exactly
+      # this use. Same rationale as Traefik's healthcheck above --
+      # add-platform-service-healthchecks's design.md.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------
+  # add-platform-monitoring: metrics collection, alerting, dashboards.
+  # See add-platform-monitoring's design.md for the full
+  # rationale behind every decision below (network placement, inline
+  # configs:, the Traefik/postgres-exporter split, Grafana's tailnet-only
+  # binding, retention sizing).
+  # ---------------------------------------------------------------------
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    networks:
+      - platform_monitoring
+    healthcheck:
+      # No dedicated readiness endpoint exists; successfully serving its
+      # metrics page is the closest real signal that it's doing its job,
+      # not just that the binary launched (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9100/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  cadvisor:
+    # gcr.io/cadvisor/cadvisor is shut down (Google Container Registry was
+    # deprecated in March 2024, shut down March 2025); versions from
+    # v0.53.0 onward publish to ghcr.io/google/cadvisor instead. v0.49.1
+    # also predates the fix (google/cadvisor#3643/#3709, in v0.54.0+) for
+    # reading container layer metadata under Docker's containerd-snapshotter
+    # storage backend, which this host uses -- see
+    # fix-cadvisor-containerd-snapshotter's design.md.
+    image: ghcr.io/google/cadvisor:v0.60.5
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      # Read-only, same trust boundary Traefik's Docker provider already
+      # relies on (design.md's "cAdvisor for per-container metrics").
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Needed by the containerd-snapshotter fix above: cAdvisor's Docker
+      # factory resolves each container's read-write layer via a
+      # containerd client instead of parsing on-disk layerdb files.
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+    networks:
+      - platform_monitoring
+    healthcheck:
+      # cAdvisor's own documented health endpoint (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    restart: unless-stopped
+    environment:
+      # `pgexporter` is a fixed, non-secret role name (documented in
+      # README.md's manual role-creation step below); only its password is
+      # a secret.
+      #
+      # THE PASSWORD IS PASSED AS ITS OWN VALUE AND NEVER INTERPOLATED INTO A
+      # URL, and that is the whole point of these three variables rather than
+      # the single DATA_SOURCE_NAME this used to carry. A password is a
+      # generated string, so it may hold any of the characters a URL gives
+      # meaning to -- `#`, `@`, `/`, `?`, `:` -- and each one silently changes
+      # what the URL parses as rather than failing to parse it as a password.
+      # `#` is the worst of them: it begins a fragment, so everything after it,
+      # host and port and database included, is discarded.
+      #
+      # This is not hypothetical. Both hosts ran for an unknown period with a
+      # password containing `#`, so the exporter had no host to connect to,
+      # reported `pg_up 0`, and was found on 2026-09-15 only by reading that
+      # metric during a PostgreSQL upgrade -- the container was `healthy` and
+      # its Prometheus target was `up` throughout, because the exporter serves
+      # /metrics with HTTP 200 whether or not it can reach a database. Measured
+      # both ways against v0.20.1 with a password carrying `#/?@`: the URL form
+      # gives pg_up 0, this form gives pg_up 1.
+      DATA_SOURCE_URI: postgres:5432/postgres?sslmode=disable
+      DATA_SOURCE_USER: pgexporter
+      DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_PASSWORD}
+    networks:
+      # Reaches Postgres over the private link, is scraped by Prometheus
+      # over platform_monitoring -- never platform_edge (design.md).
+      - platform_postgres_metrics
+      - platform_monitoring
+    healthcheck:
+      # Only confirms the exporter's own HTTP server is up -- postgres_exporter
+      # serves /metrics with HTTP 200 regardless of database connectivity, so
+      # this deliberately does NOT catch an unusable connection setting.
+      #
+      # NOR DOES ANYTHING ELSE, and this comment said otherwise until 2026-09-15.
+      # MetricsTargetDown is `up == 0` -- Prometheus's own scrape success -- and
+      # the 200 above is exactly what keeps `up` at 1. Measured against the
+      # pinned v0.20.1 with a wrong password: HTTP 200, pg_up 0,
+      # pg_exporter_last_scrape_error 1, container healthy, no alert. So a
+      # mistyped POSTGRES_EXPORTER_PASSWORD leaves PostgreSQL's metrics silently
+      # absent. pg_up is what would catch it and nothing alerts on it yet --
+      # docs/backlog.md `alert-on-the-exporter-being-unable-to-read-postgres`.
+      # Until that lands it is checked by hand, by the command in README.md's
+      # "Upgrading the PostgreSQL major version".
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9187/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    restart: unless-stopped
+    labels:
+      # apply-shipped-config-on-deploy. This is not metadata; it is what makes a
+      # change to the configs below reach the host at all.
+      #
+      # Compose decides whether to replace a container by comparing a digest of
+      # the service definition, and that digest does NOT cover the content of
+      # inline `configs:` blocks. The content is copied INTO the container when
+      # it is created -- prometheus's only bind mount is /mnt/main -- so
+      # there is no reload path either. Without a property that moves when the
+      # content moves, editing a scrape target or an alert rule produced a
+      # deploy that replaced nothing, reported every container Running and
+      # Healthy, exited zero, and changed nothing. That is how it behaved until
+      # this label existed.
+      #
+      # The value is SHA-256, hex, first 12 characters, over the concatenation
+      # of "<config name>\n<content>\n" for each config THIS service mounts, in
+      # mount order, and over this service's configs alone -- so editing a
+      # Grafana dashboard does not replace Prometheus. The config name is in the
+      # input as a delimiter: without it, moving a block from prometheus_config
+      # into prometheus_rules leaves a bare concatenation byte-identical and the
+      # defect survives in its original shape.
+      #
+      # Editing either config below means regenerating this. The static check in
+      # .github/tests fails the pull request and names the value it should hold,
+      # so this is a paste rather than a calculation.
+      platform.config-checksum: "749ebfe68c6e"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Bounded by both time and size (design.md's Retention decision) --
+      # the size cap is the actual backstop if the time-based estimate
+      # undershoots.
+      - --storage.tsdb.retention.time=28d
+      - --storage.tsdb.retention.size=4GB
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+      - source: prometheus_rules
+        target: /etc/prometheus/rules.yml
+    volumes:
+      # platform_data_volume (Ansible) creates this subdirectory, owned by
+      # 65534:65534 (prom/prometheus's own default "nobody" user), before
+      # this service can rely on it -- iac-host-configuration's "Platform
+      # Data Volume Is Mounted at a Fixed Host Path".
+      - /mnt/main/prometheus:/prometheus
+    networks:
+      - platform_monitoring
+    healthcheck:
+      # Prometheus's own documented readiness endpoint -- distinct from
+      # /-/healthy, which reports healthy before the TSDB and rule manager
+      # are actually ready (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.0
+    restart: unless-stopped
+    labels:
+      # apply-shipped-config-on-deploy -- see the prometheus service above for
+      # why this exists and how the value is computed. This one covers
+      # alertmanager_config alone, so editing the routing tree replaces this
+      # container and nothing else. Regenerate it when that config changes; the
+      # static check names the correct value.
+      platform.config-checksum: "23ee71e2892b"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    configs:
+      - source: alertmanager_config
+        target: /etc/alertmanager/alertmanager.yml
+    networks:
+      - platform_monitoring
+    healthcheck:
+      # Alertmanager's own readiness endpoint, not just "is the process up"
+      # (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    restart: unless-stopped
+    labels:
+      # apply-shipped-config-on-deploy -- see the prometheus service above for
+      # why this exists and how the value is computed. This one covers all five
+      # configs below: the datasource, the dashboard provider and the three
+      # dashboards. A change to any of them moves it, including the last, and a
+      # change to none of the others' configs does not. Regenerate it when any
+      # of the five changes; the static check names the correct value.
+      platform.config-checksum: "a30c32a2a7bc"
+    environment:
+      # Never left at its image default -- see iac-platform-services's
+      # "The dashboard interface has no default credential" scenario.
+      #
+      # READ ONLY WHEN GRAFANA'S DATABASE IS CREATED, which is the first boot
+      # against the bind mount below; Grafana's own defaults.ini says of
+      # admin_password "can be changed before first start of grafana, or in
+      # profile settings". So rotating this value recreates this container
+      # -- an environment: value IS part of the service definition, unlike an
+      # inline config's content -- with the new value in it, and leaves
+      # Grafana accepting the old one, green throughout. The host step that
+      # completes a rotation is in docs/bootstrap-a-new-host.md Appendix A;
+      # docs/backlog.md `make-a-rotated-grafana-password-reach-grafana` is
+      # the change that would remove it.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # The base URL Grafana builds its own links and redirects from, so it
+      # must name the host, not whatever machine is viewing. Interpolates the
+      # SAME value the ports: publication below uses -- a literal tailnet IPv4
+      # rendered into .env by platform-deploy.yml, which fails the deploy on an
+      # empty or non-IPv4 result before writing it. `localhost` here meant every
+      # generated link resolved to the viewer's own loopback.
+      GF_SERVER_ROOT_URL: http://${GRAFANA_BIND_ADDRESS}:3000
+    configs:
+      - source: grafana_datasource
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana_dashboard_provider
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+      - source: grafana_dashboard_host
+        target: /var/lib/grafana/dashboards/host-resources.json
+      - source: grafana_dashboard_containers
+        target: /var/lib/grafana/dashboards/container-health.json
+      - source: grafana_dashboard_apps
+        target: /var/lib/grafana/dashboards/application-errors.json
+    volumes:
+      # platform_data_volume (Ansible) creates this subdirectory, owned by
+      # 472:472 (grafana/grafana's own default user).
+      - /mnt/main/grafana:/var/lib/grafana
+    ports:
+      # GRAFANA_BIND_ADDRESS is rendered into .env by platform-deploy.yml
+      # as a literal tailnet IP, never 0.0.0.0 -- see design.md's "Grafana
+      # is reachable only over the existing private tailnet" decision.
+      # Not routed through Traefik at all, and not on platform_edge.
+      - "${GRAFANA_BIND_ADDRESS}:3000:3000"
+    networks:
+      - platform_monitoring
+    healthcheck:
+      # Grafana's documented health endpoint -- this is exactly the check
+      # that would have caught this change's originating incident, since
+      # Grafana fails to reach a ready state when its data directory isn't
+      # writable (add-platform-service-healthchecks).
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  platform_edge:
+    # Fixed, literal name -- not Compose's default project-prefixed name
+    # -- so a separate application repository's own docker-compose.yml
+    # can declare this same network as `external: true` and join it. See
+    # README.md for how an application repo does that.
+    name: platform_edge
+
+  # add-platform-monitoring: deliberately NOT given a fixed, documented
+  # name the way platform_edge is -- these two networks are this stack's
+  # own internal wiring, not a joinable interface for application repos.
+  # See iac-platform-services's "Monitoring Services Are Not Reachable
+  # From Application Containers" requirement.
+  platform_monitoring: {}
+  platform_postgres_metrics:
+    # No route to the outside world: nothing attached to this network
+    # (Postgres, postgres-exporter) needs one -- Postgres reaches the
+    # internet, if it ever needed to, via platform_edge instead.
+    internal: true
+
+volumes:
+  traefik_letsencrypt:
+
+configs:
+  prometheus_config:
+    content: |
+      global:
+        scrape_interval: 30s
+        evaluation_interval: 30s
+
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ["alertmanager:9093"]
+
+      rule_files:
+        - /etc/prometheus/rules.yml
+
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ["localhost:9090"]
+        - job_name: node-exporter
+          static_configs:
+            - targets: ["node-exporter:9100"]
+        - job_name: cadvisor
+          static_configs:
+            - targets: ["cadvisor:8080"]
+        - job_name: postgres-exporter
+          static_configs:
+            - targets: ["postgres-exporter:9187"]
+        - job_name: traefik
+          static_configs:
+            - targets: ["traefik:8082"]
+
+  # Conservative initial thresholds -- design.md's Open Questions:
+  # tunable later, without a spec change, once real traffic/behavior is
+  # observed. Covers iac-platform-services's "Metrics-Based Alerting
+  # Covers Host and Service Health" requirement's four scenarios plus the
+  # permanent Watchdog (External Dead-Man's-Switch Heartbeat).
+  prometheus_rules:
+    content: |
+      groups:
+        - name: platform-monitoring
+          rules:
+            - alert: ApplicationHighErrorRate
+              expr: >-
+                sum by (router) (rate(traefik_router_requests_total{code=~"5.."}[5m]))
+                /
+                sum by (router) (rate(traefik_router_requests_total[5m]))
+                > 0.1
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High 5xx rate on {{ $$labels.router }}"
+                description: "Router {{ $$labels.router }} has a 5xx rate above 10% for 5 minutes."
+
+            - alert: ContainerRestartingOrOOMKilled
+              expr: >-
+                increase(container_oom_events_total{name!=""}[10m]) > 0
+                or
+                changes(container_start_time_seconds{name!=""}[10m]) > 3
+              for: 0m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Container {{ $$labels.name }} is crash-looping or was OOM-killed"
+                description: "{{ $$labels.name }} has restarted repeatedly or hit an OOM kill in the last 10 minutes."
+
+            - alert: HostDiskPressure
+              expr: >-
+                (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})
+                < 0.1
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Host disk usage above 90% for 10 minutes"
+
+            - alert: HostCPUPressure
+              expr: >-
+                100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+                > 90
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Host CPU usage above 90% for 10 minutes"
+
+            - alert: HostMemoryPressure
+              expr: >-
+                (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))
+                > 0.9
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Host memory usage above 90% for 10 minutes"
+
+            - alert: MetricsTargetDown
+              expr: up == 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Prometheus target {{ $$labels.job }} is down"
+                description: "{{ $$labels.job }} has been unreachable for 5 minutes."
+
+            # alert-on-certificate-expiry: Traefik renews at 30 days
+            # remaining (its documented default, and the traefik service
+            # above sets no certificatesDuration to move it), so anything
+            # under 30 is a renewal that started and has not succeeded. 21
+            # sits nine days inside that window: long enough for the 24h
+            # renewal recheck, ordinary jitter and a week of ACME retries
+            # to resolve unseen, and still three weeks before a client sees
+            # an error.
+            #
+            # `max by (cn)` rather than the raw series: the metric is
+            # labelled by serial as well, so a superseded certificate whose
+            # series lingers after a renewal would otherwise cross the
+            # threshold nine days later and fire against a hostname that is
+            # perfectly healthy. Whether Traefik prunes the old label set
+            # was never established; this makes the question moot. Its cost
+            # is a dependency on `cn` existing, which the rule below covers.
+            - alert: TLSCertificateExpiringSoon
+              expr: >-
+                (max by (cn) (traefik_tls_certs_not_after) - time()) / 86400 < 21
+              for: 1h
+              labels:
+                severity: warning
+              annotations:
+                summary: "TLS certificate for {{ $$labels.cn }} expires soon"
+                # $$value is the days remaining, not the threshold. The route
+                # below re-notifies daily for up to three weeks, and a literal
+                # "under 21 days" would make every one of those messages
+                # byte-identical -- a countdown that never counts.
+                description: "{{ $$labels.cn }} has {{ $$value | printf \"%.1f\" }} days of certificate left, so Traefik's renewal at 30 days did not succeed."
+
+            # alert-on-certificate-expiry: the rule above returns an empty
+            # vector if its series stop existing, and an empty vector never
+            # fires and never complains. This covers that. It fires on
+            # unreachability too, after staleness plus its own `for`, so
+            # MetricsTargetDown will already have fired -- two notifications
+            # for one fault, which is duplication rather than a division of
+            # labour. What it adds is the case MetricsTargetDown CANNOT see:
+            # Traefik up, scrape job intact, and the metric renamed or dropped
+            # by a version bump -- which Dependabot's platform-monitoring-images
+            # group proposes on a schedule.
+            #
+            # Two clauses, because `cn` can be lost wholesale or piecemeal and
+            # the alert above is defeated either way. `absent(...{cn!=""})`
+            # catches every series losing the label at once. The count catches
+            # ONE losing it: that series still aggregates, under an empty `cn`,
+            # and would deliver "TLS certificate for  expires soon" naming
+            # nothing -- so the count fires while the metric is otherwise
+            # healthy. A certificate authority dropping the Subject CN at
+            # renewal touches only the renewed certificate, which is exactly
+            # that shape.
+            - alert: CertificateExpiryNotObserved
+              expr: >-
+                absent(traefik_tls_certs_not_after{cn!=""})
+                or count(traefik_tls_certs_not_after{cn=""}) > 0
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: "TLS certificate expiry is not fully observable"
+                description: "Traefik is publishing no certificate expiry carrying a cn label, or at least one certificate has lost it, so TLSCertificateExpiringSoon is watching nothing or cannot name what it watches."
+
+            - alert: Watchdog
+              expr: vector(1)
+              labels:
+                severity: none
+              annotations:
+                summary: "Permanent Watchdog alert, always firing -- routed to the external dead-man's-switch heartbeat."
+
+  alertmanager_config:
+    content: |
+      route:
+        receiver: slack
+        group_by: ["alertname"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        routes:
+          - matchers:
+              - alertname="Watchdog"
+            receiver: deadmansswitch
+            # Observed live: with this equal to the inherited
+            # group_interval (5m), real delivery cadence to the external
+            # heartbeat was a consistent ~10m (every other tick silently
+            # skipped) instead of the intended ~5m -- see
+            # fix-deadmansswitch-repeat-interval's design.md. Comfortably
+            # under group_interval avoids the boundary condition.
+            repeat_interval: 2m
+
+          - matchers:
+              - alertname="TLSCertificateExpiringSoon"
+            receiver: slack
+            # alert-on-certificate-expiry: the slack receiver now renders
+            # every alert's own annotations (name-every-alert-in-a-grouped-slack-notification),
+            # so this is no longer needed to keep the notification non-empty.
+            # It is kept for cadence: without it, two certificates firing
+            # together would share one group, and the 24h repeat_interval
+            # below would apply to the pair rather than to each certificate,
+            # so a second certificate expiring mid-window would ride the
+            # first one's countdown instead of starting its own. This host's
+            # certificates are issued through one ACME account by one
+            # Traefik process, so whatever stops one renewing stops both,
+            # making that the expected case rather than an edge.
+            group_by: ["alertname", "cn"]
+            # A legitimate three-week firing would re-notify ~126 times at
+            # the inherited 4h, into the same #alerts channel every other
+            # alert uses. That does not add urgency, it teaches people to
+            # skim the channel. A daily countdown is the right cadence for a
+            # deadline three weeks out.
+            repeat_interval: 24h
+
+      receivers:
+        - name: slack
+          slack_configs:
+            - api_url: ${SLACK_WEBHOOK_URL}
+              channel: "#alerts"
+              send_resolved: true
+              # name-every-alert-in-a-grouped-slack-notification: CommonAnnotations
+              # holds only annotation pairs identical across every alert in
+              # the group, so any alert naming a per-series label (e.g.
+              # ApplicationHighErrorRate's router) produced an empty title
+              # and body the moment two of them grouped together. Title uses
+              # CommonLabels.alertname instead, which every route's group_by
+              # includes and is therefore always common; the body lists each
+              # alert's own summary and description individually.
+              title: "{{ .CommonLabels.alertname }}"
+              text: |-
+                {{ range .Alerts -}}
+                {{ .Annotations.summary }}
+                {{ .Annotations.description }}
+
+                {{ end -}}
+        # BOTH VALUES BELOW ARE PER-STACK AND NEITHER IS VISIBLE TO ANY CHECK
+        # HERE. They interpolate that stack's own Environment secret, so two
+        # Environments holding one value is indistinguishable from two holding
+        # their own -- which is the state both hosts were in until 2026-09-16,
+        # when the alert routing and the dead-man's-switch were found shared.
+        # docs/bootstrap-a-new-host.md stage 7.5 carries the only check that
+        # reaches it: the test alert must arrive in one channel rather than
+        # both. Nothing automated can perform it.
+        #
+        # AND A ROTATION OF EITHER DOES NOT REACH THIS CONTAINER ON A DEPLOY.
+        # The config-checksum label above is computed from this committed text,
+        # so a secret change moves the rendered config and moves neither the
+        # text nor the label, and `up -d --wait` leaves the container running
+        # on the old value -- reporting success. Editing this block is what
+        # applies a rotation, because it moves the checksum. See
+        # docs/backlog.md `make-a-rotated-secret-reach-its-inline-config`.
+        - name: deadmansswitch
+          webhook_configs:
+            - url: ${DEADMANSWITCH_URL}
+              send_resolved: false
+
+  grafana_datasource:
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          uid: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+          editable: false
+
+  grafana_dashboard_provider:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: platform-monitoring
+          orgId: 1
+          folder: ""
+          type: file
+          disableDeletion: false
+          updateIntervalSeconds: 30
+          allowUiUpdates: true
+          options:
+            path: /var/lib/grafana/dashboards
+
+  grafana_dashboard_host:
+    content: |
+      {
+        "title": "Host resources",
+        "uid": "host-resources",
+        "schemaVersion": 39,
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "CPU usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "CPU %" }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Memory usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "Memory %" }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Disk usage (root)",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "1 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})", "legendFormat": "Disk %" }
+            ]
+          }
+        ]
+      }
+
+  grafana_dashboard_containers:
+    content: |
+      {
+        "title": "Container health",
+        "uid": "container-health",
+        "schemaVersion": 39,
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Per-container CPU usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[5m]))", "legendFormat": "{{name}}" }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Per-container memory usage",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (name) (container_memory_usage_bytes{name!=\"\"})", "legendFormat": "{{name}}" }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "Container restarts (start-time changes, 1h)",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "changes(container_start_time_seconds{name!=\"\"}[1h])", "legendFormat": "{{name}}" }
+            ]
+          },
+          {
+            "id": 4,
+            "title": "OOM kill events (1h)",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "increase(container_oom_events_total{name!=\"\"}[1h])", "legendFormat": "{{name}}" }
+            ]
+          }
+        ]
+      }
+
+  grafana_dashboard_apps:
+    content: |
+      {
+        "title": "Application HTTP error rates",
+        "uid": "application-errors",
+        "schemaVersion": 39,
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "5xx rate by router",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (router) (rate(traefik_router_requests_total{code=~\"5..\"}[5m]))", "legendFormat": "{{router}}" }
+            ]
+          },
+          {
+            "id": 2,
+            "title": "Total request rate by router",
+            "type": "timeseries",
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+              { "expr": "sum by (router) (rate(traefik_router_requests_total[5m]))", "legendFormat": "{{router}}" }
+            ]
+          }
+        ]
+      }

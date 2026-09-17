@@ -1,0 +1,233 @@
+# platform
+
+The shared Compose stack for services common to the whole server — a reverse proxy, a single shared PostgreSQL instance, and metrics collection/alerting/dashboards. See `iac-platform-services`.
+
+## Boundary
+
+- **One shared PostgreSQL instance, for non-durable data only.** An application that keeps technical or temporary relational records on this host gets a database inside this instance rather than its own PostgreSQL container. Durable data — data whose loss would not be tolerable — never goes in this instance under any circumstances. It belongs off this host altogether, save for one narrow exception, elsewhere on the host, that nothing has yet met; see "The shared database" below.
+- **A new persistent store has to say why it needs no backup.** Any volume — named or anonymous, and including one an *image* declares rather than this stack definition — or any writable host bind mount, whether added here or by an application on this host, means naming which of the reasons in *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) it satisfies, in the change that adds it — or, for a store added by an application in its own repository, in the change here that records it, since nothing else would leave a record on this side. The image half is not hypothetical: Alertmanager's store exists only because `prom/alertmanager` declares one, and nothing in this file mentions it. A store satisfying no reason owes a logical backup written outside this host and a rehearsed, checked restore before it first holds data.
+- **Every application on the host reuses this stack's reverse proxy** rather than defining its own, and reuses this stack's database for any non-durable relational data it keeps here. Per-application Compose files live in separate application repositories, not here.
+- **Deployed by a GitHub Actions workflow, not Ansible, and to every stack that asks for it.** A PR touching `platform/**` is validated via `docker compose config` (no deploy credential); merging to `main` runs a credential-less job that posts the diff to the run's job summary, then one deploy job **per stack**, each attached to that stack's own GitHub Environment. Which stacks receive this stack is declared by each one, in `terraform/stacks/<name>/pipeline.yml`'s `deploys_platform` field — the workflow names no stack — and the same declaration's `github_environment` is what each deploy job attaches to, so the approvers who gate a stack's Terraform apply are the approvers who gate its platform deploy. Whether a deploy waits for one is that Environment's protection rules and not the workflow's: production's waits, staging's does not. Each job joins the same private Tailscale tailnet its host is a member of (`connect-platform-deploy-via-tailscale`) and authenticates as that host's `deploy` account (provisioned by `bootstrap-ansible-host-baseline`) under a keypair of that stack's own, to trigger its one fixed deploy script over SSH — reachable only over that tailnet, not the public internet, so this pipeline never needed SSH opened beyond the operator's own CIDR. See `iac-platform-deploy-pipeline` and `.github/workflows/platform-deploy.yml`. Ansible's configuration-management scope stops at the container runtime; it never templates this stack's service definitions or invokes its lifecycle commands.
+
+- **Every value that differs between stacks arrives through `.env`, rendered at deploy time from that stack's own Environment.** Nothing in `docker-compose.yml` is parameterised per stack and nothing needs to be: it names no hostname and no environment, and both hosts mount their data volume at the same path. A stack's database credentials, dashboard credential, certificate-registration address and alert targets are secrets on its own GitHub Environment, and a value shared between stacks by being held as a *repository* secret instead is the defect to avoid — a repository secret holds one value, so both hosts would receive it.
+- **No dedicated monitoring server.** Prometheus, Alertmanager, and Grafana run in this same stack, on this same host, rather than on a second server dedicated to observability. Single-host observability risk is mitigated with an external dead-man's-switch (see Monitoring and alerting below), not a second server.
+
+## Joining the platform network
+
+An application repository's own `docker-compose.yml` reaches Traefik and Postgres by declaring the `platform_edge` network as external and attaching its service(s) to it:
+
+```yaml
+services:
+  app:
+    # ...
+    networks:
+      - platform_edge
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`app.example.com`)"
+
+networks:
+  platform_edge:
+    external: true
+```
+
+Reach the shared Postgres instance at `postgres:5432` on that same network — see `iac-platform-services`'s "Single Shared PostgreSQL Instance, Per-Application Databases" requirement.
+
+### The shared database
+
+**What it is for.** Technical or temporary records **in a relational database**, whose loss is tolerable to the application that wrote them: a job table, bookkeeping an application would rather not put in its system of record. An application that keeps data of that kind on this host gets a database and a role inside this instance rather than running a PostgreSQL container of its own.
+
+A non-relational store — a Redis cache, a queue file, an uploads directory — is outside this instance and outside that requirement. It is governed instead by *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`), like any other store on this host.
+
+**Nothing in it is backed up, and that is a decision rather than an omission.** It is what the scoping above buys: because the instance holds only data whose loss its writer can tolerate, the host needs no backup mechanism for it, and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) records that classification along with what becomes owed if it ever stops being true. Do not read the absence of a dump as a gap someone forgot to close — read it as the reason durable data is not welcome here.
+
+**Durable data goes to an external managed service that owns its own backups.** Never into this instance: that prohibition is absolute, and no backup lifts it, because holding only non-durable data is exactly what makes this instance classifiable as needing no backup. Not into a PostgreSQL container of the application's own on this host either — unless the logical backup written off the host and the rehearsed, checked restore that *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) demands are both in place before the data lands. That is a bar, not a footnote, and no application has cleared it.
+
+**Getting a database inside the instance** is a manual step today — `docs/onboard-an-application.md` carries the `CREATE ROLE` / `CREATE DATABASE` recipe, beside the step that runs it. Automating it, and delivering the credential the way an application's deploy key is delivered, is **owed and not yet built**: the obligation's trigger fired on 2026-09-13, when `commerce-ops` became the first application given a database here, and *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) states the divergence rather than hiding it. `docs/backlog.md` `automate-per-application-database-provisioning` is the mechanism. Until it lands, a manual provisioning does not discharge the obligation.
+
+### Upgrading the PostgreSQL major version
+
+**A major bump is an operator's window, never an ordinary pull request.** PostgreSQL refuses to start against a `PGDATA` initialised by an earlier major. It does not upgrade in place and it does not damage the directory — it exits. So a bump merged on its own reaches the host, `docker compose up -d --wait` blocks and then fails, the deploy job goes red, and the shared instance is down for every application on that host until someone intervenes. Loud, and not data loss.
+
+**A major can also move where the image expects its data, and that is a second thing to check rather than a restatement of the first.** From 18 the official image declares `VOLUME /var/lib/postgresql` and defaults `PGDATA` to `/var/lib/postgresql/<major>/docker`, so the 16-to-18 bump had to move the mount point with it — a store mounted at the older `/var/lib/postgresql/data` makes 18 exit 1 whether it holds an earlier cluster, holds nothing, or was recreated empty a second earlier. **Read the image's `PGDATA` and `VOLUME` before planning the window**, and ship any mount change in the same pull request as the pin, because clearing the store does not work around this one:
+
+    docker pull postgres:<new major>.<minor>
+    docker image inspect postgres:<new major>.<minor> --format '{{json .Config.Env}} {{json .Config.Volumes}}'
+
+The `pull` is not optional: `inspect` reads the local store, and a workstation planning a window has by definition not run the new release yet, so without it the answer is `No such image` — which reads as the release not existing.
+
+**What makes the upgrade cheap here is the scoping above.** Nothing in this instance is durable — that is what *Single Shared PostgreSQL Instance, Per-Application Databases* (`openspec/specs/iac-platform-services/spec.md`) and *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) between them guarantee — so the upgrade path is "clear the store and let the instance re-initialise" rather than a `pg_upgrade` or a dump and restore. What it costs instead is re-provisioning, because clearing the store discards every role and database in it.
+
+**Do this first, before anything else.** Read what the instance holds and confirm that every database in it is one whose loss the party that owns it accepts. Two answers pass: data that is non-durable under the requirements above, and data a recorded classification admits as tolerable to lose. Anything else is a breach of those requirements, and it is the breach that is the thing to fix — not the upgrade.
+
+Where a classification is what admits the data, tell the operator before the window rather than after. On the production host a database is already provisioned for `commerce-ops` and stands empty, reserved for a cutover that waits on a specification change classifying that application's production data as tolerable to lose; from the moment that lands and the data moves in, clearing production's store deletes it for good.
+
+Then, **per host**, in this order, and **take the ungated stacks first** — step 3 explains why that ordering is free. One merge reaches *every* stack whose GitHub Environment has no reviewer, so steps 1 and 2 must be complete on **all** of them before the merge, not on one of them: a second ungated stack left with its store in place meets the new major unattended and its instance is down with nobody watching. A stack whose deploy waits for a reviewer is the one whose store you clear last, after you have watched the instance come up healthy on the new major somewhere else. That is the only protection against an image-level incompatibility like the one above: found on an ungated stack it costs a re-plan; found on a reviewed one it is found with that host's data already gone.
+
+**Hold every other `platform/**` merge and every `platform-deploy.yml` dispatch for the length of the window, and say so to anyone else working on the stack.** Step 2 leaves the host without the container its Compose definition declares, and any platform deploy landing in that gap — an unrelated merge, or the rebuild dispatch in `docs/runbook-rebuild.md` — recreates `postgres` on the **old** major and re-initialises an empty cluster in the store you just cleared. That silently undoes step 2, and the rest of the window then runs against a repopulated store as though nothing had happened.
+
+Each step says where it runs. The on-host commands address the containers and the store directly rather than through `docker compose`, and that is deliberate: `/opt/platform` is `deploy:deploy` mode `0750` and `ansible/roles/ops_user` grants an operator account the `docker` group and never `deploy`, so it cannot read the Compose file `docker compose` would need — and `docker` group membership is enough for every command below.
+
+1. **On the host — declare the window, then tell the applications that use the instance** and agree it with whoever runs them. `\l` in the instance lists who they are:
+
+       ssh <host>
+       touch /var/lib/platform-maintenance/shared-postgres-window
+       docker exec platform-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "\l"'
+
+   **The `touch` is the announcement; the sentence to a human is the courtesy.** While that file exists, every application's probe on this host answers `window-open` and an application that consults it before delivering will decline to deliver — see *An Application Can Probe Its Own Database Through a Read-Only Forced Command* (`openspec/specs/iac-host-configuration/spec.md`). It needs no `sudo`: the directory is group-writable by `docker`, which is the group an operator account already holds. It survives step 2, which is the point — everything inside the store does not, and the declaration is on the root disk rather than on the data volume precisely so that clearing one cannot take the other.
+
+   **Nothing enforces this step**, exactly as nothing enforced step 5 on 2026-09-15, and the file is the only thing that announces the window to anything that reads it. `docs/backlog.md` `hold-every-platform-deploy-for-the-length-of-a-window` is the entry for the mechanism that would; until it lands, this is a step an operator can skip.
+
+   **Check:** `ls -l /var/lib/platform-maintenance/shared-postgres-window` lists the file. If the directory does not exist, this host has not been converged since that change landed — converge it before opening the window rather than creating the directory by hand.
+
+   The `$POSTGRES_USER` is expanded **inside** the container deliberately: that variable is the instance's superuser name from this stack's own `.env`, and it exists in the container's environment and not in the shell you are typing into. Expanded outside, it is empty and `psql` tries to connect as your own account.
+
+2. **On the host — discard the database by clearing its store.** **First confirm the pull request carrying the pin is green and mergeable**, because this step is irreversible and the merge is what ends the outage it opens. A red required check, a failing `openspec validate`, an unavailable reviewer or a conflict with the trunk all leave the instance discarded and the stack that would restore it unmergeable, for as long as that takes to clear. Make the pull request ready to merge, then discard — not the other way round.
+
+   **Open that pull request as a draft, and mark it ready here and not before.** GitHub refuses to merge a draft, so the ordering in the sentence above stops being advice and becomes a gate — one that holds against a second operator who never read this section, and against a merge that looks routine because its diff is one pinned version. Marking it ready is then the act that asserts every ungated stack has reached this point, rather than a warning in the body asking a reader to notice one. Confirm the checks are green and the branch has no conflict with the trunk while it is still a draft; the draft state is the only thing left holding it, and lifting that is this step's last move.
+
+   This gates *that* merge and nothing else. The paragraph above asks you to hold every **other** `platform/**` merge and dispatch for the length of the window, and nothing enforces that — `docs/backlog.md`'s `hold-every-platform-deploy-for-the-length-of-a-window` is the entry for it, and it needs a mechanism rather than a convention.
+
+   Only the `postgres` container — Traefik, Grafana and the rest keep serving. `postgres-exporter` does **not** go red: it keeps serving `/metrics` with HTTP 200 and reports `pg_up 0`, so its container stays healthy, its Prometheus target stays up, and **no alert fires today for the instance being gone**. That is a statement about the rules as they stand, and `docs/backlog.md` `alert-on-the-exporter-being-unable-to-read-postgres` proposes the alert that would change it: `pg_up == 0` holds for the whole window, far longer than any `for:` that entry would set, so once it lands this step pages on every stack for the duration. Whoever implements it updates this paragraph, and that entry says so. Nothing else mounts this store, so removing that one container is what frees it:
+
+       docker rm -f platform-postgres-1
+       docker run --rm -v /mnt/main/postgres:/store postgres:18.6 \
+         sh -c 'rm -rf /store/..?* /store/.[!.]* /store/*'
+
+   **Check** `ls -A /mnt/main/postgres` prints nothing.
+
+   **The container binds `/mnt/main/postgres` and never `/mnt/main`, and that is load-bearing rather than tidy.** The store is a directory on the shared data volume now, one path component from `/mnt/main/prometheus` and `/mnt/main/grafana` — so a recursive delete rooted at the mount destroys three stores where `docker volume rm` could only ever reach one. Binding the store alone means the container has no path to the others even if the command inside it is wrong. `.github/tests` asserts this form, so an edit that widens the bind fails the pull request. **The image is `postgres:18.6` rather than a general-purpose one** because it is already on the host -- it is what the instance runs -- and this command lands immediately after the container is removed: a registry that is slow or rate-limiting at that moment would leave the instance gone and the step unperformed. The `rm -rf` needs a container at all because the store is owned `999:999` and an operator account is neither uid 999 nor root -- it holds `docker` and never `sudo`. (Only the intermediate `18/` directory is root-owned; the entrypoint chowns PGDATA and everything beneath it to 999.) **On the production host, `commerce-ops-postgres-1` and `commerce-ops_commerce_ops_pgdata` are not this instance** — that is an application's own container, holding durable data, and nothing here touches it.
+
+   **The applications on top of it may alert, and those pages are the window rather than an incident.** An application still answering requests but returning `5xx` without its database trips `ApplicationHighErrorRate` after five minutes. One whose container exits may trip `ContainerRestartingOrOOMKilled`, but only if it restarts more than three times in ten minutes or is OOM-killed — an application that exits once and stays down trips nothing. Say to anyone else watching that channel that these are expected until step 5 has redeployed the applications, and do not let a second operator start triaging them.
+
+   **`ContainerRestartingOrOOMKilled` naming `platform-postgres-1` is the exception, and it is not noise — it is step 3 failing.** A `postgres` container that cannot start exits under `restart: unless-stopped` and crash-loops, which clears that rule's threshold within the window. So the one alert that reports the upgrade itself going wrong is the one this paragraph would otherwise have told an operator to ignore. Read every other container's restart alert as the window; read that container's as a stop.
+
+   **Silence is not evidence that the applications are up**, for the reason above, so do not read it as one: what confirms them is step 5's own per-application check. What *would* be a real signal is either alert still firing once step 5 is done.
+
+3. **From a workstation — let the deploy carry the new major to that host.** Merging the pull request that changes the pin starts one `platform-deploy.yml` run covering every opted-in stack; a stack whose GitHub Environment has no reviewer deploys immediately, and one that has a reviewer waits in that run for an approval. So the merge is what reaches every ungated stack at once, and an approval is what reaches each reviewed one — which is why steps 1 and 2 come before the merge on all of the first kind and before the approval on each of the second, and why the ungated ones go first: their whole window can complete while a reviewed stack's deploy is still sitting unapproved and its data still on disk. A host whose window falls after that run is over is redeployed on its own, by a `workflow_dispatch` of that workflow from the default branch naming its stack.
+
+   **Check**, on the host, that the instance came back on the new major. `docker ps` without `-a` is not the check: after a failed upgrade the container is precisely not running, and the filter prints an empty table and exits 0, which reads like output you have not scrolled to.
+
+       docker ps -a --filter name=platform-postgres-1 --format '{{.Image}}\t{{.Status}}'
+       docker exec platform-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "select version()"'
+
+   If it exited, `docker logs platform-postgres-1` says why, and the entrypoint's refusals name what they found. **Stop here rather than continuing to the next host.**
+
+4. **On the host — recreate postgres-exporter's role.** It lives in the store that was just cleared, so it is gone — run "One manual step per stack: postgres-exporter's monitoring role" below, with that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD`.
+
+   **Check** the exporter can actually reach the instance. `MetricsTargetDown` is not that check and cannot be: it is `up == 0`, and the exporter answers `/metrics` with HTTP 200 whether or not it can connect, so a mistyped password leaves the target up, the alert silent and PostgreSQL's metrics quietly absent.
+
+       docker exec platform-postgres-exporter-1 wget -qO- http://localhost:9187/metrics | grep -E '^pg_up |^pg_exporter_last_scrape_error '
+
+   `pg_up 1` and `pg_exporter_last_scrape_error 0` is the pass. Anything else means the role or its password is wrong, and it is worth fixing here rather than discovering later — nothing in this stack alerts on it.
+
+   **Then withdraw the window declaration, here and not at the end of step 5:**
+
+       rm /var/lib/platform-maintenance/shared-postgres-window
+
+   **Step 5's own redeploys go through the probe like any other deploy**, so a declaration still standing there would block the step that ends the window — the mechanism deadlocking on itself. Withdrawing it now leaves the gap between here and each application's re-provisioning covered by `absent`, which is the correct answer for that gap and the one the 2026-09-15 incident needed: an application deploying in it is told its database has ceased to exist, rather than that its password is wrong.
+
+   **Check** that the next probe stops reporting the window. From the host, with the `platform` entry's probe key — that entry holds no role or database of its own in the instance, so its answer is `window-open` while the declaration stands and `absent` once it is withdrawn, and both are informative:
+
+       printf '{"password":"x","table":"x"}' | ssh -i ~/.ssh/<company>-platform-probe-<environment> deploy@<host>
+
+   It must print `absent`. If it still prints `window-open`, the file is still there.
+
+5. **From a workstation — re-provision every application database, then redeploy that application.** Each is gone with the store, which each application's classification tolerates and none can start without. Run the recipe in `docs/onboard-an-application.md` for that host, per application, with `rotate=yes`. **That block is a workstation paste, not an on-host one** — it calls `gh` and then reaches the host over `ssh` itself, so pasted into a session on the host it aborts at the first `gh` under `set -eu`, having changed nothing. The password is generated fresh and delivered to that application's Environment, so only that application's **next deploy** picks it up. Trigger that deploy from the application's own repository; nothing here can. **Check** per application that it comes up and that `\l` in the instance lists its database owned by its own role.
+
+**Dependabot will propose the next major, and closing that proposal is the design working.** No `ignore` stanza is configured for this image, deliberately: an `ignore` is permanent and silent, and would suppress the only signal this repository gets that its PostgreSQL major has reached end of life. Closing an individual pull request keeps the signal and costs nothing — so expect a recurring, correctly-refused pull request rather than noise. `cover-platform-images-with-dependabot`'s design.md, decision 3, is where that was argued.
+
+## Monitoring and alerting
+
+Prometheus collects metrics from node-exporter (host), cAdvisor (every container on the host), postgres-exporter (the shared Postgres instance), and Traefik's own metrics endpoint (per-application HTTP status/error-rate counts). Alertmanager routes alerts to Slack, plus a permanent Watchdog alert routed to an external dead-man's-switch heartbeat service. Grafana provides dashboards.
+
+**Nothing here labels an alert with the host it came from.** Prometheus declares no `external_labels`, so a `MetricsTargetDown` from one stack and one from another are identical text. What separates them is the delivery target: each stack's `PLATFORM_SLACK_WEBHOOK_URL` should address a channel of its own, and each stack's dead-man's-switch check should be its own. That is a property of the values in each Environment, and **nothing in this repository can check it** — two stacks pointed at one channel produce unattributable alerts and no build fails. `docs/backlog.md` carries the entry that would label them at the source.
+
+Traefik's certificate expiry is alerted on separately, at 21 days remaining — Traefik renews at 30, so anything under that is a renewal that started and did not finish, and it is otherwise silent until the certificate actually expires. That alert takes a route of its own so each hostname is named in its own notification rather than several collapsing into one that names none; `alert-on-certificate-expiry`'s design.md has the reasoning.
+
+See `add-platform-monitoring`'s design.md for the full rationale — network placement, why configuration is inline in `docker-compose.yml`, and the trade-offs accepted along the way.
+
+**Grafana is reachable only over the private Tailscale tailnet** — not routed through Traefik, not on the public interface. From a device already on the tailnet, open `http://<tailnet-IP-or-MagicDNS-name>:3000` and sign in as `admin` with the credential in that stack's own `PLATFORM_GRAFANA_ADMIN_PASSWORD` secret. **Each stack has a Grafana of its own, with its own credential**, and the bind address is that stack's tailnet address — resolved by the deploy job from the same secret that names its SSH target, which is why that secret must be a tailnet address and never a public one.
+
+### Editing an inline config: regenerate the service's checksum
+
+**Every service mounting a `configs:` block carries a `platform.config-checksum` label, and editing that block means regenerating it.** This is not bookkeeping. Compose decides whether to replace a container by comparing a digest of the service definition, and that digest does not cover the content of inline configs — which are copied into the container when it is created, with no reload path. Before these labels existed, editing a scrape target, an alert rule, a routing rule or a dashboard produced a deploy that replaced nothing, reported every container healthy, exited zero and changed nothing on the host.
+
+You do not have to compute the value. The `.github/tests` suite recomputes it, fails the pull request when it disagrees, and names the value the label should hold — so this is a paste. Expect the edit to replace that service on the next deploy; that is the point. `apply-shipped-config-on-deploy`'s design.md carries the algorithm and the reasoning.
+
+One thing the label does **not** cover: a value the config interpolates from `.env`, such as Alertmanager's Slack webhook. Rotating that secret changes nothing the checksum can see, so the container is not replaced and keeps the old value — force a replacement by hand when you rotate one. `docs/backlog.md` `verify-at-deploy-time-that-what-shipped-is-what-runs` covers closing this properly.
+
+### One manual step per stack: postgres-exporter's monitoring role
+
+postgres-exporter connects to the shared Postgres instance as a dedicated, restricted-privilege role — never the instance's superuser credential. This role is **not** created by any automation in this repository (deliberately — see design.md's "That role is created by a one-time manual operator step, not by this change's automation"): run this once **per stack**, by hand, against that host's running `postgres` container, using a password matching whatever is stored in that stack's own `PLATFORM_POSTGRES_EXPORTER_PASSWORD` secret — each stack has its own instance, its own role and its own password:
+
+```sql
+CREATE ROLE pgexporter WITH LOGIN PASSWORD '<value of PLATFORM_POSTGRES_EXPORTER_PASSWORD>';
+GRANT pg_monitor TO pgexporter;
+```
+
+`pg_monitor` is Postgres's own built-in predefined role: read-only access to the statistics views postgres-exporter's standard collectors query, no table data access, no superuser.
+
+**Take the password from the exporter rather than from the password manager, wherever the exporter is already running** — which it is in both cases this step is reached: after a rebuild, and after a store reset. The container holds that stack's value as `DATA_SOURCE_PASS`, rendered from its Environment secret at deploy time, and that is the authoritative copy: it is exactly what the exporter will present when it connects. Read it on the host and pipe it into `psql` there, and the secret is not fetched, not pasted, not mistyped, and never enters a shell history:
+
+```sh
+ssh <operator>@<host> 'sh -s' <<'SH'
+set -eu
+pw=$(docker exec platform-postgres-exporter-1 printenv DATA_SOURCE_PASS)
+[ -n "$pw" ] || { echo "no DATA_SOURCE_PASS from the exporter container" >&2; exit 1; }
+printf '%s\n' \
+  "SET log_statement = 'none';" \
+  "SET log_min_error_statement = 'panic';" \
+  "SET log_min_duration_statement = -1;" \
+  "SET log_min_duration_sample = -1;" \
+  "SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'pgexporter') AS create_role \gset" \
+  "\if :create_role" \
+  "CREATE ROLE pgexporter WITH LOGIN PASSWORD '$pw';" \
+  "\else" \
+  "ALTER ROLE pgexporter WITH LOGIN PASSWORD '$pw';" \
+  "\endif" \
+  "GRANT pg_monitor TO pgexporter;" \
+| docker exec -i platform-postgres-1 sh -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres'
+SH
+```
+
+**All four `SET`s are load-bearing and none is decoration.** They are the same four `docs/onboard-an-application.md` §3.2 sets, for the reason §3.4 gives: every log setting that writes statement text is off for the session, so a failing statement cannot put the password into `docker logs` — **which every `docker`-group account on that host can read**. Dropping three of them, keeping only `log_statement`, leaves the default `log_min_error_statement = error`, and then the one statement carrying the password is exactly the one that gets logged.
+
+**The `\if` is what makes a re-run safe**, and a re-run is an ordinary event here rather than a mistake — a partial attempt, or a second pass over a host. Without it a re-run raises `role "pgexporter" already exists`, which is an error, which is the statement the settings above exist to keep out of the log. With it, the block converges: it creates the role or it resets its password.
+
+**Two things this still does not do.** It does not make the value *correct*: where the Environment secret is wrong, the role and the exporter agree with each other and are both wrong, and the `pg_up` check below is what establishes otherwise. And it interpolates the password into a single-quoted SQL literal, so a value containing `'` would break it — the generated alphabet does not produce one, and a hand-chosen password might, in which case type it rather than pipe it.
+
+**That each stack's password is its own is a claim nothing checks**, and it was false until 2026-09-15 — both stacks held one value, found only because two hosts' error output quoted the same prefix. Compare them without printing either, from a session on each host:
+
+```sh
+docker exec platform-postgres-exporter-1 printenv DATA_SOURCE_PASS | tr -d '\n' | sha256sum | cut -c1-16
+```
+
+Two different digests is the pass. Worth running after any rotation, since a rotation is the moment one stack's value is most easily pasted into both.
+
+**`#`, `@`, `/`, `?`, `:`, `$` and a leading quote are all safe in this password now, and the next paragraph says what made the last two safe.** Until 2026-09-15 the first four were not either: the exporter was given a single `DATA_SOURCE_NAME` URL with the password interpolated into it, so any of them silently changed what the URL meant rather than failing — `#` discarded the host, the port and the database after it. Both hosts ran that way with a password containing `#`, reporting `pg_up 0` while their containers stayed healthy and their Prometheus targets stayed up. The exporter now takes `DATA_SOURCE_URI`, `DATA_SOURCE_USER` and `DATA_SOURCE_PASS` separately, so the password reaches it as a value rather than as part of a URL.
+
+**Both layers between a GitHub secret and the container are now closed, and what that does and does not buy is worth reading before you generate one.**
+
+- **The shell that renders `.env`** — closed on 2026-09-15. `platform-deploy.yml` wrote `echo "NAME=${{ secrets.X }}"`, and GitHub substitutes the secret's raw text into that script, so bash read it as script: `ab$c#d` became `ab#d` and a secret containing `` `id -u` `` *ran the command*, in a job holding that stack's tailnet OAuth client and deploy key. Every value now reaches that script through the step's `env:` block, and `.github/tests` fails the build on any workflow that interpolates a secret — or a workflow input — into a `run:` body.
+- **Compose's own `.env` parser** — closed on 2026-09-16 by `render-the-env-file-so-a-secret-survives-it`. That parser processes what it reads: it expands `$`, honours a quote that OPENS a value, begins an inline comment at a space-preceded `#`, truncates at a line break, and strips edge whitespace. Each value is now written double-quoted with `\` → `\\`, `"` → `\"` and `$` → `$$` applied in that order, through one `render` helper that everything written into the file goes through. Measured, not reasoned: 74 values across this path and the `env_file:` path applications use, all returned byte-identical, none altered and none refused. `tools/env-rendering-probe/` is the harness.
+
+  **One sentence that stood here was wrong and is corrected rather than dropped**, because it is the reason this gap stayed open a day longer than it needed to. It said single-quoting the rendered line does not prevent the expansion. It does — a single-quoted value survives this parser for most values. It was rejected on its own two failures, both measured: an unbalanced quote makes Compose **refuse the whole file**, withholding the deploy of a stack whose secrets are unchanged; and a closed apostrophe followed by a space-preceded `#` **truncates silently**, so a password stored as `secret' #1` reaches the service as `secret`. What genuinely does not work is re-quoting in the **shell** layer above, `echo "N='<secret>'"`, which was measured and then reported as though it settled the file layer. Two layers, two mechanisms, one measurement applied to the wrong one.
+
+So the standing instruction is unchanged and its standing is not: **generate these with the `openssl rand` commands `docs/bootstrap-a-new-host.md` §7.2 gives**, whose alphabets contain no `$` and no quote. That is now hygiene rather than the mechanism — it was never something the two vendor-issued values could satisfy anyway, a Slack webhook and a dead-man's-switch URL being issued rather than chosen. What the first fix bought is that a value which does get in can no longer *execute*; what the second buys is that it is no longer silently altered either.
+
+**What the second fix does not reach**, stated here because this is where a reader comes to find out. It obliges what the parser *yields* for a name, and two of these values go somewhere else afterwards: `SLACK_WEBHOOK_URL` and `DEADMANSWITCH_URL` are interpolated into the content of the embedded Alertmanager YAML config, where a `:` followed by a space, a `#`, a quote or a newline would change or break the parse. Nothing escapes for that context. Both are vendor-issued URLs carrying no such character today, which makes it a residual rather than a defect; `docs/backlog.md` carries the entry. And by the same mechanism the paragraph on the config-checksum label above describes, a corrected value for either of those two **does not reach the running Alertmanager on the deploy that ships it** — the committed text has not moved, so the container is not replaced. Force one when it matters.
+
+**Nothing checks this shape yet, and that is worth knowing rather than assuming.** A static check that refuses a secret built into a URL is owed — `docs/backlog.md` `assert-no-secret-is-built-into-a-url` — and until it lands, what stops this returning is this paragraph and a reviewer. The rule it will assert is the one stated above: pass a secret as a value of its own, never as part of a URL. **Which names count as secrets is read from `platform-deploy.yml`'s render step rather than guessed from keywords**, which is how `DEADMANSWITCH_URL` is covered — a bearer credential whose whole value is a URL and whose name contains no word that says so. A value that is nothing but the secret, as Alertmanager's `api_url` is, is the opposite case and passes. The `.env` rendering above is now checked in the half a static read can reach — that the escaping point exists, applies its three substitutions in that order, and is what every value goes through — while the parser's own behaviour remains evidenced by measurement, since no test tier here may run a container.
+
+**If this role is ever missing or its password out of sync — after rebuilding the shared instance, or after the store reset above — nothing tells you.** `MetricsTargetDown` does not, whatever an earlier reading of it suggested: it is `up == 0`, and postgres-exporter serves `/metrics` with HTTP 200 and `pg_up 0` when it cannot connect, so its target stays up and no alert fires while PostgreSQL's metrics are absent. Verified against `v0.20.1` on 2026-09-15. `pg_up` is what would catch it and nothing alerts on it yet — `docs/backlog.md` `alert-on-the-exporter-being-unable-to-read-postgres` is that gap. Until it lands, this is checked by hand, with the command in *Upgrading the PostgreSQL major version* above.
+
+### One manual step per stack: dead-man's-switch registration
+
+Register **each** host with a third-party heartbeat/dead-man's-switch service (e.g. Healthchecks.io) and put the ping URL it gives you in that stack's own `PLATFORM_DEADMANSWITCH_URL` secret. One check per host: a single check fed by two hosts stays green while either one is alive, which is the opposite of what this exists to notice. Configure that service's expected check-in interval to comfortably exceed Alertmanager's Watchdog `repeat_interval` (2 minutes, per `platform/docker-compose.yml`'s `alertmanager_config` -- lowered from an original 5 minutes after `fix-deadmansswitch-repeat-interval` found that value, equal to the inherited `group_interval`, caused real delivery to silently halve to every ~10 minutes instead), so a single delayed gossip round doesn't produce a false page. This is the actual implementation of the mitigation named in "No dedicated monitoring server" above — if the host, Alertmanager, or the whole platform stack goes down, this is what notices.
+
+## Status
+
+`docker-compose.yml` defines Traefik (ACME-issued TLS, Docker-label routing), a single shared PostgreSQL instance, and the monitoring/alerting stack described above, deployed by `.github/workflows/platform-deploy.yml` to every stack whose declaration opts in. One definition, several hosts: what differs between them is `.env` and nothing in this directory. See `deploy-platform-compose-stack` for the change that built the original stack, `integrate-ansible-host-config` for the change that established the boundary above, and `add-platform-monitoring` for the monitoring/alerting stack.
+
+Every service in this stack defines a real Docker `healthcheck:` reflecting its own readiness, not just that its process is running -- this is what lets `docker compose up -d --wait` (in `app-deploy` on the host) actually fail the deploy job when a service comes up broken, instead of reporting false success. When adding a new service here, give it a real healthcheck too (see `add-platform-service-healthchecks` for why this matters and what it does and doesn't catch).

@@ -1,0 +1,92 @@
+---
+# Molecule scenario for the `hostname` role run with `company` NOT supplied.
+#
+# Derived from the delta specs of the OpenSpec change
+# `rename-the-stacks-and-their-resources`, before any implementation of it
+# existed. The path those deltas sit at is not written here: a change's
+# artifacts move when it is archived, and this repository's citation convention
+# is to name the change and the artifact in prose instead. See that change's
+# `test-plan.md` for the scenario-to-test mapping, the recorded baseline, and
+# the per-assertion classification.
+#
+# The requirement is *The Host's Own Name Is Set by the Converge*
+# (openspec/specs/iac-host-configuration/spec.md), scenario "An absent company
+# variable refuses": "the run SHALL fail with a diagnostic naming that variable
+# and where it is expected to be set, before any task acts on the host". The
+# requirement states the variable "is a required input in the sense of *A
+# Role's Absent Required Input Is Reported by Name*", so this scenario is
+# written in the shape `hardening/molecule/absent-ssh-cidrs` and
+# `image_prune/molecule/absent-heartbeat-key` already use -- see the former's
+# molecule.yml and converge.yml for why the block/rescue and the marker file
+# are mandatory rather than stylistic.
+#
+# WHY `idempotence` AND `side_effect` ARE OMITTED FROM test_sequence
+# ------------------------------------------------------------------
+# Stated explicitly rather than inherited silently. `idempotence` is meaningless
+# here and would fail for a reason unrelated to this scenario: the converge
+# deliberately aborts the role before it configures anything. Role idempotence
+# is covered by `default`, which converges the role to completion.
+# `side_effect` is omitted because this scenario has no side_effect.yml;
+# `prepare` is kept although this scenario has no prepare.yml -- Molecule
+# reports it as a missing playbook and moves on, and the step is left in place
+# so a fixture added later needs no sequence edit.
+#
+# Instance name namespaced per working tree, with a default Docker refuses, and
+# an explicit `hostname` because the driver would otherwise derive one from the
+# name and cross the 64-byte limit. Distinct from `default`'s instance name:
+# two scenarios of one role sharing an instance name collide on `create`
+# whenever the sibling's container is still up. See
+# ansible/roles/docker/molecule/default/molecule.yml for the full account --
+# every scenario must agree on the variable.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: hostname-absent-company-${INFRA_WORKTREE_NS:-unset:run-via-ansible/scripts/run-molecule}
+    # The name the host is created with, and the one verify.yml asserts is
+    # still in place afterwards: a refusal to proceed, not a partial
+    # application.
+    hostname: absent-company
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py asserts it. See
+    # ansible/roles/docker/molecule/default/molecule.yml for why a digest and
+    # for how to refresh it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml -- same
+    # reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - cleanup
+    - destroy
+
+verifier:
+  name: ansible

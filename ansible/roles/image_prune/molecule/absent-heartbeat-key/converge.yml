@@ -1,0 +1,92 @@
+---
+# Converges `image_prune` with `image_prune_heartbeat_ping_key` deliberately
+# NOT supplied -- not set here, and the role's defaults/main.yml deliberately
+# gives it no default, because a scheduled unit that runs unobserved is the
+# state the requirement exists to end.
+#
+# Scenario under test, from "Scheduled Host Units Report Their Own Liveness"
+# (openspec/specs/iac-host-configuration/spec.md):
+#
+#   "An absent report address is reported by name"
+#     WHEN the role converges with no report address supplied
+#     THEN it SHALL fail naming that input, before changing anything on the
+#     host, and SHALL NOT install the unit with reporting omitted
+#
+# WHY THE block/rescue AND THE MARKER FILE ARE MANDATORY, NOT STYLISTIC
+# ---------------------------------------------------------------------
+# Two reasons, both structural, and both stated in
+# ansible/roles/hardening/molecule/absent-ssh-cidrs/converge.yml, which is the
+# shape this follows. Molecule runs `converge` and `verify` as two separate
+# ansible-playbook invocations, so no fact set here survives into verify.yml
+# -- a file on the instance is the channel. And without the rescue, the
+# converge exits non-zero, Molecule never runs `verify` at all, and the
+# scenario reports a bare converge failure instead of the assertion it was
+# written to make.
+#
+# The success branch is written too, and matters most: if the check is later
+# softened -- a default added to defaults/main.yml, the assert relaxed, the
+# reporting quietly skipped when the address is absent -- this converge
+# SUCCEEDS, records `succeeded`, and verify.yml fails on it. A scenario
+# recording only the failure branch would go green in exactly the case it
+# exists to catch. Against the tree as it stands today, before the change is
+# implemented, `succeeded` is precisely what it records.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # SUPPLIED DELIBERATELY. `deploy_apps` is this role's other required
+    # input; with both absent the role would refuse on whichever assertion
+    # runs first, and a role that had lost the heartbeat assertion entirely
+    # would still refuse -- passing this scenario while asserting nothing.
+    deploy_apps:
+      - name: solo
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeSoloKeyOnlyNotARealCredential
+          solo-molecule@ci
+    # SUPPLIED THOUGH THIS CONVERGE MUST NEVER REACH IT. The role is expected
+    # to refuse before installing anything, so nothing here should ever ping
+    # -- but if the refusal is lost, this is what stops the resulting converge
+    # from reaching the external observer from a hosted runner and creating a
+    # check there. `.github/tests/test_ci_configuration.py` asserts this
+    # variable over EVERY scenario of a timer-installing role for that reason,
+    # exempting only the ping key, and only for a scenario like this one.
+    image_prune_heartbeat_base_url: http://127.0.0.1:8099
+  tasks:
+    - name: Converge image_prune with no heartbeat ping key supplied
+      block:
+        - name: Run the image_prune role
+          ansible.builtin.include_role:
+            name: image_prune
+
+        - name: Record that the role completed without failing
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-absent-heartbeat-key-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'succeeded',
+                  'failed_task_name': '',
+                  'failed_action': '',
+                  'failed_msg': ''
+                } | to_nice_json
+              }}
+      rescue:
+        - name: Record the failure the unsupplied input produced
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-absent-heartbeat-key-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_action': ansible_failed_task.action | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}

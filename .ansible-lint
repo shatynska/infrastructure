@@ -1,0 +1,53 @@
+---
+# ansible/roles/geerlingguy.docker/ is third-party content fetched by
+# `ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles`
+# (pinned by exact version there, gitignored, never committed — see
+# .gitignore). It's not this project's code to lint or fix; excluding it is
+# what keeps pre-commit's `ansible-lint ansible/` hook working for anyone who
+# has actually installed the pinned dependency locally, rather than failing
+# on upstream issues in a role we don't own.
+exclude_paths:
+  - ansible/roles/geerlingguy.docker/
+
+# ansible/playbooks/host-baseline.yml's second play takes its `hosts:` from
+# `target_environment`, supplied per run and deliberately given no default
+# (iac-host-configuration's "Host Configuration Names the Environment It
+# Targets"). ansible-lint's `syntax-check` rule COMPILES that play, and an
+# undefined variable in a `hosts:` keyword is a hard error there:
+#
+#   Error processing keyword 'hosts': 'target_environment' is undefined
+#
+# That rule is tagged `unskippable` -- it cannot be disabled per-file, per-rule
+# or by a `# noqa`, so feeding it a value is the only way through. The same
+# value is passed by the `ansible-playbook --syntax-check` pre-commit hook, so
+# the two tools compile the play identically.
+#
+# THE VALUE NAMES NO ENVIRONMENT, ON PURPOSE. A real environment name here
+# would mean these tools resolve the play against an environment nobody asked
+# for, and a sentinel that drifted into being a real environment name would do
+# so invisibly. `.github/tests` asserts that it names none.
+#
+# This is NOT a default for `target_environment`. It is scoped to the two
+# tools that compile the play without running it; a real run supplies its own
+# and is refused by the playbook's first play if it does not.
+extra_vars:
+  target_environment: syntax-check-only
+
+# Every role referenced by name (e.g. `role: hardening`) needs mocking
+# here -- not just in each role's molecule/default/converge.yml, but also
+# in the real ansible/playbooks/host-baseline.yml. ansible-lint does not
+# resolve role references via ansible.cfg's `roles_path = roles` the way
+# `ansible-playbook`/`ansible-galaxy` do; without this, standalone
+# ansible-lint reports a false-positive "role not found" even though the
+# role resolves correctly both at role-implementation time (roles_path)
+# and at molecule-test time (each molecule.yml's ANSIBLE_ROLES_PATH).
+mock_roles:
+  - docker
+  - image_prune
+  - hardening
+  - deploy_user
+  - tailscale
+  - hostname
+  - ops_user
+  - platform_data_volume
+  - swap

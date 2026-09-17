@@ -1,0 +1,63 @@
+---
+# Variables of ONE HOST -- the server `terraform/stacks/main-staging` names, and
+# no other. The filename is that server's Hetzner name, which is what
+# `inventory_hostname` resolves to under the `hcloud` plugin and what the
+# stack's `terraform.tfvars` declares as `name`. `main-production.yml` beside
+# this file carries the full account of why a host has a file of its own;
+# it is not repeated here.
+
+# Per-application deploy public keys (add-per-app-deploy-keys). Safe to
+# commit -- public keys, not secrets.
+#
+# STAGING'S OWN KEYPAIRS, NOT PRODUCTION'S -- and that holds of every entry
+# below, not just the first. One leaked private half must deploy to one host.
+# That sentence used to explain why these lists differ per environment; it now
+# explains why they sit in per-host files, which is the shape that actually
+# secures it. Each keypair is generated on the workstation, its public half
+# committed here, and its private half stored only in the GitHub Environment
+# secret of the repository that deploys that application: `platform`'s in this
+# repository's own main-staging Environment as PLATFORM_DEPLOY_SSH_KEY,
+# `commerce-ops`'s in that application's repository.
+#
+# `commerce-ops` was left out of this list while it had no staging deploy
+# path in its own repository. Its entry deliberately landed BEFORE that path
+# existed rather than after: the entry needs a converge before the
+# application's deploy can authenticate, so an application repository that is
+# ready first waits on an infrastructure pull request rather than the reverse.
+#
+# NOTE ON THE PRUNE, so neither state is read as a fault. An enumerated
+# application with no Compose file on the host renders no image reference and
+# contributes nothing to the keep set -- harmless, and the reason an entry
+# may sit here before anything deploys behind it. While NOTHING at all was
+# deployed the keep set was empty outright and the weekly unit ABANDONED and
+# reported failure, which was this role's documented contract and was
+# accepted deliberately; that ended when the platform stack reached staging
+# and the keep set stopped being empty.
+deploy_apps:
+  # `probe_public_key` is the read-only database probe's own key
+  # (make-a-shared-instance-reset-visible-to-its-applications). It is a SECOND
+  # key beside the deploy key, never a replacement: one `authorized_keys` entry
+  # carries one `command=`, so a key that could both deliver and probe would be
+  # a key bound to neither. The field is optional per application, and it sits
+  # on the host axis for the same reason the deploy key does.
+  #
+  # The probe keys carry the stack segment that the two deploy keys here
+  # predate -- see the comment convention in docs/onboard-an-application.md §2.1.
+  #
+  # `platform` carries one deliberately, and it is not a copy-paste. The stack
+  # holds no role and no database named `platform` in the shared instance, so
+  # this probe can only ever answer `window-open` or `absent` -- which makes it
+  # the operator's own check that a maintenance declaration is in force, and the
+  # one place `absent` can be observed without destroying anything. Do not
+  # remove it as an oversight, and never run the re-provisioning recipe for it.
+  - name: platform
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMCOPPlcE5sXqy1//8Cl8S3fac51+ceyD9YBnN4Vwq+ deploy@platform-staging"
+    probe_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL38ZTtPYBRjKPMOkqHZHtVilyrAYpQXQhfp3bT2b6Rv probe@platform-main-staging"
+  # The name is not free: image reclamation identifies an application's images
+  # as ghcr.io/<any owner>/<this name>, so it must equal the last segment of
+  # the image repository (ghcr.io/<org>/commerce-ops) or it reclaims nothing,
+  # silently. Same name as production's entry for that reason; a different
+  # keypair for the reason above.
+  - name: commerce-ops
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7D0FcW/kPrjuxwDgy6mt27qx3V8I+1sYT3CcOSY5ID commerce-ops-deploy-staging"
+    probe_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8Cxb8lysQ6616lS2m8lvGv1TfSOSYyN73bG13oKuW7 commerce-ops-probe-main-staging"

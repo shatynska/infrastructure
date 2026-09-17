@@ -1,0 +1,90 @@
+repos:
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.1
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_tflint
+        args:
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+      - id: terraform_validate
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        # `shellcheck-py` rather than the Docker-backed hook, for the same
+        # local-vs-CI reason the ansible-lint pin below records: this ships the
+        # binary as a pinned wheel, so a workstation and the runner check the
+        # same thing without either needing a container runtime.
+        #
+        # NO `files:` PATTERN. Every committed shell script is in scope, and
+        # they are found by shebang rather than by extension -- not one of the
+        # seven carries a `.sh` suffix. Two of them run as `root` on every
+        # host, one of those on input from an application's key, so a narrowing
+        # here would exclude exactly the scripts where a quoting mistake costs
+        # the most.
+        #
+        # Default severity, deliberately. Where a check fires on something a
+        # file does on purpose, the file carries a narrow `# shellcheck
+        # disable=` with the reason beside it -- see the banner in each of
+        # `tools/env-rendering-probe/`'s scripts. Lowering the threshold
+        # globally would have bought the same green at the price of hiding the
+        # same class of finding everywhere else.
+
+  - repo: https://github.com/ansible/ansible-lint
+    rev: v26.8.0
+    hooks:
+      - id: ansible-lint
+        files: ^ansible/
+        # Upstream's hook hardcodes `language_version: python3.14`. This
+        # project targets 3.12 -- ansible/requirements-test.txt pins its whole
+        # toolchain "verified together, in this combination, on Python 3.12" --
+        # so the hook is pinned to the same interpreter rather than pulling a
+        # second one in. Without this the hook passes only on a machine that
+        # happens to have 3.14 installed and fails everywhere else, which is
+        # exactly the local-vs-CI divergence the gitleaks pin below exists to
+        # prevent.
+        language_version: python3.12
+        # pass_filenames is false upstream (ansible-lint's own recommendation),
+        # so without an explicit target it scans the whole repo, not just
+        # `ansible/` — flagging unrelated files like .github/workflows/*.yml.
+        args: ["ansible/"]
+
+  - repo: local
+    hooks:
+      - id: ansible-playbook-syntax-check
+        name: ansible-playbook --syntax-check
+        language: system
+        # Runs with cwd = ansible/ (not the repo root pre-commit hooks
+        # otherwise use) so ansible.cfg -- and its roles_path, which
+        # resolves this project's own roles/ directory -- is actually
+        # found. Without this, every role reference fails to resolve:
+        # Ansible only looks for ansible.cfg in the current directory,
+        # it does not search upward.
+        #
+        # `-e target_environment=...` because host-baseline.yml's second play
+        # takes its `hosts:` from that variable and is deliberately given no
+        # default (iac-host-configuration's "Host Configuration Names the
+        # Environment It Targets"). --syntax-check COMPILES the play, and an
+        # undefined variable in `hosts:` is a hard error there, so without a
+        # value this hook fails on every commit. The value names no
+        # environment on purpose, and .ansible-lint carries the same one under
+        # `extra_vars` for its own unskippable syntax-check rule -- the two
+        # tools must compile the play identically or one of them is testing
+        # something the other is not.
+        entry: bash -c 'set -euo pipefail; cd ansible && for f in playbooks/*.yml; do [ -e "$f" ] && ansible-playbook --syntax-check -e target_environment=syntax-check-only "$f"; done'
+        pass_filenames: false
+        files: ^ansible/playbooks/.*\.ya?ml$
+
+  - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
+    rev: v9.26.0
+    hooks:
+      - id: commitlint
+        stages: [commit-msg]
+        additional_dependencies:
+          - "@commitlint/config-conventional"

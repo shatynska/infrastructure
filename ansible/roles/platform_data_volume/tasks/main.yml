@@ -1,0 +1,217 @@
+---
+# Mounts the platform's dedicated data volume (the Terraform-provisioned
+# `main` Hetzner Volume) at a fixed host path, formats it if needed,
+# persists the mount across reboot, and creates the subdirectories the
+# platform stack's containers bind-mount into — iac-host-configuration's ADDED
+# "Platform Data Volume Is Mounted at a Fixed Host Path" requirement
+# (openspec/specs/iac-host-configuration/spec.md, from add-platform-monitoring).
+#
+# Scope stops at the mount and its filesystem layout: this role never
+# templates or starts a platform/ service, consistent with the existing
+# "Configuration Scope Stops at the Container Runtime" requirement.
+
+- name: Refuse a superseded mount path that is also the path in force
+  ansible.builtin.assert:
+    that:
+      - platform_data_volume_mount_path | regex_replace('/+$', '')
+        not in (platform_data_volume_superseded_mount_paths
+                | map('regex_replace', '/+$', '') | list)
+    fail_msg: >-
+      platform_data_volume_mount_path ({{ platform_data_volume_mount_path }}) is
+      also named in platform_data_volume_superseded_mount_paths
+      ({{ platform_data_volume_superseded_mount_paths | join(', ') }}). Retiring
+      it would delete the /etc/fstab entry this same run establishes, leaving a
+      host that mounts and serves correctly until it reboots and then comes up
+      with no data volume at all. Correct whichever of the two is wrong; the
+      role will not resolve it by ignoring one of them.
+  # FIRST IN THIS ROLE, and ahead of every task in it that changes the host --
+  # not merely ahead of the retirement loop.
+  #
+  # It is NOT ahead of everything the PLAY changes: host-baseline.yml runs six
+  # roles before this one, so a refusal here meets a host `hardening`, `docker`
+  # and the rest have already converged. `ansible/playbooks/host-baseline.yml`
+  # records why that distance is tolerated, in the comment above its `swap`
+  # role, and this role's own README says the same. Do not let the two drift:
+  # an operator who reads "before anything changes" believes a refused converge
+  # left the host untouched.
+  #
+  # The two values are compared with a trailing slash stripped from each, so a
+  # near-miss spelling cannot slip past a guard whose one bypass leads to
+  # precisely the outcome it exists to prevent.
+
+- name: Discover the attached data volume's device path, if not explicitly set
+  ansible.builtin.find:
+    paths: /dev/disk/by-id
+    # Hetzner's stable, documented naming for an attached Volume — see
+    # design.md's "The volume's device path is discovered on-host" decision
+    # for why this is preferred over hand-copying Terraform's `linux_device`
+    # output into inventory.
+    patterns: "scsi-0HC_Volume_*"
+    file_type: any
+  register: platform_data_volume_by_id
+  when: platform_data_volume_device | length == 0
+
+- name: Resolve the discovered device path
+  ansible.builtin.set_fact:
+    # Sorted, not `files[0]`: `find` returns directory-read order and
+    # guarantees none. With one volume attached the two agree, so the
+    # difference is invisible until a second one is -- at which point an
+    # unsorted pick is nondeterministic and silent. Sorting makes the
+    # selection the same on every run against the same set of devices.
+    platform_data_volume_device: "{{ platform_data_volume_by_id.files | map(attribute='path') | sort | first }}"
+  when:
+    - platform_data_volume_device | length == 0
+    # Guards the indexing above. Without it, an empty `find` result reaches
+    # `files | first` and the play aborts on a Jinja error BEFORE the assert
+    # below -- the assert written to diagnose precisely that case, which is
+    # what a host sees with volume_enabled false or a volume still
+    # attaching. The empty case must fall through to it instead.
+    #
+    # `| default([])` is load-bearing because the register can be WHOLLY
+    # UNDEFINED, not merely missing its `files` key: a run that excludes the
+    # discovery task by --tags/--skip-tags never registers it at all. It
+    # also covers the ordinary skipped case, where the caller supplied a
+    # device and the register holds no `files`.
+    - platform_data_volume_by_id.files | default([]) | length > 0
+
+- name: Fail loudly if no device path is available (neither supplied nor discoverable)
+  ansible.builtin.assert:
+    that:
+      - platform_data_volume_device | length > 0
+    fail_msg: >-
+      No platform_data_volume_device was supplied and no
+      /dev/disk/by-id/scsi-0HC_Volume_* device was found on this host. Is the
+      `main` Hetzner Volume actually attached (volume_enabled in
+      terraform/stacks/<stack>/terraform.tfvars, for the stack whose host this
+      run targets)?
+
+- name: Format the data volume, if it has no filesystem yet
+  community.general.filesystem:
+    dev: "{{ platform_data_volume_device }}"
+    fstype: "{{ platform_data_volume_fs_type }}"
+  # community.general.filesystem is itself idempotent (it checks the
+  # existing filesystem type via blkid before acting) — this is not a
+  # first-attach-only guard, just documenting why no separate "already
+  # formatted?" check precedes it.
+
+- name: Ensure the fixed mount path exists
+  ansible.builtin.file:
+    path: "{{ platform_data_volume_mount_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Mount the data volume at the fixed path and persist it in /etc/fstab
+  ansible.posix.mount:
+    path: "{{ platform_data_volume_mount_path }}"
+    src: "{{ platform_data_volume_device }}"
+    fstype: "{{ platform_data_volume_fs_type }}"
+    state: mounted
+
+- name: Retire any superseded mount path from /etc/fstab, without unmounting it
+  ansible.posix.mount:
+    path: "{{ item | regex_replace('/+$', '') }}"
+    state: absent_from_fstab
+  loop: "{{ platform_data_volume_superseded_mount_paths }}"
+  # NORMALISED HERE TOO, and not only in the guard above. `absent_from_fstab`
+  # matches the fstab name EXACTLY -- it expands `~` and `$VAR` and nothing
+  # else -- so a declared path carrying a trailing separator, against an fstab
+  # naming it without one, reports `changed=False` and removes nothing. A
+  # declaration one character off would otherwise converge green, `ok`, with
+  # both paths still persisted: the two-paths-at-boot state this task exists to
+  # prevent, reached through the task meant to prevent it. The assert below is
+  # what catches the mirror case, an fstab entry spelled with the separator.
+  #
+  # `absent_from_fstab` rather than `absent` or `unmounted`, and the difference
+  # is the whole point: both of those unmount, and at the moment a path moves a
+  # running Prometheus or Grafana holds a bind into the old one -- so an
+  # unmount either fails on a busy target or succeeds and pulls the filesystem
+  # out from under a running service. This edits /etc/fstab and nothing else.
+  #
+  # AFTER the mount task above, so a run that fails earlier has not half-retired
+  # anything: the new path is established before the old one stops being.
+  #
+  # No `when:` guard -- an empty loop runs no iterations, and a declared path
+  # already absent from /etc/fstab reports no change, which is the state every
+  # converge after the first is in.
+
+- name: Read /etc/fstab back after retiring the superseded paths
+  ansible.builtin.slurp:
+    src: /etc/fstab
+  register: platform_data_volume_fstab_after
+  when:
+    - platform_data_volume_superseded_mount_paths | length > 0
+    - not ansible_check_mode
+
+- name: Assert no superseded path is still persisted in /etc/fstab
+  vars:
+    # BOTH SIDES NORMALISED, and the fstab side is the one that is easy to
+    # forget. Stripping only the declared paths compares `/mnt/x` against a
+    # file that may name `/mnt/x/`, so an entry the retirement could not match
+    # is also an entry this check cannot see -- the same miss twice, and the
+    # second is the one that was supposed to catch the first.
+    platform_data_volume_fstab_active: >-
+      {{ (platform_data_volume_fstab_after.content | default('') | b64decode).splitlines()
+         | map('trim') | select() | select('match', '^[^#]')
+         | map('regex_replace', '^(\S+)\s+(\S+).*$', '\2')
+         | map('regex_replace', '/+$', '') | list }}
+    platform_data_volume_still_persisted: >-
+      {{ platform_data_volume_superseded_mount_paths
+         | map('regex_replace', '/+$', '')
+         | select('in', platform_data_volume_fstab_active) | list }}
+  ansible.builtin.assert:
+    that:
+      # THE PREMISE FIRST. `still_persisted` is a membership test, and an empty
+      # `fstab_active` satisfies it exactly as a correct retirement does -- so
+      # a broken slurp or a broken reduction would report success having read
+      # nothing. By this point the role has written its own entry, so the file
+      # cannot legitimately be empty. The sibling Molecule scenario learned
+      # this against its own copy of the same reduction, after it had already
+      # reported an unearned pass.
+      - platform_data_volume_fstab_active | length > 0
+      - platform_data_volume_still_persisted | length == 0
+    fail_msg: >-
+      These superseded mount paths are still named in /etc/fstab after the
+      retirement task ran: {{ platform_data_volume_still_persisted | join(', ') }}.
+      Read /etc/fstab ({{ platform_data_volume_fstab_active | join(', ') }}) --
+      an empty list there means this check read nothing rather than that the
+      host is clean. The device would otherwise mount at more than one path on
+      the next reboot.
+  when:
+    - platform_data_volume_superseded_mount_paths | length > 0
+    # NOT UNDER `--check`. `slurp` runs in check mode but `absent_from_fstab`
+    # correctly does not write, so a check run against any host still carrying
+    # the superseded entry reads the unmodified file and fails with "still
+    # named in /etc/fstab after the retirement task ran" -- a wrong diagnosis
+    # of a correct host, and every host is in that state until this change's
+    # converge lands. `tailscale` sets `check_mode: false` on three tasks for
+    # the same reason and `swap` records the same concern, so a `--check` run
+    # of host-baseline.yml is a property sibling roles deliberately keep;
+    # the converge that `apply-host-configuration-through-a-gated-workflow`
+    # moved into the pipeline does not read it as drift. `docs/backlog.md`'s
+    # `detect-host-drift-on-a-schedule` would build host drift detection on
+    # that property, so this guard is a precondition of that entry rather than
+    # dead weight.
+    - not ansible_check_mode
+  # THE ROLE CHECKS ITS OWN WORK, because the retirement above cannot report
+  # having failed. `absent_from_fstab` is a no-op on anything it does not match
+  # -- a spelling it does not normalise, or a malformed line it skips for not
+  # splitting into six fields -- and a no-op reports `changed=False`, which is
+  # also what a correct already-retired run reports. The two are
+  # indistinguishable from the module's result, and the difference between them
+  # only becomes visible at a reboot months later.
+
+- name: Create the dependent subdirectories on the mounted volume, with per-service ownership
+  ansible.builtin.file:
+    path: "{{ platform_data_volume_mount_path }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ platform_data_volume_subdirs }}"
+  loop_control:
+    label: "{{ item.path }}"
+  # Runs after the mount task above, not before: a subdirectory created
+  # before the volume is mounted would be shadowed by the mount rather than
+  # be what a container's bind-mount actually reads from.

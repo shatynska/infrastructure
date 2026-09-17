@@ -1,0 +1,29 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing here
+# may set up the thing under test. Same two workarounds, for the same two
+# reasons, as ansible/roles/deploy_user/molecule/default/prepare.yml: an empty
+# apt cache in a freshly created container, and a nested daemon that cannot
+# stack another overlay.
+#
+# No registry image is carried in here, unlike the sibling `default` scenario:
+# this scenario has no digest-pin fixture and MUST NOT acquire one, because a
+# registry container would be a container on the host and would make the
+# empty-keep-set branch unreachable.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Refresh the apt cache before the docker role installs from it
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+
+    # THE vfs STORAGE-DRIVER FIXTURE USED TO BE WRITTEN HERE, as
+    # /etc/docker/daemon.json. It now travels as `docker_daemon_extra_options`
+    # in this scenario's converge.yml.
+    #
+    # It had to move: the `docker` role now supplies daemon options of its own
+    # (a log ceiling), and geerlingguy.docker renders that file with `copy:` --
+    # an overwrite, not a merge -- gated on its options dictionary being
+    # non-empty. That gate used to be false, which is the only reason a file
+    # written here survived the converge.

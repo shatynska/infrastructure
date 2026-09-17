@@ -1,0 +1,102 @@
+version: 2
+updates:
+  - package-ecosystem: "terraform"
+    # Every directory carrying a .terraform.lock.hcl must appear here.
+    # Dependabot's terraform ecosystem has no discovery mechanism, so a
+    # directory this list omits is not partially covered -- it is uncovered,
+    # and its provider pins rot with no signal at all. Adding a Terraform
+    # module or environment includes adding it here; the CI-configuration test
+    # suite compares the two sets and fails if they diverge.
+    directories:
+      - "/terraform/stacks/main-production"
+      - "/terraform/stacks/main-staging"
+      - "/terraform/modules/server"
+      - "/terraform/modules/volume"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker-compose"
+    # The `.env` rendering probe's own image. It is not a stack this
+    # repository deploys -- nothing runs it in CI and no host receives it --
+    # but *Automated Dependency Updates* covers every Compose file in the tree
+    # declaring a service image, not every file that is deployed, and the
+    # CI-configuration suite reports one in an unnamed directory as uncovered.
+    # Covering it is also better than the alternative that was considered:
+    # the probe's README used to say nothing refreshed its pin, which is a
+    # resigned note where a weekly pull request was available for one entry.
+    #
+    # It holds TWO Compose files, one per consumption path, and both are
+    # fetched: the fetcher's filename pattern is satisfied by a name
+    # CONTAINING "compose", which `interpolation.compose.yaml` and
+    # `env-file.compose.yaml` both do.
+    directory: "/tools/env-rendering-probe"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker-compose"
+    # The shared platform stack's image pins. The directory is listed
+    # explicitly because there is no alternative: Dependabot's Compose file
+    # fetcher lists the contents of the configured directory and does not
+    # descend into subdirectories, and it fails outright when that directory
+    # holds no Compose file -- so "/" would not scan the tree, it would error,
+    # because no Compose file sits at the repository root. It also selects by
+    # FILENAME, so a stack file added here under a name containing no
+    # "compose" would sit in a covered directory and never be read. The
+    # CI-configuration test suite compares both conditions against the tree
+    # and fails if either diverges.
+    directory: "/platform"
+    schedule:
+      interval: "weekly"
+    groups:
+      # Blast radius, not tidiness. Eight images weekly is up to eight gated
+      # production deploys; grouping the six monitoring images makes a routine
+      # week three pull requests at most. Traefik terminates TLS for every
+      # public hostname and postgres is the one stateful service, so each
+      # reaches the deploy approver as its own diff.
+      #
+      # Patterns are DEPENDENCY names, which are neither the Compose service
+      # key nor the image reference as written here. Dependabot builds the
+      # dependency as `name: details.fetch("image")` and carries the registry
+      # in the requirement's `source` instead, so the name has NO registry
+      # host: `quay.io/prometheuscommunity/postgres-exporter:v0.17.1` is the
+      # dependency `prometheuscommunity/postgres-exporter`.
+      #
+      # The first version of this stanza prefixed both of those patterns with
+      # their registry and they matched nothing -- postgres-exporter opened
+      # ungrouped as PR #92, and cadvisor's pattern was equally broken but
+      # invisible because v0.60.5 was current. The check asserting this group
+      # was green throughout, because it computed expected names the same
+      # wrong way. It is now anchored to that run; see
+      # TestDependencyNamingMatchesWhatDependabotActuallyDid.
+      #
+      # postgres-exporter is still named in full rather than as `postgres*`,
+      # which would silently pull the shared database into the group this
+      # split exists to keep it out of.
+      platform-monitoring-images:
+        patterns:
+          - "prom/*"
+          - "grafana/*"
+          - "google/cadvisor"
+          - "prometheuscommunity/postgres-exporter"
+
+  # This repository has no JavaScript. The manifest exists so the OpenSpec CLI
+  # pin has somewhere Dependabot can see it: `pr-validation.yml` validates this
+  # repository's own specification record with it, and Dependabot's npm
+  # ecosystem reads `package.json` -- a version pinned inline in a workflow
+  # step is exact but invisible to it. `docs/backlog.md`'s
+  # `cover-the-unwatched-manifests-and-settle-the-watcher` records the
+  # exactly-pinned manifests here that nothing watches; the change that added
+  # this one would not defensibly have added to them.
+  #
+  # The package is `@fission-ai/openspec`; the binary it installs is
+  # `openspec`. Those are different names, which the derived tests for that
+  # change initially conflated.
+  - package-ecosystem: "npm"
+    directory: "/.github"
+    schedule:
+      interval: "weekly"

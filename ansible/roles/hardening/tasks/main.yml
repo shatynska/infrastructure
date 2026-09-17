@@ -1,0 +1,143 @@
+---
+# Host-level UFW + fail2ban, per iac-host-configuration's "Host-Level
+# Security Owned by Ansible, Cloud Firewall Owned by Terraform"
+# requirement. UFW's allowed ports SHALL mirror what the Hetzner cloud
+# firewall (terraform/modules/server's hcloud_firewall) already allows --
+# see this role's README for the sync obligation between the two.
+
+# FIRST, before any task that changes the host. hardening_ssh_allowed_cidrs
+# has no default and no safe one (defaults/main.yml says why), and without
+# this it surfaced as `'hardening_ssh_allowed_cidrs' is undefined` from the
+# SSH rule's loop below -- by which point UFW is installed and its default
+# policy written to /etc/default/ufw, and no SSH rule. NOT a lockout either
+# way: `Enable UFW` (state: enabled) runs AFTER the SSH allow loop, so on a
+# first converge an abort inside that loop leaves the firewall inactive, and
+# on a re-converge of an already-hardened host it leaves the previous run's
+# rules in force, unchanged. What it leaves is a half-configured host, and a
+# refusal to proceed is the correct outcome instead.
+#
+# Definedness, deliberately NOT `| length > 0`: an empty list is a coherent,
+# stricter posture here, since the tailnet CGNAT rule further down admits SSH
+# independently. Asserting non-emptiness would forbid tailnet-only SSH, which
+# is safer than what prod runs.
+- name: Fail loudly if the required SSH source CIDRs were not supplied
+  ansible.builtin.assert:
+    that:
+      - hardening_ssh_allowed_cidrs is defined
+      - hardening_ssh_allowed_cidrs is sequence
+      - hardening_ssh_allowed_cidrs is not string
+      - hardening_ssh_allowed_cidrs is not mapping
+    fail_msg: >-
+      hardening_ssh_allowed_cidrs was not supplied, or is not a list. This
+      role has no default for it and there is no safe default source CIDR for
+      SSH -- set it in ansible/inventory/group_vars/<environment>.yml, the file
+      for the environment this run targets (see this role's
+      defaults/main.yml and README).
+
+# `update_cache` stays; what is added is a bound on how stale an index may be
+# before this re-fetches it. The first apt task of a converge still fetches --
+# a container or a host with no record of a fetch reads as the epoch, which is
+# outside any bound -- and the fail2ban install below then reuses what this one
+# fetched rather than downloading the whole index again seconds later.
+#
+# Registered for the scenario's assertions: `cache_updated` is the only place
+# the distinction between a fetch and a reuse exists, a fetched and an
+# unfetched index leaving identical host state.
+- name: Ensure UFW is installed
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ hardening_apt_cache_valid_time }}"
+  register: hardening_ufw_install
+
+- name: Set UFW default incoming policy to deny
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Set UFW default outgoing policy to allow
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Allow SSH (22) from the configured CIDRs
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ hardening_ssh_allowed_cidrs }}"
+
+- name: Allow HTTP (80) from the configured web CIDRs
+  community.general.ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ hardening_web_allowed_cidrs }}"
+
+- name: Allow HTTPS (443) from the configured web CIDRs
+  community.general.ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ hardening_web_allowed_cidrs }}"
+
+
+# Additive to the public-interface SSH rule above, not a replacement for
+# it -- see connect-platform-deploy-via-tailscale's design.md for why
+# this is needed (UFW's default-deny-incoming policy applies to the
+# tailscale0 interface too, not just the public one) and why it's safe
+# (100.64.0.0/10 is the tailnet's CGNAT range, not publicly routable;
+# only authenticated tailnet peers can present it as a source).
+- name: Allow SSH (22) from the tailnet CGNAT range
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "100.64.0.0/10"
+
+# Same rationale as the SSH-tailnet rule above: Grafana (added by
+# add-platform-monitoring) binds to the host's tailnet-literal IP and is
+# meant to be reachable only from tailnet peers, but UFW's default-deny-
+# incoming policy applies to the tailscale0 interface too, so it needs its
+# own explicit allow rule here as well.
+- name: Allow Grafana (3000) from the tailnet CGNAT range
+  community.general.ufw:
+    rule: allow
+    port: "3000"
+    proto: tcp
+    src: "100.64.0.0/10"
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+
+# The task the bound exists for: it runs seconds after the UFW install above
+# and, unbounded, re-fetched the index that one had just fetched.
+- name: Ensure fail2ban is installed
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ hardening_apt_cache_valid_time }}"
+  register: hardening_fail2ban_install
+
+- name: Enable the sshd jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [sshd]
+      enabled = true
+  notify: Restart fail2ban
+
+- name: Ensure fail2ban is enabled and started
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started

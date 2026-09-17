@@ -1,0 +1,111 @@
+---
+# Converges Docker Engine, then `deploy_user` with a GHCR credential that
+# is SUPPLIED and that the registry will not accept, capturing the outcome
+# for verify.yml to assert on.
+#
+# Delta scenario under test (specs/iac-host-configuration/spec.md):
+#   "A supplied credential that the registry rejects still fails the run"
+#     WHEN a GHCR token is supplied and the registry refuses it
+#     THEN the run SHALL fail rather than continuing as though no
+#     credential had been supplied
+#
+# WHY THE OUTCOME IS RECORDED TO A FILE RATHER THAN ASSERTED HERE
+# ----------------------------------------------------------------
+# Molecule runs `converge` and `verify` as two separate ansible-playbook
+# invocations, so no fact set here survives into verify.yml. A marker file
+# on the instance is the channel. It is written on BOTH branches -- the
+# success branch matters most: if the role stops failing on a rejected
+# credential (a `failed_when: false`, an `ignore_errors: true`, or a guard
+# widened from "is a credential supplied" to "did the login work"), this
+# converge succeeds, records `succeeded`, and verify.yml fails on it. A
+# scenario that only recorded the failure branch would go green in exactly
+# that case, which is the one it exists to catch.
+#
+# WHY DOCKER ENGINE IS CONVERGED HERE
+# -----------------------------------
+# `community.docker.docker_login` authenticates through the local Docker
+# daemon. Without the engine the login fails on an unreachable daemon --
+# which is still "the run failed", but not because the registry rejected
+# anything, so the scenario would establish much less than it claims.
+# Converging `docker` first also mirrors host-baseline.yml's own
+# `docker` -> ... -> `deploy_user` ordering, as `default` does.
+#
+# WHY THE CREDENTIAL IS AN `lookup('env', ...)` EXPRESSION
+# --------------------------------------------------------
+# Not so a real credential can be injected -- these variable names are
+# deliberately ones nothing sets, and the fallback below is the value this
+# scenario actually runs with. The form exists so that this file's
+# `ghcr_pull_token:` assignment is seen by `default`'s repository-wide
+# plaintext-token scan as a `lookup('env', ...)` value rather than as a
+# bare committed literal; it is the same form the two existing scenario
+# converge files use. tasks.md 6.2 repairs that scan to accept exactly that
+# form. See test-manifest.md's cross-dependency note.
+#
+# The fallback string is deliberately not shaped like a real GitHub token
+# (`ghp_`/`github_pat_` and 20+ alphanumerics), so that committing it does
+# not trip `default`'s own literal-token-marker scan.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # Same two applications, and the same dummy public keys, as the
+    # `default` scenario's converge.
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+    ghcr_pull_token: >-
+      {{ lookup('env', 'MOLECULE_GHCR_REJECTED_TOKEN')
+         | default('molecule-fixture-credential-the-registry-will-refuse', true) }}
+    ghcr_pull_username: >-
+      {{ lookup('env', 'MOLECULE_GHCR_REJECTED_USERNAME')
+         | default('molecule-fixture-account-that-does-not-exist', true) }}
+  tasks:
+    - name: Install Docker Engine so the registry login has a daemon to authenticate through
+      ansible.builtin.include_role:
+        name: docker
+
+    - name: Converge deploy_user with a supplied credential the registry will refuse
+      block:
+        - name: Run the deploy_user role
+          ansible.builtin.include_role:
+            name: deploy_user
+
+        - name: Record that the role completed without failing
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-ghcr-rejected-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'succeeded',
+                  'failed_task_name': '',
+                  'failed_action': '',
+                  'failed_msg': ''
+                } | to_nice_json
+              }}
+      rescue:
+        - name: Record the failure the supplied credential produced
+          ansible.builtin.copy:
+            dest: /var/tmp/molecule-ghcr-rejected-outcome.json
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              {{
+                {
+                  'outcome': 'failed',
+                  'failed_task_name': ansible_failed_task.name | default('') | string,
+                  'failed_action': ansible_failed_task.action | default('') | string,
+                  'failed_msg': ansible_failed_result.msg | default('') | string
+                } | to_nice_json
+              }}

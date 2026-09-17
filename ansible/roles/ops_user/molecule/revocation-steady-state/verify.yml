@@ -1,0 +1,181 @@
+---
+# Verifies the one property this scenario exists for: a converge whose
+# `ops_user_accounts` list carries an `absent` entry for an account that has
+# ALREADY been revoked reports no change at all -- tasks.md 2.3's
+# "reports `changed: false` when the account does not exist or has no
+# processes", read at the granularity a production host actually sees it.
+#
+# Two mechanisms cover it, deliberately, and they are not redundant in the
+# way they look:
+#
+#   1. molecule's `idempotence` action, which re-runs converge.yml and fails
+#      the scenario on any `changed=[1-9]`. This is the idiomatic mechanism
+#      and the one test-manifest.md always named -- what was missing was a
+#      converge with an `absent` entry for it to re-run.
+#   2. The explicit nested re-converge below. `idempotence` is a runner
+#      action, not an assertion in a file, and an unreached runner action is
+#      exactly the gap this scenario was written to close. Restating it as a
+#      named, failing-loudly assertion means a future reader can see the
+#      requirement being checked by reading this directory, without knowing
+#      molecule's default test_sequence by heart.
+#
+# Nothing here reads the role's internal registered variables. The assertion
+# is on the run's own reported changed-count -- behaviour, not internals --
+# so renaming anything inside tasks/main.yml cannot make it pass or fail for
+# the wrong reason.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    # ============================================================
+    # tasks.md 2.3 -- the termination step is a no-op, reporting
+    # `changed: false`, once the revoked account no longer exists.
+    #
+    # Run as a nested `ansible-playbook` against this same instance,
+    # because "reported no change" is a property of a RUN, and a play
+    # cannot read its own changed-count from inside itself.
+    # ============================================================
+    - name: Resolve the molecule-supplied paths the nested re-converge needs
+      ansible.builtin.set_fact:
+        ops_user_nested_inventory: "{{ lookup('env', 'MOLECULE_INVENTORY_FILE') }}"
+        ops_user_nested_scenario_dir: "{{ lookup('env', 'MOLECULE_SCENARIO_DIRECTORY') }}"
+
+    - name: Assert the nested re-converge has the environment it needs to run at all
+      ansible.builtin.assert:
+        that:
+          - ops_user_nested_inventory | length > 0
+          - ops_user_nested_scenario_dir | length > 0
+        fail_msg: >-
+          MOLECULE_INVENTORY_FILE / MOLECULE_SCENARIO_DIRECTORY are not set,
+          so the steady-state re-converge below cannot be run. This is a
+          HARNESS failure, not evidence about the ops_user role -- it is
+          asserted rather than skipped precisely so a missing environment
+          cannot turn into a silent pass. Run this playbook through
+          `molecule verify -s revocation-steady-state`, or export both
+          variables if driving it by hand.
+        quiet: true
+
+    - name: Re-converge this scenario against the already-revoked steady state
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - "{{ ops_user_nested_inventory }}"
+          - "{{ ops_user_nested_scenario_dir }}/converge.yml"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      failed_when: false
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: default
+        ANSIBLE_FORCE_COLOR: "0"
+        ANSIBLE_NOCOLOR: "1"
+      register: ops_user_steady_state_run
+
+    - name: Assert the steady-state re-converge completed without error
+      ansible.builtin.assert:
+        that:
+          - ops_user_steady_state_run.rc == 0
+          - "'unreachable=0' in ops_user_steady_state_run.stdout"
+          - "'failed=0' in ops_user_steady_state_run.stdout"
+        fail_msg: >-
+          Re-converging ops_user over a list that still carries the revoked
+          `ops-lingering` entry failed (rc
+          {{ ops_user_steady_state_run.rc }}). README.md requires a revoked
+          entry be LEFT IN THE LIST, so this list is the permanent steady
+          state of any host that has ever revoked an operator -- a run that
+          errors here breaks every subsequent converge of the whole
+          host-baseline playbook, not just this role.
+          Output:
+          {{ ops_user_steady_state_run.stdout | default('') }}
+          {{ ops_user_steady_state_run.stderr | default('') }}
+        quiet: true
+
+    - name: Assert the steady-state re-converge reported no change whatsoever
+      ansible.builtin.assert:
+        that:
+          - "'changed=0' in ops_user_steady_state_run.stdout"
+        fail_msg: >-
+          A converge over an `absent` entry whose account is already gone
+          reported a change. tasks.md 2.3 requires the session/process
+          termination step be a no-op reporting `changed: false` when the
+          account does not exist -- and since a revoked entry stays in
+          `ops_user_accounts` forever, a change here means EVERY steady-state
+          converge of this host reports work it did not do. The usual cause
+          is the `state == 'absent'` guard or the passwd-existence guard
+          having been dropped from the termination tasks.
+          Recap:
+          {{ ops_user_steady_state_run.stdout | default('') }}
+        quiet: true
+
+    # ============================================================
+    # The end state that re-converge left behind. These are not the
+    # scenario's subject -- they exist so that "changed=0" cannot be
+    # satisfied by a role that reports nothing because it DOES nothing.
+    # A role whose every task were removed would pass the assertion
+    # above and fail all three below.
+    # ============================================================
+    - name: Read the passwd database after the steady-state re-converge
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Confirm the revoked account's home directory is still gone
+      ansible.builtin.stat:
+        path: /home/ops-lingering
+      register: ops_user_lingering_home
+
+    - name: Assert the revoked account stayed revoked across the re-converge
+      ansible.builtin.assert:
+        that:
+          - "'ops-lingering' not in ansible_facts.getent_passwd"
+          - not ops_user_lingering_home.stat.exists
+        fail_msg: >-
+          The revoked `ops-lingering` account (or its home directory, which
+          holds its authorized_keys) came back. An `absent` entry must stay
+          absent on every subsequent converge, not be re-created by one.
+        quiet: true
+
+    - name: Read the surviving operator's authorized_keys
+      ansible.builtin.slurp:
+        src: /home/ops-steady/.ssh/authorized_keys
+      register: ops_user_steady_authorized_keys
+
+    - name: Read the groups the surviving operator belongs to
+      ansible.builtin.command: id -nG ops-steady
+      register: ops_user_steady_groups
+      changed_when: false
+
+    - name: Assert the tombstone entry left the live operator untouched
+      ansible.builtin.assert:
+        that:
+          - "'ops-steady' in ansible_facts.getent_passwd"
+          - >-
+            (ops_user_steady_authorized_keys.content | b64decode)
+            is search('ops-steady-molecule@ci')
+          - >-
+            (ops_user_steady_authorized_keys.content | b64decode)
+            is not search('ops-lingering-molecule@ci')
+          - "'docker' in ops_user_steady_groups.stdout.split()"
+        fail_msg: >-
+          The live `ops-steady` operator was not provisioned as expected
+          alongside the `absent` tombstone entry. Either the tombstone
+          disturbed it, or the run reported changed=0 because it did nothing
+          at all -- which is the failure mode this block exists to
+          distinguish from genuine idempotence.
+        quiet: true
+
+    - name: Check that no process survives under the revoked account's name
+      ansible.builtin.command: pgrep -u ops-lingering
+      register: ops_user_lingering_processes
+      changed_when: false
+      failed_when: false
+
+    - name: Assert no process runs under the revoked account after the re-converge
+      ansible.builtin.assert:
+        that:
+          - ops_user_lingering_processes.rc != 0
+        fail_msg: >-
+          A process is running under the revoked `ops-lingering` account
+          after a steady-state converge. Revocation is supposed to have
+          terminated everything it owned before removing it.
+        quiet: true

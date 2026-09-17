@@ -1,0 +1,128 @@
+# Naming conventions
+
+How everything this repository creates is named, and the one rule the scheme follows.
+
+**In effect, with no exception.** This document records a decision taken on 2026-09-11, delivered through four changes — `rename-terraform-environments-to-stacks`, `rename-the-stacks-and-their-resources`, `rename-the-external-services` and finally `rename-the-github-environments`. Read every name here as describing the tree rather than a target — the last quarter of it, the two GitHub Environments, moved onto the stack axis when that last change re-created them, GitHub offering no way to rename a deployment Environment.
+
+## The rule
+
+**Qualify a name where its namespace is shared; leave it short where the namespace already belongs to one thing.**
+
+Every decision below falls out of that. A Hetzner firewall never leaves its project, so it is called `main`. A server's name reaches the tailnet and the heartbeat service, both of which hold every stack a company owns, so it carries the stack it belongs to.
+
+## What each namespace is scoped to
+
+This table is the reason the scheme looks uneven, and it is worth reading before disagreeing with any particular name.
+
+| Namespace | Scoped to | Consequence |
+|---|---|---|
+| Hetzner server, firewall, volume, SSH key names | one **project** | a name is free in every other project |
+| Hetzner volume device path (`scsi-0HC_Volume_<id>`) | the volume's **id** | the on-host mount path is independent of the volume's name |
+| GitHub Environment, repository secret | one **repository** | free in the company's clone |
+| HCP workspace | one **organisation** | one organisation per company |
+| Terraform state | one **workspace** | two stacks may never share one |
+| Ansible `inventory_hostname` | the Hetzner **server name** | renaming a server renames its Ansible identity |
+| Heartbeat check slug | one **account** | one account per company, holding every stack |
+| Tailnet machine name | one **tailnet** | one tailnet per company, holding every stack |
+| `~/.ssh/`, SSH aliases, checkouts | one **workstation** | shared between every company you operate |
+
+Two of those are shared **per company rather than per project** — the tailnet and the heartbeat account — and that is the single fact the server's name exists to respect. Two hosts sharing a heartbeat slug do not fail loudly: the live one's weekly success keeps the check green while the other's timer is dead, which is the masking failure `docs/bootstrap-a-new-host.md` Appendix C names.
+
+## The axes
+
+| Axis | Values | Where it appears |
+|---|---|---|
+| **company** | `<company>`, one value per operating company | the workstation, and the host's own hostname. Nowhere in Hetzner, HCP or GitHub — each of those boundaries already belongs to one company |
+| **tenant** | `main`, and later a named system | the stack name |
+| **environment** | `production`, `staging` | the stack name. Spelled in full, always — `prod` and `preprod` prefix-collide, and one spelling is worth more than four characters |
+| **rank** | `main` | project-local resources distinguished by rank rather than by identity |
+| **identity** | `operator`, and later `deploy`, `ci` | resources distinguished by *what they authenticate* rather than by rank |
+
+There is deliberately **no role axis** (`web`, `db`, `edge`). Every role field appears when a tenant is split across several hosts, and this project's answer to that is a managed service rather than a second host. If one is ever needed it appends without disturbing anything above it.
+
+## The stack is the only identifier
+
+A **stack** is one Terraform root module: one state, one Hetzner project, one blast radius. Its name is `<tenant>-<environment>`, and everything else is derived from it rather than chosen separately.
+
+    stack name                 main-production
+      ├── directory            terraform/stacks/main-production/
+      ├── GitHub Environment   main-production
+      ├── HCP workspace        main-production
+      ├── Hetzner project      main-production
+      ├── read-only secret     HCLOUD_TOKEN_MAIN_PRODUCTION     (upper-cased, - → _)
+      ├── inventory source     ansible/inventory/main-production.hcloud.yml
+      └── server               main-production
+
+Tenant before environment, because a tenant outlives the environments it has and some tenants will have only one. Adding a tenant is adding a directory; a tenant with no staging is simply a tenant with one stack, and nothing notices the absence.
+
+**The write secret is the exception that needs no suffix.** `HCLOUD_TOKEN` inside each GitHub Environment is correct as it stands: Environments namespace their own secrets. The read-only token needs the stack in its name only because *repository* secrets are one flat namespace, and the plan and drift jobs deliberately declare no `environment:` — which is what keeps the write token out of their reach.
+
+## Every name
+
+| What | Name | Why this and not something shorter or longer |
+|---|---|---|
+| stack directory | `terraform/stacks/main-production/` | `stacks/` names the invariant — one state, one plan — rather than the contents |
+| labels | `tenant=main`, `environment=production`, `managed_by=terraform` | orthogonal axes belong in labels, which are queryable; a name can only carry one ordering |
+| Ansible groups | `main` and `production`, one per label | a tenant-wide baseline and an environment-wide baseline, without special-casing a tenant that has no staging |
+| **server** | `main-production` | the one name that leaves its project. Unique per **company**, not per project |
+| firewall | `main` | project-local, and distinguished by rank |
+| volume | `main` | project-local. `-data` was the server's role leaking into the volume's name |
+| mount path | `/mnt/main` | identical in every stack, which is what lets `platform/docker-compose.yml` stay unparameterised |
+| SSH key | `operator` | keys are distinguished by what they authenticate, never by rank. See below |
+| heartbeat slug | `main-production-prune-host-images` | derived from `inventory_hostname`; carries no company because the account holds one |
+| OS hostname | `<company>-main-production` | the only repository-side value that reaches a workstation serving two companies |
+
+## Rank words and identity words
+
+`main` answers *which of several?* — it is the right word for a volume or a firewall, where a second one would be the extra one. It is deliberately not `default`, which reads as though nobody chose, and not `primary`, which drags in replication vocabulary.
+
+An SSH key is not distinguished by rank. A second key here would be a deploy key, a CI key, or another person's — so keys take the identity axis, and this one is `operator` because that is what it is: the operator's root credential, whose workstation half is `~/.ssh/<company>-root`.
+
+## The hostname, and the two names a host has
+
+`inventory_hostname` is `main-production` and the host's own hostname is `<company>-main-production`. That divergence is the rule doing its job rather than an oversight: `inventory_hostname` lives inside a repository that belongs to one company, and the hostname is read on a laptop that serves two.
+
+**The converge sets the hostname, and it did not always.** Cloud-init sets it once, at creation, from the Hetzner server name — so renaming a server in Terraform does not rename the running host, and a stack renamed without an Ansible hostname task would leave the host answering to its old name forever. That is why `rename-the-stacks-and-their-resources` brought the `hostname` role with it: it runs on every converge, templates `{{ company }}-{{ inventory_hostname }}`, and satisfies *The Host's Own Name Is Set by the Converge* (`openspec/specs/iac-host-configuration/spec.md`). `company` is a single group variable that the company's clone changes once.
+
+## The workstation
+
+The only namespace shared between companies, and the only place the company name is spelled out on disk. Every name below carries the `<company>` segment, which is what lets a second company's set sit beside this one rather than collide with it.
+
+| What | Name |
+|---|---|
+| checkout | `~/projects/<company>-infrastructure` |
+| root key | `~/.ssh/<company>-root` |
+| operator key | `~/.ssh/<company>-ops` |
+| SSH alias | `ssh <company>-main-production` |
+| converge key, **one per stack** | `~/.ssh/<company>-ansible-ci-main-production` |
+| platform deploy key, **one per stack** | `~/.ssh/<company>-platform-main-production` |
+| application deploy key, **one per application per stack** | `~/.ssh/<company>-<app>-main-staging` |
+
+**The last three are passphrase-less and are deleted from the workstation once stored** — the converge key and the platform key into their GitHub Environment secrets, an application's into its own repository's Environment. They are listed here because the name is chosen on the workstation and must be got right there, not because the file stays.
+
+**All three per-target keys carry the stack**, and the axis is the one each key's authorisation actually sits on. What a deploy key authorises is an entry in `ansible/inventory/host_vars/<server name>.yml` — the vars file of the one host that stack provisions — so the file holding a key's public half, the platform's included, is a host's file. The converge key reaches its host with no such entry in between, its public half appended to `root`'s `authorized_keys` by hand. Different routes, one axis, and the names say so.
+
+**They read as one rule now and did not always**, which is worth knowing because the history is still in the repository. The two deploy keys carried the *environment* until `deploy_apps` moved off it: while that list sat in `ansible/inventory/group_vars/<environment>.yml`, an entry authorised its key on every host in the environment, and a name spelling the stack would have claimed a narrower blast radius than the key had. Naming it honestly was the right answer to the wrong shape; the shape was corrected by the change `bound-a-deploy-key-to-one-host-when-an-environment-holds-two-stacks`, and the names followed it. Nothing was re-keyed when they did — while each environment holds one stack the two spellings name the same keypair, and a key is identified by its fingerprint rather than by its filename. See *A Host-Scoped Variable Lives in the Host's Own Vars File* (`openspec/specs/iac-host-configuration/spec.md`).
+
+**Nothing reads any of these three filenames**, so no check can hold them. Each private half goes into a GitHub Environment secret and each public half into a host's `authorized_keys` or into that host's vars file, and none of those carries the name it was generated under. This table is where the scheme is stated and the runbooks are where it is used; both are read by a person. Two stacks made `-production` and `-staging` distinct by luck; a second tenant would have collided, which is the collision `HCLOUD_TOKEN_MAIN_PRODUCTION` carries four extra characters to avoid one namespace over.
+
+**Pin every alias to an explicit `HostName`.** A bare alias resolved by MagicDNS follows whichever tailnet profile is active, so `ssh main-production` with two tailnets is a command whose destination depends on a setting you cannot see in it.
+
+**Point the `HostName` at the host's tailnet address, and keep the public one as a comment rather than as a second alias.** A tailnet peer is an authenticated device of the operator's own; the public path works only while the workstation also sits inside the `/24` in that stack's `ssh_allowed_cidrs`, which is a fact about where you are rather than about who you are. The public address is still the fallback — it is what remains when a converge wedges `tailscaled`, and `docs/backlog.md`'s `close-public-ssh-and-manage-sshd-explicitly` is the entry weighing whether to keep it — so record it beside the entry it belongs to and paste it into `HostName` for as long as it is needed. As an alias it would instead be a path taken by habit, on a host that cannot tell you which one you used.
+
+## Growth
+
+| What arrives | What it costs |
+|---|---|
+| a second environment for a tenant | a directory. `main-staging`, and every derived name follows |
+| a tenant with no staging | nothing. One stack instead of two |
+| a third tenant | a directory. `analytics-production` |
+| a second company | a clone of this repository, a Hetzner account, an HCP organisation, a tailnet and a heartbeat account of its own — and one group variable changed |
+| a second volume in one stack | a name on the rank axis beside `main`: `backups`, `media` |
+| a second server in one stack | the only shape that costs a rename. The role axis appends — `main-production-main` beside `main-production-db` — and the existing server is renamed once rather than left as the unmarked default |
+
+## What a name must never carry
+
+Region, size, image, IP address, owner, or anything else that can change without the thing itself changing. Those go in labels, which are queryable and which nothing else is derived from.
+
+**One company per Hetzner account, HCP organisation, tailnet and heartbeat account.** Sharing any of the four puts two companies in one namespace, and the name that namespace holds would then need the company in it. The heartbeat account is the one to watch: sharing it fails silently, and it fails in the direction of a green check.

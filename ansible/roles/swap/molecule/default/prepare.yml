@@ -1,0 +1,124 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing
+# here may set up the thing under test.
+#
+# `prepare` runs once, after `create` and before `converge`, and is NOT re-run
+# for the `idempotence` action, so nothing here can mask the role's own
+# non-idempotence.
+#
+# WHY THIS FILE EXISTS AT ALL
+# ---------------------------
+# The requirement's scenario "Configuration is established without activation"
+# has a negative half: "no kernel state outside the run's ownership SHALL be
+# written". The only two readings of kernel swap state available inside a
+# privileged container -- `/proc/swaps` and `/proc/sys/vm/swappiness` -- are
+# readings of the RUNNER's kernel, not of the instance's, because neither is
+# namespaced. So neither can be asserted as an absolute:
+#
+#   * `/proc/swaps` is non-empty on any runner that has swap of its own, and
+#     empty on one that does not, so "it is empty" is flaky and "it is
+#     non-empty" asserts nothing about this role.
+#   * a live `vm.swappiness` of any particular number is meaningless without
+#     knowing what it was before the converge -- on a runner already at the
+#     role's configured value, an absolute assertion passes no matter what the
+#     role did.
+#
+# Capturing both here, BEFORE the converge, turns the negative half into a
+# comparison the runner's own configuration cannot make vacuous: verify.yml
+# asserts each reading is unchanged. That is a real discriminator -- a role
+# that ran `swapon` or wrote the live sysctl despite activation being disabled
+# changes one of these two files' contents and fails.
+#
+# The captures are written to /var/tmp because Molecule runs `prepare`,
+# `converge` and `verify` as separate ansible-playbook invocations, so no fact
+# set here survives into verify.yml. A file on the instance is the channel,
+# the same mechanism
+# ansible/roles/platform_data_volume/molecule/no-device-discoverable/converge.yml
+# uses and for the same reason.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the kernel's swap table as it stands before the converge
+      ansible.builtin.command: cat /proc/swaps
+      register: swap_prepare_proc_swaps
+      changed_when: false
+
+    - name: Read the kernel's live swap tendency as it stands before the converge
+      ansible.builtin.command: cat /proc/sys/vm/swappiness
+      register: swap_prepare_swappiness
+      changed_when: false
+
+    - name: Report what was captured, so a later comparison failure is readable
+      ansible.builtin.debug:
+        msg:
+          - "/proc/swaps before converge: {{ swap_prepare_proc_swaps.stdout }}"
+          - "vm.swappiness before converge: {{ swap_prepare_swappiness.stdout }}"
+
+    # WHAT IS CAPTURED FROM /proc/swaps IS THE LIST OF ACTIVE SWAP AREAS, NOT
+    # THE TABLE. The table's `Used` column is live kernel accounting on a
+    # machine that is running other work, so it drifts between `prepare` and
+    # `verify` for reasons that have nothing to do with this role -- comparing
+    # the whole text would be a flaky assertion wearing a strict one's clothes.
+    # The list of areas changes only when something activates or deactivates
+    # swap, which is exactly, and only, what the assertion is about.
+    - name: Record both captures where verify.yml can read them
+      ansible.builtin.copy:
+        dest: /var/tmp/molecule-swap-prepare-capture.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {{
+            {
+              'swap_areas': swap_prepare_proc_swaps.stdout
+                            | regex_findall('(?m)^(/\\S*)') | sort,
+              'live_swappiness': swap_prepare_swappiness.stdout | trim
+            } | to_nice_json
+          }}
+
+    # THIS SCENARIO CANNOT RUN HONESTLY ON A MACHINE WHOSE OWN SWAP IS A FILE
+    # AT THE PATH THE ROLE UNDER TEST USES, and it says so rather than
+    # producing a confusing result.
+    #
+    # /proc/swaps is not namespaced, so the table this container reads is the
+    # runner's. The role's first act is to decide whether its file is already
+    # active by matching its path against that table. On a host swapping to
+    # /swapfile -- the Ubuntu installer's default, and precisely what this role
+    # creates -- the role would conclude "already active", skip `mkswap`, and
+    # the run would go red at the signature assertion for a reason that is the
+    # rig's rather than the role's.
+    #
+    # THIS IS NOT HYPOTHETICAL, and the guard has already earned its place.
+    # GitHub's Ubuntu runners swap to `/swapfile` -- the role's own default --
+    # observed on image 20260831.293.1 in CI on 2026-09-09, when this assertion
+    # failed the scenario. That is why converge.yml now overrides
+    # `swap_file_path` to a path nothing swaps to; the guard below checks THAT
+    # path, so it still fires if a future runner ever collides with it.
+    - name: Read the runner's own swap table, which this container shares
+      ansible.builtin.command: cat /proc/swaps
+      register: swap_prepare_collision_check
+      changed_when: false
+
+    #
+    # The path is a LITERAL, not `swap_file_path`: this play does not include
+    # the role, so neither the role's defaults nor converge.yml's overrides are
+    # in scope here. It must be kept in step with the override in converge.yml.
+    - name: Refuse to run where the runner's own swap collides with the path under test
+      vars:
+        swap_collision_path: /opt/molecule-swapfile
+      ansible.builtin.assert:
+        that:
+          - swap_collision_path not in (swap_prepare_collision_check.stdout | regex_findall('(?m)^(/\S*)'))
+        fail_msg: >-
+          This machine's own kernel already has {{ swap_collision_path }}
+          active as swap, and /proc/swaps is shared with this container. The
+          role under test would read its own file as already active and skip
+          formatting it, so a result from this rig would say nothing about the
+          role. This is a limitation of the machine, not a defect in the role
+          or in this scenario -- run the suite somewhere whose swap is a
+          different path.
+        success_msg: >-
+          The runner's swap areas do not collide with
+          {{ swap_collision_path }}.
+        quiet: true

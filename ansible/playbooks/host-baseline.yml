@@ -1,0 +1,187 @@
+---
+# THE TARGET GROUP MUST NOT BE EMPTY, AND NOTHING ELSE CHECKS THAT.
+#
+# A play whose `hosts:` matches no host is skipped and the run exits 0, so a
+# converge that reached nothing reports exactly what a converge with nothing
+# to do reports. Every way of reaching that state is a mistake: an environment
+# misspelled, a source whose project holds no such environment, a server that
+# does not exist. See iac-host-configuration's "A Run Whose Target Group
+# Resolves to No Host Refuses".
+#
+# THIS HAS TO BE ITS OWN PLAY. `pre_tasks` run on the hosts a play matched, so
+# a play matching nothing runs none of them -- the check must live somewhere
+# that runs when the target set is empty, and that is a play with a target of
+# its own.
+#
+# Distinct from each role's own input assertions, which this does not replace:
+# those reach a role acting on a host that resolved, and none of them runs
+# when no host resolved at all.
+#
+# TWO WAYS TO GET PAST IT, one closed here and one that cannot be:
+#
+#   --tags/--skip-tags   CLOSED by `tags: always` below, for every tag
+#                        selection EXCEPT `--skip-tags always`, which names
+#                        this mechanism and turns it off. That one is a
+#                        deliberate act rather than a slip, and no tag can be
+#                        immune to being skipped by name. Without the tag at
+#                        all, any ordinary selection deselects these untagged
+#                        asserts, the converge play matches nothing, and the
+#                        run exits 0 -- the exact outcome this guard exists to
+#                        prevent. platform_data_volume/tasks/main.yml carries
+#                        a comment about the same hazard biting a register.
+#
+#   --limit              NOT CLOSED, AND NOT CLOSEABLE FROM HERE. A limit
+#                        filters `localhost` out of this play, and Ansible has
+#                        no per-play exemption from it. A run with a --limit
+#                        naming a host in an empty group skips both plays and
+#                        exits 0, and with no target_environment supplied it
+#                        reports the raw `Error processing keyword 'hosts'`
+#                        rather than the diagnostic below. Do not pass --limit
+#                        to this playbook; there is nothing here to narrow,
+#                        since the environment already selects the host set.
+#                        docs/backlog.md `test-a-play-at-play-scope` records it.
+- name: Refuse before configuring anything if the target resolved to nothing
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  # `always`, so a --tags run cannot deselect the refusal. See the block above.
+  tags: always
+  tasks:
+    # Separate tasks, deliberately: a single compound assertion would report
+    # both causes with one message and leave the operator to work out which.
+    - name: Fail loudly if no environment was supplied
+      ansible.builtin.assert:
+        that:
+          - target_environment is defined
+          - target_environment is string
+          - target_environment | length > 0
+        fail_msg: >-
+          No target_environment was supplied, so there is nothing to
+          configure. This play has NO DEFAULT for it on purpose: a default
+          would make the environment a property of what was forgotten rather
+          than of what was asked for, and the environment a forgotten flag
+          would fall back to is the one whose misconfiguration is least
+          recoverable. Re-run with, for example,
+          `-e target_environment=staging`.
+        quiet: true
+
+    # `| default([])` is load-bearing. `keyed_groups` creates a group only
+    # where some host carries the label, so under the production stack's
+    # inventory source the key `staging` is not an empty list -- it is absent, and indexing
+    # `groups` raises a Jinja error instead of reaching this message.
+    - name: Fail loudly if the target environment resolved to no host
+      ansible.builtin.assert:
+        that:
+          - groups[target_environment] | default([]) | length > 0
+        fail_msg: >-
+          target_environment is "{{ target_environment }}", and that group
+          holds no host, so this run would configure nothing and exit 0.
+          Three things produce it: the environment is misspelled; the
+          inventory source named with -i belongs to a different Hetzner
+          project than this environment (each source reaches exactly one --
+          see ansible/inventory/); or the server does not exist
+          (server_enabled in that environment's terraform.tfvars). A
+          credential that was rejected outright is NOT one of them -- that
+          fails earlier, at inventory parse, because ansible.cfg sets
+          any_unparsed_is_failed.
+        quiet: true
+
+# Host configuration for one environment's server: container runtime,
+# host-level hardening, and the restricted deploy account. See
+# the change bootstrap-ansible-host-baseline for the full rationale.
+# Ansible's scope stops here -- it never templates platform/'s Compose
+# file or invokes a Compose lifecycle command (iac-platform-services'
+# "Platform Stack Deployment Is Not Ansible's Responsibility").
+#
+# `hosts:` is the environment supplied per run, with NO `| default(...)`.
+# The guard play above is what reports its absence; a default here would
+# silently converge whichever environment the default named.
+#
+# WHO RUNS THIS, which changed with `apply-host-configuration-through-a-gated-workflow`.
+# `.github/workflows/host-converge.yml` runs it on a merge to `main` touching
+# `ansible/`, one job per environment, each attached to that environment's own
+# GitHub Environment -- so production's waits for the same approval a Terraform
+# apply waits for. An operator runs it by hand in exactly one case: a host's
+# FIRST converge, and a rebuilt host's, because the workflow reaches a host over
+# the tailnet and joining the tailnet is what the `tailscale` role below does.
+# `docs/bootstrap-a-new-host.md` stage 6 is that case; stage 6.6 hands the rest
+# to the pipeline.
+- name: Host baseline configuration
+  hosts: "{{ target_environment }}"
+  become: true
+  roles:
+    - role: docker
+    - role: hardening
+    - role: tailscale
+    # AFTER `tailscale`, AND THE ORDER IS LOAD-BEARING RATHER THAN TIDY. This
+    # role sets the host's OWN name to `{{ company }}-{{ inventory_hostname }}`.
+    # Until `tailscale` above pins it, the name a host REPORTS to the tailnet is
+    # derived from its own name -- so running this first would tell the tailnet
+    # a name nothing intends, for as long as the rest of this play takes or
+    # fails in, and every unattended converge and deploy reaches this host by
+    # that name. `.github/tests` asserts this ordering, because nothing else
+    # holds it and this list has been reordered before.
+    #
+    # An earlier draft of the change that added this role put it FIRST, on the
+    # reasoning that nothing depends on it. That was wrong, and it is recorded
+    # rather than quietly dropped: "nothing depends on this" is the kind of
+    # claim that reads as obviously true, which is why the dependency went
+    # unnoticed. See ansible/roles/hostname/README.md.
+    - role: hostname
+    - role: deploy_user
+    # After `docker`: the `docker` group must exist before an operator
+    # account can join it (the change add-ops-account).
+    - role: ops_user
+    # Order-independent of every role above: a mount, not a service --
+    # see ansible/roles/platform_data_volume/README.md
+    # (add-platform-monitoring).
+    - role: platform_data_volume
+    # After `docker`: the prune script it installs calls the container runtime,
+    # and the timer it arms is enabled at converge time. It reads the same
+    # `deploy_apps` the deploy_user role above does -- the same inventory
+    # variable, not a copy: a divergence between two such lists would offer a
+    # live application's images for removal. See
+    # openspec/specs/iac-host-configuration/spec.md, "Unreferenced Host Images
+    # Are Pruned on a Schedule".
+    - role: image_prune
+    # LAST, and order-independent: `swap` depends on nothing and nothing
+    # depends on it, so the position is chosen for what it does not disturb.
+    # This play carries FIVE role-scope pre-flight assertions -- `hardening`,
+    # `deploy_user`, `ops_user`, `platform_data_volume` and `image_prune` --
+    # and no play-scope check at all, so a run missing a required input still
+    # changes the host with every role ahead of the one that refuses. That gap
+    # is declined rather than pending, and this ordering is its stated
+    # mitigation. TWO GAPS, one decision at two depths. PLAY SCOPE: against a
+    # host whose own vars file omits `deploy_apps`, a real run installs Docker,
+    # runs the whole of `hardening` including `Enable UFW` and joins the tailnet
+    # before `deploy_user`'s assertion is reached -- so *A Role's Absent
+    # Required Input Is Reported by Name*, whose wording reads naturally as the
+    # play, is met at role scope and not at play scope. ELEMENT SHAPE: the
+    # assertions check the container -- defined, a sequence, not a string, not a
+    # mapping -- and nothing about the elements, so `deploy_apps: ["platform"]`
+    # passes and then fails at `item.name`. Neither is closed for the same
+    # reason: what they produce is a PARTIALLY-CONVERGED host, not a damaged
+    # one. Every role here is idempotent, so the recovery is to correct that
+    # file and re-run, which is what an operator does on seeing the
+    # refusal anyway -- while a play-scope fix would restate every role's
+    # required inputs in a second place that nothing keeps in step with the
+    # roles, buying an earlier refusal at the cost of a new drift class. Do not
+    # read the guard play above as this fix: it is about NO host resolving at
+    # all, which is upstream of every role. NO LIVE CASE TODAY -- this sentence
+    # used to name staging, whose variables left `deploy_apps` unset
+    # deliberately; it is supplied there now, and every host this repository
+    # has supplies it. The next case is the next HOST's vars file written from
+    # scratch -- `deploy_apps` moved onto the host axis, so a new stack now
+    # arrives without it even in an environment whose baseline is complete,
+    # which makes that case more frequent rather than less. Both existing
+    # group_vars files say where the list went. Revisit when a
+    # partially-converged host
+    # actually costs something, or when a third requirement comes to rest on
+    # the play-scope half; two do already, the other being *Platform Data
+    # Volume Is Mounted at a Fixed Host Path*.
+    # Running after all five means this role
+    # never writes 4 GiB and swaps it on ahead of a refusal that was going to
+    # happen anyway. An earlier placement did exactly that for `ops_user`'s and
+    # `platform_data_volume`'s cases.
+    - role: swap

@@ -1,0 +1,11 @@
+{
+  "name": "infrastructure-ci-openspec",
+  "private": true,
+  "description": "Pins the OpenSpec CLI that pr-validation.yml uses to validate this repository's own specification record. This repository has no JavaScript; the manifest exists because Dependabot's npm ecosystem reads package.json and cannot see a version pinned inline in a workflow step, and four exactly-pinned manifests here already go unwatched. The package is @fission-ai/openspec; the binary it installs is openspec.",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "@fission-ai/openspec": "1.12.0"
+  }
+}

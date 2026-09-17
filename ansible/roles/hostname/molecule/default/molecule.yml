@@ -1,0 +1,95 @@
+---
+# Molecule scenario for the `hostname` role, which does not exist yet.
+#
+# Derived from the delta specs of the OpenSpec change
+# `rename-the-stacks-and-their-resources`, before any implementation of it
+# existed. The path those deltas sit at is not written here: a change's
+# artifacts move when it is archived, and this repository's citation convention
+# is to name the change and the artifact in prose instead. See that change's
+# `test-plan.md` for the scenario-to-test mapping, the recorded baseline, and
+# the per-assertion classification.
+#
+# The requirement is *The Host's Own Name Is Set by the Converge*
+# (openspec/specs/iac-host-configuration/spec.md), and this scenario carries
+# three of its six scenarios: "A host renamed in the provisioning layer answers
+# to the new name after a converge", "The host's name carries the company and
+# the reported name does not" (the first half only -- see verify.yml), and "The
+# host resolves the name it was just given".
+#
+# WHY THE INSTANCE NAME IS SHORT, AND WHY THAT IS NOT COSMETIC
+# ------------------------------------------------------------
+# The role derives the host's own name from `inventory_hostname`, and under
+# Molecule `inventory_hostname` IS this instance name -- namespace and all.
+# Linux caps a host name at 64 bytes, so `hn-` is chosen over a descriptive
+# prefix to leave room for the namespace plus the company prefix the role adds.
+# converge.yml asserts the resulting length before the role runs, so a working
+# tree whose name is long enough to cross the limit fails saying so rather than
+# failing inside `hostnamectl`.
+#
+# The declared `hostname` below is deliberately NOT the name this converge
+# produces: it stands in for the name cloud-init gave the host at creation, so
+# that the run has something to rename. That is the first scenario above.
+#
+# Instance name namespaced per working tree, with a default Docker refuses, and
+# an explicit `hostname` because the driver would otherwise derive one from the
+# name and cross the 64-byte limit. See
+# ansible/roles/docker/molecule/default/molecule.yml for the full account --
+# every scenario must agree on the variable.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: hn-${INFRA_WORKTREE_NS:-unset:run-via-ansible/scripts/run-molecule}
+    hostname: created-elsewhere
+    # Digest-pinned, and the SAME digest every other scenario in this
+    # repository names -- iac-cicd-pipeline requires it and
+    # .github/tests/test_ci_configuration.py asserts it. See
+    # ansible/roles/docker/molecule/default/molecule.yml for why a digest and
+    # for how to refresh it.
+    image: geerlingguy/docker-ubuntu2204-ansible@sha256:0172e3b586fc316491b5ac080e6b24c5f66cde985c27c625025f13f66a8cd21f
+    pre_build_image: true
+    # systemd: `ansible.builtin.hostname` reaches `hostnamectl` on this
+    # distribution, which needs a running init system and a dbus to reach
+    # systemd-hostnamed.
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+
+provisioner:
+  name: ansible
+  env:
+    # See ansible/roles/docker/molecule/default/molecule.yml -- same
+    # reasoning, applies to every role's scenario.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/../
+
+scenario:
+  # `idempotence` is kept and is load-bearing here: a role that renames a host
+  # by running a command unconditionally reports changed on every converge, and
+  # this run is what catches it. `side_effect` is omitted because this scenario
+  # has no side_effect.yml; `prepare` is left in place so a fixture added later
+  # needs no sequence edit.
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup
+    - destroy
+
+verifier:
+  name: ansible

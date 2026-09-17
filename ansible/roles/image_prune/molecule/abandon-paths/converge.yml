@@ -1,0 +1,100 @@
+---
+# Converges the container runtime, builds the single fixture image, and then
+# converges `image_prune` with an EMPTY enumeration -- arrangement 1 of the
+# three this scenario carries (tasks.md 2.4).
+#
+# `deploy_apps: []` is a SUPPLIED value, not a missing one, so the role's
+# required-input assertion must accept it; what an empty list MEANS is decided
+# at run time by the abandon condition, not by that assertion (tasks.md 1.2).
+# If converge fails here with the role's own `deploy_apps` fail_msg, that
+# assertion is rejecting a value it is required to accept.
+#
+# THIS SCENARIO MUST NEVER ACQUIRE A CONTAINER. Arrangement 3 needs a genuinely
+# empty union, and design.md's "any host with containers has a non-empty union"
+# means one container anywhere makes that branch permanently unreachable --
+# silently, since the run would then abandon at a different condition and still
+# read as covered.
+
+- name: Install the container runtime the fixture and the role both need
+  hosts: all
+  become: true
+  vars:
+    # FIXTURE ONLY -- the vfs storage driver, so `docker build` can mount
+    # inside this instance. Under the default overlayfs snapshotter it fails
+    # with "failed to mount ... fstype: overlay ... invalid argument".
+    #
+    # Supplied here rather than written to /etc/docker/daemon.json in
+    # prepare.yml, where it used to live: the `docker` role now renders that
+    # file itself and a copy written beforehand does not survive. Merged UNDER
+    # the role's log ceiling, so a fixture cannot unset it.
+    #
+    # ONE TIMING DIFFERENCE FROM THE OLD ARRANGEMENT, recorded because a later
+    # author could be caught by it. Writing the file in `prepare.yml` put vfs in
+    # place before dockerd ever started. Supplying it as a role variable means
+    # dockerd starts once on the default snapshotter and is then restarted onto
+    # vfs by the external role's own `meta: flush_handlers`. Nothing in this
+    # scenario pulls or builds inside that window, so it is safe as written --
+    # but a step added to `prepare.yml` that pulled an image would land it on
+    # the wrong graphdriver and it would be invisible afterwards.
+    docker_daemon_extra_options:
+      storage-driver: vfs
+      features:
+        containerd-snapshotter: false
+  roles:
+    - role: docker
+
+- name: Build the single fixture image this scenario's assertions read
+  hosts: all
+  become: true
+  tasks:
+    # FIXTURE ONLY. One tagged image, referenced by nothing and held by
+    # nothing. It is not decoration: every assertion below claims a run removed
+    # NOTHING, and on a host with nothing removable that claim is vacuous. With
+    # the abandon guard mutated away (tasks.md 2.8), this image is what the
+    # run would take, and its disappearance is what turns the assertion red.
+    #
+    # DOCKER_BUILDKIT=0: prepare.yml puts the nested daemon on vfs with
+    # containerd-snapshotter disabled, and the classic builder is the one that
+    # mounts anywhere. `docker build` creates and removes its own intermediate
+    # containers, leaving `docker ps -a` empty -- verify.yml asserts that
+    # before anything else.
+    - name: Build the unreferenced fixture image
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export DOCKER_BUILDKIT=0
+        d=/tmp/image-prune-abandon-build
+        rm -rf "$d"
+        mkdir -p "$d"
+        printf 'FROM alpine:3.19\nRUN echo abandon-canary > /image-prune-marker\n' > "$d/Dockerfile"
+        docker pull alpine:3.19 >/dev/null
+        docker build -t imgprune-fixture/abandon-canary:v1 "$d" >/dev/null
+        docker images -q --no-trunc imgprune-fixture/abandon-canary:v1 \
+          > /var/tmp/image-prune-abandon-canary-id
+      args:
+        executable: /bin/bash
+        creates: /var/tmp/image-prune-abandon-canary-id
+      changed_when: false
+
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # Arrangement 1: the enumeration is present on the host and names no
+    # application.
+    deploy_apps: []
+    # THE REPORTER IS POINTED AT A LOCAL SINK THAT DOES NOT EXIST, and that is
+    # deliberate. This scenario asserts abandon paths, so its activations
+    # report failures; left on the production default they would create a
+    # check at the external observer from a hosted runner on every pull
+    # request touching ansible/, under `?create=1`. An unreachable local
+    # address makes the reporting a no-op the `-` prefix on ExecStopPost=
+    # swallows, which is exactly the behaviour this scenario's own assertions
+    # need it to have. `.github/tests/test_ci_configuration.py` asserts this
+    # variable over every scenario of a timer-installing role.
+    image_prune_heartbeat_base_url: http://127.0.0.1:8099
+    # NOT A CREDENTIAL: names no real project and grants access to nothing.
+    # Required because the role refuses to converge without it, which is the
+    # point of `absent-heartbeat-key` and not of this scenario.
+    image_prune_heartbeat_ping_key: fixture-key-not-a-real-ping-key
+  roles:
+    - role: image_prune

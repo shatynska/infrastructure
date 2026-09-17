@@ -1,0 +1,231 @@
+---
+# Variables for the `staging` GROUP. This file did not move when its stack's
+# directory did -- the stack is now `main-staging` while the group stays
+# `staging`, because `staging` was already the environment axis spelled in full
+# and only `prod` was abbreviated. It is the clearest demonstration in the
+# repository that a stack's name and its group's name are independent.
+#
+# Written from scratch rather than copied from the production group's file and
+# edited: the two gaps in required-input validation that only the play could
+# close -- recorded in `ansible/playbooks/host-baseline.yml`, above its `swap`
+# role -- name this file as the first moment a group_vars is written from
+# scratch, and so the first moment either gap has a real case rather than a
+# constructed one.
+#
+# The staging server was created with only a single SSH key and no root
+# password (terraform/modules/server/main.tf's own comment: providing a key
+# at creation means Hetzner never sets one) -- root is the only login this
+# host has, exactly as on the production host.
+ansible_user: root
+
+# Non-secret staging configuration, mirroring
+# terraform/stacks/main-staging/terraform.tfvars's ssh_allowed_cidrs and
+# web_allowed_cidrs exactly -- see ansible/roles/hardening/README.md for why
+# these two are hand-kept in sync rather than generated from Terraform, and
+# why that matters.
+#
+# The SSH range is the same operator ISP range production allows: the cloud
+# firewall is no wider for staging than for production.
+hardening_ssh_allowed_cidrs:
+  - "176.104.184.0/24"
+
+# OPEN, mirroring web_allowed_cidrs = ["0.0.0.0/0"] in staging's
+# terraform.tfvars, which opens 80 and 443 to the internet as production's
+# does. The two files agree so that neither layer is read as closed while the
+# other is open.
+#
+# Stated explicitly. The role defaults it to [], so omitting it would
+# silently leave this file disagreeing with terraform.tfvars.
+#
+# NARROWER THAN IT READS: this value does NOT decide what is reachable on
+# 80/443. Traefik PUBLISHES those ports, and a container-published port is
+# DNAT'd and traversed in FORWARD, never offered to UFW's INPUT chain -- so
+# the cloud firewall alone decides what reaches them from the internet, and a
+# tailnet peer reaches them whatever this says. See docs/backlog.md's
+# say-what-the-host-firewall-actually-gates. The mirror is kept all the same,
+# for every port UFW does gate.
+hardening_web_allowed_cidrs:
+  - "0.0.0.0/0"
+
+# Operator identities allowed an unprivileged, interactive login on this
+# host (add-ops-account). Safe to commit -- these are public keys, not
+# secrets; each private half is generated out-of-band on the operator's own
+# workstation and never enters this repository.
+#
+# `state` is per-entry and defaults to `present`. To revoke an operator, set
+# its `state` to `absent` and LEAVE THE ENTRY HERE until the next converge
+# has removed the account -- deleting the entry outright is not revocation,
+# it just stops the role from acting on it. See
+# ansible/roles/ops_user/README.md.
+#
+# NOTE: `docker` group membership is root-equivalent by escalation, so this
+# is not a boundary against the key holder -- it buys blast-radius
+# containment against mistakes, attribution, and revocability.
+#
+# The same operator key the production host carries, deliberately: this is the
+# human's own identity, not a per-environment credential, and giving one
+# person two keys
+# for two hosts buys nothing and loses attribution when one is rotated.
+ops_user_accounts:
+  - name: ops-claude
+    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICc/YzvZTHHNETGGAy89vD7IpzTU3jDAphOeKD6q5Kiu ops-claude"
+
+# Subdirectories platform_data_volume creates on the mounted `main` volume for
+# platform/docker-compose.yml's Prometheus, Grafana and shared PostgreSQL
+# services to bind-mount. Identical to the production group's, and identical on
+# purpose: both stacks mount at the same path, so /mnt/main/prometheus,
+# /mnt/main/grafana and /mnt/main/postgres are correct here as written and
+# platform/docker-compose.yml stays unparameterised across stacks.
+#
+# Owner/group match each image's own upstream default user, so no `user:`
+# override is needed in the Compose service definitions: 65534/65534 is
+# prom/prometheus's default ("nobody"); 472/472 is grafana/grafana's own
+# documented default; 999/999 is the `postgres` image's own user, which its
+# entrypoint steps down to after creating `<major>/docker` beneath this
+# directory as root (move-the-shared-database-onto-the-data-volume). `0755`
+# rather than the `1777` that image sets in its own filesystem: that mode
+# exists so it can run as an arbitrary uid, which this stack does not do.
+platform_data_volume_subdirs:
+  - path: prometheus
+    owner: "65534"
+    group: "65534"
+    mode: "0755"
+  - path: grafana
+    owner: "472"
+    group: "472"
+    mode: "0755"
+  - path: postgres
+    owner: "999"
+    group: "999"
+    mode: "0755"
+
+# The path this volume used to be mounted at, removed from /etc/fstab so the
+# device is not persisted at two paths across a reboot. Identical to the other
+# environment's for the same reason platform_data_volume_subdirs is: both
+# stacks mounted at the same path, so both have the same entry to retire.
+#
+# Inline flow form on one line deliberately -- `.github/tests` exempts the
+# retired path from its sweep only where it sits on a line beginning with this
+# key, and a block sequence would put the value on a line of its own.
+platform_data_volume_superseded_mount_paths: ["/mnt/main-data"]
+
+# ghcr_pull_username is not secret (it's the GitHub account the token belongs
+# to) and is committed in plain text. The same account production uses: the
+# token is read-only (`read:packages`) against the same packages, so a second
+# account would be a second thing to rotate for no isolation gained.
+ghcr_pull_username: shatynska
+
+# ---------------------------------------------------------------------------
+# SUPPLIED OUT-OF-BAND. Everything below was generated by the operator, on
+# their own workstation, and is encrypted in place under the `staging` vault
+# id -- NOT production's. A staging-only operator must not hold the password
+# protecting production's secrets, which is what reusing production's vault id
+# would mean. That label follows the ENVIRONMENT and not the stack, which is
+# why it did not move when this stack's directory did.
+#
+# This block used to open "THIS FILE IS INCOMPLETE, AND THE HOST IS NOT YET
+# CONVERGED" and close "this file's state is PENDING the operator". Both were
+# true when written and stopped being true in the same evening: all three
+# values below arrived together, and the host converged that night -- the
+# change `configure-the-staging-host`'s task list records the run and the
+# checks that followed it.
+#
+# WHAT EACH ABSENCE COSTS is kept, because it is the part that outlives this
+# file's own completion: it is what to know when the NEXT environment's files
+# are written from scratch, where all three are absent again. They are not
+# alike, and only two of the three refuse. The first of them is no longer
+# supplied from a file like this one at all -- it is named here because a
+# converge needs it whatever file it comes from, and because the way it refuses
+# is the same.
+#
+#   deploy_apps                     NOT IN THIS FILE -- it belongs in the
+#                                   host's own `host_vars/<server name>.yml`,
+#                                   for the reason stated where the list used
+#                                   to sit. REFUSES while unset. Do not answer that
+#                                   with `[]`, which is a *supplied* value to
+#                                   both roles that read it -- their assertions
+#                                   say so in as many words -- meaning "no
+#                                   application may deploy to this host". That
+#                                   converges, and leaves the weekly prune
+#                                   abandoning with "the enumeration names no
+#                                   application", a different failure from the
+#                                   empty-keep-set one a host with nothing
+#                                   deployed on it has.
+#
+#   image_prune_heartbeat_ping_key  REFUSES, by name, the same way.
+#
+#   ghcr_pull_token                 DOES NOT REFUSE. An absent registry
+#                                   credential is a tolerated operating mode --
+#                                   iac-host-configuration's "Host
+#                                   Authenticates to GHCR for Application Image
+#                                   Pulls" requires the login to be SKIPPED
+#                                   rather than failed -- so leaving it out
+#                                   converges a host that cannot pull private
+#                                   images.
+#
+# WHERE THE REFUSAL LANDS, which is not "before anything happens": `deploy_user`
+# is the FOURTH role in the play. `docker`, `hardening` and `tailscale` run
+# first and all change the host, so an incomplete file produces a
+# partially-converged host -- Docker installed, UFW enabled, tailnet joined --
+# and not an untouched one. That is recoverable by completing the file and
+# re-running, every role being idempotent, and it is the exposure the two
+# play-scope gaps describe -- recorded in ansible/playbooks/host-baseline.yml,
+# above its `swap` role. This file is where that exposure was last live.
+# ---------------------------------------------------------------------------
+
+# `deploy_apps` IS NOT HERE, AND MUST NOT BE PUT BACK. The applications a host
+# authorises to deploy to it live in that host's own file --
+# `host_vars/main-staging.yml`, which carries this environment's entries and
+# the reasoning that used to sit here. An entry in THIS file would authorise
+# its key on every host in the environment, and an environment may hold two
+# stacks of different tenants; one leaked private half must reach one host.
+# See "A Host-Scoped Variable Lives in the Host's Own Vars File"
+# (openspec/specs/iac-host-configuration/spec.md).
+#
+# The block above still describes what `deploy_apps` costs when absent, and
+# that is still true -- it refuses, and `[]` is a supplied value rather than an
+# answer to it. Only the file it is supplied FROM has changed.
+
+# A genuine secret (a read:packages-scoped GHCR token): Vault-encrypt it in
+# place, never plain text.
+#
+#   cd ansible
+#   ansible-vault encrypt_string --vault-id staging@prompt '<ghp_... token>' \
+#     --name ghcr_pull_token
+#
+# and paste the whole block here, `ghcr_pull_token: !vault |` line included.
+ghcr_pull_token: !vault |
+  $ANSIBLE_VAULT;1.2;AES256;staging
+  33333532616430316265336132636438316338633062633538333339666634663639383564663939
+  3839393261346565663664313464353535383665316139360a303135643765333431336636356561
+  39613262623165336537346165363334356665643939646661313961653331366435613361313030
+  6535313836316466390a343361656136636433353239336439666534386337666330653938653530
+  38326135343934613438653932303139643938333161633839303032666634633463383839633333
+  6166313765643832316631353666663263646439336131346364
+
+# The project ping key the weekly prune unit reports its own liveness under.
+# A genuine secret for the same reason: a party who holds it can suppress
+# this alarm by reporting success on the unit's behalf.
+#
+#   cd ansible
+#   ansible-vault encrypt_string --vault-id staging@prompt '<ping key>' \
+#     --name image_prune_heartbeat_ping_key
+#
+# It is the same project ping key production uses, and it addresses a DIFFERENT
+# check because the check name is derived from inventory_hostname: this stack's
+# server is named `main-staging`, so the check is
+# `main-staging-prune-host-images`. docs/bootstrap-a-new-host.md Appendix A
+# records the period and grace to give it -- a check created by its first
+# ping carries the observer's default until corrected.
+#
+# The key must be a bare token of letters, digits, `_` and `-`; the role
+# refuses anything else by name, because the value is rendered into a shell
+# file its reporting script sources and a quote in it would make that script
+# fail silently.
+image_prune_heartbeat_ping_key: !vault |
+  $ANSIBLE_VAULT;1.2;AES256;staging
+  31613737663164376638663862393262303361323236636233326634613738386566613035343936
+  3233383263666161383039656361393437353365373637610a666435326538643837393039363032
+  37646434366662336238366237353264636431626466366162643530383236373332633666396461
+  6135313731343335390a613735343263366633346433386165383864666634623965613161323834
+  34343764333931633631653038396337643233336630636462363432393438353162

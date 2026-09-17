@@ -1,0 +1,3 @@
+---
+# No tasks of its own — see meta/main.yml. This file exists so the role
+# has the conventional structure even though it's a pure wrapper.

@@ -1,0 +1,30 @@
+# platform_data_volume
+
+Mounts the platform's dedicated data volume — the Terraform-provisioned `main` Hetzner Volume (`terraform/stacks/<stack>/terraform.tfvars`, `terraform/modules/volume`) — at a fixed host path, formatting it if it has no filesystem yet, and persists the mount in `/etc/fstab` so it survives a reboot without a manual step. Also creates whatever subdirectories a `platform/` service needs to bind-mount, each with its own declared ownership and permissions, before that service can rely on them existing.
+
+Implements `iac-host-configuration`'s ADDED "Platform Data Volume Is Mounted at a Fixed Host Path" requirement — see `openspec/specs/iac-host-configuration/spec.md`, and `add-platform-monitoring`'s `design.md`, for the full rationale, including why the volume's device path is discovered on-host rather than hand-copied from Terraform's output.
+
+## Scope
+
+This role stops at the mount and its filesystem layout. It never templates or starts a `platform/` Compose service and never invokes a Compose lifecycle command — that stays outside Ansible's responsibility entirely, per the existing "Configuration Scope Stops at the Container Runtime" requirement. What a `platform/` service does with the subdirectories this role prepares (bind-mounting them into a container) is `platform/`'s own concern, deployed by the separate `platform-deploy` GitHub Actions pipeline.
+
+## Device discovery
+
+`platform_data_volume_device` defaults to an empty string, which this role reads as "not explicitly supplied" — it then globs `/dev/disk/by-id/scsi-0HC_Volume_*` (Hetzner's stable, documented naming for an attached Volume). Pass `platform_data_volume_device` explicitly only to override this (as the `default` Molecule scenario does, pointing it at a fixture loop device standing in for the real attached volume).
+
+Two properties of that discovery are specified requirements, not incidental:
+
+- **It is deterministic.** `find` returns directory-read order and guarantees none, so the match is sorted and the lexicographically first device chosen. With one volume attached — production today — sorted and unsorted agree, so the difference only appears once a second volume is attached, which is exactly when a silent, run-to-run-varying pick would be worst. Whether an ambiguous match should instead be a hard failure was considered and declined, not settled here: refusing would make this role's success depend on what else is attached to the host, which it does not own, so a second volume mounted for an unrelated purpose would break `host-baseline.yml` on every run thereafter. A converge that stops is a worse failure than a mount that is merely arbitrary — particularly since the pick is not arbitrary, two Molecule scenarios holding it deterministic. Revisit when a second volume is actually attached to a host in this project.
+- **Finding nothing is reported, not raised.** A host with the volume disabled in `terraform.tfvars`, or one where the volume is still attaching, matches nothing — the ordinary state of such a host, not an exotic one. The run fails with a message naming the missing device and the `volume_enabled` toggle, rather than with a Jinja error about an empty list.
+
+Four of the role's Molecule scenarios cover discovery: `default` (device supplied explicitly), `no-device-discoverable`, and `multiple-devices-discoverable` plus `multiple-devices-reverse-order` — one per directory-read arrangement, since a single arrangement cannot tell a sorted selection from an order-dependent one. The other two, `superseded-path-retired` and `superseded-path-in-force-refused`, cover retiring a superseded mount path.
+
+## Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `platform_data_volume_device` | `""` (discovered) | Block device path. Empty means "discover it" (see above); set explicitly to override. |
+| `platform_data_volume_mount_path` | `/mnt/main` | Fixed host path the volume is mounted at. It matches the volume's name, but is **not** derived from it: the two are independent by construction — the on-host device is `/dev/disk/by-id/scsi-0HC_Volume_<id>`, keyed on the volume's id — which is what let the volume be renamed with no migration and no remount, and what lets the two disagree whenever a second stack in one Hetzner project forces it. |
+| `platform_data_volume_fs_type` | `ext4` | Filesystem created if the device is unformatted, and expected on an already-formatted one. |
+| `platform_data_volume_subdirs` | `[]` | List of `{path, owner, group, mode}` — one entry per `platform/` service that bind-mounts a subdirectory of the volume. Empty means no subdirectory is created. |
+| `platform_data_volume_superseded_mount_paths` | `[]` | Host paths this volume was previously mounted at. Each is removed from `/etc/fstab` so the device is not persisted at two paths across a reboot. **It never unmounts** — a running service holding the old path is left undisturbed and the kernel drops the live mount at the next reboot. Declaring the path in force here fails the run before **this role** changes anything — not before the play does: `host-baseline.yml` runs six roles ahead of this one, and closing that is the separate decision `ansible/playbooks/host-baseline.yml` records under the comment above its `swap` role. |

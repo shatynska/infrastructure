@@ -1,0 +1,73 @@
+---
+# Converges Docker Engine first (see molecule.yml for why this scenario
+# needs it), then `deploy_user` with the `deploy_apps` interface tasks.md
+# 1.1/2.1 describes: a list of {name, public_key} entries, seeded here
+# with `platform` (mirroring the existing production entry, per tasks.md
+# 2.1) plus `commerce-ops` as the sample new-application entry -- the same
+# pairing tasks.md 2.1 itself names, so this is not an invented example.
+#
+# Role variable interface, confirmed against ansible/roles/deploy_user/
+# tasks/main.yml and defaults/main.yml as implemented:
+#   - `deploy_apps`: list of {name, public_key}, no default.
+#   - `ghcr_pull_token` / `ghcr_pull_username`: no default -- the
+#     credentials community.docker.docker_login uses to authenticate root's
+#     Docker credential store to GHCR.
+#
+# GHCR_PULL_TOKEN and GHCR_PULL_USERNAME are read from the environment and
+# fall back to an EMPTY string -- never a placeholder, and never a committed
+# credential. The login task is guarded on both halves being non-empty, so
+# an empty fallback is what lets this scenario run with no credential at
+# all; a non-empty dummy would satisfy the guard, reach ghcr.io and abort
+# the converge on a 403, which is what it used to do
+# (repair-ansible-test-harness). Set both variables
+# together to exercise the real login path -- see test-manifest.md for why
+# the GHCR-credential-store assertion in verify.yml is conditioned on a real
+# value being supplied this way.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+    ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_PULL_TOKEN') | default('', true) }}"
+    ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_PULL_USERNAME') | default('', true) }}"
+    # FIXTURE ONLY. This scenario is the only one that runs a real container
+    # INSIDE the Molecule instance: deploy-receive triggers app-deploy, which
+    # runs `docker compose up -d --wait`, and the requirement scenario "A
+    # single SSH session delivers content and triggers deploy" is only
+    # demonstrated if that actually succeeds. Under the default overlayfs
+    # snapshotter it fails with "failed to mount ... fstype: overlay ...
+    # invalid argument" -- docker-in-docker cannot stack another overlay here.
+    # vfs is slower but mounts anywhere, which is the right trade for a
+    # fixture. (repair-ansible-test-harness, task 6b.4.)
+    #
+    # Supplied to the `docker` role rather than written to
+    # /etc/docker/daemon.json in prepare.yml, where it used to live: that file
+    # is now rendered by the role itself and a copy written beforehand does not
+    # survive. These options are merged UNDER the role's log ceiling, so this
+    # fixture cannot unset the thing the role exists to guarantee.
+    #
+    # ONE TIMING DIFFERENCE FROM THE OLD ARRANGEMENT, recorded because a later
+    # author could be caught by it. Writing the file in `prepare.yml` put vfs in
+    # place before dockerd ever started. Supplying it as a role variable means
+    # dockerd starts once on the default snapshotter and is then restarted onto
+    # vfs by the external role's own `meta: flush_handlers`. Nothing in this
+    # scenario pulls or builds inside that window, so it is safe as written --
+    # but a step added to `prepare.yml` that pulled an image would land it on
+    # the wrong graphdriver and it would be invisible afterwards.
+    docker_daemon_extra_options:
+      storage-driver: vfs
+      features:
+        containerd-snapshotter: false
+  roles:
+    - role: docker
+    - role: deploy_user

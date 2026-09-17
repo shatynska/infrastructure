@@ -1,0 +1,162 @@
+---
+# This stack's pipeline configuration, read by .github/workflows/'s
+# discovery step -- see "Each Stack Declares Its Own Pipeline
+# Configuration" (openspec/specs/iac-cicd-pipeline/spec.md).
+#
+# It lives here, beside the terraform.tfvars it belongs to, so the folder is
+# self-describing: adding a stack is adding a directory, and changes no
+# file under .github/workflows/. Workflows SHALL NOT name a stack, map
+# one to its secrets, or condition on one -- everything they need about this
+# stack is below.
+#
+# `.yml` rather than `.tf`/`.tfvars` deliberately: Terraform must not read this
+# file. `terraform fmt`, `terraform validate` and `tflint` all ignore it.
+
+# The GitHub Environment this stack's apply job attaches to. REQUIRED.
+#
+# Whether that pauses for a human is a property of the Environment's protection
+# rules -- repository settings, which no file here can verify -- and not of the
+# workflow. `main-production` requires a reviewer.
+#
+# SHALL be distinct from every other stack's: two stacks naming the
+# same GitHub Environment share its WRITE token and its protection rules, so a
+# stack meant to be ungated would hold this one's write credential.
+#
+# IT IS THIS STACK'S NAME, and reaching that took a re-creation rather than a
+# rename. GitHub offers no way to rename a deployment Environment -- no UI
+# control, and the REST API exposes only GET, PUT and DELETE with the name in
+# the URL path (measured 2026-09-12). So `main-production` was created fresh and
+# all fifteen of this Environment's secrets were re-entered by hand, which is
+# the only route GitHub allows. `docs/naming-conventions.md` asks for exactly
+# this name, and the tree now matches the scheme with no exception.
+github_environment: main-production
+
+# The repository secret holding this stack's read-only Hetzner token.
+# REQUIRED.
+#
+# Plan and drift jobs declare no `environment:` -- so they can reach repository
+# secrets only -- and read this name out of the matrix. A repository secret
+# holds one value, so this name SHALL be distinct from every other
+# stack's, or two stacks plan under one token.
+#
+# NOT `HCLOUD_TOKEN`, AND THE REASON IS NOT STYLE. Credential Scoping by
+# Privilege obliges EVERY stack's GitHub Environment to define
+# `HCLOUD_TOKEN` as that stack's Read & Write token, and GitHub resolves
+# an Environment-scoped secret ahead of a repository-scoped one of the same
+# name. While only the plan and drift jobs read this field the collision was
+# harmless -- neither declares an `environment:`. The host-converge job does,
+# so read from there `HCLOUD_TOKEN` yields the WRITE token, silently and with
+# no error, from a field that says read-only.
+#
+# So no stack's declared read-only secret may be a name its own
+# Environment also defines. `.github/tests` asserts that for `HCLOUD_TOKEN`
+# specifically, which is the checkable half; the general form is repository
+# settings and is unverifiable from here.
+#
+# `MAIN_PRODUCTION` rather than `PRODUCTION`, AND THE EXTRA WORD IS THE POINT.
+# A repository secret is one flat namespace, and a stack is a (tenant,
+# environment) pair -- so `PRODUCTION` alone is unique only while this
+# repository has one tenant, and `analytics-production` would collide with it.
+# This is knowingly the SECOND rename of this secret: it was `HCLOUD_TOKEN_PROD`
+# until the environment axis was spelled in full, and GitHub cannot rename a
+# secret, so each spelling cost a create-flip-delete. Shortening it back would
+# buy nine characters and a third one.
+#
+# It is also the name this stack's inventory source reads and the one
+# `ansible/.envrc.example` names for the same token locally -- which the
+# Dynamic Inventory requirement now obliges to match this field, so the three
+# move together or the build fails.
+read_only_secret: HCLOUD_TOKEN_MAIN_PRODUCTION
+
+# The Ansible group this stack's converge targets. REQUIRED, and read only by
+# the host-configuration workflow -- the validation, plan, apply and drift
+# workflows run no converge, and refusing a stack there for the absence of a
+# field only a converge consumes would fail a Terraform-only pull request for a
+# reason that change does not have.
+#
+# DECLARED RATHER THAN DERIVED, AND THAT IS THE POINT OF THE FIELD. A stack is
+# a (tenant, environment) pair; the group is the environment alone. They were
+# one word until this stack was renamed, and `host-converge.yml` fed the group
+# from the stack's name because at one tenant the two coincide. They no longer
+# do: this stack is `main-production` and its group is `production`. Splitting
+# the name on `-` would work on these two names and fail silently on the next
+# -- as a group that does not exist, reported several steps after the run
+# began.
+#
+# IT AND `github_environment` ABOVE NO LONGER SPELL THE SAME WORD, and that is
+# the scheme arriving rather than a discrepancy. This one is `production`
+# because an Ansible group IS the environment; that one is `main-production`
+# because a GitHub Environment belongs to one stack. They read alike for as
+# long as this repository had one tenant, which is precisely what made the
+# collision invisible: a second tenant's production would have shared an
+# Environment, its write token and its protection rules. A future
+# `analytics-production` declares `production` HERE too, and reads the same
+# `group_vars/production.yml`, while naming an Environment of its own.
+#
+# IT NAMES THREE THINGS, WHICH MOVE TOGETHER: the play's `hosts:`, the
+# `--vault-id` label that environment's secrets are labelled under, and the
+# `group_vars` file the converge reads. All three describe the environment. The
+# stack's own name still names the inventory source and the concurrency group,
+# because those follow the Hetzner project.
+#
+# UNLIKE THE TWO FIELDS ABOVE, THIS CARRIES NO UNIQUENESS OBLIGATION, and the
+# difference is deliberate rather than an oversight. Two stacks naming one
+# GitHub Environment share a write token; two naming one read-only secret share
+# a credential. Two stacks naming one Ansible group share a set of host
+# variables, which is what an environment-wide baseline across tenants is. A
+# future `analytics-production` declares `production` here too, and reads the
+# same `group_vars/production.yml`.
+target_environment: production
+
+# Whether the Destroy Policy Gate applies to this stack. OPTIONAL;
+# absent means it applies, so a mistake in this file fails safe.
+#
+# POLARITY IS LOAD-BEARING AND LIVES IN THE NAME. This field names the GATE, so
+# `true` means the gate applies and a destructive plan needs the override label.
+# It is deliberately not named for the inverse: `disposable: true` and
+# `destroy_policy_gate: true` are the same value and opposite meanings, and
+# nothing in a value can tell a reader which was meant. A stack that
+# exists to be rebuilt may set this `false`; this one may not.
+destroy_policy_gate: true
+
+# Whether the shared platform stack is deployed to this stack's host.
+# OPTIONAL; absent means it is NOT, so a stack directory committed before its
+# GitHub Environment holds any platform secret receives no deploy.
+#
+# POLARITY IS LOAD-BEARING AND LIVES IN THE NAME, as it does for the gate
+# above. This field names what is true when the value is `true`.
+# `platform_excluded: false` would be the same value with the opposite
+# meaning, and nothing in a value can tell a reader which was meant.
+#
+# THE TWO OPTIONAL FIELDS DEFAULT TO OPPOSITE VALUES, FOR ONE REASON. Each
+# default is the safe value when the field was forgotten. For the destroy
+# policy that is "the gate applies"; for this it is "deployed to by nothing",
+# because a new stack has none of the nine `PLATFORM_*` secrets when its
+# directory is first committed, and a default of `true` would have its first
+# merge touching `platform/**` attempt a deploy under credentials that do not
+# exist, against a host that may not yet authorise the key.
+#
+# THIS FIELD IS THE ONLY THING THAT POINTS THE PLATFORM DEPLOY AT THIS STACK.
+# Which GitHub Environment that deploy attaches to is `github_environment`
+# above -- the same Environment this stack's apply and converge attach to, so
+# one set of approvers gates every kind of change to this stack.
+#
+# IT IS ABOUT A LAYER THAT IS NOT TERRAFORM, AND THAT IS NOT NEW HERE.
+# `target_environment` above is an Ansible group sitting beside a
+# `terraform.tfvars`. This file is the stack's PIPELINE configuration rather
+# than its Terraform configuration, which is why it is `.yml`: Terraform must
+# not read it, and `terraform fmt`, `terraform validate` and `tflint` all
+# ignore it.
+#
+# OPTING IN IS NOT THE SAME FACT AS THE HOST AUTHORISING THE DEPLOY KEY, and
+# the two are checked against each other rather than derived one from the
+# other. `deploy_apps` in this stack's host's own
+# `ansible/inventory/host_vars/<server name>.yml` must enumerate `platform`,
+# or `.github/tests` fails the pull request naming both files. NOT this
+# stack's `group_vars`: an environment may hold two stacks of different
+# tenants, and an entry there would authorise one key on both their hosts --
+# see "A Host-Scoped Variable Lives in the Host's Own Vars File"
+# (openspec/specs/iac-host-configuration/spec.md). Left to the
+# deploy, the same disagreement surfaces as an authentication failure after
+# the tailnet join and after a human approved it.
+deploys_platform: true

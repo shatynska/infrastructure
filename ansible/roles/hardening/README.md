@@ -1,0 +1,31 @@
+# hardening
+
+UFW (default-deny incoming, SSH always allowed, HTTP/HTTPS opt-in) and fail2ban (sshd jail). Implements `iac-host-configuration`'s "Host-Level Security Owned by Ansible, Cloud Firewall Owned by Terraform" requirement.
+
+## Keeping UFW in sync with the cloud firewall
+
+**`terraform/modules/server`'s `hcloud_firewall` resource is not the source of truth for this role's variables, and vice versa.** The two are maintained by hand in two separate places:
+
+- Cloud firewall (what's reachable from the internet at all): that environment's `terraform/stacks/<environment>/terraform.tfvars`'s `ssh_allowed_cidrs` and `web_allowed_cidrs`.
+- Host firewall (defense-in-depth on top of whatever the cloud layer already allows): that environment's `ansible/inventory/group_vars/<environment>.yml`'s `hardening_ssh_allowed_cidrs` and `hardening_web_allowed_cidrs`.
+
+The pair is per environment, and both environments must be checked: prod's and staging's `web_allowed_cidrs` are both `["0.0.0.0/0"]` today, but each is its own stack's value, so a change made to one environment's pair says nothing about the other's.
+
+Whenever either side's CIDR list changes, check the other. Leaving UFW stricter than the cloud firewall silently blocks traffic the cloud layer already permits (this happened once already — see `bootstrap-ansible-host-baseline`'s design.md, Context section for the `web_allowed_cidrs` correction that prompted this note). Leaving UFW looser than the cloud firewall doesn't expose anything new (the cloud layer still blocks it first), but defeats the point of having host-level defense-in-depth at all.
+
+**Deriving the Ansible side from Terraform output is deliberately not done**, though it would remove this drift class entirely. It would make an Ansible run depend on Terraform state and an HCP Terraform token, coupling the two layers that this repository's structure exists to keep separate. The hand-mirror is the accepted cost, and the check above is what holds it. **Revisit if it drifts a second time**: one recurrence is evidence the manual sync does not hold, and would outweigh the coupling objection.
+
+## Tailnet-scoped rules
+
+UFW's default-deny-incoming policy applies to the `tailscale0` interface the same as the public one, so any service meant to be reachable only from tailnet peers needs its own explicit allow rule here, in addition to whatever binds it to the tailnet interface at the application level. Two such rules exist today, both restricted to `100.64.0.0/10` (the tailnet's CGNAT range — not publicly routable, so only authenticated tailnet peers can present it as a source):
+
+- SSH (22) — additive to the public-interface SSH rule above, not a replacement for it. See `connect-platform-deploy-via-tailscale`'s design.md for why this is needed.
+- Grafana (3000) — the platform monitoring stack's dashboard, added by `add-platform-monitoring`. Grafana binds to the host's tailnet-literal IP rather than `0.0.0.0`; this rule is what actually lets tailnet peers reach it despite that binding.
+
+## Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `hardening_ssh_allowed_cidrs` | *(required, no default)* | List of CIDR strings allowed to reach SSH (22). |
+| `hardening_web_allowed_cidrs` | `[]` | List of CIDR strings allowed to reach HTTP/HTTPS (80/443). Empty means closed. |
+| `hardening_apt_cache_valid_time` | `3600` | Seconds an already-fetched package index may be reused for. The first install of a run still fetches, later ones reuse — **except on a host carrying a maintained `apt` update-success stamp, where the module reads a timestamp it never advances and every task fetches as before**. See `defaults/main.yml`. |

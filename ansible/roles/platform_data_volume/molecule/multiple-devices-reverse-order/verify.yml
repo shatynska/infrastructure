@@ -1,0 +1,8 @@
+---
+# Imported, not copied: this arm differs from
+# `multiple-devices-discoverable` only in MOLECULE_MULTI_DEVICE_REVERSE_ORDER,
+# set in this scenario's molecule.yml. Duplicating the playbook would let the
+# two arms drift into asserting different things, which would defeat the point
+# of running both.
+- name: Verify with the by-id entries in the opposite order
+  import_playbook: ../multiple-devices-discoverable/verify.yml

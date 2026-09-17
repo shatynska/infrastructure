@@ -1,0 +1,491 @@
+name: Ansible Verify
+
+# The Molecule suite -- this repository's largest test asset, and the only
+# thing that observes what a role actually does to a host.
+#
+# REQUIRED STATUS CHECK. The `ansible-verify` job below is the context to
+# register in `main`'s branch protection, so that a failing scenario blocks the
+# merge. See the Ansible Configuration Is Verified in Continuous Integration
+# and Gates the Merge requirement.
+#
+# Whether it IS registered is repository settings rather than repository
+# content, and nothing here can tell you: `.github/tests` makes no network
+# call, and asserts only that this file is SHAPED so the context can be
+# registered safely. Read the branch protection API if you need to know. This
+# comment is deliberately written to stay true either way, because the setting
+# is applied by hand after this file merges and a comment claiming otherwise
+# would be false for as long as that took.
+#
+# THREE THINGS ABOUT THAT SHAPE, each of which reintroduces a permanently
+# pending pull request if undone:
+#
+# 1. NO WORKFLOW-LEVEL `paths:` FILTER. A path-filtered required check never
+#    reports on a non-matching pull request, leaving it unmergeable. The
+#    filtering happens INSIDE the always-running discovery job instead -- the
+#    shape `pr-validation.yml` uses. See the Required Status Checks Report on
+#    Every Pull Request requirement.
+#
+# 2. THE REGISTERED CONTEXT IS THE `ansible-verify` JOB, NOT THE MATRIX. A
+#    matrix job's context name is generated from the matrix, so it cannot be
+#    enumerated in branch protection in advance, a role added under
+#    `ansible/roles/` would introduce a context nobody registered, and an
+#    empty or skipped matrix produces no context at all.
+#
+# 3. A SKIPPED MATRIX IS NOT A SUCCESS. `success()` over a skipped job is
+#    true, and `needs.<job>.result` returns `skipped` both for a job whose
+#    `if:` was false and for one whose matrix was empty. The gate below reads
+#    the difference explicitly. Advisory status was never achieved by
+#    swallowing a step's result and blocking status is not achieved by
+#    conflating a skip with a pass; either would report a green conclusion for
+#    a suite that verified nothing.
+#
+# Role discovery itself runs on EVERY pull request, not only those touching
+# `ansible/`: a repository state in which no role carries scenarios has lost
+# the check that gates every merge, and the pull request that removed it is
+# not the only one that should stop.
+#
+# `workflow_dispatch` is here because a manual dispatch is resolved through the
+# default branch's workflow listing: this file cannot be dispatched until it is
+# on `main`, and the `ref` input then chooses which branch's code runs, not
+# whether the workflow can be found. Such a run carries no diff, so the change
+# filter is skipped and the suite runs in full -- see the resolution step.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ansible-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: discover
+    runs-on: ubuntu-latest
+    # A job-level `permissions:` block REPLACES the workflow-level one rather
+    # than adding to it, so `contents: read` is repeated here or the checkout
+    # below loses its own scope. `pull-requests: read` is what the change
+    # filter's API read needs. Neither of the other two jobs needs either, so
+    # this is declared on the job rather than on the workflow -- see the
+    # Least-Privilege Workflow Permissions requirement. No write scope
+    # anywhere: reading which files a pull request touched is a read.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # `roles` is every role discovered; `selection` is the subset this run
+      # owes, and it is what the matrix consumes. The unfiltered set is
+      # published anyway, for two reasons: it is what a reader comparing a
+      # narrowed run against the whole suite needs, and `.github/tests` pins
+      # the discovery assertion to the step that writes it rather than to that
+      # step's position -- which is what stops a step inserted ahead of
+      # discovery from silently re-targeting that assertion.
+      roles: ${{ steps.discover.outputs.roles }}
+      run-suite: ${{ steps.gate.outputs.run-suite }}
+      selection: ${{ steps.select.outputs.selection }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The filter that replaces the workflow-level one. Same action and same
+      # pin as `pr-validation.yml`, which resolves the same paths for its own
+      # lint tier -- one mechanism in this repository rather than two, and one
+      # version to move rather than two.
+      #
+      # Conditioned on the event because it resolves a pull request's diff and
+      # there is none on any other event. Skipping it there is what makes the
+      # resolution below single-branched on a dispatch, so the polarity it
+      # warns about is unreachable rather than merely handled.
+      - name: Detect changes under the configuration directory
+        id: changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        with:
+          # WHAT THE SUITE READS IS NARROWER THAN `ansible/`, and the
+          # difference is spelled as EXCLUSIONS rather than as inclusions. The
+          # two spellings agree on today's tree and disagree on tomorrow's: a
+          # file added under `ansible/` that nobody thought about is, under an
+          # inclusion list, silently not a trigger -- the suite skips and the
+          # gate reports green, which is the failure every other refusal in
+          # this workflow is written to prevent. Under this list the same file
+          # runs the suite: wasteful, visible, and correctable in one line.
+          #
+          # Each exclusion was established by reading the scenarios, not by
+          # reasoning about the directory, and the sweep's own signal is in
+          # design.md Decision 1 of the change below. A path a scenario names
+          # in a COMMENT, or asserts as a substring of an expected failure
+          # message, is not a path that scenario reads -- one scenario does
+          # exactly that with `ansible/inventory/group_vars/<environment>.yml`,
+          # asserting it as a substring of a refusal it expects.
+          #
+          #   inventory/**       reached by exactly one scan, which now lives
+          #                      in `.github/tests` and runs on EVERY pull
+          #                      request rather than on a subset. Excluding it
+          #                      before that move would have withdrawn the only
+          #                      check reading it.
+          #   playbooks/**       reached by nothing. Named in one scenario
+          #                      comment, recording that its role ordering
+          #                      mirrors the baseline playbook's -- and the
+          #                      mirroring is not asserted.
+          #   requirements.txt   the converge workflow's own `ansible-core`.
+          #                      DISTINCT from `requirements-test.txt` and
+          #                      `requirements.yml`, which are NOT excluded:
+          #                      both determine what every scenario runs under,
+          #                      one scenario reads the second of them directly
+          #                      to assert an external role's pin, and every
+          #                      scenario names it as its dependency manifest.
+          #   .envrc*            operator environment scaffolding. `.envrc` is
+          #                      gitignored; `.envrc.example` is a document.
+          #
+          # `ansible.cfg` is deliberately NOT excluded. Two scenario comments
+          # claim it governs their runs -- it does not, Molecule running with
+          # the role directory as its working directory, so configuration
+          # discovery never reaches two levels up -- but a file the scenarios
+          # believe governs them is not one to exclude on the strength of a
+          # sweep, and it changes rarely.
+          #
+          # `predicate-quantifier` IS LOAD-BEARING AND IS NOT A STYLE CHOICE.
+          # The action's DEFAULT is `some`, under which every pattern is
+          # compiled independently and OR-ed: `patterns.some(rule =>
+          # rule.isMatch(filename))`. picomatch INVERTS a matcher built from a
+          # `!`-prefixed pattern, so `'!ansible/inventory/**'` returns true for
+          # every path that is NOT under that directory -- and the OR is then
+          # true for essentially every file in the repository. Left at the
+          # default, these four negations would not narrow anything: they would
+          # make this filter match README.md and terraform/*.tf, and the suite
+          # would start seven containers on EVERY pull request. That is not a
+          # smaller version of the bug this change fixes; it is a strictly
+          # larger one, on a required check whose degraded runs took 75
+          # minutes.
+          #
+          # `some-with-excludes` is the quantifier that means what the list
+          # above reads as: selected where some positive matches AND no
+          # negation matches. It is order-independent -- the positive is
+          # written first for legibility, not for semantics -- and exclusion is
+          # final, no later pattern re-including a file.
+          #
+          # `.github/tests` asserts that this input is DECLARED, because
+          # without it the negations are silently inert and every check over
+          # the declared patterns still passes. That is the "economical and
+          # silent" failure this repository refuses everywhere else, and it is
+          # invisible to any assertion that reads only the pattern list.
+          #
+          # `.github/tests` asserts this declaration, and asserts
+          # separately that `pr-validation.yml`'s lint filter carries NO
+          # negation -- that tier is the compensating coverage for everything
+          # excluded here, so the two must disagree, and both halves are
+          # checked rather than reviewed.
+          #
+          # See the change `narrow-the-molecule-trigger-to-what-it-reads`.
+          predicate-quantifier: 'some-with-excludes'
+          # The changed-file list the selection is computed from, and it comes
+          # from the filter that ALREADY runs rather than from a second
+          # mechanism. This action resolves a pull request's diff through the
+          # API, which is what the shallow checkout requires. What it emits is
+          # positives minus exclusions -- exactly the set the attribution wants.
+          list-files: json
+          filters: |
+            ansible:
+              - 'ansible/**'
+              - '!ansible/inventory/**'
+              - '!ansible/playbooks/**'
+              - '!ansible/requirements.txt'
+              - '!ansible/.envrc*'
+
+      # Resolves whether the suite runs, for both triggers. THE POLARITY IS THE
+      # POINT: a run that is not a pull request has no diff, the step above did
+      # not run, and its output is the empty string. Reading that as "nothing
+      # changed" would skip the suite and report a green conclusion on exactly
+      # the trigger this repository uses to run it against the trunk. So the
+      # branch is on the event name, not on the filter's output.
+      #
+      # Free of `${{ }}` on purpose -- both inputs arrive through `env:` -- so
+      # `.github/tests` can pull this body out of the workflow and run it under
+      # bash across the event names it must distinguish. The same is true of
+      # the gate in the `ansible-verify` job; they are two scripts and are
+      # tested separately.
+      - name: Resolve whether the suite runs
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FILTER_RESULT: ${{ steps.changes.outputs.ansible }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # An unresolvable value is refused rather than read as `false`. On a
+            # pull request the filter above MUST have run, so anything other
+            # than `true` or `false` means it did not -- and the empty string
+            # that a skipped step leaves behind is indistinguishable from
+            # "nothing changed" unless it is rejected here. Read as `false` it
+            # skips the matrix, and the gate then concludes success on a pull
+            # request nothing verified. Any narrowing of that step's condition
+            # produces exactly this, which is why the refusal lives here rather
+            # than in an assertion about how the condition is spelled.
+            case "$FILTER_RESULT" in
+              true|false)
+                run_suite="$FILTER_RESULT"
+                echo "Pull request: the change filter reported '${FILTER_RESULT}', so run-suite=${run_suite}."
+                ;;
+              *)
+                echo "::error::The change filter produced '${FILTER_RESULT}' on a pull request, where it must produce 'true' or 'false'. It did not run. Refusing to read that as 'nothing changed': doing so skips the suite and reports a green required status check for a pull request nothing verified."
+                exit 1
+                ;;
+            esac
+          else
+            run_suite=true
+            echo "Event '${EVENT_NAME}' carries no diff to filter on, so the whole suite runs: run-suite=true."
+          fi
+          echo "run-suite=${run_suite}" >>"$GITHUB_OUTPUT"
+
+      # Discovers rather than enumerates, so a role or scenario added under
+      # ansible/roles/ is covered without a workflow edit -- the same shape the
+      # Terraform checks use. Fails loudly on an empty result: an empty matrix
+      # skips the dependent job and the workflow concludes success having run
+      # nothing, which is a green that verified nothing.
+      #
+      # THIS REFUSAL READS THE TREE, NEVER THE SELECTION, and moving it behind
+      # the selection step below is the one edit that would quietly undo it. A
+      # tree in which no role carries scenarios has LOST the check that gates
+      # every merge -- a fact about the repository, not about this pull
+      # request's diff -- so the pull request that removed the last scenario is
+      # not the only one that should stop. Behind the selection it would become
+      # "this diff owed nothing", which the gate reports as a correct skip.
+      #
+      # It is therefore deliberately unfiltered, and the selection below
+      # narrows what RUNS without narrowing what is discovered. Two refusals
+      # over two different sets: this one, and the selector's own refusal to
+      # hand the matrix an empty list on a run that owed the suite.
+      #
+      # Free of `${{ }}` on purpose, so it can be run standalone against a
+      # scratch tree.
+      - name: Discover roles carrying scenarios
+        id: discover
+        run: |
+          set -euo pipefail
+          # `grep -v '\.'` drops Galaxy-namespaced roles, which carry a dot in
+          # their directory name where this project's own roles never do.
+          # Third-party roles ship their own scenarios, and running them would
+          # verify somebody else's code; the vendored one is gitignored, so
+          # this matters in a provisioned working tree rather than in CI, where
+          # discovery runs on a bare checkout in its own job.
+          roles=$(find ansible/roles -mindepth 2 -maxdepth 2 -type d -name molecule -printf '%h\n' \
+            | xargs -r -n1 basename \
+            | { grep -v '\.' || true; } \
+            | sort \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          if [ "$roles" = "[]" ] || [ -z "$roles" ]; then
+            echo "::error::Role discovery found nothing under ansible/roles/ carrying a molecule/ directory. Refusing to report success having verified no scenario."
+            exit 1
+          fi
+          echo "Discovered roles: ${roles}"
+          echo "roles=${roles}" >>"$GITHUB_OUTPUT"
+
+      # The selector needs a YAML parser, from the same pinned manifest the
+      # static suite installs. An exact pin rather than a bare install: two
+      # installs at different times must not resolve different versions and
+      # silently change what is selected.
+      - name: Install the selector's toolchain
+        if: github.event_name != 'pull_request' || steps.gate.outputs.run-suite == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned parser
+        if: github.event_name != 'pull_request' || steps.gate.outputs.run-suite == 'true'
+        run: pip install -r .github/requirements-ci.txt
+
+      # WHICH of the discovered roles this run owes. The graph is derived from
+      # the scenarios in this checkout and nothing commits it -- a recorded
+      # graph is a list, and a list falling behind the scenarios it describes
+      # under-selects SILENTLY, which the gate below cannot see.
+      #
+      # THE POLARITY IS TO RUN. An unattributable path, a path nobody
+      # anticipated, a closure with nothing runnable left in it: each widens to
+      # every discovered role rather than narrowing to none. Wasteful is
+      # visible and correctable in one line; narrow is green and silent.
+      #
+      # `[]` where the suite is not owed, which is the one case the matrix is
+      # meant to be skipped for and which the gate below reads as such. The
+      # selector is not run there: there is no diff to attribute.
+      #
+      # Free of `${{ }}` on purpose -- both inputs arrive through `env:` -- so
+      # `.github/tests` can pull this body out and run it standalone, the same
+      # shape the two scripts around it use.
+      - name: Select the roles this run owes
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_SUITE: ${{ steps.gate.outputs.run-suite }}
+          CHANGED_FILES: ${{ steps.changes.outputs.ansible_files }}
+        run: |
+          set -euo pipefail
+          # THE BRANCH IS ON THE EVENT NAME, exactly as the resolution above
+          # branches, and for the same reason. On an event carrying no diff the
+          # change filter did not run, so every step output it would have
+          # written -- INCLUDING the run-suite this step could otherwise key
+          # on -- is the empty string. Keying the selection on that value would
+          # emit `[]` on precisely the trigger this repository uses to run the
+          # suite against the trunk, while the resolution above said the suite
+          # was owed: the two computed from different things, disagreeing, and
+          # the disagreement reported as a correct skip.
+          #
+          # So the selection is forced by the same branch that forces
+          # owed-ness. Below it, and only there, the run-suite value is a value
+          # the filter actually produced.
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$RUN_SUITE" != "true" ]; then
+            echo "The suite is not owed on this run, so there is nothing to select."
+            echo "selection=[]" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # An event carrying no diff leaves CHANGED_FILES empty, and the
+          # selector reads an empty changed-file list as "not attributable" and
+          # widens to every role it can run -- the same answer, reached by the
+          # same rule that widens an unrecognised path, rather than by a second
+          # branch that could come to disagree with this one.
+          selection=$(python3 ansible/scripts/select_molecule_roles.py \
+            --root . --changed-files "${CHANGED_FILES:-}")
+          echo "Selected roles: ${selection}"
+          echo "selection=${selection}" >>"$GITHUB_OUTPUT"
+
+  molecule:
+    name: molecule (${{ matrix.role }})
+    needs: discover
+    # Gated on the JOB, never on its steps. A step-level condition leaves the
+    # job itself running and concluding success having executed nothing, which
+    # the gate below would then read as a genuine pass rather than as a skip.
+    if: needs.discover.outputs.run-suite == 'true'
+    runs-on: ubuntu-latest
+    # No `environment:` and no secret: the suite runs offline against local
+    # containers. Setting MOLECULE_GHCR_PULL_TOKEN would additionally exercise
+    # the real registry-login path, and is deliberately not done here.
+    strategy:
+      fail-fast: false
+      matrix:
+        role: ${{ fromJSON(needs.discover.outputs.selection) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # Exact pinned manifests, never a fresh resolve. requirements-test.txt
+      # records at length why these pins move forward rather than backward.
+      - name: Install the test toolchain
+        run: pip install -r ansible/requirements-test.txt
+
+      # Into ansible/roles/ explicitly. Each scenario sets
+      # ANSIBLE_ROLES_PATH to its project directory's parent -- ansible/roles/
+      # -- and Molecule does not install this manifest itself: its galaxy
+      # dependency step resolves `role-file` relative to the scenario
+      # directory, finds nothing, and returns without error. So a role
+      # installed to the default ~/.ansible/roles is never found, and converge
+      # fails on the dependency rather than on anything the scenario asserts.
+      # `-p` applies only to roles, hence the split.
+      - name: Install Galaxy content
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection install -r ansible/requirements.yml
+          ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
+
+      # Run through the entry point, not the runner directly. Every scenario's
+      # instance name now defaults to a value Docker refuses, so invoking
+      # Molecule bare would fail at `create` here exactly as it would on a
+      # workstation -- which is the point of the default, and means CI supplies
+      # a namespace like any other caller rather than being exempt.
+      #
+      # A runner is an isolated checkout, so nothing here can collide with
+      # anything; the namespace it derives is real but uncontended. Running it
+      # the same way regardless is what keeps the local path the exercised one.
+      #
+      # `--all` is required, not stylistic: several roles carry more than one
+      # scenario, and running without that flag covers only each role's
+      # `default` scenario, silently skipping most of the suite.
+      - name: molecule test --all
+        working-directory: ansible/roles/${{ matrix.role }}
+        run: ../../scripts/run-molecule test --all
+
+  # The registered required status check. Its name is a literal, so branch
+  # protection has something stable to point at; the matrix job's name is not,
+  # which is why this job exists at all.
+  ansible-verify:
+    name: ansible-verify
+    needs: [discover, molecule]
+    # Runs whatever its dependencies concluded. Without this the job is itself
+    # skipped when a dependency fails or is skipped -- and a skipped job
+    # produces no status check context, which under branch protection is a
+    # required check that never reports.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # Reads three results and concludes. Free of `${{ }}`: the inputs arrive
+      # through `env:`, so `.github/tests` can pull this body out and run it
+      # across every row of the table it implements.
+      #
+      # Discovery is checked FIRST, and not for tidiness. When it fails, its
+      # outputs are empty strings, so RUN_SUITE is "" and MATRIX_RESULT is
+      # "skipped" -- which the "nothing changed, nothing ran" branch would
+      # otherwise pass. The gate would report success precisely when discovery
+      # had refused to.
+      #
+      # `skipped` is refused where the suite was asked for, and accepted only
+      # where it was not. `cancelled` is refused either way: a cancelled job
+      # has verified nothing, and a run superseded by a newer push reports on
+      # that older commit rather than on the one being merged.
+      #
+      # FOUR INPUTS NOW, NOT THREE. The selection joins them, and it is read
+      # for two things: naming the subset a narrowed run covered, and refusing
+      # a matrix that ran where nothing was owed. Neither weakens the three
+      # refusals above -- a narrowed matrix is still a matrix, and every way it
+      # can conclude other than `success` is still a failure here.
+      - name: Conclude on the suite's behalf
+        env:
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          MATRIX_RESULT: ${{ needs.molecule.result }}
+          RUN_SUITE: ${{ needs.discover.outputs.run-suite }}
+          SELECTION: ${{ needs.discover.outputs.selection }}
+        run: |
+          set -euo pipefail
+
+          if [ "$DISCOVER_RESULT" != "success" ]; then
+            echo "::error::Role discovery concluded '${DISCOVER_RESULT}', not 'success'. Its outputs are empty, so whether the suite was owed cannot be read from them. Refusing to conclude success on a run whose own precondition did not hold."
+            exit 1
+          fi
+
+          case "$MATRIX_RESULT" in
+            success)
+              # A matrix that RAN on a run owing the suite nothing means the
+              # selection and the decision to run were computed from different
+              # things. Unreachable while the matrix job stays gated on
+              # `run-suite` rather than on the selection -- which it does, just
+              # above -- and refused anyway, because the day someone keys that
+              # condition on the selection instead, this is the disagreement
+              # that would otherwise pass silently.
+              if [ "$RUN_SUITE" != "true" ]; then
+                echo "::error::The suite ran on a run that owed it nothing (run-suite=${RUN_SUITE}, selection=${SELECTION}). Those two are computed from different inputs and have disagreed. Refusing to conclude success rather than reporting a green check whose matrix nobody asked for."
+                exit 1
+              fi
+              # NAME THE SUBSET. A narrowed run is indistinguishable from a
+              # wrongly narrowed one in the check's summary unless the roles are
+              # written out, and a human reading this line is the only reader
+              # that can catch a graph defect the static checks did not model.
+              echo "The suite ran and passed on the roles this run owed: ${SELECTION}."
+              echo "That is a SUBSET of the discovered roles wherever the diff was confined to one role's directory -- it carries that role plus every role whose scenarios converge it. A shared manifest, the entry point, ansible.cfg, or any path the attribution does not recognise selects every role instead. See the selection step above and the change select-the-molecule-matrix-per-role."
+              ;;
+            skipped)
+              if [ "$RUN_SUITE" = "true" ]; then
+                echo "::error::The suite was skipped on a run that asked for it (run-suite=true). A skipped job is not a passing one: concluding success here would report a green required status check for a suite that verified nothing."
+                exit 1
+              fi
+              echo "Nothing the suite reads changed, so it was skipped rather than run. Files under ansible/ MAY have changed: the suite's change detection excludes the inventory, the playbooks, the converge workflow's own requirements.txt and the .envrc scaffolding, none of which any scenario reads. Those paths are covered by the lint tier in pr-validation.yml, which is triggered by the whole of ansible/ without exclusion. Concluding success having correctly done no work."
+              ;;
+            *)
+              echo "::error::The suite concluded '${MATRIX_RESULT}' (run-suite=${RUN_SUITE}). Only 'success', or a skip on a run that did not ask for the suite, may conclude success."
+              exit 1
+              ;;
+          esac

@@ -1,0 +1,386 @@
+name: Drift Detection
+
+# NO STACK IS NAMED ANYWHERE IN THIS FILE. Each stack's read-only
+# secret comes from that stack's own
+# `terraform/stacks/<name>/pipeline.yml`, and the sweep runs over whatever
+# `discover` finds. See the Each Stack Declares Its Own Pipeline
+# Configuration requirement.
+#
+# Unlike the two other Terraform workflows this one is NOT narrowed by changed
+# paths: drift is divergence from what was committed, which no diff predicts.
+# Every stack is planned on every run.
+on:
+  schedule:
+    - cron: "0 3 * * *" # nightly, 03:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: discover
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      stacks: ${{ steps.discover.outputs.stacks }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Discover the stacks and their declarations
+        id: discover
+        run: |
+          set -euo pipefail
+
+          # Enumerates every stack directory, reads each one's committed
+          # pipeline declaration, and emits the matrix this workflow's jobs run
+          # over. Nothing here names a stack: adding one is adding a
+          # directory.
+          #
+          # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
+          # message that names the directory: an absent declaration, one missing
+          # a field the workflows read, and two stacks colliding on a
+          # secret or on a GitHub Environment. A silently skipped stack is
+          # one that is planned by nothing, applied by nothing and drift-checked
+          # by nothing, which is indistinguishable from it not existing.
+          #
+          # THIS BODY IS IDENTICAL IN ALL THREE TERRAFORM WORKFLOWS, and
+          # `.github/tests` asserts that it stays so. Copies are not the only
+          # available shape -- a composite action under `.github/actions/` would
+          # share these steps, and the reason for not using one is that it costs
+          # a fourth file in a diff already restructuring three gated workflows,
+          # and that `.github/tests` locates this body by step name inside a
+          # workflow. Both are costs rather than blockers. What makes the copies
+          # safe meanwhile is the identity assertion: the suite executes one copy
+          # and that assertion is what makes running it evidence about all three.
+          # Edit them together, or factor them out together.
+          #
+          # Free of Actions expressions on purpose -- it takes nothing from the
+          # event -- so `.github/tests` can pull this body out and run it
+          # against a scratch tree carrying each of those refusals. That is the
+          # constraint `ansible-verify.yml`'s discovery body already observes,
+          # and the reason its tests can exist at all. The prohibition includes
+          # naming the interpolation syntax in a comment, which is why this
+          # sentence spells it out in words.
+
+          stacks_root="terraform/stacks"
+          declaration_name="pipeline.yml"
+
+          if [ ! -d "$stacks_root" ]; then
+            echo "::error::Stack discovery found no ${stacks_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # One flat `key: value` line out of a declaration. The declaration is
+          # a flat mapping by design, so this reads it with no YAML parser --
+          # the same shape the gitleaks step uses to read its pin out of
+          # .pre-commit-config.yaml, and what keeps this body runnable with
+          # nothing but bash, jq and coreutils.
+          #
+          # Leading and trailing whitespace is trimmed; whitespace INSIDE a
+          # value is kept, because a GitHub Environment name may legitimately
+          # carry a space and silently deleting it would attach the apply job to
+          # a different Environment than the one declared -- one GitHub would
+          # then create on demand, with no protection rules. A value that cannot
+          # be used is refused below by name, which is what the requirement asks
+          # for; normalising it into a usable-looking one is not.
+          field() {
+            sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
+              | head -n 1 \
+              | sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/"
+          }
+
+          records=$(mktemp)
+          refused=0
+
+          for directory in "$stacks_root"/*/; do
+            [ -d "$directory" ] || continue
+            name="$(basename "$directory")"
+            declaration="${directory}${declaration_name}"
+
+            if [ ! -f "$declaration" ]; then
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. A stack with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              refused=1
+              continue
+            fi
+
+            github_environment="$(field "$declaration" github_environment)"
+            read_only_secret="$(field "$declaration" read_only_secret)"
+            destroy_policy_gate="$(field "$declaration" destroy_policy_gate)"
+
+            incomplete=0
+            if [ -z "$github_environment" ]; then
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this stack's apply job attaches to, and it has no safe default."
+              incomplete=1
+            fi
+            if [ -z "$read_only_secret" ]; then
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this stack's read-only Hetzner token, and it has no safe default."
+              incomplete=1
+            fi
+
+            # A value that is present but unusable is refused by name rather
+            # than passed on. A plan job indexes `secrets[...]` with the secret
+            # name, and an index GitHub cannot resolve yields an EMPTY
+            # credential rather than an error -- the plan then authenticates as
+            # nobody and fails somewhere far from the cause.
+            case "$read_only_secret" in
+              "") ;;
+              [0-9]* | *[!A-Za-z0-9_]*)
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which is not a GitHub secret name — letters, digits and underscores only, not starting with a digit. A plan job indexes secrets[...] with it, and a name that does not resolve yields an empty credential rather than an error."
+                incomplete=1
+                ;;
+            esac
+
+            # A control character in either value would corrupt the
+            # tab-separated record this loop builds, so it is refused here
+            # rather than silently splitting a stack into two.
+            case "${github_environment}${read_only_secret}" in
+              *[[:cntrl:]]*)
+                echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
+                incomplete=1
+                ;;
+            esac
+
+            # The one OPTIONAL field. Absent means the gate applies, so a
+            # mistake in a declaration fails safe. A value that is neither
+            # absent nor a boolean is a declaration this pipeline cannot read,
+            # not a default to fall back on: read wrongly, this field disables
+            # the strongest guard on an apply.
+            case "$destroy_policy_gate" in
+              "")
+                destroy_policy_gate=true
+                ;;
+              true | false) ;;
+              *)
+                echo "::error::${name}: ${declaration} states 'destroy_policy_gate: ${destroy_policy_gate}', which is neither true nor false. Refusing to guess which was meant."
+                incomplete=1
+                ;;
+            esac
+
+            if [ "$incomplete" -ne 0 ]; then
+              refused=1
+              continue
+            fi
+
+            printf '%s\t%s\t%s\t%s\n' \
+              "$name" "$github_environment" "$read_only_secret" "$destroy_policy_gate" >>"$records"
+          done
+
+          if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
+            echo "::error::Stack discovery found no stack under ${stacks_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # Two collisions no assertion about workflow text can reach, because
+          # they live in committed data rather than in a workflow. Two
+          # stacks sharing a read-only secret plan under one credential
+          # against different Hetzner projects; two sharing a GitHub Environment
+          # share its WRITE token and its protection rules, so a stack
+          # meant to be ungated would hold the reviewed one's write credential.
+          for secret in $(cut -f3 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every stack but one would report a meaningless diff."
+            refused=1
+          done
+
+          for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so a stack intended to be ungated would hold the reviewed stack's write credential."
+            refused=1
+          done
+
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::Stack discovery refused the committed declarations, so no stack enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            exit 1
+          fi
+
+          discovered=$(jq -R -s -c '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                name: .[0],
+                github_environment: .[1],
+                read_only_secret: .[2],
+                destroy_policy_gate: (.[3] == "true")
+              })
+          ' <"$records")
+          rm -f "$records"
+
+          echo "Discovered stacks: ${discovered}"
+          echo "stacks=${discovered}" >>"$GITHUB_OUTPUT"
+  drift:
+    name: drift (${{ matrix.stack.name }})
+    needs: discover
+    runs-on: ubuntu-latest
+    # No `environment:` on this job, so TF_API_TOKEN resolves to its
+    # repository-scoped secret. It's a single unsplit HCP Terraform
+    # token (this org's free tier has no privilege split to apply) —
+    # this job never applies, so the stack's own Read Only Hetzner token
+    # is what actually keeps it from mutating infrastructure.
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      # One stack's failure must not leave every other stack
+      # unchecked and unreported: a sweep that stops at the first failure is
+      # silence indistinguishable from no drift.
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.discover.outputs.stacks) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: terraform init
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
+        run: terraform init
+
+      # Runs with -lock=false: this plan writes nothing, and taking the
+      # state lock would let a nightly read collide with an in-flight
+      # apply and report a spurious failure. detailed-exitcode: 0 = no
+      # diff, 1 = error, 2 = diff present. This workflow never applies
+      # and does not invoke the destroy-policy gate — see the Scheduled
+      # Drift Detection requirement.
+      #
+      # The Hetzner token is `secrets[...]` indexed by the name this
+      # stack's own declaration states, so each row authenticates to its
+      # own Hetzner project rather than to whichever one a literal named.
+      - name: terraform plan
+        id: plan
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets[matrix.stack.read_only_secret] }}
+        run: |
+          set +e
+          terraform plan -lock=false -no-color -input=false -detailed-exitcode -out=tfplan >plan_output.txt 2>&1
+          echo "exit_code=$?" >>"$GITHUB_OUTPUT"
+          set -e
+          cat plan_output.txt
+
+      # The issue is identified PER STACK. With one title for every
+      # stack, a second stack's drift would overwrite the first's
+      # report and one stack's clean plan would close the other's.
+      - name: Report drift as a deduplicated issue
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+          STACK_NAME: ${{ matrix.stack.name }}
+        run: |
+          set -euo pipefail
+          issue_title="Terraform drift detected: terraform/stacks/${STACK_NAME}"
+
+          # Matched on the WHOLE title, not by `--search ... in:title`. That
+          # search is tokenised rather than exact and returns ranked results, so
+          # taking `.[0]` of it picks whatever ranked first -- and once a second
+          # stack exists, one whose name extends another's token sequence
+          # (`prod` and `prod-eu`) can rank first for the other's title. One
+          # stack's drift would then be appended to the other's issue, and
+          # later its clean plan would close that other stack's still-real
+          # report. This is the requirement's own scenario "Drift in one
+          # stack does not resolve another's report", inverted.
+          existing=$(gh issue list --state open --limit 200 --json number,title \
+            | jq -r --arg title "$issue_title" '[.[] | select(.title == $title)] | .[0].number // empty')
+
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "No drift."
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Drift resolved: the nightly plan on $(date -u +%Y-%m-%dT%H:%M:%SZ) found no differences."
+              gh issue close "$existing"
+            fi
+            exit 0
+          fi
+
+          if [ "$EXIT_CODE" != "2" ]; then
+            echo "::error::terraform plan failed (exit code $EXIT_CODE) rather than reporting a diff."
+            exit 1
+          fi
+
+          body_file=$(mktemp)
+          {
+            echo "Nightly drift-detection plan found a difference between the committed configuration and actual infrastructure state, as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            echo
+            echo '```'
+            cat plan_output.txt
+            echo '```'
+          } >"$body_file"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body_file"
+          else
+            gh issue create --title "$issue_title" --body-file "$body_file"
+          fi
+
+  # Liveness reporting, per the Scheduled Workflows Report Their Own Liveness
+  # requirement (openspec/specs/iac-cicd-pipeline/spec.md). What raises the
+  # alarm is this check's SILENCE at the external observer, not the ping: a run
+  # that fails, a run killed mid-flight and a run that never happens at all are
+  # equally visible, and the last of those is the one no failure notification
+  # can reach -- GitHub disables a schedule-triggered workflow after 60 days of
+  # repository inactivity and emits nothing at all when it does.
+  #
+  # `needs:` names EVERY other job in this workflow, discovery included. A
+  # skipped dependency reads as non-failure to the reporter below, so a job this
+  # list omitted could fail, skip its dependants, and leave the heartbeat
+  # reporting a healthy sweep that planned nothing.
+  #
+  # The period and grace that decide when silence becomes an alarm are the
+  # observer's own configuration and are NOT readable from this file. They are
+  # recorded in docs/bootstrap-a-new-host.md, Appendix A, beside the secret.
+  #
+  # A manual workflow_dispatch reports too, and so resets that silence timer:
+  # after dispatching to recover a disabled workflow, confirm the schedule
+  # itself is enabled rather than reading the green check as evidence. See the
+  # change notice-when-a-periodic-job-stops-reporting, design.md Decision 7.
+  report:
+    name: report
+    needs: [discover, drift]
+    # Runs whatever the rest of the workflow did, so an early failure reports
+    # at once rather than waiting out the observer's silence timeout.
+    if: always()
+    runs-on: ubuntu-latest
+    # No `environment:` and no scope: the ping key is a repository secret
+    # precisely so this job never queues behind a required-reviewer approval.
+    permissions: {}
+    steps:
+      - name: Report this run's outcome to its heartbeat check
+        # A cancellation is an operator's act, not a defect. Reporting it as a
+        # failure would train the alarm to be ignored, and the silence timeout
+        # is still the backstop if cancellations continue.
+        if: ${{ !cancelled() }}
+        env:
+          PING_KEY: ${{ secrets.HEARTBEAT_PING_KEY }}
+          # NOT `success()`. Under `if: always()` that is false for a merely
+          # SKIPPED needed job, which is an ordinary outcome of a healthy run,
+          # and a reporter keyed on it would ping /fail on a healthy nightly.
+          RUN_FAILED: ${{ contains(needs.*.result, 'failure') }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PING_KEY}" ]; then
+            echo "::error::HEARTBEAT_PING_KEY is empty or unset, so this run cannot report to its heartbeat check, and this workflow going quiet raises no alarm until it is set."
+            exit 1
+          fi
+
+          # create=1 on BOTH endpoints, not on the success path alone: a
+          # workflow that fails from its first run never takes the success
+          # path, and a slug-addressed ping to a check that does not exist
+          # returns 404 and does nothing -- leaving the observer with nothing
+          # to go quiet and the whole mechanism decorative.
+          if [ "${RUN_FAILED}" = "true" ]; then
+            url="https://hc-ping.com/${PING_KEY}/infrastructure-drift/fail?create=1"
+          else
+            url="https://hc-ping.com/${PING_KEY}/infrastructure-drift?create=1"
+          fi
+
+          curl --fail --silent --show-error --retry 3 --max-time 30 "${url}"

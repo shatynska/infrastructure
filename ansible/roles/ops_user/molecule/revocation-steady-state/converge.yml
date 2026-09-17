@@ -1,0 +1,49 @@
+---
+# The converge whose SECOND run is the point of this scenario.
+#
+# The list below is the shape README.md requires a revoked operator be left
+# in: the entry stays in `ops_user_accounts` permanently, marked `absent`,
+# because deleting it outright is not revocation (the role can only act on
+# entries it is given). So this exact list -- one live operator plus one
+# tombstone -- is the steady state of a production host that has ever
+# revoked anyone, not a transient state during one converge.
+#
+# Run 1 (molecule `converge`):   ops-steady is created; ops-lingering, which
+#                                prepare.yml seeded, is revoked. Reports
+#                                changed, and is expected to.
+# Run 2 (molecule `idempotence`): ops-lingering no longer exists, so the
+#                                session/process-termination tasks must be
+#                                a no-op reporting `changed: false`
+#                                (tasks.md 2.3), and the whole converge must
+#                                report changed=0. THIS IS THE ASSERTION --
+#                                molecule's idempotence action fails the
+#                                scenario on any `changed=[1-9]`, and
+#                                verify.yml re-states it explicitly so the
+#                                failure names the requirement.
+#
+# `ops-steady` omits `state` entirely, so the documented default (`present`,
+# tasks.md 2.3) is exercised rather than assumed -- and so this scenario
+# also shows that a tombstone entry sitting beside a live one disturbs
+# neither the live account nor its key.
+#
+# Both public keys are dummies, structurally shaped like ed25519 keys and
+# labelled as not credentials. No private key exists for either, here or
+# anywhere.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    ops_user_accounts:
+      - name: ops-steady
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsSteadyKeyOnlyNotARealCreden
+          ops-steady-molecule@ci
+      - name: ops-lingering
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeOpsLingerKeyOnlyNotARealCreden
+          ops-lingering-molecule@ci
+        state: absent
+  roles:
+    - role: ops_user

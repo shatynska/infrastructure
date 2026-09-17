@@ -1,0 +1,121 @@
+---
+# Converges `deploy_user` three times, each time with the GHCR credential
+# in a different shape of "not supplied". All three must complete without
+# failing; verify.yml then asserts that no registry authentication
+# happened and that the role's full on-host artifact set landed anyway.
+#
+# Delta scenario under test (specs/iac-host-configuration/spec.md):
+#   "Host configuration completes when no GHCR credential is supplied"
+#     WHEN the host-baseline playbook runs with no GHCR token supplied
+#     THEN the registry authentication step SHALL be skipped, the run SHALL
+#     complete successfully, and every other host configuration step SHALL
+#     be applied as it would be with a credential present
+#
+# WHY THREE CONVERGES RATHER THAN ONE
+# -----------------------------------
+#   1. UNDEFINED. The most literal reading of "no GHCR token supplied", and
+#      the shape design.md names as the likeliest real-world instance: "a
+#      variable that is misnamed, or a vars file that is not loaded". A
+#      guard written as `when: ghcr_pull_token | length > 0` errors on an
+#      undefined variable instead of skipping, which is a run failure, not
+#      the skip this scenario requires.
+#   2. DEFINED BUT EMPTY. The shape the repository's own fixtures produce
+#      once tasks.md 4.3 empties the placeholder fallbacks in the two
+#      existing scenario converge files.
+#   3. TOKEN WITHOUT USERNAME. Not named by any delta scenario -- see
+#      test-manifest.md, where this play's assertion is classified DERIVED.
+#      It is here because tasks.md 4.1 and design.md both require the guard
+#      to test BOTH credential halves, and because nothing else in the
+#      suite distinguishes a both-halves guard from a token-only one: with
+#      a token-only guard this play attempts a login with an undefined
+#      username and fails the run.
+#
+# Three plays in one converge, rather than three scenarios: the expected
+# outcome of all three is identical -- a skipped login and a fully-applied
+# host -- so one container is enough to observe it. The play names are what
+# identifies which shape failed. They are written as separate plays rather
+# than as three `include_role` tasks so that each sets the role's own
+# interface variables as play vars, which is how the sibling scenarios set
+# them too.
+#
+# WHY THE VALUES BELOW ARE `lookup('env', ...)` EXPRESSIONS
+# ---------------------------------------------------------
+# NOT so that a real credential can be injected -- these environment
+# variable names are deliberately ones nothing sets, and this scenario must
+# stay credential-free even under tasks.md 7.2's "re-run with real
+# credentials" pass. The form exists so that this file's `ghcr_pull_token:`
+# assignments are seen by `default`'s repository-wide plaintext-token scan
+# as a `lookup('env', ...)` value rather than as a bare committed literal.
+# tasks.md 6.2 repairs that scan to "accept an assignment whose value is an
+# inline `!vault` value or a `lookup('env', ...)` expression"; these
+# assignments are written in exactly the form the two existing scenario
+# converge files use, so a repair that accepts those accepts these. See
+# test-manifest.md's cross-dependency note.
+#
+# `deploy_apps` is repeated in each play rather than shared through a YAML
+# anchor: a test fixture is read far more often than it is edited, and the
+# three plays being independently readable is worth the repetition. Its
+# two entries and their dummy public keys are the `default` scenario's, so
+# that "every other host configuration step ... as it would be with a
+# credential present" is a like-for-like comparison against what that
+# scenario already asserts.
+
+- name: Converge with both GHCR credential variables left entirely undefined
+  hosts: all
+  become: true
+  vars:
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+  roles:
+    - role: deploy_user
+
+- name: Converge again with both GHCR credential halves defined but empty
+  hosts: all
+  become: true
+  vars:
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+    ghcr_pull_token: "{{ lookup('env', 'MOLECULE_GHCR_ABSENT_TOKEN') | default('', true) }}"
+    ghcr_pull_username: "{{ lookup('env', 'MOLECULE_GHCR_ABSENT_USERNAME') | default('', true) }}"
+  roles:
+    - role: deploy_user
+
+- name: Converge again with a token supplied but no username
+  hosts: all
+  become: true
+  vars:
+    deploy_apps:
+      - name: platform
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculePlatformKeyOnlyNotARealCredential
+          platform-molecule@ci
+      - name: commerce-ops
+        public_key: >-
+          ssh-ed25519
+          AAAAC3NzaC1lZDI1NTE5AAAAIDummyMoleculeCommerceOpsKeyOnlyNotARealCred
+          commerce-ops-molecule@ci
+    # `ghcr_pull_username` is deliberately left undefined in this play.
+    ghcr_pull_token: >-
+      {{ lookup('env', 'MOLECULE_GHCR_HALF_CREDENTIAL_TOKEN')
+         | default('molecule-half-credential-fixture-never-a-real-token', true) }}
+  roles:
+    - role: deploy_user

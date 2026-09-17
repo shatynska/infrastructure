@@ -1,0 +1,889 @@
+name: PR Validation
+
+# Required status check. The `validate` job must always run and report a
+# conclusion — including on PRs that touch no Terraform files — so this
+# workflow is NOT path-filtered at the workflow level. Terraform-specific
+# steps are instead conditioned on changed paths inside the job. See the
+# Required Status Checks Report on Every Pull Request requirement.
+#
+# NO STACK IS NAMED ANYWHERE IN THIS FILE, and that is a requirement
+# rather than a style: adding a stack is adding a directory under
+# `terraform/stacks/`, and SHALL change no file under `.github/workflows/`.
+# The GitHub Environment each one attaches to, the repository secret holding
+# its read-only Hetzner token, and whether the destroy-policy gate applies to
+# it are declared by that directory's own `pipeline.yml`. See the Each
+# Stack Declares Its Own Pipeline Configuration requirement.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs on EVERY pull request, not only those touching Terraform: a repository
+  # state in which no stack carries a readable declaration has lost the
+  # thing that makes the plan matrix cover anything, and the pull request that
+  # produced it is not the only one that should stop.
+  discover:
+    name: discover
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      stacks: ${{ steps.affected.outputs.stacks }}
+      plan-expected: ${{ steps.affected.outputs.plan-expected }}
+    steps:
+      # `fetch-depth: 0` because the step below diffs the pull request's base
+      # against its head. actions/checkout's default shallow clone has neither
+      # commit, and the diff would fail rather than resolve — which the
+      # resolution refuses, so this would fail the run loudly rather than plan
+      # the wrong set. Fetching in full is cheaper than making that a
+      # possibility.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Deliberately names neither `terraform/modules` nor
+      # `terraform/stacks`: it lists what changed, and the step after it
+      # decides what that means. Keeping the two apart is what lets each be
+      # pulled out of this file and run on its own.
+      - name: List the paths this pull request changes
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "::error::This pull request supplied no base or head commit (base='${BASE_SHA}', head='${HEAD_SHA}'), so the paths it changes cannot be listed. Refusing to continue with an empty list, which reads as 'nothing changed' and plans nothing."
+            exit 1
+          fi
+          if ! paths=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" 2>&1); then
+            echo "::error::git diff between ${BASE_SHA} and ${HEAD_SHA} failed: ${paths}. Refusing to read that as 'nothing changed'."
+            exit 1
+          fi
+          {
+            echo "paths<<CHANGED_PATHS_EOF"
+            printf '%s\n' "$paths"
+            echo "CHANGED_PATHS_EOF"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Discover the stacks and their declarations
+        id: discover
+        run: |
+          set -euo pipefail
+
+          # Enumerates every stack directory, reads each one's committed
+          # pipeline declaration, and emits the matrix this workflow's jobs run
+          # over. Nothing here names a stack: adding one is adding a
+          # directory.
+          #
+          # FAILS CLOSED. Every route below ends in a non-zero exit carrying a
+          # message that names the directory: an absent declaration, one missing
+          # a field the workflows read, and two stacks colliding on a
+          # secret or on a GitHub Environment. A silently skipped stack is
+          # one that is planned by nothing, applied by nothing and drift-checked
+          # by nothing, which is indistinguishable from it not existing.
+          #
+          # THIS BODY IS IDENTICAL IN ALL THREE TERRAFORM WORKFLOWS, and
+          # `.github/tests` asserts that it stays so. Copies are not the only
+          # available shape -- a composite action under `.github/actions/` would
+          # share these steps, and the reason for not using one is that it costs
+          # a fourth file in a diff already restructuring three gated workflows,
+          # and that `.github/tests` locates this body by step name inside a
+          # workflow. Both are costs rather than blockers. What makes the copies
+          # safe meanwhile is the identity assertion: the suite executes one copy
+          # and that assertion is what makes running it evidence about all three.
+          # Edit them together, or factor them out together.
+          #
+          # Free of Actions expressions on purpose -- it takes nothing from the
+          # event -- so `.github/tests` can pull this body out and run it
+          # against a scratch tree carrying each of those refusals. That is the
+          # constraint `ansible-verify.yml`'s discovery body already observes,
+          # and the reason its tests can exist at all. The prohibition includes
+          # naming the interpolation syntax in a comment, which is why this
+          # sentence spells it out in words.
+
+          stacks_root="terraform/stacks"
+          declaration_name="pipeline.yml"
+
+          if [ ! -d "$stacks_root" ]; then
+            echo "::error::Stack discovery found no ${stacks_root}/ directory at all. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # One flat `key: value` line out of a declaration. The declaration is
+          # a flat mapping by design, so this reads it with no YAML parser --
+          # the same shape the gitleaks step uses to read its pin out of
+          # .pre-commit-config.yaml, and what keeps this body runnable with
+          # nothing but bash, jq and coreutils.
+          #
+          # Leading and trailing whitespace is trimmed; whitespace INSIDE a
+          # value is kept, because a GitHub Environment name may legitimately
+          # carry a space and silently deleting it would attach the apply job to
+          # a different Environment than the one declared -- one GitHub would
+          # then create on demand, with no protection rules. A value that cannot
+          # be used is refused below by name, which is what the requirement asks
+          # for; normalising it into a usable-looking one is not.
+          field() {
+            sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
+              | head -n 1 \
+              | sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/"
+          }
+
+          records=$(mktemp)
+          refused=0
+
+          for directory in "$stacks_root"/*/; do
+            [ -d "$directory" ] || continue
+            name="$(basename "$directory")"
+            declaration="${directory}${declaration_name}"
+
+            if [ ! -f "$declaration" ]; then
+              echo "::error::${name}: ${directory} carries no ${declaration_name}. A stack with no declaration names no GitHub Environment and no read-only secret, so nothing plans it, nothing applies it and nothing drift-checks it."
+              refused=1
+              continue
+            fi
+
+            github_environment="$(field "$declaration" github_environment)"
+            read_only_secret="$(field "$declaration" read_only_secret)"
+            destroy_policy_gate="$(field "$declaration" destroy_policy_gate)"
+
+            incomplete=0
+            if [ -z "$github_environment" ]; then
+              echo "::error::${name}: ${declaration} declares no 'github_environment'. That field names the GitHub Environment this stack's apply job attaches to, and it has no safe default."
+              incomplete=1
+            fi
+            if [ -z "$read_only_secret" ]; then
+              echo "::error::${name}: ${declaration} declares no 'read_only_secret'. That field names the repository secret holding this stack's read-only Hetzner token, and it has no safe default."
+              incomplete=1
+            fi
+
+            # A value that is present but unusable is refused by name rather
+            # than passed on. A plan job indexes `secrets[...]` with the secret
+            # name, and an index GitHub cannot resolve yields an EMPTY
+            # credential rather than an error -- the plan then authenticates as
+            # nobody and fails somewhere far from the cause.
+            case "$read_only_secret" in
+              "") ;;
+              [0-9]* | *[!A-Za-z0-9_]*)
+                echo "::error::${name}: ${declaration} states 'read_only_secret: ${read_only_secret}', which is not a GitHub secret name — letters, digits and underscores only, not starting with a digit. A plan job indexes secrets[...] with it, and a name that does not resolve yields an empty credential rather than an error."
+                incomplete=1
+                ;;
+            esac
+
+            # A control character in either value would corrupt the
+            # tab-separated record this loop builds, so it is refused here
+            # rather than silently splitting a stack into two.
+            case "${github_environment}${read_only_secret}" in
+              *[[:cntrl:]]*)
+                echo "::error::${name}: ${declaration} carries a control character in 'github_environment' or 'read_only_secret'. Refusing to read a declaration this step cannot represent."
+                incomplete=1
+                ;;
+            esac
+
+            # The one OPTIONAL field. Absent means the gate applies, so a
+            # mistake in a declaration fails safe. A value that is neither
+            # absent nor a boolean is a declaration this pipeline cannot read,
+            # not a default to fall back on: read wrongly, this field disables
+            # the strongest guard on an apply.
+            case "$destroy_policy_gate" in
+              "")
+                destroy_policy_gate=true
+                ;;
+              true | false) ;;
+              *)
+                echo "::error::${name}: ${declaration} states 'destroy_policy_gate: ${destroy_policy_gate}', which is neither true nor false. Refusing to guess which was meant."
+                incomplete=1
+                ;;
+            esac
+
+            if [ "$incomplete" -ne 0 ]; then
+              refused=1
+              continue
+            fi
+
+            printf '%s\t%s\t%s\t%s\n' \
+              "$name" "$github_environment" "$read_only_secret" "$destroy_policy_gate" >>"$records"
+          done
+
+          if [ ! -s "$records" ] && [ "$refused" -eq 0 ]; then
+            echo "::error::Stack discovery found no stack under ${stacks_root}/. Refusing to report success having discovered nothing: an empty matrix skips every dependent job and the run reports green having done nothing."
+            exit 1
+          fi
+
+          # Two collisions no assertion about workflow text can reach, because
+          # they live in committed data rather than in a workflow. Two
+          # stacks sharing a read-only secret plan under one credential
+          # against different Hetzner projects; two sharing a GitHub Environment
+          # share its WRITE token and its protection rules, so a stack
+          # meant to be ungated would hold the reviewed one's write credential.
+          for secret in $(cut -f3 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$secret" '$3 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare '${secret}' as their read-only secret. A repository secret holds one value, so their plans would run under one credential and every stack but one would report a meaningless diff."
+            refused=1
+          done
+
+          for shared_environment in $(cut -f2 "$records" | sort | uniq -d); do
+            colliding=$(awk -F'\t' -v value="$shared_environment" '$2 == value { printf "%s ", $1 }' "$records")
+            echo "::error::${colliding}: all declare the GitHub Environment '${shared_environment}'. They would share its write token and its protection rules, so a stack intended to be ungated would hold the reviewed stack's write credential."
+            refused=1
+          done
+
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::Stack discovery refused the committed declarations, so no stack enters the matrix. Every reason is reported above, each naming the directory it belongs to."
+            exit 1
+          fi
+
+          discovered=$(jq -R -s -c '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                name: .[0],
+                github_environment: .[1],
+                read_only_secret: .[2],
+                destroy_policy_gate: (.[3] == "true")
+              })
+          ' <"$records")
+          rm -f "$records"
+
+          echo "Discovered stacks: ${discovered}"
+          echo "stacks=${discovered}" >>"$GITHUB_OUTPUT"
+      # Narrows the discovered set to what this pull request can actually
+      # affect. Without it, a pull request touching one stack plans every
+      # stack -- and on `apply.yml`, where the same resolution runs,
+      # raises an approval request with nothing to approve.
+      #
+      # FAILS CLOSED, and the polarity is the whole point: an unresolvable
+      # result and a genuine "nothing affected" are indistinguishable, so an
+      # empty input is refused rather than read as the second. Read as
+      # "nothing affected" it plans nothing and reports green.
+      #
+      # Free of `${{ }}`, both inputs through `env:`, for the same reason the
+      # discovery body above is.
+      - name: Resolve which stacks this pull request affects
+        id: affected
+        env:
+          STACKS: ${{ steps.discover.outputs.stacks }}
+          CHANGED_PATHS: ${{ steps.changed.outputs.paths }}
+        run: |
+          set -euo pipefail
+
+          # THIS BODY IS IDENTICAL IN BOTH WORKFLOWS THAT NARROW BY CHANGED
+          # PATHS, and `.github/tests` asserts that it stays so. A pull request
+          # and the merge of that same pull request must resolve the same
+          # stacks, or the reviewer approves one plan and the pipeline
+          # applies another. What differs between the two is only where the
+          # changed paths come from, which is the step before this one.
+          #
+          # Free of Actions expressions, both inputs through `env:`, so
+          # `.github/tests` can pull this body out and run it.
+
+          if [ -z "${STACKS}" ]; then
+            echo "::error::Stack discovery produced no set of stacks, so which of them this change affects cannot be resolved. Refusing to read that as 'no stack affected': that plans nothing, applies nothing and reports a green run."
+            exit 1
+          fi
+
+          if [ -z "${CHANGED_PATHS}" ]; then
+            echo "::error::The set of changed paths is empty, which means the step that resolves it did not conclude -- a change always changes at least one path. Refusing to read that as 'no stack affected'."
+            exit 1
+          fi
+
+          # The mapping the requirement states: a change under
+          # `terraform/modules/` affects every stack, because every
+          # stack consumes those modules; a change under
+          # `terraform/stacks/<name>/` affects that stack alone.
+          selected=""
+          every=0
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            case "$path" in
+              terraform/modules/*)
+                every=1
+                ;;
+              terraform/stacks/*/*)
+                candidate="${path#terraform/stacks/}"
+                selected="${selected}${candidate%%/*}
+          "
+                ;;
+            esac
+          done <<CHANGED_PATHS_EOF
+          ${CHANGED_PATHS}
+          CHANGED_PATHS_EOF
+
+          if [ "$every" -eq 1 ]; then
+            affected="$STACKS"
+          else
+            names=$(printf '%s' "$selected" | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            affected=$(printf '%s' "$STACKS" | jq -c --argjson names "$names" 'map(select(.name as $name | $names | index($name)))')
+          fi
+
+          count=$(printf '%s' "$affected" | jq 'length')
+          if [ "$count" -gt 0 ]; then
+            expected=true
+          else
+            expected=false
+          fi
+
+          echo "Affected stacks (${count}): ${affected}"
+          echo "stacks=${affected}" >>"$GITHUB_OUTPUT"
+          echo "plan-expected=${expected}" >>"$GITHUB_OUTPUT"
+  # The plan, one job per affected stack.
+  #
+  # THREE THINGS ABOUT THIS JOB'S SHAPE, each load-bearing:
+  #
+  # 1. IT CARRIES ITS OWN SECRET SCAN. The Pull Request Plan Visibility
+  #    requirement obliges a scan to precede every plan IN THE JOB THAT RUNS IT,
+  #    because a failing step stops the next step in its own job and stops
+  #    nothing anywhere else. `validate` scans too, and unconditionally, which
+  #    is what covers a pull request that plans nothing at all.
+  #
+  # 2. IT IS GATED BY AN `if:` READING THE DISCOVERY OUTPUT, not by an empty
+  #    matrix. That was the other way round until an empty matrix was actually
+  #    observed on a run: GitHub does not skip such a job, it never CREATES it,
+  #    and `needs.<job>.result` for a job that was never created is `failure` --
+  #    so every pull request touching no Terraform path failed the required
+  #    status check.
+  #
+  #    The condition names no Terraform path, and that is not a wording trick:
+  #    the Pull Request Validation Checks requirement forbids putting a secret
+  #    scan behind a path condition, and what satisfies that requirement is
+  #    `validate`'s own gitleaks step, which is unconditional and runs on every
+  #    pull request. THIS job's scan exists for a different obligation --
+  #    Pull Request Plan Visibility's "a secret scan SHALL precede every plan,
+  #    in the job that runs it" -- which has nothing to order where there is no
+  #    plan. `.github/tests` asserts the unconditional scan positively, so
+  #    gating this copy cannot be mistaken for gating them all.
+  #
+  # 3. IT IS NOT THE REGISTERED STATUS CHECK. A matrix generates one context
+  #    name per row, so there is no stable name for branch protection to point
+  #    at; `validate` concludes on this job's behalf below.
+  plan:
+    name: plan (${{ matrix.stack.name }})
+    needs: discover
+    if: ${{ needs.discover.outputs.plan-expected == 'true' }}
+    runs-on: ubuntu-latest
+    # No `environment:` — a plan job declaring one would both pause on that
+    # Environment's protection rules and resolve `HCLOUD_TOKEN` to the
+    # write-capable token in an ungated job. See the Credential Scoping by
+    # Privilege requirement, whose prohibition this implements.
+    permissions:
+      contents: read
+      pull-requests: write # this job, and only this job, posts the plan comment
+    strategy:
+      # One stack's plan failing must not abandon the others: a reviewer
+      # shown one failure and nothing about the rest cannot tell whether they
+      # were clean or merely unexamined.
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.discover.outputs.stacks) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The same install `validate` runs, and deliberately not a shared step:
+      # the ordering this protects is scoped to a job, so a scan in another job
+      # protects nothing here. The version is read out of .pre-commit-config.yaml
+      # at run time rather than hardcoded, so neither copy can drift from the
+      # local hook or from the other.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          version=$(awk '/gitleaks\/gitleaks/{found=1} found && /rev:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' .pre-commit-config.yaml)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the pinned gitleaks revision from .pre-commit-config.yaml. Refusing to install an unverified version."
+            exit 1
+          fi
+          echo "Installing gitleaks ${version}, the revision .pre-commit-config.yaml pins."
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
+          rm gitleaks.tar.gz
+
+      # Before the plan, in this job. A plan authenticates to a cloud API and
+      # writes its output into a pull request comment; a leaked credential
+      # reaching either is what this ordering exists to prevent.
+      - name: gitleaks
+        run: |
+          "$RUNNER_TEMP/gitleaks" dir . --redact --exit-code 1
+
+      # HCP Terraform has no OIDC path for CLI-driven backend/state auth
+      # (its "dynamic credentials" feature authenticates providers during
+      # a remote-executed run, not the CLI itself), and this org's free
+      # tier has no team-scoped tokens to split by privilege either — see
+      # design.md Decision 9 of the change that introduced this pipeline.
+      # TF_API_TOKEN is a single static token; the Hetzner token's split
+      # remains the real security boundary.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      # `secrets[...]` indexed by the name this stack's own declaration
+      # states, which is the only construction that can resolve a DIFFERENT
+      # token per row: `${{ }}` is evaluated before a step runs, so a literal
+      # name binds one compile-time-known secret and a shell loop over N
+      # stacks would hold one token for all of them.
+      - name: terraform plan
+        id: plan
+        working-directory: terraform/stacks/${{ matrix.stack.name }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets[matrix.stack.read_only_secret] }}
+          STACK_NAME: ${{ matrix.stack.name }}
+        run: |
+          set -euo pipefail
+
+          # A STATUS THIS STEP MEANS TO INSPECT IS CAPTURED WITH `|| status=$?`,
+          # never by reading `$?` on the line after the command. A `run:` step is
+          # executed as `bash -e`, and `set` turns on only the options it names
+          # -- `set -uo pipefail` does NOT clear `-e`, however much it reads as
+          # though it replaces the whole option set. Under `-e` a failing command
+          # ends the shell at that line, so every branch below it is unreachable
+          # and the error handling that looks like the safety net is dead code.
+          # `cmd || status=$?` is exempt from `-e` because the command is the
+          # left operand of a list, which is the only reason this works.
+
+          # The comment body is written FIRST, and then again with whatever the
+          # plan produced. The steps below post it whenever this step ran at
+          # all, and without this a failure before the plan -- a failed `init`,
+          # most often -- would leave them pointing at a file that does not
+          # exist, so the last error in the log would be a missing-file failure
+          # from the comment action rather than the failure that actually
+          # stopped the plan.
+          heading="### Terraform Plan — \`terraform/stacks/${STACK_NAME}\`"
+          printf '%s\n\nThis plan did not run to completion; see the job log.\n' \
+            "$heading" >comment_body.md
+
+          init_exit=0
+          terraform init >init_output.txt 2>&1 || init_exit=$?
+          cat init_output.txt
+          if [ "$init_exit" -ne 0 ]; then
+            {
+              echo "$heading"
+              echo
+              echo '`terraform init` failed, so no plan was produced.'
+              echo
+              echo '```'
+              cat init_output.txt
+              echo '```'
+            } >comment_body.md
+            echo "::error::terraform init exited ${init_exit}, so this stack was not planned."
+            exit 1
+          fi
+
+          plan_exit=0
+          terraform plan -no-color -input=false -out=tfplan >plan_output.txt 2>&1 || plan_exit=$?
+          {
+            echo "$heading"
+            echo
+            echo '```'
+            cat plan_output.txt
+            echo '```'
+          } >comment_body.md
+          cat plan_output.txt
+
+          # ANY non-zero status fails this row, not exit 1 alone. `terraform
+          # plan` returns 0 or 1 of its own accord, but a runner that OOM-kills
+          # it reports 137, a SIGTERM 143, and an unusable binary 126 or 127 --
+          # and `validate` now concludes explicitly on this row's result, so a
+          # status this step let through would be reported as a plan that ran
+          # and passed.
+          if [ "$plan_exit" -ne 0 ]; then
+            echo "::error::terraform plan exited ${plan_exit}. Refusing to report this stack as planned."
+            exit 1
+          fi
+
+      # The marker carries the stack name. With a constant marker and
+      # `edit-mode: replace`, N stacks would each find and overwrite the
+      # same comment, leaving one plan standing — and at one stack that
+      # defect and the correct behaviour are indistinguishable, which is why
+      # this is asserted statically rather than observed on a run.
+      # Stated POSITIVELY -- the plan step ran and concluded one way or the
+      # other -- rather than as `!= 'skipped'` or `!= ''`. The plan step carries
+      # no `if:`, so it can never be skipped and `!= 'skipped'` is always true,
+      # including when an earlier step in this job failed and the plan step never
+      # ran at all; these steps would then post a body this job never wrote.
+      # `!= ''` closes that, but only on the premise that an unreached step's
+      # `outcome` is the empty string rather than some other value. The positive
+      # form needs no premise: it admits exactly the two outcomes that mean the
+      # body exists.
+      - name: Find existing plan comment
+        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
+        id: find_comment
+        uses: peter-evans/find-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "### Terraform Plan — `terraform/stacks/${{ matrix.stack.name }}`"
+
+      - name: Post plan as PR comment
+        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body-path: terraform/stacks/${{ matrix.stack.name }}/comment_body.md
+
+  # THE REGISTERED REQUIRED STATUS CHECK. Its name is a literal, so branch
+  # protection has something stable to point at; the plan matrix's name is not,
+  # which is why this job concludes on the matrix's behalf below.
+  validate:
+    name: validate
+    needs: [discover, plan]
+    # Runs whatever its dependencies concluded. Without this the job is itself
+    # skipped when a dependency fails or is skipped -- and a skipped job
+    # produces no status check context, which under branch protection is a
+    # required check that never reports: the same permanently-pending state a
+    # path filter produces.
+    #
+    # `always()` ALONE, and nothing joined to it. Both the Specification Record
+    # Is Verified in Continuous Integration and the Continuous-Integration
+    # Configuration Is Itself Verified requirements oblige this job to be
+    # unconditional, and admit this exact literal on a job declaring `needs:`
+    # precisely because it cannot evaluate false. `always() && <anything>` is
+    # not admitted, and neither is any other expression.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `dorny/paths-filter` resolves the pull request's diff through the API
+      # and needs this read scope. Write moved to the plan job, which is the one
+      # that now posts the plan comment — see the Least-Privilege Workflow
+      # Permissions requirement.
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Detect Terraform and platform changes
+        id: changes
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            terraform:
+              - 'terraform/stacks/**'
+              - 'terraform/modules/**'
+            platform:
+              - 'platform/**'
+            ansible:
+              - 'ansible/**'
+
+      # Unconditional, and deliberately so. This suite asserts the properties
+      # this pipeline's own requirements state -- which checks are gated on
+      # which paths, which versions are pinned where, which jobs declare an
+      # `environment:`, which directories Dependabot covers. A pull request
+      # touching nothing under .github/ can still violate them: adding a module
+      # under terraform/modules/ breaks Dependabot coverage without editing a
+      # workflow. It needs no network, credential, container runtime or
+      # Terraform binary. See the Continuous-Integration Configuration Is
+      # Itself Verified requirement.
+      - name: Setup Python (CI configuration tests)
+        id: setup_python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install CI test dependencies
+        run: pip install -r .github/requirements-ci.txt
+
+      - name: CI configuration tests
+        run: python3 -m unittest discover --start-directory .github/tests --verbose
+
+      # Validates this repository's own specification record: that the
+      # capability specifications and active deltas parse, and that no
+      # archived change's task list still claims outstanding work.
+      #
+      # Unconditional, and so is this job. A record is falsified by what
+      # merged before it, not by the diff under review -- so a pull request
+      # touching nothing under openspec/ is precisely the one that would
+      # carry an unrelated stale failure past a path filter.
+      #
+      # The two steps below hold a CLOSED FORM, and the CI-configuration
+      # suite asserts it: the script is the validating invocations and
+      # nothing else -- no shell operator joining them to anything, no
+      # redirection or capture of their status, no `shell:` override -- and
+      # neither this step nor this job declares `continue-on-error` in any
+      # form. Every other property here is satisfied by a step that runs, is
+      # pinned, is never skipped, and then swallows its result; such a step
+      # reports green forever. Suppression is excluded by asserting a shape
+      # rather than by listing evasions, because a list is complete only
+      # until someone writes the entry nobody thought of. An edit to these
+      # lines will fail that assertion until it is updated -- deliberately,
+      # for a step whose whole purpose is to be un-bypassable.
+      - name: Setup Node (specification record validation)
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      # `npm ci` and not `npm install`: it installs the lockfile exactly and
+      # fails where the manifest and the lockfile disagree, which is the
+      # property `terraform init` gets from a committed .terraform.lock.hcl.
+      # The pin lives in .github/package.json so Dependabot can see it.
+      - name: Install OpenSpec (pinned)
+        working-directory: .github
+        run: npm ci
+
+      # Invoked by path, NOT as `npx openspec`. npx searches node_modules/.bin
+      # upward from the working directory, and `.github/node_modules` is a
+      # child of the repository root rather than an ancestor of it -- so from
+      # here npx never sees the pinned install. It falls back to its own cache
+      # or downloads from the registry at run time, which is exactly the
+      # freshly-resolved dependency this check is specified to forbid.
+      #
+      # Verified rather than assumed: with `.github/node_modules` moved aside
+      # and no global install on PATH, `npx openspec validate --all` still
+      # exited 0 and validated -- from the npx cache. A CI runner has no such
+      # cache, so the same line would have resolved a version off the registry,
+      # or failed. The path form can only run what `npm ci` installed.
+      - name: Validate the specification record
+        run: ./.github/node_modules/.bin/openspec validate --all
+
+      - name: Validate archived change records
+        run: ./.github/node_modules/.bin/openspec validate --archived
+
+      # Validates platform/docker-compose.yml renders and parses
+      # correctly. No SSH credential, no `environment:` declared anywhere
+      # in this job -- see the Pull Request Validation Runs Without
+      # Deploy Credentials requirement in iac-platform-deploy-pipeline.
+      # .env.example supplies dummy values purely so `config` can resolve
+      # variable interpolation; real values are never present here.
+      - name: docker compose config (platform/)
+        if: steps.changes.outputs.platform == 'true'
+        run: |
+          cp platform/.env.example platform/.env
+          docker compose -f platform/docker-compose.yml config
+          rm platform/.env
+
+      # Unconditional. A secret scanner whose entire value is being
+      # unconditional cannot be gated on a path filter -- a credential
+      # committed under ansible/, platform/ or docs/ is exactly as exposed as
+      # one under terraform/. This is also the scan that covers a pull request
+      # affecting no stack, where the plan matrix is empty and its own
+      # copy of these two steps never runs. The version is read out of
+      # .pre-commit-config.yaml at run time rather than hardcoded, so the local
+      # hook and this scan cannot drift apart; a comment asking people to keep
+      # two numbers in sync is what produced the drift this replaces.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          version=$(awk '/gitleaks\/gitleaks/{found=1} found && /rev:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' .pre-commit-config.yaml)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the pinned gitleaks revision from .pre-commit-config.yaml. Refusing to install an unverified version."
+            exit 1
+          fi
+          echo "Installing gitleaks ${version}, the revision .pre-commit-config.yaml pins."
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+          # Extracted outside the workspace: the next step scans the working
+          # tree, and a binary sitting at the repository root would be scanned
+          # by itself -- ~30 MB whose embedded rule config is dense in exactly
+          # the keywords the generic-api-key rule keys on. Keeping it out also
+          # makes this invocation equivalent to the one verified locally,
+          # where no such file exists.
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
+          rm gitleaks.tar.gz
+
+      # Invokes the gitleaks CLI binary directly, not
+      # gitleaks/gitleaks-action@v2 — that action requires a paid
+      # GITLEAKS_LICENSE for org-owned repos and runs on Node 20, which
+      # GitHub-hosted runners drop on 2026-09-16.
+      # `dir` scans the working tree; `detect` (removed from the documented CLI
+      # by 8.30.0, surviving only as an alias for `git`) scans history, and on
+      # actions/checkout's default shallow clone a history scan sees one commit
+      # and reports success on everything else. Verified: run where git fails,
+      # `detect` logs the failure and still concludes "no leaks found" -- the
+      # same "could not tell, therefore fine" shape as the destroy gate. What
+      # matters on a pull request is whether a secret is in the tree being
+      # merged, not when it entered.
+      - name: gitleaks
+        run: |
+          "$RUNNER_TEMP/gitleaks" dir . --redact --exit-code 1
+
+      - name: Setup Terraform
+        if: steps.changes.outputs.terraform == 'true'
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~> 1.9"
+          terraform_wrapper: false
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: terraform fmt -check
+        if: steps.changes.outputs.terraform == 'true'
+        run: terraform fmt -check -recursive
+
+      # validate/tflint/test discover terraform/modules/*/ and terraform/stacks/* directories
+      # rather than naming them, so a directory added under either one is
+      # covered without a workflow edit — see the change
+      # fix-ci-module-coverage.
+      - name: terraform validate
+        if: steps.changes.outputs.terraform == 'true'
+        run: |
+          set -euo pipefail
+          for dir in terraform/modules/*/ terraform/stacks/*/; do
+            if compgen -G "${dir}*.tf" >/dev/null; then
+              echo "::group::terraform validate ${dir}"
+              (cd "$dir" && terraform init -backend=false && terraform validate)
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Setup tflint
+        if: steps.changes.outputs.terraform == 'true'
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: latest
+
+      - name: tflint
+        if: steps.changes.outputs.terraform == 'true'
+        run: |
+          set -euo pipefail
+          tflint --init --config="${{ github.workspace }}/.tflint.hcl"
+          for dir in terraform/modules/*/ terraform/stacks/*/; do
+            if compgen -G "${dir}*.tf" >/dev/null; then
+              tflint --config="${{ github.workspace }}/.tflint.hcl" --chdir="${dir%/}"
+            fi
+          done
+
+      - name: terraform test
+        if: steps.changes.outputs.terraform == 'true'
+        run: |
+          set -euo pipefail
+          for dir in terraform/modules/*/; do
+            if compgen -G "${dir}tests/*.tftest.hcl" >/dev/null; then
+              echo "::group::terraform test ${dir}"
+              (cd "$dir" && terraform test)
+              echo "::endgroup::"
+            fi
+          done
+
+      # Trivy's/tfsec's built-in misconfiguration rule packs target
+      # AWS/Azure/GCP/Kubernetes/Docker, not Hetzner — see the Hetzner
+      # Guardrails Are Encoded Locally requirement. This step catches
+      # generic Terraform-level issues; it is deliberately not treated
+      # as the Hetzner security control. Custom Hetzner-specific
+      # policies, if added under the repo, are picked up automatically
+      # by trivy-action's `trivy-config` custom checks directory.
+      - name: Trivy misconfiguration scan
+        if: steps.changes.outputs.terraform == 'true'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+
+      # Ansible's blocking tier. These run through `pre-commit` rather than
+      # being re-expressed here: both hooks are already pinned in
+      # .pre-commit-config.yaml with non-obvious arguments (ansible-lint needs
+      # an explicit `ansible/` target or it scans the whole repo;
+      # --syntax-check must run with cwd ansible/ or ansible.cfg's roles_path
+      # never resolves), and duplicating them here would duplicate the pins
+      # too. gitleaks is deliberately NOT run this way: its upstream hook uses
+      # `--staged`, and nothing is staged in a CI checkout, so it would scan
+      # zero changes and pass vacuously.
+      #
+      # requirements-test.txt supplies ansible-core (pinned 2.21.3), which is
+      # what provides ansible-galaxy and ansible-playbook. It also carries
+      # Molecule, unused here -- installing a subset would mean either a second
+      # copy of the ansible-core pin or extracting one line out of a pinned
+      # manifest, both of which reintroduce the drift the gitleaks step above
+      # exists to close.
+      - name: Install Ansible toolchain
+        if: steps.changes.outputs.ansible == 'true'
+        run: pip install -r ansible/requirements-test.txt
+
+      # Roles are installed into ansible/roles/ explicitly, NOT to the default
+      # ~/.ansible/roles. `ansible/ansible.cfg` sets `roles_path = roles`,
+      # which REPLACES the default search list rather than extending it, so a
+      # role installed to the default location is invisible to anything
+      # running with cwd `ansible/` -- which the syntax-check hook does, and
+      # must, or ansible.cfg is not found at all. Installing from the
+      # repository root without `-p` puts the role somewhere nothing will look
+      # and the syntax check fails on `- role: geerlingguy.docker`.
+      #
+      # Split into role and collection commands because `-p` applies only to
+      # roles: `ansible-galaxy install -r ... -p ...` silently ignores the
+      # collections in the same manifest, with a warning that is easy to miss
+      # in a CI log.
+      - name: Install Galaxy content
+        if: steps.changes.outputs.ansible == 'true'
+        run: |
+          set -euo pipefail
+          ansible-galaxy collection install -r ansible/requirements.yml
+          ansible-galaxy role install -r ansible/requirements.yml -p ansible/roles
+
+      - name: Cache pre-commit environments
+        if: steps.changes.outputs.ansible == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          # Keyed on the runner image and Python version as well as the config:
+          # a pre-commit hook environment is built against a specific
+          # interpreter, so a runner-image bump would otherwise restore a cache
+          # that no longer works.
+          key: pre-commit-${{ runner.os }}-py${{ steps.setup_python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: ansible-lint
+        if: steps.changes.outputs.ansible == 'true'
+        run: pre-commit run ansible-lint --all-files --show-diff-on-failure
+
+      - name: ansible-playbook --syntax-check
+        if: steps.changes.outputs.ansible == 'true'
+        run: pre-commit run ansible-playbook-syntax-check --all-files --show-diff-on-failure
+
+      # Concludes for the plan matrix, whose generated job names branch
+      # protection cannot register. Last, so every check above still runs and
+      # reports on a pull request whose plan failed.
+      #
+      # DISCOVERY IS READ FIRST, and not for tidiness. When discovery fails its
+      # outputs are empty strings, so PLAN_EXPECTED is "" and PLAN_RESULT is
+      # "skipped" -- which the "nothing to plan" branch would otherwise pass,
+      # concluding success precisely on a run whose own precondition refused.
+      #
+      # `skipped` is refused where a plan was owed and accepted only where it
+      # was not. `cancelled` is refused either way: a cancelled matrix has
+      # planned nothing, and a run superseded by a newer push reports on the
+      # older commit rather than on the one being merged.
+      #
+      # Free of `${{ }}`: the inputs arrive through `env:`, so `.github/tests`
+      # can pull this body out and run it across every row of the table it
+      # implements.
+      - name: Conclude on the plan matrix's behalf
+        env:
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_EXPECTED: ${{ needs.discover.outputs.plan-expected }}
+        run: |
+          set -euo pipefail
+
+          if [ "$DISCOVER_RESULT" != "success" ]; then
+            echo "::error::Stack discovery concluded '${DISCOVER_RESULT}', not 'success'. Its outputs are empty, so whether a plan was owed cannot be read from them. Refusing to conclude success on a run whose own precondition did not hold."
+            exit 1
+          fi
+
+          case "$PLAN_RESULT" in
+            success)
+              echo "Every affected stack was planned and reported (plan-expected=${PLAN_EXPECTED})."
+              ;;
+            skipped)
+              if [ "$PLAN_EXPECTED" = "true" ]; then
+                echo "::error::The plan matrix was skipped on a run that resolved at least one affected stack (plan-expected=true). A skipped job is not a passing one: concluding success here would report a green required status check for a pull request nothing planned."
+                exit 1
+              fi
+              echo "This pull request affects no stack, so no plan was owed and none ran. Concluding success having correctly done no work."
+              ;;
+            *)
+              echo "::error::The plan matrix concluded '${PLAN_RESULT}' (plan-expected=${PLAN_EXPECTED}). Only 'success', or a skip on a pull request that affects no stack, may conclude success."
+              exit 1
+              ;;
+          esac

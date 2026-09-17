@@ -1,0 +1,1869 @@
+---
+# Verifies the two ADDED requirements "An Application Can Probe Its Own
+# Database Through a Read-Only Forced Command" (14 scenarios) and "The Host
+# Carries an Operator-Declared Maintenance Window for the Shared Instance"
+# (4 scenarios) in openspec/specs/iac-host-configuration/spec.md, and the
+# host-side half of the ADDED requirement "A Destructive Window on the Shared
+# Instance Is Announced to the Applications That Hold Databases in It"
+# (openspec/specs/iac-platform-services/spec.md).
+#
+# Every block below is labelled with the delta scenario or the normative clause
+# it covers. The change `make-a-shared-instance-reset-visible-to-its-
+# applications` carries the test-plan.md holding the full scenario-accounting
+# table, each assertion's specified/derived classification, the unresolved
+# project questions, and the cases deliberately left uncovered with their
+# reasons. Several fixtures below look gratuitously specific and are not.
+#
+# NOTHING HERE PASSES TODAY, and that is the intended state: `deploy-probe`,
+# `app-probe` and `/var/lib/platform-maintenance/` do not exist in this tree, so
+# the first probe task reports a target that is absent. That establishes the
+# target's absence and nothing about whether these assertions discriminate --
+# what establishes that is each one going green as the implementation lands.
+#
+# THE ORDER OF THE PHASES IS LOAD-BEARING. The six tokens are not six
+# independent conditions that can be arranged in any order: reaching
+# `unreachable` means making the instance unreachable, and reaching `absent`
+# means destroying the role and database every earlier assertion reads. So the
+# fixture is driven through one sequence -- healthy, window raised, window
+# withdrawn, unreachable over the application's own network, discarded and
+# re-initialised, stopped -- and the destructive phases come last. A case moved
+# earlier passes for the wrong reason or fails for a fixture reason.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    # THE DECLARATION'S PATH IS A LITERAL IN THREE PLACES -- this role, the
+    # role's README and platform/README.md's upgrade runbook -- because the
+    # requirement fixes it ("Its location SHALL be a fixed, documented path")
+    # and an operator types it under time pressure. The DIRECTORY and its
+    # ownership and mode are SPECIFIED by the requirement's own prose; the FILE
+    # NAME inside it comes from that change's design.md decision 5 and is
+    # recorded as DERIVED in test-plan.md. A test that raises a window has no
+    # way to avoid naming it.
+    probe_window_dir: /var/lib/platform-maintenance
+    probe_window_file: /var/lib/platform-maintenance/shared-postgres-window
+
+    probe_payload_dir: /tmp/probe-payloads
+
+    # The six tokens, in the requirement's own precedence order. Used to decide
+    # whether a run emitted a token at all, which is what the exit-status
+    # obligation is stated in terms of.
+    probe_tokens:
+      - window-open
+      - unreachable
+      - absent
+      - credential-refused
+      - empty
+      - populated
+
+    # The fixture instance is the image platform/docker-compose.yml pins, and
+    # not a lighter stand-in. `app-probe` reads the client's image from the
+    # RUNNING container (that change's design.md decision 7), so the fixture's
+    # image is the one the probe's own client runs; a fixture on a different
+    # major would exercise a client this repository never ships.
+    # .github/tests asserts that this literal and the stack's pin agree.
+    probe_postgres_image: postgres:18.6
+
+    # Not `platform`: an application of that name is enumerated in converge.yml
+    # and the whole point of that entry is that the instance holds no role and
+    # no database for it. A superuser sharing its name would make `absent`
+    # reachable for the wrong reason.
+    probe_superuser: platform_superuser
+    probe_superuser_password: molecule-fixture-superuser-never-a-real-credential
+
+    # The one value this scenario later asserts appears in no process listing.
+    # It exists in this file, in the fixture's SQL file and in the probe input
+    # objects, and in nothing else.
+    probe_app_password: molecule-fixture-commerce-ops-password-never-a-real-credential
+    probe_denied_password: molecule-fixture-probe-denied-password-never-a-real-credential
+    probe_wrong_password: molecule-fixture-wrong-password-never-a-real-credential
+
+    # Every phase-A case, with the outcomes the requirement admits for it.
+    # `refuse` is an outcome like any other: a non-zero exit emitting no token.
+    # A case admitting two outcomes is one the requirement itself leaves open,
+    # never one this pass was unsure about.
+    probe_phase_a_cases:
+      # Scenario: the connection succeeds and the named table holds a row.
+      - name: populated
+        app: commerce-ops
+        expect: [populated]
+        object:
+          password: "{{ probe_app_password }}"
+          table: alembic_version
+      # Scenario: A marker table that does not exist is an ordinary answer.
+      - name: empty-no-such-table
+        app: commerce-ops
+        expect: [empty]
+        object:
+          password: "{{ probe_app_password }}"
+          table: no_such_marker_table
+      # The second limb of `empty`: the table exists and holds no row.
+      - name: empty-table-without-rows
+        app: commerce-ops
+        expect: [empty]
+        object:
+          password: "{{ probe_app_password }}"
+          table: empty_marker
+      # Scenario: A schema-qualified table name is not refused for being
+      # qualified. `public.` is the form design.md names; `app_schema.` is the
+      # discriminating one, because an implementation that satisfies the first
+      # by dropping everything before the dot fails the second.
+      - name: qualified-public-schema
+        app: commerce-ops
+        expect: [populated]
+        object:
+          password: "{{ probe_app_password }}"
+          table: public.alembic_version
+      - name: qualified-other-schema
+        app: commerce-ops
+        expect: [populated]
+        object:
+          password: "{{ probe_app_password }}"
+          table: app_schema.qualified_marker
+      # Scenario: A stale password is told apart from a reset instance.
+      - name: credential-refused
+        app: commerce-ops
+        expect: [credential-refused]
+        object:
+          password: "{{ probe_wrong_password }}"
+          table: alembic_version
+      # Scenario: An absent role is told apart from a refused credential.
+      # `platform` holds no role and no database in the instance, and no
+      # password for it exists anywhere, which is what makes these two cases the
+      # requirement's "without that password having to be correct".
+      - name: absent-unknown-password
+        app: platform
+        expect: [absent]
+        object:
+          password: molecule-fixture-no-password-exists-for-this-role
+          table: alembic_version
+      - name: absent-another-applications-password
+        app: platform
+        expect: [absent]
+        object:
+          password: "{{ probe_app_password }}"
+          table: alembic_version
+      # Normative clause: an input object carrying fields beyond those named
+      # SHALL be accepted and the unknown fields ignored. Asserted by the answer
+      # being the same one `populated` above gets.
+      - name: unknown-fields-ignored
+        app: commerce-ops
+        expect: [populated]
+        object:
+          password: "{{ probe_app_password }}"
+          table: alembic_version
+          probe_protocol_version: 2
+          requested_by: a-repository-this-one-does-not-read
+          nested_unknown_field:
+            anything: at all
+      # Normative clause: the object MAY carry `role` and `database`, which
+      # SHALL equal the names derived from the forced command's argument.
+      - name: agreeing-role-and-database
+        app: commerce-ops
+        expect: [populated]
+        object:
+          password: "{{ probe_app_password }}"
+          table: alembic_version
+          role: commerce-ops
+          database: commerce-ops
+      # Scenario: A probe key can only probe its own application.
+      - name: disagreeing-role
+        app: commerce-ops
+        expect: [refuse]
+        object:
+          password: "{{ probe_app_password }}"
+          table: alembic_version
+          role: platform
+      - name: disagreeing-database
+        app: commerce-ops
+        expect: [refuse]
+        object:
+          password: "{{ probe_app_password }}"
+          table: alembic_version
+          database: platform
+      # Scenario: An unclassified failure is not resolved to the nearest token
+      # -- the incomplete-input half.
+      - name: missing-table
+        app: commerce-ops
+        expect: [refuse]
+        object:
+          password: "{{ probe_app_password }}"
+      - name: missing-password
+        app: commerce-ops
+        expect: [refuse]
+        object:
+          table: alembic_version
+      # The same scenario's other half, and the only case here that reaches it
+      # from the INSTANCE rather than from the input: `probe-denied`'s role and
+      # database both exist, so the root-side read succeeds and the credential
+      # path is reached, and its connection then fails with `permission denied
+      # for database` -- a message neither the auth-failure nor the
+      # connection-level pattern matches.
+      - name: unclassified-instance-error
+        app: probe-denied
+        expect: [refuse]
+        object:
+          password: "{{ probe_denied_password }}"
+          table: alembic_version
+      # Scenario: A table name cannot execute anything. The requirement admits
+      # `empty` or a refusal and nothing else; what must not happen is either
+      # canary file appearing. The shell forms are what would run if the name
+      # were interpolated into ANY command string at any layer -- the host's
+      # `sudo` line, the `docker run` line, or the client container's `sh -c`.
+      - name: table-name-shell-substitution
+        app: commerce-ops
+        expect: [empty, refuse]
+        object:
+          password: "{{ probe_app_password }}"
+          table: $(touch /tmp/probe-canary-dollar)
+      - name: table-name-backticks
+        app: commerce-ops
+        expect: [empty, refuse]
+        object:
+          password: "{{ probe_app_password }}"
+          table: "`touch /tmp/probe-canary-backtick`"
+      # The SQL form. `copy ... to program` is the statement that would run a
+      # command inside the server's own container, so its canary is checked
+      # there as well as on the host.
+      - name: table-name-statement-separator
+        app: commerce-ops
+        expect: [empty, refuse]
+        object:
+          password: "{{ probe_app_password }}"
+          table: "alembic_version'; copy (select 1) to program 'touch /tmp/probe-canary-sql'; --"
+      # Normative clause: the name SHALL take the shape of an optionally
+      # schema-qualified identifier, and one outside that shape SHALL refuse
+      # non-zero RATHER THAN answering `empty`. This case is the one that
+      # separates the shape check from the two above, which the scenario lets
+      # answer either way.
+      - name: table-name-outside-the-shape
+        app: commerce-ops
+        expect: [refuse]
+        object:
+          password: "{{ probe_app_password }}"
+          table: not a valid identifier!
+      # DERIVED from that change's design.md decision 7 ("one identifier, or two
+      # separated by a dot"), not from the delta's own text, which says
+      # "optionally schema-qualified" and stops. Recorded as derived in
+      # test-plan.md; reconsider it deliberately rather than repairing it if the
+      # implementation admits three parts on purpose.
+      - name: table-name-three-parts
+        app: commerce-ops
+        expect: [refuse]
+        object:
+          password: "{{ probe_app_password }}"
+          table: a.b.c
+      # Scenario: An unclassified failure ... or the input object is malformed.
+      - name: malformed-json
+        app: commerce-ops
+        expect: [refuse]
+        text: '{"password": "molecule", "table":'
+      - name: not-an-object
+        app: commerce-ops
+        expect: [refuse]
+        text: '["molecule", "alembic_version"]'
+      # DERIVED: no delta scenario names an empty input, but `password` and
+      # `table` are both required, so an object carrying neither is the
+      # incomplete case in its most literal form.
+      - name: empty-input
+        app: commerce-ops
+        expect: [refuse]
+        text: ""
+      # Added by this change's own code review, which found it and confirmed it
+      # against the parser. `\u0000` is a legal JSON escape and decodes to a NUL,
+      # which the NUL-framed handover between the parser and the probe cannot
+      # carry: the password's tail arrives in the TABLE slot, having never been
+      # through the identifier shape check, and the real table name is discarded
+      # as an unread third field. The requirement says a name outside that shape
+      # SHALL refuse rather than answer `empty`, and before the fix this answered
+      # `empty`. Written as raw text rather than as an object because the `text`
+      # form is what puts the escape in the file for the probe to decode.
+      - name: nul-in-password
+        app: commerce-ops
+        expect: [refuse]
+        text: '{"password": "x\u0000'' ; drop table t; --", "table": "alembic_version"}'
+      # Its sibling and NOT a second regression test: this one already
+      # refused before the NUL fix, because the identifier pattern is
+      # anchored at the end of the string and a NUL is not in it.
+      # `nul-in-password` is the case that discriminates, because there the
+      # NUL lands in a field no shape check reads. Kept for the symmetry, so
+      # a later reader does not conclude the framing is guarded on one side
+      # only.
+      - name: nul-in-table
+        app: commerce-ops
+        expect: [refuse]
+        text: '{"password": "molecule", "table": "alembic\u0000_version"}'
+
+  tasks:
+    # ================================================================
+    # SECTION 0 -- what the converge left on the host.
+    #
+    # Content checks over rendered artefacts, in the same idiom as `default`'s
+    # authorized_keys and sudoers assertions. These are what the behavioural
+    # sections below rest on: a probe answering correctly through a key bound
+    # to the wrong application would be worse than one that did not answer.
+    # ================================================================
+
+    - name: Stat the window declaration's directory
+      ansible.builtin.stat:
+        path: "{{ probe_window_dir }}"
+      register: deploy_user_probe_window_dir_stat
+
+    # ----------------------------------------------------------------
+    # Requirement clause: "Ansible SHALL provision whatever the declaration is
+    # held in, so that it exists on a host before any window does, and so that
+    # an operator account -- which holds no `sudo` of any kind -- can raise and
+    # withdraw it with the capability it already has."
+    # ----------------------------------------------------------------
+    - name: Assert the declaration's directory was provisioned root-owned, group docker, mode 0775
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_window_dir_stat.stat.exists
+          - deploy_user_probe_window_dir_stat.stat.isdir
+          - deploy_user_probe_window_dir_stat.stat.pw_name == "root"
+          - deploy_user_probe_window_dir_stat.stat.gr_name == "docker"
+          - deploy_user_probe_window_dir_stat.stat.mode == "0775"
+        fail_msg: >-
+          {{ probe_window_dir }} is missing, or is not a root-owned, group
+          `docker`, mode 0775 directory. The converge SHALL provision it, so
+          that it exists on a host before any window does and an operator
+          account holding the `docker` group and no `sudo` at all can raise and
+          withdraw the declaration inside it.
+
+    - name: Assert no window is declared on a freshly converged host
+      ansible.builtin.stat:
+        path: "{{ probe_window_file }}"
+      register: deploy_user_probe_window_initially
+
+    - name: Assert the converge itself declares no window
+      ansible.builtin.assert:
+        that:
+          - not deploy_user_probe_window_initially.stat.exists
+        fail_msg: >-
+          {{ probe_window_file }} exists after a converge that declared no
+          window. A declaration standing means every probe on the host answers
+          `window-open`, so a converge raising one would stop every application
+          delivering, silently and indefinitely.
+
+    - name: Stat the two probe scripts
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: deploy_user_probe_script_stats
+      loop:
+        - /usr/local/bin/deploy-probe
+        - /usr/local/bin/app-probe
+
+    # ----------------------------------------------------------------
+    # Requirement clause: the SSH-layer half holds no privilege and the
+    # privileged half is what reaches the runtime -- the same two-script shape
+    # `deploy-receive` -> `app-deploy` already has, whose two independent
+    # layers are what bind an application's name.
+    # ----------------------------------------------------------------
+    - name: Assert deploy-probe is deploy-owned and app-probe is root-owned, both mode 0755
+      vars:
+        deploy_probe_stat: "{{ deploy_user_probe_script_stats.results[0].stat }}"
+        app_probe_stat: "{{ deploy_user_probe_script_stats.results[1].stat }}"
+      ansible.builtin.assert:
+        that:
+          - deploy_probe_stat.exists
+          - deploy_probe_stat.pw_name == "deploy"
+          - deploy_probe_stat.mode == "0755"
+          - app_probe_stat.exists
+          - app_probe_stat.pw_name == "root"
+          - app_probe_stat.gr_name == "root"
+          - app_probe_stat.mode == "0755"
+        fail_msg: >-
+          /usr/local/bin/deploy-probe is missing or not deploy-owned mode 0755,
+          or /usr/local/bin/app-probe is missing or not root:root mode 0755. The
+          unprivileged half is what the forced command runs and the privileged
+          half is what reaches the container runtime; collapsing them into one
+          script would leave the application's name pinned by one layer instead
+          of two.
+
+    - name: Read deploy's authorized_keys
+      ansible.builtin.slurp:
+        src: /opt/platform/.ssh/authorized_keys
+      register: deploy_user_probe_authorized_keys
+
+    # ----------------------------------------------------------------
+    # Scenario: A leaked probe key cannot be used to pivot into the host's
+    # network -- the static half.
+    #
+    # The channel-forwarding refusal itself is live OpenSSH `restrict`
+    # enforcement rather than this role's logic, and is not reproduced here, for
+    # the same reason `default`'s verify.yml gives for the deploy key: this
+    # scenario pipes at the scripts directly rather than opening an SSH session.
+    # What is asserted is that the option that enforcement depends on is present
+    # on the probe entry, and that the entry's forced command is bound to one
+    # invocation carrying that application's own name.
+    #
+    # Scenario: A probe key can only probe its own application -- the
+    # authorized_keys layer of it.
+    # ----------------------------------------------------------------
+    - name: Assert each probe key's line carries restrict and a forced command naming only its own application
+      vars:
+        authorized_keys_content: "{{ deploy_user_probe_authorized_keys.content | b64decode }}"
+        platform_probe_line: >-
+          {{ authorized_keys_content.splitlines()
+             | select('search', 'platform-probe-molecule@ci') | list | first | default('') }}
+        commerce_probe_line: >-
+          {{ authorized_keys_content.splitlines()
+             | select('search', 'commerce-ops-probe-molecule@ci') | list | first | default('') }}
+        denied_probe_line: >-
+          {{ authorized_keys_content.splitlines()
+             | select('search', 'probe-denied-probe-molecule@ci') | list | first | default('') }}
+      ansible.builtin.assert:
+        that:
+          - platform_probe_line != ""
+          - "'restrict' in platform_probe_line"
+          - "'command=\"/usr/local/bin/deploy-probe platform\"' in platform_probe_line"
+          - "'commerce-ops' not in platform_probe_line"
+          - commerce_probe_line != ""
+          - "'restrict' in commerce_probe_line"
+          - "'command=\"/usr/local/bin/deploy-probe commerce-ops\"' in commerce_probe_line"
+          - denied_probe_line != ""
+          - "'restrict' in denied_probe_line"
+          - "'command=\"/usr/local/bin/deploy-probe probe-denied\"' in denied_probe_line"
+        fail_msg: >-
+          A probe key's authorized_keys entry does not carry `restrict` together
+          with a forced command bound to exactly its own application name.
+          Either `restrict` is missing (a leaked probe key could open a
+          port-forwarding, agent-forwarding, X11 or pty channel into the host's
+          network), or the forced command is missing or names another
+          application. platform: '{{ platform_probe_line }}'; commerce-ops:
+          '{{ commerce_probe_line }}'; probe-denied: '{{ denied_probe_line }}'
+
+    - name: Assert each application's deploy entry is unchanged beside its probe entry
+      vars:
+        authorized_keys_content: "{{ deploy_user_probe_authorized_keys.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'command=\"/usr/local/bin/deploy-receive platform\"' in authorized_keys_content"
+          - "'command=\"/usr/local/bin/deploy-receive commerce-ops\"' in authorized_keys_content"
+          - "'command=\"/usr/local/bin/deploy-receive no-probe-app\"' in authorized_keys_content"
+        fail_msg: >-
+          An application's deploy entry is missing after a converge that added
+          probe entries beside it. A second entry per application SHALL be
+          additive; the deploy path is untouched by this change.
+
+    # ----------------------------------------------------------------
+    # Scenario: An application that declares no probe key gets none.
+    # ----------------------------------------------------------------
+    - name: Stat the probe sudoers rule of every enumerated application
+      ansible.builtin.stat:
+        path: "/etc/sudoers.d/app-probe-{{ item }}"
+      register: deploy_user_probe_sudoers_stats
+      loop:
+        - platform
+        - commerce-ops
+        - probe-denied
+        - no-probe-app
+
+    - name: Assert an application declaring no probe key received no probe entry and no probe sudoers rule
+      vars:
+        authorized_keys_content: "{{ deploy_user_probe_authorized_keys.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - not deploy_user_probe_sudoers_stats.results[3].stat.exists
+          - "'deploy-probe no-probe-app' not in authorized_keys_content"
+        fail_msg: >-
+          `no-probe-app` declares no probe public key, and the converge gave it
+          a probe entry or an /etc/sudoers.d/app-probe-no-probe-app rule anyway.
+          A probe key is optional per application: an application declaring none
+          SHALL receive neither, and that SHALL NOT be an error -- which the
+          converge having completed at all already establishes.
+
+    - name: Assert each application that declares a probe key received its probe sudoers rule
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_sudoers_stats.results[0].stat.exists
+          - deploy_user_probe_sudoers_stats.results[1].stat.exists
+          - deploy_user_probe_sudoers_stats.results[2].stat.exists
+        fail_msg: >-
+          An application declaring a probe public key has no
+          /etc/sudoers.d/app-probe-<name> rule, so its unprivileged half cannot
+          reach the privileged one at all.
+
+    - name: Read each probe sudoers rule
+      ansible.builtin.slurp:
+        src: "/etc/sudoers.d/app-probe-{{ item }}"
+      register: deploy_user_probe_sudoers_files
+      loop:
+        - platform
+        - commerce-ops
+        - probe-denied
+
+    # ----------------------------------------------------------------
+    # Requirement clause: the application name reaches every privileged script
+    # "only as the fixed argument its forced command carries and the
+    # fully-qualified `sudoers.d` rule that matches it".
+    # ----------------------------------------------------------------
+    - name: Assert each probe sudoers rule is the exact, fully-qualified, wildcard-free line for its own application
+      vars:
+        platform_rule: "{{ deploy_user_probe_sudoers_files.results[0].content | b64decode }}"
+        commerce_rule: "{{ deploy_user_probe_sudoers_files.results[1].content | b64decode }}"
+        denied_rule: "{{ deploy_user_probe_sudoers_files.results[2].content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'deploy ALL=(root) NOPASSWD: /usr/local/bin/app-probe platform' in platform_rule"
+          - "'*' not in platform_rule"
+          - "'deploy ALL=(root) NOPASSWD: /usr/local/bin/app-probe commerce-ops' in commerce_rule"
+          - "'*' not in commerce_rule"
+          - "'deploy ALL=(root) NOPASSWD: /usr/local/bin/app-probe probe-denied' in denied_rule"
+          - "'*' not in denied_rule"
+        fail_msg: >-
+          A probe sudoers rule is not an exact match on its own application's
+          app-probe invocation with no wildcard. A wildcard or an
+          argument-forwarding form would let any application's probe key name
+          any application, which is the second of the two independent layers
+          this requirement binds the name with.
+
+    - name: Validate each probe sudoers rule with visudo
+      ansible.builtin.command: "visudo -cf /etc/sudoers.d/app-probe-{{ item }}"
+      loop:
+        - platform
+        - commerce-ops
+        - probe-denied
+      changed_when: false
+
+    - name: Attempt sudo app-probe for an application with no probe sudoers rule, as deploy
+      ansible.builtin.command: "sudo -n /usr/local/bin/app-probe {{ item }}"
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_sudo_refusals
+      changed_when: false
+      failed_when: false
+      loop:
+        - no-probe-app
+        - nonexistent-app
+
+    - name: Assert sudo refuses app-probe for an application with no rule of its own
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - "'password is required' in item.stderr or 'not allowed' in item.stderr"
+        fail_msg: >-
+          sudo permitted `app-probe {{ item.item }}` even though no
+          /etc/sudoers.d/app-probe-{{ item.item }} rule exists. The privileged
+          half SHALL be reachable only for an application whose fully-qualified
+          rule matches.
+      loop: "{{ deploy_user_probe_sudo_refusals.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # ================================================================
+    # SECTION 1 -- the fixture: a real shared PostgreSQL instance.
+    #
+    # FIXTURE ONLY. Nothing here is the subject of an assertion; the self-checks
+    # at the end of this section exist so that a later failure is readable as a
+    # broken fixture rather than as a defect in the probe.
+    #
+    # It is a real instance and not a stand-in because the whole problem this
+    # change exists for is that PostgreSQL answers an absent role and a wrong
+    # password identically. A stubbed instance would answer however the stub was
+    # written, which is the one thing that cannot be assumed here.
+    # ================================================================
+
+    - name: Fixture -- create the network the applications reach the instance over
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker network inspect platform_edge >/dev/null 2>&1 || docker network create platform_edge
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Fixture -- start the shared instance under the name the probe reads
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker rm -f platform-postgres-1 >/dev/null 2>&1 || true
+        docker volume rm -f platform_postgres_data >/dev/null 2>&1 || true
+        docker run -d \
+          --name platform-postgres-1 \
+          --network platform_edge \
+          --restart unless-stopped \
+          -e POSTGRES_USER={{ probe_superuser | quote }} \
+          -e POSTGRES_PASSWORD={{ probe_superuser_password | quote }} \
+          -v platform_postgres_data:/var/lib/postgresql \
+          {{ probe_postgres_image | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Fixture -- wait for the instance to accept connections
+      ansible.builtin.command: docker exec platform-postgres-1 pg_isready -U {{ probe_superuser }}
+      register: deploy_user_probe_fixture_ready
+      until: deploy_user_probe_fixture_ready.rc == 0
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    # Written to a file rather than into a command line so that no fixture
+    # password reaches the host's process listing either -- the assertion later
+    # in this file samples that listing, and a fixture leaving the value in it
+    # would make the sample unreadable.
+    - name: Fixture -- write the SQL that provisions the application roles and databases
+      ansible.builtin.copy:
+        dest: /root/probe-fixture-roles.sql
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          create role "commerce-ops" login password '{{ probe_app_password }}';
+          create database "commerce-ops" owner "commerce-ops";
+          create role "probe-denied" login password '{{ probe_denied_password }}';
+          create database "probe-denied" owner "probe-denied";
+          revoke connect on database "probe-denied" from public;
+          revoke connect on database "probe-denied" from "probe-denied";
+
+    - name: Fixture -- write the SQL that creates commerce-ops's marker tables
+      ansible.builtin.copy:
+        dest: /root/probe-fixture-tables.sql
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          create table alembic_version (version_num text not null);
+          insert into alembic_version (version_num) values ('molecule-fixture-revision');
+          create table empty_marker (id integer);
+          create schema app_schema;
+          create table app_schema.qualified_marker (id integer);
+          insert into app_schema.qualified_marker (id) values (1);
+          alter table alembic_version owner to "commerce-ops";
+          alter table empty_marker owner to "commerce-ops";
+          alter schema app_schema owner to "commerce-ops";
+          alter table app_schema.qualified_marker owner to "commerce-ops";
+
+    - name: Fixture -- provision the roles, the databases and the marker tables
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker exec -i platform-postgres-1 \
+          psql -v ON_ERROR_STOP=1 -U {{ probe_superuser | quote }} -d postgres \
+          < /root/probe-fixture-roles.sql
+        docker exec -i platform-postgres-1 \
+          psql -v ON_ERROR_STOP=1 -U {{ probe_superuser | quote }} -d commerce-ops \
+          < /root/probe-fixture-tables.sql
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Fixture self-check -- the application's own credential really works from platform_edge
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm --network platform_edge \
+          -e PGPASSWORD={{ probe_app_password | quote }} \
+          {{ probe_postgres_image | quote }} \
+          psql -h platform-postgres-1 -U commerce-ops -d commerce-ops -tAc 'select count(*) from alembic_version'
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_fixture_credential_check
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the fixture's credential path is real
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_fixture_credential_check.rc == 0
+          - deploy_user_probe_fixture_credential_check.stdout | trim == "1"
+        fail_msg: >-
+          A client on platform_edge could not connect as commerce-ops with the
+          fixture password, or the marker table does not hold exactly one row.
+          Every `populated`, `empty` and `credential-refused` assertion below
+          rests on this, so this is a BROKEN FIXTURE rather than a defect in the
+          probe. rc {{ deploy_user_probe_fixture_credential_check.rc }}, stdout
+          '{{ deploy_user_probe_fixture_credential_check.stdout }}', stderr
+          '{{ deploy_user_probe_fixture_credential_check.stderr }}'
+
+    - name: Fixture self-check -- probe-denied's connection fails with a message the token set does not classify
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run --rm --network platform_edge \
+          -e PGPASSWORD={{ probe_denied_password | quote }} \
+          {{ probe_postgres_image | quote }} \
+          psql -h platform-postgres-1 -U probe-denied -d probe-denied -tAc 'select 1'
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_fixture_denied_check
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the unclassified-error fixture really induces an unclassified error
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_fixture_denied_check.rc != 0
+          - "'permission denied for database' in deploy_user_probe_fixture_denied_check.stderr"
+          - "'password authentication failed' not in deploy_user_probe_fixture_denied_check.stderr"
+        fail_msg: >-
+          Connecting as probe-denied did not produce `permission denied for
+          database`. The unclassified-failure case below asserts that the probe
+          refuses rather than resolving an unrecognised message to the nearest
+          token, and it establishes nothing unless the message really is
+          unrecognised. This is a BROKEN FIXTURE, not a defect in the probe.
+          stderr: '{{ deploy_user_probe_fixture_denied_check.stderr }}'
+
+    - name: Fixture -- record the tables and the row count the probe must leave alone
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker exec platform-postgres-1 \
+          psql -U {{ probe_superuser | quote }} -d commerce-ops -tAc \
+          "select coalesce(string_agg(schemaname || '.' || tablename, ',' order by schemaname, tablename), '')
+             from pg_tables
+            where schemaname not in ('pg_catalog', 'information_schema')"
+        docker exec platform-postgres-1 \
+          psql -U {{ probe_superuser | quote }} -d commerce-ops -tAc 'select count(*) from alembic_version'
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_database_before
+      changed_when: false
+
+    # ================================================================
+    # SECTION 2 -- phase A: every answer reachable against a healthy instance
+    # with no window declared.
+    # ================================================================
+
+    - name: Create the directory the probe input objects are read from
+      ansible.builtin.file:
+        path: "{{ probe_payload_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write each well-formed probe input object
+      ansible.builtin.copy:
+        dest: "{{ probe_payload_dir }}/{{ item.name }}.json"
+        content: "{{ item.object | to_json }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ probe_phase_a_cases | selectattr('object', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Write each deliberately malformed probe input
+      ansible.builtin.copy:
+        dest: "{{ probe_payload_dir }}/{{ item.name }}.json"
+        content: "{{ item.text }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ probe_phase_a_cases | selectattr('text', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Run every phase-A probe as the deploy account
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/' ~ item.name ~ '.json') | quote }}
+          | /usr/local/bin/deploy-probe {{ item.app | quote }}
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_a
+      changed_when: false
+      failed_when: false
+      loop: "{{ probe_phase_a_cases }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.expect | join('|') }}"
+
+    # ----------------------------------------------------------------
+    # Normative clause: "A token and a failure SHALL be distinguishable without
+    # parsing either. The probe SHALL exit zero when and only when it emits one,
+    # and SHALL exit non-zero, emitting no token and a diagnostic on standard
+    # error, in every other case."
+    #
+    # Asserted over EVERY case at once rather than case by case, because the
+    # obligation is a biconditional over all of them: a probe that exited zero
+    # on a refusal, or non-zero while emitting a token, would satisfy every
+    # individual expectation below and still be unusable by a consumer that
+    # reads the exit status -- which is what the requirement tells a consumer to
+    # read.
+    # ----------------------------------------------------------------
+    - name: Assert every probe exits zero when and only when it emitted a token
+      vars:
+        probe_stdout: "{{ item.stdout | trim }}"
+      ansible.builtin.assert:
+        that:
+          - (item.rc == 0) == (probe_stdout in probe_tokens)
+          - item.rc != 0 or (item.stdout_lines | length == 1)
+          - item.rc == 0 or (probe_stdout not in probe_tokens)
+          - item.rc == 0 or (item.stderr | trim | length > 0)
+        fail_msg: >-
+          Case '{{ item.item.name }}' exited {{ item.rc }} having written
+          '{{ item.stdout }}' to standard output and '{{ item.stderr }}' to
+          standard error. The probe SHALL exit zero when and only when it emits
+          exactly one token and nothing else, and SHALL otherwise exit non-zero
+          emitting no token and a diagnostic on standard error. A consumer told
+          to read the exit status cannot tell a token from a failure otherwise.
+      loop: "{{ deploy_user_probe_phase_a.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Assert every phase-A case reached an outcome the requirement admits for it
+      vars:
+        probe_outcome: "{{ (item.stdout | trim) if item.rc == 0 else 'refuse' }}"
+      ansible.builtin.assert:
+        that:
+          - probe_outcome in item.item.expect
+        fail_msg: >-
+          Case '{{ item.item.name }}' reached '{{ probe_outcome }}', and the
+          requirement admits {{ item.item.expect | join(' or ') }} for it. rc
+          {{ item.rc }}, stdout '{{ item.stdout }}', stderr '{{ item.stderr }}'.
+      loop: "{{ deploy_user_probe_phase_a.results }}"
+      loop_control:
+        label: "{{ item.item.name }} -> {{ item.item.expect | join('|') }}"
+
+    # ----------------------------------------------------------------
+    # Scenario: An absent role is told apart from a refused credential.
+    # Scenario: A stale password is told apart from a reset instance.
+    #
+    # The pair is the whole point of the change, so it is asserted as a pair
+    # rather than left to the table above: the incident was one of these two
+    # conditions being reported as the other. `platform` holds no role and no
+    # database in the instance and no password for it exists anywhere, which is
+    # what makes `absent` reachable "without that password having to be correct
+    # for the answer to be reached".
+    # ----------------------------------------------------------------
+    - name: Assert an absent role answers absent, and a wrong password against a present one answers credential-refused
+      vars:
+        absent_unknown: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'absent-unknown-password') | first }}"
+        absent_other: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'absent-another-applications-password') | first }}"
+        refused: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'credential-refused') | first }}"
+      ansible.builtin.assert:
+        that:
+          - absent_unknown.stdout | trim == "absent"
+          - absent_other.stdout | trim == "absent"
+          - refused.stdout | trim == "credential-refused"
+        fail_msg: >-
+          An application whose role and database do not exist did not answer
+          `absent`, or one whose role and database exist and whose password was
+          refused did not answer `credential-refused`. These two are
+          byte-identical over the wire -- PostgreSQL answers an absent role and
+          a wrong password with the same FATAL message at the same exit status
+          -- so `absent` SHALL be resolved by a root-side existence read needing
+          no application credential. Reporting a reset instance as a credential
+          problem is the 2026-09-15 incident this requirement exists to end.
+          absent (unknown password) '{{ absent_unknown.stdout }}', absent
+          (another application's password) '{{ absent_other.stdout }}',
+          credential-refused '{{ refused.stdout }}'
+
+    # ----------------------------------------------------------------
+    # Scenario: A marker table that does not exist is an ordinary answer.
+    # Scenario: A schema-qualified table name is not refused for being
+    # qualified.
+    # ----------------------------------------------------------------
+    - name: Assert an unknown table is an ordinary empty, and a qualified name is resolved rather than refused
+      vars:
+        unknown_table: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'empty-no-such-table') | first }}"
+        qualified_public: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'qualified-public-schema') | first }}"
+        qualified_other: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'qualified-other-schema') | first }}"
+      ansible.builtin.assert:
+        that:
+          - unknown_table.rc == 0
+          - unknown_table.stdout | trim == "empty"
+          - qualified_public.rc == 0
+          - qualified_public.stdout | trim == "populated"
+          - qualified_other.rc == 0
+          - qualified_other.stdout | trim == "populated"
+        fail_msg: >-
+          A table name that resolves to nothing SHALL answer `empty` and SHALL
+          NOT report an error -- no application's migration-tool bookkeeping
+          table is a literal in this repository, so an unknown name is an
+          ordinary answer. A schema-qualified name that DOES resolve SHALL be
+          answered on what it resolves to and SHALL NOT be refused for carrying
+          a schema; refusing one would stop a correct deploy for nothing. The
+          `app_schema.` case is the discriminating one: an implementation that
+          satisfies `public.` by dropping everything before the dot fails it.
+          unknown '{{ unknown_table.stdout }}' rc {{ unknown_table.rc }},
+          public-qualified '{{ qualified_public.stdout }}' rc
+          {{ qualified_public.rc }}, other-qualified
+          '{{ qualified_other.stdout }}' rc {{ qualified_other.rc }}
+
+    # ----------------------------------------------------------------
+    # Scenario: A probe key can only probe its own application.
+    # ----------------------------------------------------------------
+    - name: Assert a role or database disagreeing with the forced command's argument refuses, and is not reported as any token
+      vars:
+        disagreeing_role: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'disagreeing-role') | first }}"
+        disagreeing_database: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'disagreeing-database') | first }}"
+        agreeing: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'agreeing-role-and-database') | first }}"
+      ansible.builtin.assert:
+        that:
+          - disagreeing_role.rc != 0
+          - disagreeing_role.stdout | trim not in probe_tokens
+          - disagreeing_database.rc != 0
+          - disagreeing_database.stdout | trim not in probe_tokens
+          - agreeing.rc == 0
+          - agreeing.stdout | trim == "populated"
+        fail_msg: >-
+          A probe supplying another application's role or database name SHALL
+          refuse, emitting no token and exiting non-zero, and SHALL NOT report
+          that refusal as any of the six tokens -- a misdirected probe reported
+          as `absent` or `credential-refused` is an answer about somebody else's
+          database. The names MAY be supplied when they AGREE with the forced
+          command's argument, so the agreeing case must still answer normally,
+          or a consumer sending the fields the contract names is refused for
+          being polite. role '{{ disagreeing_role.stdout }}' rc
+          {{ disagreeing_role.rc }}, database
+          '{{ disagreeing_database.stdout }}' rc {{ disagreeing_database.rc }},
+          agreeing '{{ agreeing.stdout }}' rc {{ agreeing.rc }}
+
+    # ----------------------------------------------------------------
+    # Scenario: An unclassified failure is not resolved to the nearest token.
+    # ----------------------------------------------------------------
+    - name: Assert an unrecognised message from the instance, and a malformed or incomplete object, each refuse without a token
+      vars:
+        unclassified: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'unclassified-instance-error') | first }}"
+        malformed: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'malformed-json') | first }}"
+        not_an_object: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'not-an-object') | first }}"
+        missing_table: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'missing-table') | first }}"
+        missing_password: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'missing-password') | first }}"
+        empty_input: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'empty-input') | first }}"
+      ansible.builtin.assert:
+        that:
+          - unclassified.rc != 0
+          - unclassified.stdout | trim not in probe_tokens
+          - unclassified.stderr | trim | length > 0
+          - malformed.rc != 0
+          - malformed.stdout | trim not in probe_tokens
+          - not_an_object.rc != 0
+          - not_an_object.stdout | trim not in probe_tokens
+          - missing_table.rc != 0
+          - missing_table.stdout | trim not in probe_tokens
+          - missing_password.rc != 0
+          - missing_password.stdout | trim not in probe_tokens
+          - empty_input.rc != 0
+          - empty_input.stdout | trim not in probe_tokens
+        fail_msg: >-
+          An error the token set does not classify, or a malformed or incomplete
+          input object, SHALL emit no token, exit non-zero and write a
+          diagnostic to standard error -- and SHALL NOT be resolved to the token
+          whose condition most nearly resembles it. `permission denied for
+          database` matches neither the authentication-failure message nor the
+          connection-level ones, and a probe that guessed would turn a wording
+          change, or a non-English `lc_messages`, into a wrong answer about
+          somebody's database. unclassified rc {{ unclassified.rc }} stdout
+          '{{ unclassified.stdout }}' stderr '{{ unclassified.stderr }}';
+          malformed rc {{ malformed.rc }} stdout '{{ malformed.stdout }}';
+          not-an-object rc {{ not_an_object.rc }}; missing-table rc
+          {{ missing_table.rc }}; missing-password rc {{ missing_password.rc }};
+          empty-input rc {{ empty_input.rc }}
+
+    # ----------------------------------------------------------------
+    # Normative clause: the name "SHALL additionally be required to take the
+    # shape of an optionally schema-qualified identifier. A name outside that
+    # shape SHALL refuse non-zero RATHER THAN answering `empty`".
+    #
+    # Separated from the metacharacter cases below, which the scenario lets
+    # answer `empty` OR refuse: this clause admits only the refusal, because
+    # `empty` asserts that the database was read and held no such table, and a
+    # name refused before any reading would make that assertion about a database
+    # nothing looked at.
+    # ----------------------------------------------------------------
+    - name: Assert a table name outside the identifier shape refuses rather than answering empty
+      vars:
+        outside_shape: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'table-name-outside-the-shape') | first }}"
+        three_parts: "{{ deploy_user_probe_phase_a.results | selectattr('item.name', 'equalto', 'table-name-three-parts') | first }}"
+      ansible.builtin.assert:
+        that:
+          - outside_shape.rc != 0
+          - outside_shape.stdout | trim != "empty"
+          - outside_shape.stdout | trim not in probe_tokens
+          - three_parts.rc != 0
+          - three_parts.stdout | trim not in probe_tokens
+        fail_msg: >-
+          A table name outside the shape of an optionally schema-qualified
+          identifier SHALL refuse non-zero rather than answering `empty`.
+          Answering `empty` would assert that the database was read and held no
+          such table, for a name refused before anything was read. outside-shape
+          rc {{ outside_shape.rc }} stdout '{{ outside_shape.stdout }}';
+          three-parts rc {{ three_parts.rc }} stdout '{{ three_parts.stdout }}'
+          (the three-part case is DERIVED from that change's design.md decision
+          7, not from the delta's own text -- reconsider it deliberately rather
+          than repairing it).
+
+    # ----------------------------------------------------------------
+    # Scenario: A table name cannot execute anything.
+    #
+    # The canaries are the assertion; the token is secondary. A name carrying a
+    # shell metacharacter must not be capable of RUNNING anything at any layer,
+    # whether or not the password beside it would have been accepted -- the
+    # names above travel with the CORRECT password, so a probe that reached the
+    # client container at all would have run them.
+    # ----------------------------------------------------------------
+    - name: Look for every command-execution canary on the host
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: deploy_user_probe_host_canaries
+      loop:
+        - /tmp/probe-canary-dollar
+        - /tmp/probe-canary-backtick
+        - /tmp/probe-canary-sql
+
+    - name: Look for every command-execution canary inside the instance's own container
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for canary in /tmp/probe-canary-dollar /tmp/probe-canary-backtick /tmp/probe-canary-sql; do
+          if docker exec platform-postgres-1 test -e "$canary" 2>/dev/null; then
+            echo "PRESENT $canary"
+          else
+            echo "ABSENT $canary"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_container_canaries
+      changed_when: false
+
+    - name: Assert no table name executed anything, at any layer
+      vars:
+        present_on_host: "{{ deploy_user_probe_host_canaries.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+        present_in_container: "{{ deploy_user_probe_container_canaries.stdout_lines | select('search', '^PRESENT') | list }}"
+      ansible.builtin.assert:
+        that:
+          - present_on_host | length == 0
+          - present_in_container | length == 0
+        fail_msg: >-
+          A client-supplied table name executed a command. The table name is the
+          one client-supplied value that reaches SQL at all, and it SHALL NOT be
+          interpolated into a command string at any layer -- interpolated into
+          the client container's `sh -c`, a name carrying a metacharacter is
+          command execution inside a container attached to platform_edge,
+          reached before any password has been checked, which is exactly the
+          pivot a probe key must not buy. Present on the host:
+          {{ present_on_host }}; present inside platform-postgres-1:
+          {{ present_in_container }}
+
+    # ----------------------------------------------------------------
+    # Requirement clause: "`deploy-probe` SHALL write to no database, create,
+    # alter or drop nothing".
+    # ----------------------------------------------------------------
+    - name: Read back the tables and the row count after every phase-A probe
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker exec platform-postgres-1 \
+          psql -U {{ probe_superuser | quote }} -d commerce-ops -tAc \
+          "select coalesce(string_agg(schemaname || '.' || tablename, ',' order by schemaname, tablename), '')
+             from pg_tables
+            where schemaname not in ('pg_catalog', 'information_schema')"
+        docker exec platform-postgres-1 \
+          psql -U {{ probe_superuser | quote }} -d commerce-ops -tAc 'select count(*) from alembic_version'
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_database_after
+      changed_when: false
+
+    - name: Assert no probe wrote to, created, altered or dropped anything in the database
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_database_after.stdout_lines == deploy_user_probe_database_before.stdout_lines
+        fail_msg: >-
+          The set of tables in commerce-ops's database, or the number of rows in
+          its marker table, changed across a run of probes. The probe is
+          read-only: it SHALL write to no database and create, alter or drop
+          nothing. Before {{ deploy_user_probe_database_before.stdout_lines }}, after
+          {{ deploy_user_probe_database_after.stdout_lines }}
+
+    # ================================================================
+    # SECTION 3 -- what the probe must refuse to be, and what it must not
+    # disclose.
+    # ================================================================
+
+    # ----------------------------------------------------------------
+    # Scenario: A probe key cannot deliver or deploy.
+    # ----------------------------------------------------------------
+    - name: Build a deploy archive of the shape deploy-receive accepts
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf /tmp/deploy_user_probe_delivery_attempt
+        mkdir -p /tmp/deploy_user_probe_delivery_attempt
+        printf 'services:\n  noop:\n    image: alpine:3.19\n    command: ["sleep", "3600"]\n' \
+          > /tmp/deploy_user_probe_delivery_attempt/docker-compose.yml
+        printf 'PROBE_DELIVERY=attempted\n' > /tmp/deploy_user_probe_delivery_attempt/.env
+        tar -czf /tmp/deploy_user_probe_delivery_attempt.tar.gz -C /tmp/deploy_user_probe_delivery_attempt docker-compose.yml .env
+        chmod 0644 /tmp/deploy_user_probe_delivery_attempt.tar.gz
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Record what /opt/commerce-ops holds before the delivery attempt
+      ansible.builtin.find:
+        paths: /opt/commerce-ops
+        hidden: true
+        recurse: true
+      register: deploy_user_probe_opt_before
+
+    - name: Pipe an archive at the probe, as the deploy account
+      ansible.builtin.shell:
+        cmd: set -o pipefail; cat /tmp/deploy_user_probe_delivery_attempt.tar.gz | /usr/local/bin/deploy-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_delivery_attempt
+      changed_when: false
+      failed_when: false
+
+    - name: Record what /opt/commerce-ops holds after the delivery attempt
+      ansible.builtin.find:
+        paths: /opt/commerce-ops
+        hidden: true
+        recurse: true
+      register: deploy_user_probe_opt_after
+
+    - name: List the containers running after the delivery attempt
+      ansible.builtin.command: docker ps --format '{% raw %}{{.Names}}{% endraw %}'
+      register: deploy_user_probe_containers_after_delivery
+      changed_when: false
+
+    - name: Assert an archive piped at a probe key delivers nothing and deploys nothing
+      vars:
+        before_paths: "{{ deploy_user_probe_opt_before.files | map(attribute='path') | sort | list }}"
+        after_paths: "{{ deploy_user_probe_opt_after.files | map(attribute='path') | sort | list }}"
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_delivery_attempt.rc != 0
+          - deploy_user_probe_delivery_attempt.stdout | trim not in probe_tokens
+          - before_paths == after_paths
+          - deploy_user_probe_containers_after_delivery.stdout_lines | select('search', 'noop') | list | length == 0
+        fail_msg: >-
+          Piping an archive at an application's probe key extracted something
+          into /opt/commerce-ops, triggered a deploy, or answered with a token.
+          A probe key SHALL deliver no content and trigger no deploy: it grants
+          strictly less than the deploy key beside it, and that is the whole
+          reason the two are separate keys with separate forced commands.
+          /opt/commerce-ops before {{ before_paths }}, after {{ after_paths }};
+          probe rc {{ deploy_user_probe_delivery_attempt.rc }} stdout
+          '{{ deploy_user_probe_delivery_attempt.stdout }}'; containers
+          {{ deploy_user_probe_containers_after_delivery.stdout_lines }}
+
+    - name: Assert the database is still untouched after the delivery attempt
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker exec platform-postgres-1 \
+          psql -U {{ probe_superuser | quote }} -d commerce-ops -tAc 'select count(*) from alembic_version'
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_rows_after_delivery
+      changed_when: false
+      failed_when: deploy_user_probe_rows_after_delivery.stdout | trim != "1"
+
+    # ----------------------------------------------------------------
+    # Requirement clause: `deploy-probe` "SHALL NOT accept any operand beyond
+    # that fixed argument, so that no password reaches a command line or a
+    # process listing on either machine".
+    # ----------------------------------------------------------------
+    - name: Invoke deploy-probe with an operand beyond its fixed argument
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/populated.json') | quote }}
+          | /usr/local/bin/deploy-probe commerce-ops {{ probe_app_password | quote }}
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_extra_operand
+      changed_when: false
+      failed_when: false
+
+    - name: Assert an operand beyond the fixed argument is refused, with no token
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_extra_operand.rc != 0
+          - deploy_user_probe_extra_operand.stdout | trim not in probe_tokens
+        fail_msg: >-
+          deploy-probe accepted an operand beyond the fixed argument its forced
+          command carries. A probe that reads a password from its command line
+          puts it in the process listing of whichever machine invoked it, which
+          is exactly what reading the input object from standard input exists to
+          avoid. rc {{ deploy_user_probe_extra_operand.rc }}, stdout
+          '{{ deploy_user_probe_extra_operand.stdout }}'
+
+    # ----------------------------------------------------------------
+    # Scenario: The password never reaches a command line.
+    #
+    # Sampled WHILE a probe runs, because that is the only window in which the
+    # value could appear: a listing taken afterwards is empty whatever the probe
+    # did. The vacuity guard is the second assertion -- at least one sample must
+    # have caught the probe itself -- without which an absent password proves
+    # only that the sampler never looked while anything was happening.
+    #
+    # The `docker inspect` half is supplementary and its limits are stated in
+    # test-plan.md: the throwaway client container is short-lived, so a run that
+    # never captures it asserts nothing about `-e PGPASSWORD=...`. What holds
+    # the disclosure obligation up is the process-listing half.
+    # ----------------------------------------------------------------
+    - name: Sample the host's process listing and container configuration while a probe runs
+      ansible.builtin.shell: |
+        set -uo pipefail
+        : > /tmp/probe_ps_samples
+        : > /tmp/probe_inspect_samples
+        runuser -u deploy -- sh -c \
+          "cat {{ probe_payload_dir }}/populated.json | /usr/local/bin/deploy-probe commerce-ops" \
+          > /tmp/probe_sampled_stdout 2> /tmp/probe_sampled_stderr &
+        probe_pid=$!
+        while kill -0 "$probe_pid" 2>/dev/null; do
+          ps -eo args >> /tmp/probe_ps_samples 2>/dev/null || true
+          docker ps -q 2>/dev/null | xargs -r docker inspect >> /tmp/probe_inspect_samples 2>/dev/null || true
+          sleep 0.05
+        done
+        wait "$probe_pid"
+        echo "PROBE_RC=$?"
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_password_sampling
+      changed_when: false
+      failed_when: false
+
+    - name: Read the samples back
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: deploy_user_probe_sample_contents
+      loop:
+        - /tmp/probe_ps_samples
+        - /tmp/probe_inspect_samples
+
+    - name: Assert the sampler really looked while the probe was running
+      vars:
+        ps_samples: "{{ deploy_user_probe_sample_contents.results[0].content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - ps_samples | length > 0
+          - "'deploy-probe' in ps_samples"
+        fail_msg: >-
+          The process-listing sampler captured nothing, or captured nothing
+          naming `deploy-probe`. The assertion below reads the ABSENCE of the
+          password from these samples, and an absence proves nothing where the
+          sampler never looked while the probe was running. This is a BROKEN
+          TEST rather than a defect in the probe.
+
+    - name: Assert the password appeared in no process listing taken while the probe ran
+      vars:
+        ps_samples: "{{ deploy_user_probe_sample_contents.results[0].content | b64decode }}"
+        inspect_samples: "{{ deploy_user_probe_sample_contents.results[1].content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - probe_app_password not in ps_samples
+          - probe_app_password not in inspect_samples
+        fail_msg: >-
+          The application's password appeared in the host's process listing, or
+          in the configuration of a container running while the probe ran. It
+          SHALL travel only over standard input: an argument puts it in the
+          host's own process listing, and `-e PGPASSWORD=...` on the client
+          container puts it in `docker inspect` output, which every account in
+          the `docker` group on the host can read.
+
+    - name: Search the deploy account's home for any file carrying the password
+      ansible.builtin.shell: |
+        set -uo pipefail
+        grep -rlF -- "$PROBE_PASSWORD" /opt/platform 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      environment:
+        PROBE_PASSWORD: "{{ probe_app_password }}"
+      register: deploy_user_probe_home_password_scan
+      changed_when: false
+
+    - name: Assert no shell history or other file under the deploy account's home carries the password
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_home_password_scan.stdout | trim == ""
+        fail_msg: >-
+          A file under the deploy account's home carries the application's
+          password: {{ deploy_user_probe_home_password_scan.stdout }}. It SHALL appear in no
+          shell history and no process listing on either machine.
+
+    # ----------------------------------------------------------------
+    # Scenario: An oversized or unrecognised input object -- "the probe SHALL
+    # refuse non-zero, emitting no token, WITHOUT HAVING READ IT ALL".
+    #
+    # The `without having read it all` limb is what the FIFO is for, and it is
+    # the reason this case is not in the phase-A table. The writer delivers a
+    # large object and then holds the pipe open without ever closing it. A probe
+    # that caps its read refuses promptly; one that reads to end-of-input blocks
+    # until the bound below kills it, and exit status 124 is `timeout`'s own,
+    # distinguishable from any refusal. A parser given no cap will buffer
+    # whatever an unauthenticated stranger's standard input sends it.
+    # ----------------------------------------------------------------
+    - name: Feed the probe an oversized object over a pipe that is never closed
+      ansible.builtin.shell: |
+        set -uo pipefail
+        rm -f /tmp/probe_oversized_fifo
+        mkfifo -m 0644 /tmp/probe_oversized_fifo
+        {
+          printf '{"password": "%s", "table": "alembic_version", "padding": "' \
+            "$PROBE_PASSWORD"
+          head -c 1048576 /dev/zero | tr '\0' 'x'
+          printf '"}'
+          sleep 300
+        } > /tmp/probe_oversized_fifo &
+        writer_pid=$!
+        timeout 60 runuser -u deploy -- /usr/local/bin/deploy-probe commerce-ops \
+          < /tmp/probe_oversized_fifo > /tmp/probe_oversized_stdout 2> /tmp/probe_oversized_stderr
+        probe_rc=$?
+        kill "$writer_pid" 2>/dev/null || true
+        rm -f /tmp/probe_oversized_fifo
+        echo "PROBE_RC=$probe_rc"
+        echo "PROBE_STDOUT=$(cat /tmp/probe_oversized_stdout)"
+      args:
+        executable: /bin/bash
+      environment:
+        PROBE_PASSWORD: "{{ probe_app_password }}"
+      register: deploy_user_probe_oversized
+      changed_when: false
+      failed_when: false
+
+    - name: Assert an oversized input object is refused without the probe having read it all
+      vars:
+        oversized_rc: >-
+          {{ (deploy_user_probe_oversized.stdout | regex_search('PROBE_RC=([0-9]+)', '\1') | default([], true) | first) | default('') }}
+        oversized_stdout: >-
+          {{ (deploy_user_probe_oversized.stdout | regex_search('PROBE_STDOUT=(.*)', '\1') | default([], true) | first) | default('') }}
+      ansible.builtin.assert:
+        that:
+          - oversized_rc != ''
+          - oversized_rc | int != 0
+          - oversized_rc | int != 124
+          - oversized_stdout | trim not in probe_tokens
+        fail_msg: >-
+          An input object larger than the probe accepts SHALL be refused
+          non-zero, emitting no token, without having been read in full. Exit
+          status 124 is `timeout`'s: it means the probe was still reading an
+          input that is never going to end, which is what a parser given no cap
+          does with an unauthenticated stranger's standard input. Exit status 0
+          means it answered. Read rc '{{ oversized_rc }}', stdout
+          '{{ oversized_stdout }}'.
+
+    # ================================================================
+    # SECTION 4 -- phase B and C: the operator-declared window.
+    # ================================================================
+
+    # ----------------------------------------------------------------
+    # Scenario: An operator can declare a window without sudo.
+    #
+    # The operator account itself is `ops_user`'s to provision and that role is
+    # not converged here, so the FIXTURE is an account holding exactly what
+    # `ops_user` grants -- the `docker` group and no `sudo` of any kind -- and
+    # the assertion is that raising and withdrawing the declaration works with
+    # that and nothing more. Asserting it against a fixture account rather than
+    # a real one is recorded in test-plan.md; what it cannot establish is that
+    # `ops_user` still grants the docker group, which that role's own scenarios
+    # own.
+    # ----------------------------------------------------------------
+    - name: Fixture -- an account holding the docker group and no sudo, as ops_user provisions one
+      ansible.builtin.user:
+        name: probe-operator
+        groups: docker
+        append: true
+        shell: /bin/bash
+        create_home: true
+
+    - name: Assert the fixture operator account really holds no sudo
+      ansible.builtin.command: sudo -n true
+      become: true
+      become_user: probe-operator
+      register: deploy_user_probe_operator_sudo
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the operator account has no sudo at all
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_operator_sudo.rc != 0
+        fail_msg: >-
+          The fixture operator account can run `sudo`. An operator account holds
+          the `docker` group and no `sudo` of any kind, so an assertion that the
+          declaration can be raised with the capability that account already
+          holds establishes nothing unless the account really lacks it. BROKEN
+          FIXTURE, not a defect in the role.
+
+    - name: Raise the declaration as the operator account, with no sudo and no pipeline
+      ansible.builtin.command: touch {{ probe_window_file }}
+      become: true
+      become_user: probe-operator
+      register: deploy_user_probe_window_raise
+      changed_when: false
+      failed_when: false
+
+    - name: Assert raising the declaration succeeded using only the capability the operator already holds
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_window_raise.rc == 0
+        fail_msg: >-
+          An operator account provisioned per *Unprivileged Operator Accounts
+          Support Interactive Host Inspection* could not raise the declaration.
+          It SHALL succeed using only the capability that account is already
+          granted, and no sudoers rule SHALL be added for it -- an operator in
+          the middle of a window cannot wait on a pipeline, and routing them
+          through an escalation to touch a flag is what the mode on the
+          directory exists to avoid. stderr:
+          '{{ deploy_user_probe_window_raise.stderr }}'
+
+    - name: Search every sudoers rule on the host for one added for the declaration
+      ansible.builtin.shell: |
+        set -uo pipefail
+        grep -rlE 'platform-maintenance|shared-postgres-window' /etc/sudoers /etc/sudoers.d 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: deploy_user_probe_window_sudoers_scan
+      changed_when: false
+
+    - name: Assert no sudoers rule was added for raising or withdrawing the declaration
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_window_sudoers_scan.stdout | trim == ""
+        fail_msg: >-
+          A sudoers rule naming the declaration exists:
+          {{ deploy_user_probe_window_sudoers_scan.stdout }}. No sudoers rule SHALL be added
+          for raising or withdrawing it -- the `docker` group's write access to
+          the directory is what makes the act available, and `ops_user` writes
+          no sudoers.d file of any kind.
+
+    # ----------------------------------------------------------------
+    # Scenario: A declared window is reported to every application on that host.
+    # Scenario: Raising and withdrawing the declaration needs no pipeline.
+    #
+    # The instance beneath the window is HEALTHY here, and that is the
+    # discriminating state: during a window it may look perfectly well -- before
+    # the volume is discarded, or after it has come back but before any database
+    # is re-provisioned -- and an application that delivered on the strength of
+    # that would be delivering into something about to be destroyed. So these
+    # probes would answer `populated`, `credential-refused` and `absent`
+    # respectively with no window standing, and each must answer `window-open`
+    # instead.
+    # ----------------------------------------------------------------
+    - name: Probe every application while the window stands
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/' ~ item.name ~ '.json') | quote }}
+          | /usr/local/bin/deploy-probe {{ item.app | quote }}
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_b
+      changed_when: false
+      failed_when: false
+      loop:
+        - {name: populated, app: commerce-ops}
+        - {name: credential-refused, app: commerce-ops}
+        - {name: absent-unknown-password, app: platform}
+        - {name: unclassified-instance-error, app: probe-denied}
+      loop_control:
+        label: "{{ item.app }} / {{ item.name }}"
+
+    - name: Assert every probe on the host answers window-open whatever stands beneath it
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.stdout | trim == "window-open"
+        fail_msg: >-
+          With a window declared on the host, the probe for
+          '{{ item.item.app }}' answered '{{ item.stdout }}' (rc {{ item.rc }})
+          rather than `window-open`. `window-open` takes precedence over every
+          other answer: it SHALL be reported whatever the state of the role, the
+          database, the credential or the instance beneath it, and raising the
+          declaration SHALL be enough to make every probe on that host answer
+          it, with no converge, no deploy and no restart in between.
+      loop: "{{ deploy_user_probe_phase_b.results }}"
+      loop_control:
+        label: "{{ item.item.app }} / {{ item.item.name }}"
+
+    # ----------------------------------------------------------------
+    # Requirement clause: "It SHALL be evaluated by the privileged half of the
+    # probe, so that one place decides whether a window is in force; the
+    # unprivileged half SHALL NOT be where that answer is reached, whatever it
+    # can or cannot read."
+    #
+    # Invoked through `sudo app-probe` directly, which is the only way to
+    # observe which half evaluated it: an implementation that answered
+    # `window-open` in `deploy-probe` would satisfy every assertion above and
+    # fail this one, because nothing in the privileged half would know about the
+    # window at all.
+    # ----------------------------------------------------------------
+    - name: Invoke the privileged half directly while the window stands
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/populated.json') | quote }}
+          | sudo -n /usr/local/bin/app-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_privileged_half
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the privileged half is where the window is evaluated
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_privileged_half.rc == 0
+          - deploy_user_probe_privileged_half.stdout | trim == "window-open"
+        fail_msg: >-
+          Invoked directly, the privileged half answered
+          '{{ deploy_user_probe_privileged_half.stdout }}' (rc
+          {{ deploy_user_probe_privileged_half.rc }}) rather than `window-open` while a
+          window stood. The declaration SHALL be evaluated by the privileged
+          half, so that one place decides whether a window is in force; putting
+          that answer in the unprivileged half would make the window's answer
+          the only one a bug in `deploy-probe` could suppress.
+
+    - name: Withdraw the declaration as the operator account
+      ansible.builtin.command: rm {{ probe_window_file }}
+      become: true
+      become_user: probe-operator
+      register: deploy_user_probe_window_withdraw
+      changed_when: false
+      failed_when: false
+
+    - name: Probe again immediately after the withdrawal, with no converge in between
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/populated.json') | quote }}
+          | /usr/local/bin/deploy-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_c
+      changed_when: false
+      failed_when: false
+
+    - name: Assert withdrawing the declaration is enough to stop the window being reported
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_window_withdraw.rc == 0
+          - deploy_user_probe_phase_c.rc == 0
+          - deploy_user_probe_phase_c.stdout | trim == "populated"
+        fail_msg: >-
+          After the operator withdrew the declaration, the next probe answered
+          '{{ deploy_user_probe_phase_c.stdout }}' rather than the answer the healthy
+          instance beneath it warrants. Withdrawing SHALL be enough to stop
+          every probe answering `window-open`, with no converge, no deploy and
+          no restart in between; nothing in this play converged anything between
+          the two probes. Withdrawal rc {{ deploy_user_probe_window_withdraw.rc }}, stderr
+          '{{ deploy_user_probe_window_withdraw.stderr }}'.
+
+    # ================================================================
+    # SECTION 5 -- phase D: unreachable, told apart from a credential problem.
+    #
+    # The instance keeps running and its own state stays readable from the host;
+    # what changes is that it leaves the network the application reaches it
+    # over. This is the case the requirement means by "no route, no name
+    # resolution, or nothing listening", and it is the one that establishes the
+    # probe's vantage: a credential check run from inside the server's own
+    # container could not see it at all, and would answer as though the instance
+    # were healthy.
+    # ================================================================
+
+    - name: Detach the instance from the network the applications reach it over
+      ansible.builtin.command: docker network disconnect platform_edge platform-postgres-1
+      changed_when: false
+
+    - name: Probe an application whose role, database and password are all correct
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/populated.json') | quote }}
+          | /usr/local/bin/deploy-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_d
+      changed_when: false
+      failed_when: false
+
+    - name: Assert an instance that cannot be reached is not reported as a credential problem
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_phase_d.rc == 0
+          - deploy_user_probe_phase_d.stdout | trim == "unreachable"
+        fail_msg: >-
+          With the instance off the network the application reaches it over, the
+          probe answered '{{ deploy_user_probe_phase_d.stdout }}' rather than `unreachable`.
+          A connection that never happened cannot have had its credential
+          refused, and `could not translate host name` and `Connection refused`
+          land on the same psql exit status as an authentication failure -- so
+          resolving the token by exit status alone produces exactly this wrong
+          answer.
+
+    - name: Re-attach the instance to the applications' network
+      ansible.builtin.command: docker network connect platform_edge platform-postgres-1
+      changed_when: false
+
+    # ================================================================
+    # SECTION 6 -- phase E: the window the change exists for. The declaration is
+    # raised, the volume is discarded, and the declaration has to survive the
+    # act it describes.
+    # ================================================================
+
+    - name: Raise the declaration before the first destructive step
+      ansible.builtin.command: touch {{ probe_window_file }}
+      become: true
+      become_user: probe-operator
+      changed_when: false
+
+    - name: Discard the shared instance's container and its volume
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker rm -f platform-postgres-1
+        docker volume rm platform_postgres_data
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Stat the declaration after the volume it announced has been discarded
+      ansible.builtin.stat:
+        path: "{{ probe_window_file }}"
+      register: deploy_user_probe_window_after_discard
+
+    - name: Probe while the instance is gone and the declaration still stands
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/populated.json') | quote }}
+          | /usr/local/bin/deploy-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_e
+      changed_when: false
+      failed_when: false
+
+    # ----------------------------------------------------------------
+    # Scenario: The declaration survives the volume being discarded.
+    # Scenario (iac-platform-services): The announcement outlives what it
+    # announces.
+    # ----------------------------------------------------------------
+    - name: Assert the declaration outlived the act it announces, and is still in force
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_window_after_discard.stat.exists
+          - deploy_user_probe_phase_e.rc == 0
+          - deploy_user_probe_phase_e.stdout | trim == "window-open"
+        fail_msg: >-
+          The declaration did not survive the volume being discarded, or stopped
+          being reported once the instance was gone. It lives outside the volume
+          whose discarding is the window precisely so that it survives the act
+          it describes, and it stays in force until an operator withdraws it --
+          a declaration held inside the instance, or in a Docker volume that
+          `docker volume prune` removes, would be destroyed by the very act it
+          announces. Declaration present:
+          {{ deploy_user_probe_window_after_discard.stat.exists }}; probe answered
+          '{{ deploy_user_probe_phase_e.stdout }}' rc {{ deploy_user_probe_phase_e.rc }}.
+
+    # ================================================================
+    # SECTION 7 -- phase F: the gap the incident fell into. The instance is
+    # serving again on an empty volume, the window has been withdrawn, and the
+    # application's database has not been re-provisioned.
+    # ================================================================
+
+    - name: Bring the shared instance back on a fresh, empty volume
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker run -d \
+          --name platform-postgres-1 \
+          --network platform_edge \
+          --restart unless-stopped \
+          -e POSTGRES_USER={{ probe_superuser | quote }} \
+          -e POSTGRES_PASSWORD={{ probe_superuser_password | quote }} \
+          -v platform_postgres_data:/var/lib/postgresql \
+          {{ probe_postgres_image | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Wait for the re-initialised instance to accept connections
+      ansible.builtin.command: docker exec platform-postgres-1 pg_isready -U {{ probe_superuser }}
+      register: deploy_user_probe_fixture_ready_again
+      until: deploy_user_probe_fixture_ready_again.rc == 0
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Withdraw the declaration once the instance is serving again
+      ansible.builtin.command: rm {{ probe_window_file }}
+      become: true
+      become_user: probe-operator
+      changed_when: false
+
+    - name: Probe with the credential that was correct before the reset
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/' ~ item ~ '.json') | quote }}
+          | /usr/local/bin/deploy-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_f
+      changed_when: false
+      failed_when: false
+      loop:
+        - populated
+        - credential-refused
+      loop_control:
+        label: "{{ item }}"
+
+    # ----------------------------------------------------------------
+    # Scenario (iac-platform-services): An application can determine that its
+    # database has ceased to exist.
+    #
+    # This is the incident, reproduced: the volume has been discarded, the
+    # instance is back, and the application's role and database are gone. Its
+    # stored password is now the password of a role that does not exist, and
+    # PostgreSQL reports that identically to a wrong one. Both probes must
+    # answer `absent` -- the second one especially, because a probe that only
+    # reached `absent` through a correct credential would be answering in the
+    # one case where no correct credential exists.
+    # ----------------------------------------------------------------
+    - name: Assert a destroyed database is reported as absent, and never as a refused credential
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.stdout | trim == "absent"
+        fail_msg: >-
+          After the volume was discarded and the instance re-initialised, the
+          probe answered '{{ item.stdout }}' rather than `absent` for input
+          '{{ item.item }}'. The application's role and database no longer
+          exist, and the absence SHALL be reported as such rather than as a
+          refused credential -- reported as a credential problem, it names a
+          password in a repository that changed nothing, which is how the
+          2026-09-15 reset went unnoticed for four and a half hours. rc
+          {{ item.rc }}, stderr '{{ item.stderr }}'.
+      loop: "{{ deploy_user_probe_phase_f.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # ================================================================
+    # SECTION 8 -- phase G: a stopped instance, which is the answer that must
+    # NOT be `absent`.
+    #
+    # LAST, deliberately. `absent`'s documented remedy re-provisions the role
+    # and rotates its password, so reporting a merely stopped instance as a
+    # destroyed database invites an operator to break a healthy application. The
+    # instance is stopped rather than removed, so its own state is exactly as
+    # unreadable as a crash or a restart would leave it -- and the role and
+    # database really are gone from it, so a probe evaluating `absent` before
+    # `unreachable` would answer `absent` here with a clear conscience.
+    # ================================================================
+
+    - name: Stop the shared instance
+      ansible.builtin.command: docker stop platform-postgres-1
+      changed_when: false
+
+    - name: Probe two applications against a stopped instance
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/' ~ item.name ~ '.json') | quote }}
+          | /usr/local/bin/deploy-probe {{ item.app | quote }}
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_g
+      changed_when: false
+      failed_when: false
+      loop:
+        - {name: populated, app: commerce-ops}
+        - {name: absent-unknown-password, app: platform}
+      loop_control:
+        label: "{{ item.app }}"
+
+    - name: Assert a stopped instance answers unreachable and never absent
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.stdout | trim == "unreachable"
+        fail_msg: >-
+          Against a stopped instance the probe for '{{ item.item.app }}'
+          answered '{{ item.stdout }}' rather than `unreachable`. `unreachable`
+          takes precedence over `absent`, and the precedence SHALL NOT be read
+          as an evaluation order that reaches `absent` first: `absent` is an
+          assertion about what the instance HOLDS and SHALL be made only from a
+          reading of the instance that actually succeeded. A stopped, restarting
+          or absent instance is not a database that ceased to exist, and
+          reporting it as one invites the operator to re-provision and rotate
+          the credential of a healthy application whose instance was merely
+          down.
+      loop: "{{ deploy_user_probe_phase_g.results }}"
+      loop_control:
+        label: "{{ item.item.app }}"
+
+    # ----------------------------------------------------------------
+    # Scenario: A stopped instance is not reported as a destroyed database --
+    # the "is restarting" arm, which the phase above does NOT reach.
+    #
+    # `docker stop` yields `Container ... is not running`, a message the runtime
+    # speaks for itself. This phase is the other shape: the container is UP and
+    # the server inside it is not accepting connections, which is what a
+    # restart, a crash with the container still running, and the initialising
+    # window right after a volume re-create all look like. There `docker exec`
+    # succeeds and relays the INSTANCE's own stderr --
+    #
+    #   psql: error: connection to server on socket
+    #   "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+    #
+    # -- and a probe classifying that as a runtime failure refuses where the
+    # requirement says `unreachable`. That is a real regression this change
+    # shipped for one commit and its own code review caught; nothing here
+    # exercised it, which is why this phase exists.
+    #
+    # The fixture replaces the instance with a container of the SAME NAME, from
+    # the same image, running `sleep` instead of the server -- the only way to
+    # hold the container up with nothing listening, since the real container's
+    # PID 1 is the server and stopping it stops the container.
+    # ----------------------------------------------------------------
+    - name: Fixture -- replace the instance with a container that is up and serving nothing
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker rm -f platform-postgres-1 >/dev/null 2>&1 || true
+        docker run -d --name platform-postgres-1 --network platform_edge \
+          -e POSTGRES_USER={{ probe_superuser | quote }} \
+          {{ probe_postgres_image | quote }} sleep 600
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Probe an instance whose container is up and whose server is not accepting connections
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          cat {{ (probe_payload_dir ~ '/populated.json') | quote }}
+          | /usr/local/bin/deploy-probe commerce-ops
+        executable: /bin/bash
+      become: true
+      become_user: deploy
+      register: deploy_user_probe_phase_h
+      changed_when: false
+      failed_when: false
+
+    - name: Assert a server that is not accepting connections answers unreachable, and is not a refusal
+      ansible.builtin.assert:
+        that:
+          - deploy_user_probe_phase_h.rc == 0
+          - deploy_user_probe_phase_h.stdout | trim == "unreachable"
+        fail_msg: >-
+          With the container up and the server not accepting connections, the
+          probe answered '{{ deploy_user_probe_phase_h.stdout }}' (rc
+          {{ deploy_user_probe_phase_h.rc }}) rather than `unreachable`. This is
+          the requirement's "is restarting" arm. A non-zero exit with no token
+          means the probe classified the INSTANCE's own stderr, relayed through
+          `docker exec`, as a failure of the container runtime -- so a probe
+          during any restart reports itself broken instead of reporting that the
+          instance could not be reached.
+
+    - name: Fixture -- put the real instance back
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker rm -f platform-postgres-1 >/dev/null 2>&1 || true
+        docker run -d \
+          --name platform-postgres-1 \
+          --network platform_edge \
+          --restart unless-stopped \
+          -e POSTGRES_USER={{ probe_superuser | quote }} \
+          -e POSTGRES_PASSWORD={{ probe_superuser_password | quote }} \
+          -v platform_postgres_data:/var/lib/postgresql \
+          {{ probe_postgres_image | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: false

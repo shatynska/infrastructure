@@ -1,0 +1,719 @@
+name: Platform Deploy
+
+# Diff-then-gated-deploy, mirroring apply.yml's plan/apply split so that a
+# reviewed Environment's approver sees the exact diff before approving -- see
+# the Reviewer Sees the Exact Diff Before Approving requirement in
+# iac-platform-deploy-pipeline. Not a required PR check; only the validation
+# step in pr-validation.yml is that.
+#
+# NO STACK IS NAMED ANYWHERE IN THIS FILE, AND NEITHER IS ANY GITHUB
+# ENVIRONMENT OR ANSIBLE GROUP. Which stacks receive the shared platform stack
+# comes from each stack's own `terraform/stacks/<name>/pipeline.yml`, through
+# the `deploys_platform` field, and each one's GitHub Environment from the
+# `github_environment` field beside it. See The Platform Deploy Names No Stack
+# and Each Stack Declares Its Own Pipeline Configuration
+# (openspec/specs/iac-cicd-pipeline/spec.md).
+#
+# THE WORKFLOW-LEVEL `paths:` FILTER IS PERMISSIBLE ONLY BECAUSE THIS IS NOT A
+# REQUIRED STATUS CHECK. The opposite rule governs pr-validation.yml, where a
+# workflow-level filter would leave a non-matching pull request permanently
+# pending -- Required Status Checks Report on Every Pull Request
+# (openspec/specs/iac-cicd-pipeline/spec.md).
+#
+# A CONSEQUENCE OF THAT FILTER WORTH KNOWING BEFORE IT SURPRISES SOMEONE: the
+# opt-in lives under `terraform/stacks/`, which this filter does not match. A
+# merge that opts a stack in and touches nothing under `platform/` starts no
+# run at all, and that stack receives the stack at the next platform change or
+# at a dispatch below -- not at its own merge.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "platform/**"
+  # WHY THIS TRIGGER EXISTS: a rebuilt host needs the stack redeployed to it
+  # ALONE. Re-running the last run would redeploy every stack and wake another
+  # stack's approval gate for a host that did not change, and
+  # `docs/runbook-rebuild.md`'s rebuild sequence needs the narrower
+  # act. It also covers the gap the `paths:` filter leaves: a merge
+  # that opts a stack in without touching `platform/` starts no run.
+  #
+  # WHAT IT DOES NOT OPEN, AND THE GUARD THAT MAKES THAT TRUE. A dispatch runs
+  # against whatever ref is chosen, and `actions/checkout` takes that ref -- so
+  # without a guard this trigger would ship an unmerged branch's stack
+  # definition to a real host, and to an ungated stack with no approval at all.
+  # `AGENTS.md` says a change reaches production by merging and by nothing
+  # else. So `discover` refuses any ref but the default branch, as its FIRST
+  # act, before any Environment is named and before any credential is in
+  # reach. What this trigger re-deploys is therefore what merging already
+  # delivered, which is exactly what the rebuild needs and nothing more.
+  #
+  # A branch rule on each Environment would be a second, independent guard,
+  # and is worth adding -- but it is a repository setting no committed file can
+  # assert, so it is not what this rests on.
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: >-
+          One stack to deploy to. Leave empty to deploy to every stack
+          discovery finds opted in. Runs only from the default branch.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: discover
+    runs-on: ubuntu-latest
+    # No `environment:` -- this job resolves which Environments the run will
+    # ask for, so it must hold none of their secrets.
+    permissions:
+      contents: read
+    outputs:
+      stacks: ${{ steps.discover.outputs.stacks }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # ITS OWN STEP, AND FIRST. A push to `main` can only be `main`; a
+      # dispatch is whatever ref was chosen, and `actions/checkout` takes it --
+      # so without this the deploy would ship an unmerged branch's stack
+      # definition to a real host, and to an ungated stack with no approval at
+      # all. This runs before any stack is read, before any Environment is
+      # named and before any credential is in reach.
+      #
+      # SEPARATE FROM THE DISCOVERY STEP BELOW rather than its first lines,
+      # deliberately: that body is executed verbatim by `.github/tests` against
+      # a scratch tree, and a guard reading the event would make it depend on
+      # variables no such harness can supply -- so the body would die under
+      # `set -u` in the one place it is exercised most.
+      - name: Refuse a deploy from anything but the default branch
+        env:
+          RUNNING_REF: ${{ github.ref }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEFAULT_REF#refs/heads/}" ]; then
+            echo "::error::The repository's default branch could not be resolved, so this run cannot establish that it is deploying merged content. Refusing rather than assuming it is."
+            exit 1
+          fi
+          if [ "$RUNNING_REF" != "$DEFAULT_REF" ]; then
+            echo "::error::This run is on '${RUNNING_REF}', and the platform stack is deployed from '${DEFAULT_REF}' alone. A deploy carries the committed stack definition to a real host, so it runs from the branch that has been merged and reviewed and from no other. Merge the change, then dispatch this workflow from ${DEFAULT_REF} if you need to reach one stack without waiting for the next platform change."
+            exit 1
+          fi
+
+      # Nothing in this step's body is an `${{ }}` expression: the dispatch
+      # input arrives through `env:` below. An interpolated expression is
+      # substituted as TEXT before bash parses the line, and .github/tests
+      # executes this body against a scratch tree, which it could not do if
+      # the body only made sense after GitHub had rewritten it.
+      #
+      # THIS BODY IS DELIBERATELY NOT IDENTICAL TO THE TERRAFORM DISCOVERY
+      # BODY, nor to host-converge.yml's. It reads a field none of them read
+      # and emits two columns where they emit three or four, so it falls
+      # outside the identity assertion in .github/tests, which stays covering
+      # the three Terraform workflows exactly as it does today. What it DOES
+      # share with them is the `field()` reader, the control-character
+      # refusal, the empty-result refusal and the JSON emission -- the overlap
+      # is idiom rather than accident. Five near-siblings now exist where the
+      # decision to keep three was taken; docs/backlog.md carries the entry
+      # that would collapse them.
+      - name: Discover the stacks the platform stack is deployed to
+        id: discover
+        env:
+          REQUESTED_STACK: ${{ inputs.stack }}
+        run: |
+          set -euo pipefail
+          stacks_root="terraform/stacks"
+          declaration_name="pipeline.yml"
+          field() {
+            sed -n -E "s/^[[:space:]]*${2}[[:space:]]*:[[:space:]]*(.*)\$/\1/p" "$1" \
+              | head -n 1 \
+              | sed -E "s/[[:space:]]+#.*\$//; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/"
+          }
+          if [ ! -d "$stacks_root" ]; then
+            echo "::error::Discovery found no ${stacks_root}/ directory at all, so no stack can declare that the platform stack is deployed to it. Refusing to report success having discovered nothing: an empty matrix skips the deploy job and the run reports green having deployed nothing."
+            exit 1
+          fi
+          records=$(mktemp)
+          refused=0
+          excluded=""
+          opted_in_names=""
+          for directory in "$stacks_root"/*/; do
+            [ -d "$directory" ] || continue
+            name="$(basename "$directory")"
+            declaration="${directory}${declaration_name}"
+            if [ ! -f "$declaration" ]; then
+              echo "::error::${name}: ${declaration} does not exist, so this stack declares neither whether the platform stack is deployed to it nor which GitHub Environment such a deploy would attach to."
+              refused=1
+              continue
+            fi
+            deploys_platform="$(field "$declaration" deploys_platform)"
+            github_environment="$(field "$declaration" github_environment)"
+            case "${deploys_platform}${github_environment}" in
+              *[[:cntrl:]]*)
+                echo "::error::${name}: ${declaration} carries a control character in 'deploys_platform' or 'github_environment'. Refusing to read a declaration this step cannot represent."
+                refused=1
+                continue
+                ;;
+            esac
+            # An unrecognised value is refused rather than read as either
+            # choice. Treating anything-but-`true` as `false` would make a
+            # typo a silent opt-out, and the opposite would make one a silent
+            # deploy; neither is a thing to guess at.
+            case "$deploys_platform" in
+              true) ;;
+              "" | false)
+                excluded="${excluded}${name} "
+                continue
+                ;;
+              *)
+                echo "::error::${name}: ${declaration} states 'deploys_platform: ${deploys_platform}', which is neither 'true' nor 'false'. This field decides whether the shared platform stack is deployed to this stack's host, and an unrecognised value is refused rather than read as either answer."
+                refused=1
+                continue
+                ;;
+            esac
+            if [ -z "$github_environment" ]; then
+              echo "::error::${name}: ${declaration} states 'deploys_platform: true' but declares no 'github_environment'. That field names the GitHub Environment this stack's deploy job attaches to, which is what confines this stack's deploy credential and what decides whether the deploy waits for a reviewer. It has no safe default: GitHub CREATES an Environment a workflow names, with no protection rules, so a deploy attached to nothing would run unreviewed rather than fail."
+              refused=1
+              continue
+            fi
+            opted_in_names="${opted_in_names}${name} "
+            printf '%s\t%s\n' "$name" "$github_environment" >>"$records"
+          done
+          # Named rather than silent. A stack omitted by a forgotten field is
+          # otherwise visible only in its own absence, which is the one place
+          # nobody looks.
+          if [ -n "$excluded" ]; then
+            echo "Excluded by their own declarations, and deployed to by nothing: ${excluded}"
+          fi
+          # In-band, like apply.yml's, and for the reason its own comment
+          # gives: a collision lives in committed DATA rather than in workflow
+          # text, so no assertion about this file can reach it. Two stacks
+          # naming one Environment share its write token and its protection
+          # rules -- and here, share the nine PLATFORM_* secrets, so one host
+          # would receive the other's database credential and both deploy rows
+          # would target whichever host that Environment's PLATFORM_DEPLOY_HOST
+          # names. `.github/tests` checks this too; a deploy is worth both.
+          duplicates="$(cut -f2 "$records" | sort | uniq -d)"
+          if [ -n "$duplicates" ]; then
+            for environment in $duplicates; do
+              owners="$(awk -F'\t' -v want="$environment" '$2 == want { printf "%s ", $1 }' "$records")"
+              echo "::error::These stacks all declare the '${environment}' GitHub Environment: ${owners}. They would share its nine PLATFORM_* secrets, so every one of them would deploy to the single host that Environment's PLATFORM_DEPLOY_HOST names, each overwriting the last."
+            done
+            refused=1
+          fi
+          if [ "$refused" -ne 0 ]; then
+            echo "::error::Discovery refused the committed declarations, so no stack enters the matrix. Every reason is reported above, each naming the stack it belongs to."
+            rm -f "$records"
+            exit 1
+          fi
+          if [ ! -s "$records" ]; then
+            echo "::error::No stack declares 'deploys_platform: true', so the shared platform stack is deployed to nowhere. Refusing to report success having discovered nothing. Excluded: ${excluded:-none}"
+            rm -f "$records"
+            exit 1
+          fi
+          requested="$(printf '%s' "${REQUESTED_STACK:-}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+          # An ABSENT OR EMPTY input selects every opted-in stack and is not
+          # refused -- every `push` supplies an empty one, so conflating empty
+          # with unresolvable would fail every merge. Only a non-empty value
+          # is matched.
+          if [ -n "$requested" ]; then
+            if ! awk -F'\t' -v want="$requested" '$1 == want { found = 1 } END { exit !found }' "$records"; then
+              echo "::error::This run was requested for '${requested}', which discovery did not find opted in. Opted in: ${opted_in_names:-none}. Excluded by their own declarations: ${excluded:-none}"
+              rm -f "$records"
+              exit 1
+            fi
+            selected=$(mktemp)
+            awk -F'\t' -v want="$requested" '$1 == want' "$records" >"$selected"
+            mv "$selected" "$records"
+          fi
+          discovered=$(jq -R -s -c '
+            split("\n")
+            | map(select(length > 0))
+            | map(split("\t"))
+            | map({
+                name: .[0],
+                github_environment: .[1]
+              })
+          ' <"$records")
+          rm -f "$records"
+          echo "Discovered: ${discovered}"
+          echo "stacks=${discovered}" >>"$GITHUB_OUTPUT"
+
+  diff:
+    name: diff
+    needs: discover
+    runs-on: ubuntu-latest
+    # No `environment:` here -- must start immediately, with no access to any
+    # stack's deploy credential. See Reviewer Sees the Exact Diff Before
+    # Approving and Deploy Credential Confined to the Gated Job.
+    #
+    # ONE OF THIS JOB, NOT ONE PER STACK. The content deployed is the same for
+    # every stack: the committed stack definition, whose per-stack values
+    # arrive at deploy time from that stack's own Environment and therefore
+    # appear in no diff. A job per stack would publish the same summary
+    # several times and multiply the jobs that run before the gate.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Write platform/ diff to job summary
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          null_sha="0000000000000000000000000000000000000000"
+          {
+            echo '### platform/ diff — this merge'
+            echo
+            if [ -n "${BEFORE_SHA:-}" ] && [ "${BEFORE_SHA:-}" != "$null_sha" ] \
+               && ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              BEFORE_SHA=""
+            fi
+            if [ -z "${BEFORE_SHA:-}" ] || [ "${BEFORE_SHA:-}" = "$null_sha" ]; then
+              echo 'This run carries no usable comparison base — it was requested by hand, or the base no longer resolves after a force-push — so there is no diff to show. It deploys the committed stack definition at this ref.'
+            else
+              echo '```diff'
+              git diff "$BEFORE_SHA" "$AFTER_SHA" -- platform/
+              echo '```'
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: deploy (${{ matrix.stack.name }})
+    needs: [discover, diff]
+    runs-on: ubuntu-latest
+    # Resolved per matrix row from discovery, and a literal here would be the
+    # stack-naming this workflow forbids. It is also the guard that a literal
+    # used to carry: GitHub CREATES an Environment a workflow names, with no
+    # protection rules, so an Environment no stack declares gates nothing
+    # rather than failing. What holds that now is the pair of assertions in
+    # .github/tests -- that this attachment varies by matrix row and comes
+    # from discovery, and that no two stacks declare one GitHub Environment --
+    # which is the same substitution apply.yml made.
+    #
+    # Whether this pauses for a human is a property of the Environment's
+    # protection rules and not of this workflow. One stack's Environment
+    # requires a reviewer and another's does not; nothing below distinguishes
+    # them.
+    environment: ${{ matrix.stack.github_environment }}
+    permissions:
+      contents: read
+    # Per stack, because what it protects is the deploy state on ONE host,
+    # which two stacks do not share. A workflow-level group cannot read a
+    # matrix, and a group shared across stacks would hold one stack's deploy
+    # behind another stack's pending approval -- promotion ordering reached by
+    # a route that declares no dependency.
+    concurrency:
+      group: platform-deploy-${{ matrix.stack.name }}
+      cancel-in-progress: false
+    strategy:
+      # THREE SETTINGS WOULD REINTRODUCE PROMOTION ORDERING WITH NO `needs:`
+      # EDGE TO READ, and none is used: `fail-fast` at its default cancels
+      # every sibling row when one fails, `max-parallel: 1` sequences the rows
+      # in an order nobody chose, and a `needs:` between deploy rows states it
+      # outright. Ordering is exercised at a reviewed Environment's approval,
+      # by an approver free to withhold it until a lower stack has been seen
+      # to work -- see Each Stack's Deploy Attaches to the Environment Its Own
+      # Declaration Names, and *Stack and Module Folder Structure*
+      # (openspec/specs/iac-repo-foundations/spec.md), which settles the same
+      # question for the Terraform apply.
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.discover.outputs.stacks) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # An undefined GitHub secret resolves to an EMPTY STRING rather than to
+      # an error, and the two halves of this set fail differently. An empty
+      # host reaches `tailscale ping` and `ssh deploy@` as an empty argument
+      # naming neither the stack nor the secret. An empty rendered value is
+      # worse, because it need not fail at all: platform/docker-compose.yml
+      # interpolates each one as ${VAR} with no `:?` error form, so the
+      # assignment is rendered empty and a service that tolerates that starts,
+      # satisfies `--wait`, and leaves the run green -- an empty
+      # GRAFANA_ADMIN_PASSWORD is the live case, against *Metrics Dashboards
+      # Are Available* (openspec/specs/iac-platform-services/spec.md), which
+      # obliges a non-default credential.
+      #
+      # All nine arrive through `env:` rather than interpolated into the body:
+      # an expression interpolated into a shell body is substituted as TEXT
+      # before bash parses the line, so a value carrying a quote or a newline
+      # is parsed as shell -- and one of these nine is a multi-line private
+      # key. It also lets the check loop over names instead of spelling each
+      # twice. NAMES ARE REPORTED, VALUES NEVER.
+      #
+      # GRAFANA_BIND_ADDRESS is NOT in this set and its absence here is not an
+      # oversight: no secret holds it, and the step that derives it runs
+      # below. Including it would refuse every row of every run.
+      #
+      # NEITHER IS THE TAILSCALE OAUTH PAIR, though this stack's Environment
+      # holds it and the next step consumes it. The class this step exists for
+      # is a secret whose absence does NOT stop the deploy -- an empty value
+      # rendered into a file, which a tolerant service accepts on its way to a
+      # green run. An absent OAuth credential is the opposite: the join fails,
+      # loudly, before anything is written, which is what this step would
+      # otherwise be providing. Reading it here would also make this step
+      # indistinguishable from the join itself to anything examining the job's
+      # order, including the check that holds this step ahead of it.
+      - name: Establish this stack's secret set is complete
+        env:
+          STACK: ${{ matrix.stack.name }}
+          GITHUB_ENVIRONMENT: ${{ matrix.stack.github_environment }}
+          PLATFORM_DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+          PLATFORM_DEPLOY_SSH_KEY: ${{ secrets.PLATFORM_DEPLOY_SSH_KEY }}
+          PLATFORM_ACME_EMAIL: ${{ secrets.PLATFORM_ACME_EMAIL }}
+          PLATFORM_POSTGRES_USER: ${{ secrets.PLATFORM_POSTGRES_USER }}
+          PLATFORM_POSTGRES_PASSWORD: ${{ secrets.PLATFORM_POSTGRES_PASSWORD }}
+          PLATFORM_POSTGRES_EXPORTER_PASSWORD: ${{ secrets.PLATFORM_POSTGRES_EXPORTER_PASSWORD }}
+          PLATFORM_GRAFANA_ADMIN_PASSWORD: ${{ secrets.PLATFORM_GRAFANA_ADMIN_PASSWORD }}
+          PLATFORM_SLACK_WEBHOOK_URL: ${{ secrets.PLATFORM_SLACK_WEBHOOK_URL }}
+          PLATFORM_DEADMANSWITCH_URL: ${{ secrets.PLATFORM_DEADMANSWITCH_URL }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in \
+            PLATFORM_DEPLOY_HOST \
+            PLATFORM_DEPLOY_SSH_KEY \
+            PLATFORM_ACME_EMAIL \
+            PLATFORM_POSTGRES_USER \
+            PLATFORM_POSTGRES_PASSWORD \
+            PLATFORM_POSTGRES_EXPORTER_PASSWORD \
+            PLATFORM_GRAFANA_ADMIN_PASSWORD \
+            PLATFORM_SLACK_WEBHOOK_URL \
+            PLATFORM_DEADMANSWITCH_URL
+          do
+            # Indirect expansion rather than `eval`: the names are loop
+            # literals here, but `eval` on anything reachable from a secret is
+            # a habit worth not forming.
+            if [ -z "${!name:-}" ]; then
+              missing="${missing}${name} "
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::${STACK}: these secrets resolved to nothing and should have come from the '${GITHUB_ENVIRONMENT}' GitHub Environment: ${missing}. This stack's declaration opts it in to the platform deploy, so the Environment is expected to hold all nine. Refusing before joining the tailnet and before rendering anything: an absent secret becomes an empty assignment in the rendered environment file, and a service that tolerates one starts, satisfies the deploy's wait for health, and leaves this run green having deployed a stack with no credential on it."
+            exit 1
+          fi
+
+      # Joins this runner to the same tailnet this stack's host is a member of
+      # (connect-platform-deploy-via-tailscale) -- SSH is only reachable this
+      # way, not over the public internet, per that change's design.md. The
+      # OAuth client is scoped to this stack's GitHub Environment like every
+      # other secret this job uses, and ephemeral per-run nodes are created
+      # automatically (tailscale/github-action's own behavior), not a
+      # long-lived credential. `ping` waits for the host to actually become
+      # reachable before proceeding -- new tailnet peers propagate with a
+      # brief, eventually-consistent delay, and the deploy steps below would
+      # otherwise race it.
+      - name: Connect to the tailnet
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+
+      # add-platform-monitoring: Grafana's docker-compose.yml `ports:`
+      # entry needs a literal IPv4 tailnet address, not a hostname --
+      # Docker's port-publish host_ip parses only a literal IP, with no
+      # DNS/MagicDNS resolution. PLATFORM_DEPLOY_HOST is documented
+      # (connect-platform-deploy-via-tailscale's design.md) as either a
+      # MagicDNS name or a literal IP, interchangeably, for its other
+      # consumers (tailscale ping/ssh-keyscan/ssh all resolve either form
+      # themselves) -- Docker does not, so this step resolves it once,
+      # here, to whichever form Grafana's bind actually needs. Runs on
+      # this already-tailnet-joined runner, not on the host itself: the
+      # host is only reachable via deploy-receive's forced-command SSH,
+      # which accepts no other command (see design.md's Decisions for the
+      # two rejected earlier drafts of this step).
+      #
+      # Checks whether the secret's value already IS a literal IPv4
+      # address first, and only calls `tailscale ip` (a hostname/FQDN
+      # peer lookup, not documented to also accept an already-literal IP)
+      # when it isn't -- this makes the step correct independent of
+      # whichever way that undocumented case actually behaves. Fails
+      # loudly on an empty or invalid result either way, rather than
+      # writing a bad address into .env.
+      - name: Resolve Grafana's tailnet bind address
+        id: grafana_bind
+        env:
+          DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          # A ValueError from IPv4Address is an uncaught exception, which
+          # python3 -c already exits non-zero on -- no explicit try/except
+          # needed. Stderr is discarded since a rejected value is an
+          # expected, not exceptional, outcome here.
+          is_ipv4() {
+            python3 -c "import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])" "$1" 2>/dev/null
+          }
+          value="$DEPLOY_HOST"
+          if is_ipv4 "$value"; then
+            resolved="$value"
+          else
+            resolved="$(tailscale ip -4 "$value")"
+          fi
+          if ! is_ipv4 "$resolved"; then
+            echo "::error::Resolved Grafana bind address '$resolved' is not a valid IPv4 literal" >&2
+            exit 1
+          fi
+          echo "address=$resolved" >>"$GITHUB_OUTPUT"
+
+      # Rendered fresh each run from this stack's Environment-scoped secrets
+      # -- never committed, never logged. Each stack renders its own values,
+      # so neither host receives the other's database credential, dashboard
+      # credential or alert targets. See Platform Secrets Rendered from CI at
+      # Deploy Time.
+      # EVERY VALUE REACHES THE SHELL THROUGH `env:`, NEVER INTERPOLATED INTO
+      # THE SCRIPT. An expression written into a `run:` body is substituted as
+      # TEXT before bash parses the line, so the secret becomes part of a
+      # double-quoted shell word and bash expands it there -- the same reason
+      # host-converge.yml's "Set up the converge credentials" step is written
+      # this way, which is the shape copied here.
+      #
+      # This is not theoretical, and the three measurements are kept because
+      # each fails differently and silently. With `echo "NAME=<secret>"`:
+      #
+      #   ab$c#d      renders  ab#d       -- `$c` expanded to nothing
+      #   "abc"def    renders  abcdef     -- the shell ate the quotes
+      #   x`id -u`y   renders  x1000y     -- A COMMAND RAN
+      #
+      # The third is the one that matters most and is the least obvious: a
+      # secret carrying a backtick or `$(…)` is executed by this job's shell,
+      # which at that moment holds this stack's tailnet OAuth client and the
+      # deploy key below. Nothing outside can reach it, since only the operator
+      # writes these Environments -- so it is a foot-gun rather than an attack
+      # surface, and the fix is to stop the value being shell at all rather
+      # than to quote it better. RE-QUOTING DOES NOT WORK: `echo "N='<secret>'"`
+      # still renders ab$c#d as 'ab#d', measured.
+      #
+      # The first two corrupt instead, and a corrupted credential is not loud:
+      # the service starts, reports healthy, and fails only at whatever it
+      # needed the credential for. postgres-exporter spent an unknown period in
+      # exactly that state -- see docs/backlog.md
+      # `alert-on-the-exporter-being-unable-to-read-postgres`.
+      #
+      # THIS STEP CLOSES THE SHELL, AND THE `render` HELPER BELOW CLOSES THE
+      # PARSER. Compose reads the file this writes with a dotenv parser of its
+      # own, and that parser processes what it reads: it expands `$`, honours a
+      # quote that OPENS a value, begins an inline comment at a space-preceded
+      # `#`, truncates at a line break, and strips leading and trailing
+      # whitespace. So a value written into the file unaltered is not delivered
+      # unaltered, and the failure is silent -- the service starts, reports
+      # healthy, and fails at whatever needed the credential.
+      #
+      # THE RULE WAS MEASURED, NOT REASONED. Each value is wrapped in double
+      # quotes with `\` -> `\\`, `"` -> `\"` and `$` -> `$$` applied IN THAT
+      # ORDER; escaping the quotes or dollars first would double a backslash
+      # the escaper itself introduced. Measured against 51 values on this
+      # interpolation path and 15 on the `env_file:` path applications use, it
+      # returns the stored value byte for byte in every case.
+      # `tools/env-rendering-probe/` is the harness, committed so the evidence
+      # can be re-taken rather than trusted; the change
+      # `render-the-env-file-so-a-secret-survives-it` carries the measurement.
+      #
+      # `$$` RATHER THAN `\$` BECAUSE IT IS THE PARSER'S OWN ESCAPE. Both were
+      # measured identical inside double quotes; outside them `a$$b` yields
+      # `a$b` while `a\$b` yields `a\`, so the backslash form is a consequence
+      # of double-quote processing rather than a rule about `$`. It is also the
+      # form `platform/docker-compose.yml` already uses (`pg_isready -U
+      # $$POSTGRES_USER`).
+      #
+      # THE OBLIGATION STOPS AT THE PARSER. Two of these values are afterwards
+      # interpolated into the content of an embedded Alertmanager YAML config
+      # and one into a Traefik `command:` argument; nothing here escapes for
+      # those contexts. See the requirement and `docs/backlog.md`.
+      #
+      # WHAT THE SHELL LAYER BOUGHT, KEPT HERE BECAUSE IT IS STILL TRUE AND IS
+      # WHY THE `env:` BLOCK EXISTS. This step once rendered with
+      # `echo "NAME=${{ secrets.X }}"`. GitHub substitutes a secret's raw text
+      # into the `run:` body, so bash read it as script:
+      #
+      #   ab$c#d      renders  ab#d       -- `$c` expanded to nothing
+      #   "abc"def    renders  abcdef     -- the shell ate the quotes
+      #   x`id -u`y   renders  x1000y     -- A COMMAND RAN
+      #
+      # The third is the one that matters most: a secret carrying a backtick or
+      # `$(…)` is executed by this job's shell, which at that moment holds this
+      # stack's tailnet OAuth client and the deploy key below. Every value now
+      # reaches the script through `env:`, and `.github/tests` refuses any
+      # workflow that interpolates a secret into a `run:` body. RE-QUOTING IN
+      # THAT LAYER DOES NOT WORK -- `echo "N='<secret>'"` still rendered
+      # `ab$c#d` as `ab#d`, measured -- and that result says nothing about the
+      # file layer, where quoting is exactly what does work. Reading it as
+      # though it did is what left this gap open for a day.
+      #
+      # THE ESCAPED FORM IS NEVER PRINTED. GitHub registers its log masking
+      # against each secret's own value, so the escaped variant is a different
+      # string that masking does not cover. It goes into the file and nowhere
+      # else.
+      - name: Render .env from secrets
+        env:
+          ACME_EMAIL: ${{ secrets.PLATFORM_ACME_EMAIL }}
+          POSTGRES_USER: ${{ secrets.PLATFORM_POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.PLATFORM_POSTGRES_PASSWORD }}
+          POSTGRES_EXPORTER_PASSWORD: ${{ secrets.PLATFORM_POSTGRES_EXPORTER_PASSWORD }}
+          SLACK_WEBHOOK_URL: ${{ secrets.PLATFORM_SLACK_WEBHOOK_URL }}
+          DEADMANSWITCH_URL: ${{ secrets.PLATFORM_DEADMANSWITCH_URL }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.PLATFORM_GRAFANA_ADMIN_PASSWORD }}
+          GRAFANA_BIND_ADDRESS: ${{ steps.grafana_bind.outputs.address }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          # Names only, never values -- see the requirement's report clause.
+          altered=''
+
+          # The single escaping point. Every value written into the file goes
+          # through this and nothing else writes into it, so a ninth value
+          # added later is escaped by construction rather than by whoever adds
+          # it remembering to. No `$(…)` anywhere in this step: command
+          # substitution strips trailing newlines and a secret may end in one.
+          render() {
+            local name="$1"
+            local value="$2"
+
+            # Membership is justified by a position in which the PREVIOUS
+            # rendering corrupted the value -- a `$` anywhere, a `"` or `'`
+            # opening it, a `#` preceded by a space, a line break anywhere,
+            # edge whitespace. Detection is by presence ANYWHERE, deliberately:
+            # testing position here would re-derive the parser's rules in a
+            # place nothing can exercise them, and those rules are not
+            # guessable (a space before a `#` begins a comment; a tab does
+            # not). The `\` is a margin with no measured corrupting position,
+            # kept because it is the character whose treatment differs most
+            # between contexts. Over-reporting costs one look at a credential
+            # that is fine.
+            case "$value" in
+              *'\'*|*'"'*|*"'"*|*'$'*|*'#'*|*$'\n'*|[[:space:]]*|*[[:space:]])
+                altered="$altered $name"
+                ;;
+            esac
+
+            local escaped="$value"
+            escaped="${escaped//\\/\\\\}"
+            escaped="${escaped//\"/\\\"}"
+            escaped="${escaped//\$/\$\$}"
+            printf '%s="%s"\n' "$name" "$escaped"
+          }
+
+          {
+            render ACME_EMAIL "$ACME_EMAIL"
+            render POSTGRES_USER "$POSTGRES_USER"
+            render POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+            render POSTGRES_EXPORTER_PASSWORD "$POSTGRES_EXPORTER_PASSWORD"
+            render SLACK_WEBHOOK_URL "$SLACK_WEBHOOK_URL"
+            render DEADMANSWITCH_URL "$DEADMANSWITCH_URL"
+            render GRAFANA_ADMIN_PASSWORD "$GRAFANA_ADMIN_PASSWORD"
+            render GRAFANA_BIND_ADDRESS "$GRAFANA_BIND_ADDRESS"
+          } >platform/.env
+
+          # A value named here CARRIES a character the previous rendering
+          # alters in some position -- it does not establish that this value
+          # was altered, because detection is by presence and the set is a
+          # superset of what corrupts (the backslash is in it as a stated
+          # margin with no measured corrupting position at all). The first
+          # real firing, on 2026-09-16, was exactly that case: both stacks
+          # named GRAFANA_ADMIN_PASSWORD and neither recreated a container,
+          # so nothing had been corrupted and nothing needed rotating. The
+          # message said it did. That is why it now says what it detects and
+          # names the test that settles it.
+          #
+          # Where a value WAS being altered, whatever was provisioned from it
+          # -- the database role `initdb` created at first boot, most sharply
+          # -- is keyed to the altered form and stops matching now that the
+          # correct one is delivered. The empty case is stated explicitly: an
+          # absent notice and a notice reporting nothing read alike, and only
+          # one of them is evidence.
+          if [ -n "$altered" ]; then
+            echo "::warning::these rendered values carry a character the rendering this replaces alters in SOME position:$altered"
+            echo "::notice::that is not yet evidence any of them WAS altered -- detection is by presence, never by position, because testing position here would re-derive the parser's rules where nothing can exercise them. To tell: a value whose parsed form changed also changed its service definition, so this deploy recreated that service's container. Read the deploy output above -- Recreated, not Running. Rotate only a value whose container was recreated, together with whatever was provisioned from it. One exception: a value interpolated into an embedded configuration replaces no container, so that test cannot see it."
+          else
+            echo "::notice::no rendered value carries a character the rendering this replaces could alter"
+          fi
+
+      # ssh-keyscan below is trust-on-first-use on EVERY run, which verifies
+      # nothing about the host's identity. Accepted deliberately, because the
+      # connection it protects is already bounded by something stronger: the
+      # runner reaches the host only over the tailnet, having authenticated to
+      # it with an OAuth client scoped to this stack's Environment, and the key
+      # it presents is restricted to a forced command that accepts no other
+      # invocation. An attacker positioned to answer that keyscan is already
+      # inside the tailnet. Revisit if the deploy ever runs over the public
+      # internet, at which point this stops being defence-in-depth and becomes
+      # the only check.
+      #
+      # PLATFORM_DEPLOY_SSH_KEY is the private half of the platform keypair
+      # add-per-app-deploy-keys's deploy_user role installs the public half of
+      # (as this key's own `deploy_apps` entry) -- generated out-of-band there
+      # (its tasks.md 2.2's sibling generation for platform), not here. EACH
+      # STACK HAS A KEYPAIR OF ITS OWN, whose public half that stack's host
+      # authorises and no other host does, so one leaked private half deploys
+      # to one host. This key and every secret above SHALL be scoped to this
+      # stack's own GitHub Environment (GitHub resolves an Environment-scoped
+      # secret ahead of a repository-scoped one of the same name, mirroring
+      # apply.yml's HCLOUD_TOKEN pattern): a repository secret holds one
+      # value, so a key held there would deploy to every host. The accepted
+      # content-layer trust boundary depends on this key being unreadable by
+      # any job that has not attached to this Environment -- which the
+      # discover and diff jobs above, declaring none, cannot.
+      #
+      # THESE TWO GO THROUGH `env:` FOR THE REASON THE RENDER STEP ABOVE GIVES,
+      # and they are worth naming separately because the entry that found this
+      # said they were unaffected. That was true of the `.env` file, which
+      # neither of them enters -- and wrong about the shell, which both of them
+      # were interpolated into. A private key is PEM base64 and a host is a
+      # tailnet address, so neither can hold a `$` or a backtick today; the
+      # point is that nothing made that a property rather than a coincidence,
+      # and this key is the most valuable secret this job holds.
+      - name: Set up the deploy SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.PLATFORM_DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" >~/.ssh/platform_deploy_key
+          chmod 600 ~/.ssh/platform_deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >>~/.ssh/known_hosts
+
+      # One SSH session carries both the content and the trigger: this
+      # key's `authorized_keys` entry is now restricted to the forced
+      # command `deploy-receive platform` (add-per-app-deploy-keys), which
+      # overrides any command sent over the session -- a separate `scp`
+      # plus separate `ssh` commands (the previous three-step shape) would
+      # no longer work at all against that restriction. `deploy-receive`
+      # itself extracts docker-compose.yml/.env into /opt/platform, sets
+      # the extracted .env's permissions (satisfying
+      # iac-platform-services's restrictive-permissions requirement --
+      # replacing the separate "Tighten .env permissions" step this
+      # workflow used to run), and triggers `sudo /usr/local/bin/app-deploy
+      # platform` -- all within this one connection, so no second command
+      # ever needs to reach the host over this key. `docker compose up -d
+      # --wait` inside app-deploy blocks until every service is
+      # running/healthy and exits non-zero otherwise, which is what fails
+      # this step (and therefore this job) on a partial deploy -- no
+      # separate post-deploy health check is added here.
+      - name: Deliver docker-compose.yml and .env, and trigger the deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.PLATFORM_DEPLOY_HOST }}
+        # DELIBERATELY NO `set -o pipefail` HERE, unlike the two steps above
+        # that gained one with their `env:` blocks -- the asymmetry is the sort
+        # that reads as an oversight. GitHub runs `bash -e {0}`, so `-e` is on
+        # and `pipefail` is not: a `tar` failure in this pipeline is masked and
+        # the step's status is `ssh`'s alone. That is worth closing and is NOT
+        # closed here, because turning it on changes when a deploy fails, which
+        # belongs to a change about the deploy rather than to one about how a
+        # secret is rendered.
+        run: |
+          tar -czf - -C platform docker-compose.yml .env | \
+            ssh -i ~/.ssh/platform_deploy_key "deploy@$DEPLOY_HOST"

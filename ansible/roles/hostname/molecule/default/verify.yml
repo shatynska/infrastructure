@@ -1,0 +1,193 @@
+---
+# Verifies what the converge did to the instance's own name, and to its
+# ability to resolve it.
+#
+# Provenance of each assertion (full classification in this change's
+# `test-plan.md`). The requirement is *The Host's Own Name Is Set by the
+# Converge* (openspec/specs/iac-host-configuration/spec.md):
+#
+#   the name is the derived one       SPECIFIED -- scenario "A host renamed in
+#                                     the provisioning layer answers to the new
+#                                     name after a converge", and "its own name
+#                                     SHALL carry the operating company and its
+#                                     inventory identity".
+#   the name is not the created one   SPECIFIED -- the same scenario's
+#                                     "rather than the name it was created
+#                                     with". Stated separately so a run says
+#                                     whether the rename did not happen or
+#                                     happened wrongly.
+#   127.0.1.1 names it                SPECIFIED as to the obligation -- "The
+#                                     host SHALL resolve its own name locally,
+#                                     and the converge SHALL make it do so as
+#                                     part of setting that name". DERIVED as to
+#                                     the address: `127.0.1.1` is Debian's own
+#                                     convention and is what this change's
+#                                     tasks.md 5.1a names.
+#   getent resolves it                SPECIFIED -- the same clause, read through
+#                                     the resolver rather than through the file,
+#                                     so that a file edited into a shape nothing
+#                                     resolves is still caught.
+#   sudo emits no warning             SPECIFIED -- scenario "The host resolves
+#                                     the name it was just given": "so that a
+#                                     privileged command run afterwards emits no
+#                                     unresolved-host warning". This is the
+#                                     assertion the requirement's own "the half
+#                                     that is missing is the one an operator
+#                                     sees" names, and it is the one that goes
+#                                     red on a role that sets the name and
+#                                     leaves /etc/hosts alone.
+#
+# `company` is restated here because Molecule runs converge and verify as two
+# separate ansible-playbook invocations: no var set there survives into here.
+# The two must agree, and a divergence shows up as a failed assertion naming
+# both names.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    company: acme
+    hostname_expected_name: "{{ company }}-{{ inventory_hostname }}"
+    hostname_created_name: created-elsewhere
+  tasks:
+    - name: Read the name the host now answers to
+      ansible.builtin.command: hostname
+      register: hostname_observed
+      changed_when: false
+
+    - name: Report the observed name
+      ansible.builtin.debug:
+        var: hostname_observed.stdout
+
+    - name: Assert the host answers to the name this repository states
+      ansible.builtin.assert:
+        that:
+          - hostname_observed.stdout == hostname_expected_name
+        fail_msg: >-
+          The host answers to '{{ hostname_observed.stdout }}', not
+          '{{ hostname_expected_name }}'. A host's name is set once, at
+          creation, from the name the provisioning layer gave the server, and
+          nothing re-sets it afterwards -- so a converge that does not set it
+          leaves a host answering to a name no committed file states, and
+          nothing fails.
+        success_msg: >-
+          The host answers to '{{ hostname_expected_name }}'.
+        quiet: true
+
+    - name: Assert the name is no longer the one the instance was created with
+      ansible.builtin.assert:
+        that:
+          - hostname_observed.stdout != hostname_created_name
+        fail_msg: >-
+          The host still answers to '{{ hostname_created_name }}', the name it
+          was created with. Stated separately from the assertion above so that
+          a run reports whether the rename did not happen at all, rather than
+          only that the resulting name was wrong.
+        success_msg: >-
+          The name the instance was created with has been replaced.
+        quiet: true
+
+    - name: Assert the name carries the company and the inventory identity, in that order
+      ansible.builtin.assert:
+        that:
+          - hostname_observed.stdout.startswith(company ~ '-')
+          - hostname_observed.stdout.endswith(inventory_hostname)
+        fail_msg: >-
+          '{{ hostname_observed.stdout }}' does not carry
+          '{{ company }}' and '{{ inventory_hostname }}' as its two parts. The
+          name is derived from the host's inventory identity together with the
+          variable naming the operating company -- a name assembled some other
+          way is one a second company's clone cannot change in one place.
+        success_msg: >-
+          The name carries the company and the inventory identity.
+        quiet: true
+
+    - name: Read the loopback entries /etc/hosts declares
+      ansible.builtin.slurp:
+        src: /etc/hosts
+      register: hostname_etc_hosts
+
+    - name: Report /etc/hosts
+      ansible.builtin.debug:
+        var: hostname_etc_hosts.content | b64decode
+
+    - name: Assert the loopback entry answers for the name the host was just given
+      # SINGLE backslashes, and the folded scalar below is why. A folded
+      # (unquoted) YAML scalar performs no escape processing, so Jinja receives
+      # this pattern exactly as written and applies its OWN string-literal
+      # parsing to it -- under which `\\.` collapses to `\.`, asking for a
+      # literal backslash after `127` and matching nothing on any tree. The
+      # read was written double-escaped and reported no loopback entry against
+      # a host that had one. Measured against the pinned ansible-core 2.21.3.
+      vars:
+        hostname_hosts_lines: >-
+          {{ (hostname_etc_hosts.content | b64decode).splitlines()
+             | select('match', '^127\.0\.1\.1\s') | list }}
+      ansible.builtin.assert:
+        that:
+          - hostname_hosts_lines | length > 0
+          - hostname_hosts_lines | select('search', hostname_expected_name) | list | length > 0
+        fail_msg: >-
+          /etc/hosts carries no 127.0.1.1 entry naming
+          '{{ hostname_expected_name }}': {{ hostname_hosts_lines }}.
+          `hostnamectl` sets the name and touches nothing else, so the loopback
+          entry keeps answering for whatever the host was called before. The
+          two move together or the name is only half set.
+        success_msg: >-
+          The loopback entry answers for '{{ hostname_expected_name }}'.
+        quiet: true
+
+    - name: Resolve the host's own name through the resolver rather than the file
+      ansible.builtin.command: "getent hosts {{ hostname_expected_name }}"
+      register: hostname_getent
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the host resolves its own name
+      ansible.builtin.assert:
+        that:
+          - hostname_getent.rc == 0
+        fail_msg: >-
+          `getent hosts {{ hostname_expected_name }}` exited
+          {{ hostname_getent.rc }}, so the host does not resolve the name it
+          was just given. Asserted through the resolver as well as through the
+          file above, so that an /etc/hosts edited into a shape nothing
+          resolves is still caught.
+        success_msg: >-
+          The host resolves its own name.
+        quiet: true
+
+    - name: Establish that sudo is present, so the warning check below reads something
+      ansible.builtin.command: sudo --version
+      register: hostname_sudo_present
+      changed_when: false
+      failed_when: false
+
+    - name: Assert sudo is available on this instance
+      ansible.builtin.assert:
+        that:
+          - hostname_sudo_present.rc == 0
+        fail_msg: >-
+          sudo is not available on this instance, so the unresolved-host
+          warning check below would pass having observed nothing. This is a
+          fact about the pinned image rather than about the role.
+        quiet: true
+
+    - name: Run a privileged command and capture what it emits
+      ansible.builtin.command: sudo hostname
+      register: hostname_privileged
+      changed_when: false
+
+    - name: Assert the privileged command emitted no unresolved-host warning
+      ansible.builtin.assert:
+        that:
+          - "'unable to resolve host' not in hostname_privileged.stderr | lower"
+        fail_msg: >-
+          A privileged command emitted
+          '{{ hostname_privileged.stderr }}'. This is the symptom the
+          requirement names: not a failure but a warning on every privileged
+          command and every login thereafter, which is exactly why it would
+          survive -- nothing goes red. It is what a converge that sets the name
+          and leaves /etc/hosts alone produces.
+        success_msg: >-
+          A privileged command ran with no unresolved-host warning.
+        quiet: true

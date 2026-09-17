@@ -1,0 +1,34 @@
+---
+# FIXTURE ONLY -- nothing here is the subject of any assertion, and nothing here
+# may set up the thing under test. It is `default`'s prepare.yml minus that
+# scenario's pre-migration seeding, which is about a migration this change has
+# nothing to do with, and it exists for the same two reasons that file records:
+#
+# 1. geerlingguy.docker 8.0.0's tasks/setup-Debian.yml installs packages with
+#    `state: present` and NO `update_cache`, which fails against a freshly
+#    created container whose apt cache is empty.
+# 2. The geerlingguy/docker-ubuntu2204-ansible image does not carry
+#    python3-requests, which community.docker.docker_login needs ON THE TARGET.
+#    This scenario supplies no GHCR credential, so that login is expected to be
+#    skipped -- the package is installed anyway, so that a converge here differs
+#    from `default`'s in what it exercises and not in what it can reach.
+#
+# THE POSTGRESQL FIXTURE IS NOT HERE, and could not be: `prepare` runs before
+# `converge`, and the container runtime it needs is installed BY the converge.
+# It is built in verify.yml, which is where `default` builds its own nested
+# containers for the same reason.
+#
+# `prepare` runs once, after `create` and before `converge`, and is NOT re-run
+# for the `idempotence` action, so nothing here can mask a role's own
+# non-idempotence.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Refresh the apt cache and install the target-side Python dependency
+      ansible.builtin.apt:
+        name:
+          - python3-requests
+        state: present
+        update_cache: true
+        cache_valid_time: 0

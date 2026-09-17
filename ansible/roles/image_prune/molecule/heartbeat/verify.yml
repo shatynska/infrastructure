@@ -1,0 +1,495 @@
+---
+# Verifies the ADDED requirement "Scheduled Host Units Report Their Own
+# Liveness" in openspec/specs/iac-host-configuration/spec.md.
+#
+# Derived from that delta spec ahead of any implementation, and WITHOUT
+# reading any implementation of the reporting -- none exists. Read the change
+# `notice-when-a-periodic-job-stops-reporting`'s test-plan.md before changing
+# anything below: it carries the scenario-accounting table, every assertion's
+# specified/derived classification, the wording assumptions taken on the
+# journal message, and what the killed-activation arrangement substitutes.
+#
+# ORDERING IS LOAD-BEARING, in three places:
+#
+#   1. The sink probe comes first. Every "no report arrived" assertion here is
+#      a NEGATIVE, and a sink that is not recording satisfies all of them
+#      vacuously. The probe is what makes their silence mean something.
+#   2. "Installing the report does not activate the unit" reads a sink that
+#      has received no ping at all, so it precedes every arrangement that
+#      activates the unit.
+#   3. The undeliverable-report arrangement needs the prune to still SUCCEED,
+#      so it precedes the arrangement that breaks the prune. Once the
+#      enumeration is removed, every later activation fails for that reason
+#      and a successful-unit assertion could not be made at all.
+#
+# DELIBERATELY NOT ASSERTED HERE, recorded so the absence of a test is
+# distinguishable from the absence of the thought:
+#
+#   * THE OBSERVER'S SILENCE. "A timer that stops firing is detected" is a
+#     property of the third party's period and grace, which are not in this
+#     tree and cannot be read from it. Nothing here approximates it; the
+#     change's confirm gate is where it is established.
+#
+#   * A REAL WEDGED CONTAINER RUNTIME as the cause of the killed activation.
+#     The kill itself is real -- see that arrangement's own comment for what
+#     it substitutes and why.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    image_prune_sink_log: /var/tmp/heartbeat-sink.log
+    image_prune_unit_path: /etc/systemd/system/prune-host-images.service
+    image_prune_env_path: /etc/prune-host-images/heartbeat.env
+    # The derivation design.md Decision 4 states: the inventory host's name
+    # plus the unit's stem, templated rather than written as a literal so that
+    # two converged hosts cannot share one check and mask each other's
+    # silence. Under Molecule the inventory host is this instance.
+    image_prune_expected_slug: "{{ inventory_hostname }}-prune-host-images"
+  tasks:
+
+    # ============================================================
+    # PRECONDITION -- the sink records what reaches it.
+    #
+    # Not hygiene. Three assertions below claim that NO report arrived, and a
+    # sink that had died, or that never wrote its log, would satisfy every one
+    # of them while observing nothing at all.
+    # ============================================================
+    - name: Probe the local sink from the instance
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8099/molecule-probe
+        status_code: 200
+      register: image_prune_sink_probe
+
+    - name: Read what the sink has recorded so far
+      ansible.builtin.command: cat {{ image_prune_sink_log }}
+      register: image_prune_sink_after_probe
+      changed_when: false
+
+    - name: Assert the sink records the requests that reach it
+      ansible.builtin.assert:
+        that:
+          - image_prune_sink_probe.status == 200
+          - image_prune_sink_after_probe.stdout_lines
+            | select('search', 'molecule-probe') | list | length == 1
+        fail_msg: >-
+          The local sink did not record a request sent to it directly, so it
+          is not observing anything. Every "no report arrived" assertion in
+          this file would then pass vacuously, and every "a report arrived"
+          one would fail for a reason that has nothing to do with the role.
+          This is a broken fixture, not a defect in the reporting. Recorded:
+          {{ image_prune_sink_after_probe.stdout_lines }}
+        success_msg: >-
+          The sink records what reaches it, so its silence below is evidence.
+        quiet: true
+
+    # ============================================================
+    # Delta scenario: The report address is not world-readable on the host
+    #
+    # "the on-host file carrying the report address SHALL be readable only by
+    # the account the unit runs as". The unit runs as root, so `0600` root is
+    # that. The address grants access to nothing, but a party holding it can
+    # SUPPRESS the alarm by reporting success on the unit's behalf -- which is
+    # the outcome this requirement exists to prevent.
+    #
+    # The reporting script's own path is read out of the installed unit rather
+    # than assumed: this scenario asserts what the unit invokes, not what a
+    # test author guessed it would be called.
+    # ============================================================
+    - name: Read the installed unit's reporting directive and the file it reads the address from
+      ansible.builtin.shell: |
+        set -euo pipefail
+        line="$(grep -m1 '^ExecStopPost=' {{ image_prune_unit_path }} || true)"
+        echo "EXECSTOPPOST [${line}]"
+        command="${line#ExecStopPost=}"
+        case "$command" in
+          -*) echo "DASH-PREFIXED yes"; command="${command#-}" ;;
+          *) echo "DASH-PREFIXED no" ;;
+        esac
+        program="${command%% *}"
+        echo "PROGRAM [${program}]"
+        if [ -n "$program" ] && [ -e "$program" ]; then
+          echo "PROGRAM-MODE $(stat -c '%a %U' "$program")"
+        else
+          echo "PROGRAM-MODE absent"
+        fi
+        if [ -e {{ image_prune_env_path }} ]; then
+          echo "ENV-MODE $(stat -c '%a %U' {{ image_prune_env_path }})"
+        else
+          echo "ENV-MODE absent"
+        fi
+      args:
+        executable: /bin/bash
+      register: image_prune_reporting_install
+      changed_when: false
+
+    - name: Assert the unit reports from the init system, and cannot be failed by a failed report
+      ansible.builtin.assert:
+        that:
+          - "'DASH-PREFIXED yes' in image_prune_reporting_install.stdout_lines"
+          - image_prune_reporting_install.stdout_lines
+            | select('search', '^PROGRAM \\[/.+\\]$') | list | length == 1
+        fail_msg: >-
+          "The report SHALL come from the init system rather than from inside
+          the unit's own script" -- a run killed from outside the process
+          cannot report its own death, and that kill is precisely the case the
+          duration bound exists for. And "the unit's own result SHALL be
+          unaffected by the delivery having failed", which is what systemd's
+          `-` prefix on ExecStopPost= spells: without it a third party being
+          briefly unreachable marks a prune that did its work correctly as a
+          failed unit. Read: {{ image_prune_reporting_install.stdout_lines }}
+
+    - name: Assert the address is readable only by the account the unit runs as
+      ansible.builtin.assert:
+        that:
+          - "'ENV-MODE 600 root' in image_prune_reporting_install.stdout_lines"
+          - "'PROGRAM-MODE 700 root' in image_prune_reporting_install.stdout_lines"
+        fail_msg: >-
+          {{ image_prune_env_path }} SHALL be readable only by the account the
+          unit runs as (0600 root), and the script that reads it SHALL be 0700
+          root. This host deliberately carries unprivileged operator accounts,
+          and a party who holds the address can suppress this alarm by
+          reporting success on the unit's behalf. Read:
+          {{ image_prune_reporting_install.stdout_lines }}
+
+    # ============================================================
+    # Delta scenario: Installing the report does not activate the unit
+    #
+    # "adding or updating the reporting SHALL NOT itself run the unit's work".
+    # Two reads, because either alone is satisfiable by the wrong thing: the
+    # sink has received no ping (the reporting did not fire), and no image
+    # present before the converge is gone (the prune did not run). This
+    # scenario's test_sequence is Molecule's default, so the role has
+    # converged TWICE by now -- the second time on a host where the unit was
+    # already installed, which is the scenario's own premise.
+    # ============================================================
+    - name: Collect what the converges left behind
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "PINGS-SO-FAR $(grep -c '{{ image_prune_expected_slug }}' {{ image_prune_sink_log }} || true)"
+        echo "SERVICE-EXECMAINSTART [$(systemctl show prune-host-images.service --property=ExecMainStartTimestampMonotonic --value)]"
+        docker images -a --no-trunc -q | sort -u > /var/tmp/image-prune-images-after-converge
+        missing="$(comm -23 /var/tmp/image-prune-images-before-converge \
+                            /var/tmp/image-prune-images-after-converge | tr '\n' ' ')"
+        echo "GONE-SINCE-CONVERGE [${missing}]"
+      args:
+        executable: /bin/bash
+      register: image_prune_after_converge
+      changed_when: false
+
+    - name: Assert installing the reporting neither reported nor pruned
+      ansible.builtin.assert:
+        that:
+          - "'PINGS-SO-FAR 0' in image_prune_after_converge.stdout_lines"
+          - "'SERVICE-EXECMAINSTART [0]' in image_prune_after_converge.stdout_lines"
+          - "'GONE-SINCE-CONVERGE []' in image_prune_after_converge.stdout_lines"
+        fail_msg: >-
+          Converging the role SHALL NOT itself run the unit's work, on the same
+          reasoning "Unreferenced Host Images Are Pruned on a Schedule" already
+          gives for its own installation. Either a ping was sent during a
+          converge, or the service has run at least once, or an image present
+          before the converge is gone after it -- an Ansible run removing
+          images from a host as a side effect of configuring it. The monotonic
+          timestamp is read rather than the human-readable one because a unit
+          that has never run reports `n/a` on some systemd versions and empty
+          on others, while the monotonic form is `0` on all of them. Collected:
+          {{ image_prune_after_converge.stdout_lines }}
+
+    # ============================================================
+    # Delta scenario: A successful activation is reported
+    #
+    # "a success SHALL be reported, resetting the observer's silence timeout".
+    # This activation runs the REAL prune to completion -- converge.yml's one
+    # stopped container is what makes a successful run reachable at all, since
+    # the prune abandons on a host whose keep set is empty.
+    # ============================================================
+    - name: Activate the unit on a host whose keep set is satisfied
+      ansible.builtin.shell: |
+        set -euo pipefail
+        before="$(wc -l < {{ image_prune_sink_log }})"
+        rc=0
+        systemctl start prune-host-images.service || rc=$?
+        echo "START-RC $rc"
+        echo "RESULT $(systemctl show prune-host-images.service --property=Result --value)"
+        for _ in $(seq 1 20); do
+          [ "$(wc -l < {{ image_prune_sink_log }})" -gt "$before" ] && break
+          sleep 1
+        done
+        tail -n +$((before + 1)) {{ image_prune_sink_log }} | sed 's/^/REPORT /'
+      args:
+        executable: /bin/bash
+      register: image_prune_success_run
+      changed_when: false
+
+    - name: Assert a successful activation reports success under this unit's own identifier
+      vars:
+        reports: "{{ image_prune_success_run.stdout_lines | select('match', '^REPORT ') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "'START-RC 0' in image_prune_success_run.stdout_lines"
+          - "'RESULT success' in image_prune_success_run.stdout_lines"
+          - reports | length == 1
+          - reports | select('search', image_prune_expected_slug) | list | length == 1
+          - reports | select('search', '/fail') | list | length == 0
+          - reports | select('search', 'create=1') | list | length == 1
+        fail_msg: >-
+          A successful activation SHALL report a success to the external
+          observer under this unit's own identifier
+          ({{ image_prune_expected_slug }}), and that ping SHALL carry
+          `create=1` -- a slug-addressed ping to a check that does not exist
+          404s and does nothing, which leaves the reporter believing it
+          reports and the observer with nothing to go quiet. A `/fail` report
+          here would be the opposite defect: an alarm raised on a healthy run.
+          Collected: {{ image_prune_success_run.stdout_lines }}
+
+    # ============================================================
+    # Delta scenario: An undeliverable report leaves a local trace
+    #
+    # "the attempted endpoint and the delivery's outcome SHALL be written to
+    # the host's log, and the unit's own result SHALL be unaffected by the
+    # delivery having failed".
+    #
+    # The sink is stopped, which is the condition an unreachable observer
+    # produces. The prune itself is untouched and must still succeed: that is
+    # the half of this scenario that a `-`-prefixed ExecStopPost= is for, and
+    # the half a test asserting only "the journal says something" would miss.
+    # ============================================================
+    - name: Stop the sink so the next report cannot be delivered
+      ansible.builtin.systemd:
+        name: heartbeat-sink.service
+        state: stopped
+
+    - name: Activate the unit while the observer is unreachable
+      ansible.builtin.shell: |
+        set -euo pipefail
+        # Local time, because that is how journalctl parses --since. `--utc`
+        # below only changes how timestamps are DISPLAYED.
+        since="$(date '+%Y-%m-%d %H:%M:%S')"
+        before="$(wc -l < {{ image_prune_sink_log }})"
+        rc=0
+        systemctl start prune-host-images.service || rc=$?
+        echo "START-RC $rc"
+        echo "RESULT $(systemctl show prune-host-images.service --property=Result --value)"
+        echo "SINK-GREW $(( $(wc -l < {{ image_prune_sink_log }}) - before ))"
+        # journald ingests the ExecStopPost= stderr write asynchronously, so
+        # reading immediately after `systemctl start` returns can land before
+        # the line is queryable and redden this scenario against a correct
+        # implementation. Flush, then poll for the line rather than assuming
+        # one read is enough.
+        journalctl --sync 2>/dev/null || true
+        for _ in $(seq 1 20); do
+          journalctl --utc --no-pager -u prune-host-images.service \
+            --since "$since" > /var/tmp/image-prune-undeliverable.journal 2>&1 || true
+          grep -q '{{ image_prune_expected_slug }}' \
+            /var/tmp/image-prune-undeliverable.journal && break
+          sleep 1
+          journalctl --sync 2>/dev/null || true
+        done
+        echo "JOURNAL-LINES $(grep -c . /var/tmp/image-prune-undeliverable.journal || true)"
+        echo "JOURNAL-NAMES-ENDPOINT $(grep -c '{{ image_prune_expected_slug }}' /var/tmp/image-prune-undeliverable.journal || true)"
+        # `curl: ` with its colon, not the bare word. The reporting script
+        # writes "curl status N" to stderr itself, so grepping the bare word
+        # would be satisfied by the script talking ABOUT curl rather than by
+        # the --show-error diagnostic reaching the journal, which is what this
+        # reads. Only curl writes the colon form.
+        #
+        # Two characters are deliberately absent from this whole block, in the
+        # comments as well as the code: an apostrophe and an unbalanced
+        # parenthesis. Either one trips the argument splitter in Ansible
+        # before the shell ever sees this, and the error it raises names the
+        # first line of the block rather than the offending one.
+        echo "JOURNAL-NAMES-CURL $(grep -c 'curl: ' /var/tmp/image-prune-undeliverable.journal || true)"
+      args:
+        executable: /bin/bash
+      register: image_prune_undeliverable_run
+      changed_when: false
+
+    - name: Assert an undeliverable report leaves the unit successful and the journal informative
+      ansible.builtin.assert:
+        that:
+          - "'START-RC 0' in image_prune_undeliverable_run.stdout_lines"
+          - "'RESULT success' in image_prune_undeliverable_run.stdout_lines"
+          - "'SINK-GREW 0' in image_prune_undeliverable_run.stdout_lines"
+          - "'JOURNAL-NAMES-ENDPOINT 0' not in image_prune_undeliverable_run.stdout_lines"
+          - "'JOURNAL-NAMES-CURL 0' not in image_prune_undeliverable_run.stdout_lines"
+        fail_msg: >-
+          With the observer unreachable, the unit SHALL still be successful --
+          a prune that did its work correctly must not be recorded as failed
+          because a third party was briefly unreachable -- and the attempted
+          endpoint and the delivery's outcome SHALL be written to the host's
+          log. Because the `-` prefix makes the failed ping invisible to
+          systemd deliberately, that write is the ONLY local trace of it: an
+          operator answering the resulting silence days later otherwise finds
+          a successful unit, a successful prune, and no account of why nothing
+          was reported. `SINK-GREW 0` is the arrangement's own guard -- if the
+          sink received this ping it was never stopped, and this scenario
+          asserted nothing. Collected:
+          {{ image_prune_undeliverable_run.stdout_lines }}. The journal is at
+          /var/tmp/image-prune-undeliverable.journal on the instance.
+
+    - name: Start the sink again, so the arrangements below can be observed
+      ansible.builtin.systemd:
+        name: heartbeat-sink.service
+        state: started
+
+    - name: Wait until the sink is accepting connections again
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8099
+        timeout: 30
+
+    # ============================================================
+    # FROM HERE ON THE PRUNE ITSELF FAILS.
+    #
+    # No successful-activation assertion may be added below this line: the
+    # enumeration is removed, so every later activation fails for that reason
+    # and a success assertion past this point could not discriminate anything.
+    # ============================================================
+
+    # ============================================================
+    # Delta scenario: A failed activation is reported as a failure
+    #
+    # "a failure SHALL be reported to the external observer under that unit's
+    # own identifier". The failure is the prune's REAL abandon path -- the
+    # host carries no enumeration, which the script reports and exits non-zero
+    # on -- rather than a substituted command, so what is exercised is a unit
+    # that genuinely failed.
+    # ============================================================
+    - name: Remove the enumeration, so the next activation genuinely fails
+      ansible.builtin.file:
+        path: /etc/prune-host-images/apps
+        state: absent
+
+    - name: Activate the unit on a host it must abandon
+      ansible.builtin.shell: |
+        set -euo pipefail
+        before="$(wc -l < {{ image_prune_sink_log }})"
+        rc=0
+        systemctl start prune-host-images.service || rc=$?
+        echo "START-RC $rc"
+        echo "RESULT $(systemctl show prune-host-images.service --property=Result --value)"
+        for _ in $(seq 1 20); do
+          [ "$(wc -l < {{ image_prune_sink_log }})" -gt "$before" ] && break
+          sleep 1
+        done
+        tail -n +$((before + 1)) {{ image_prune_sink_log }} | sed 's/^/REPORT /'
+      args:
+        executable: /bin/bash
+      register: image_prune_failure_run
+      changed_when: false
+
+    - name: Assert a failed activation reports a failure under this unit's own identifier
+      vars:
+        reports: "{{ image_prune_failure_run.stdout_lines | select('match', '^REPORT ') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "'START-RC 0' not in image_prune_failure_run.stdout_lines"
+          - "'RESULT success' not in image_prune_failure_run.stdout_lines"
+          - reports | length == 1
+          - reports | select('search', image_prune_expected_slug) | list | length == 1
+          - reports | select('search', '/fail') | list | length == 1
+          - reports | select('search', 'create=1') | list | length == 1
+        fail_msg: >-
+          A unit that exits non-zero SHALL report a FAILURE under its own
+          identifier ({{ image_prune_expected_slug }}), carrying `create=1` on
+          the failure path as well as on the success one: a unit that fails
+          from its very first activation never takes the success path, so a
+          success-only `create=1` would leave its check never created, its
+          `/fail` pings 404ing, and a chronically failing unit reported by
+          nothing at all. The first two assertions are this arrangement's own
+          guard -- a run that SUCCEEDED here did not reach the failure path,
+          and the report below would be about the wrong thing. Collected:
+          {{ image_prune_failure_run.stdout_lines }}
+
+    # ============================================================
+    # Delta scenario: A run killed by its own bound is reported
+    #
+    # "a failure SHALL still be reported, because the report is emitted by the
+    # init system rather than by the terminated process".
+    #
+    # WHAT THIS ARRANGEMENT SUBSTITUTES, stated plainly because it is the one
+    # place in this file where the thing under test is not reached by its own
+    # production path. A drop-in replaces the unit's ExecStart= with a command
+    # that outlives a three-second TimeoutStartSec=. What is REAL: the systemd
+    # path (`Result=timeout`), the kill from outside the process, the absence
+    # of any output from the killed process, the installed ExecStopPost=, and
+    # the reporting script. What is SUBSTITUTED: the REASON the process hung.
+    # In production that reason is a container runtime that stopped answering,
+    # which cannot be produced deterministically inside a Molecule instance --
+    # wedging the daemon breaks the same daemon this scenario's own fixture
+    # needs. The change's test-plan.md records this, and records that the
+    # arrangement can be deleted without touching any other assertion here.
+    #
+    # The `RESULT timeout` assertion is not decoration: it is what establishes
+    # that this arrangement reached the systemd path it is about, rather than
+    # an ordinary non-zero exit dressed up as a kill.
+    # ============================================================
+    - name: Create the drop-in directory the arrangement below writes into
+      ansible.builtin.file:
+        path: /etc/systemd/system/prune-host-images.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Arrange a run that outlives its own start timeout
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/prune-host-images.service.d/molecule-timeout.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/bin/sleep 30
+          TimeoutStartSec=3
+      register: image_prune_timeout_dropin
+
+    - name: Activate the unit and let its own bound kill it
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl daemon-reload
+        before="$(wc -l < {{ image_prune_sink_log }})"
+        rc=0
+        systemctl start prune-host-images.service || rc=$?
+        echo "START-RC $rc"
+        echo "RESULT $(systemctl show prune-host-images.service --property=Result --value)"
+        for _ in $(seq 1 20); do
+          [ "$(wc -l < {{ image_prune_sink_log }})" -gt "$before" ] && break
+          sleep 1
+        done
+        tail -n +$((before + 1)) {{ image_prune_sink_log }} | sed 's/^/REPORT /'
+      args:
+        executable: /bin/bash
+      register: image_prune_killed_run
+      changed_when: false
+
+    - name: Assert a run killed on its own bound still reports a failure
+      vars:
+        reports: "{{ image_prune_killed_run.stdout_lines | select('match', '^REPORT ') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "'RESULT timeout' in image_prune_killed_run.stdout_lines"
+          - reports | length == 1
+          - reports | select('search', image_prune_expected_slug) | list | length == 1
+          - reports | select('search', '/fail') | list | length == 1
+          - reports | select('search', 'create=1') | list | length == 1
+        fail_msg: >-
+          A unit terminated by the init system on expiry of its configured
+          start timeout, producing no output of its own, SHALL still report a
+          failure -- the report is emitted by the init system rather than by
+          the terminated process, and a script killed from outside cannot
+          report that it was killed. This is also where a reporter branching
+          on `$EXIT_STATUS` breaks and only here: systemd sets it to the
+          signal NAME (`KILL`) rather than to a number on this path, which is
+          why the discriminator is `$SERVICE_RESULT`. `RESULT timeout` is this
+          arrangement's own guard: without it, an ordinary non-zero exit would
+          read as a kill. Collected: {{ image_prune_killed_run.stdout_lines }}
+
+    - name: Remove the drop-in, leaving the unit as the role installed it
+      ansible.builtin.file:
+        path: /etc/systemd/system/prune-host-images.service.d/molecule-timeout.conf
+        state: absent
+
+    - name: Reload systemd so the unit is the role's again
+      ansible.builtin.systemd:
+        daemon_reload: true

@@ -1,0 +1,652 @@
+---
+# Installs the scheduled prune described by iac-host-configuration's
+# "Unreferenced Host Images Are Pruned on a Schedule". See the role README for
+# what the keep set is and what removing an application from `deploy_apps`
+# means operationally.
+
+# `deploy_apps` has no default and no safe one: it is the enumeration this
+# host's deploy accounts, sudoers rules and forced commands are already
+# generated from, and inventing one here would either protect images nothing
+# wants or offer a live application's images for removal. Same shape as
+# deploy_user's own assertion, which reads the same variable.
+#
+# An EMPTY list is a supplied value, not a missing one, and this assertion must
+# accept it -- what an empty enumeration means is decided at run time by the
+# script's own abandon condition, not here.
+- name: Assert deploy_apps was supplied
+  ansible.builtin.assert:
+    that:
+      - deploy_apps is defined
+      - deploy_apps is sequence
+      - deploy_apps is not string
+      - deploy_apps is not mapping
+    fail_msg: >-
+      deploy_apps was not supplied, or is not a list. This role has no default
+      for it: it is the version-controlled enumeration of deployable
+      applications, and the keep set is computed from it. Set it in
+      ansible/inventory/host_vars/<server name>.yml -- the file for THIS HOST
+      rather than for its environment, where deploy_user already reads it.
+    quiet: true
+
+# Same shape and the same reasoning as the assertion above, for the input that
+# decides whether this unit is observed at all. It fires before anything is
+# written to the host, per iac-host-configuration's "A Role's Absent Required
+# Input Is Reported by Name": a converge that installed the timer and silently
+# omitted the reporting would leave a scheduled unit running unobserved, which
+# is the state "Scheduled Host Units Report Their Own Liveness" exists to end.
+- name: Assert the heartbeat ping key was supplied
+  ansible.builtin.assert:
+    that:
+      - image_prune_heartbeat_ping_key is defined
+      - image_prune_heartbeat_ping_key is string
+      - image_prune_heartbeat_ping_key | length > 0
+      # The shape limb is not fussiness. The key is rendered into a shell
+      # file the reporting script sources: a value carrying a quote or a
+      # newline makes that file invalid shell, `set -eu` aborts the script,
+      # and the `-` prefix on ExecStopPost= swallows the abort -- leaving a
+      # GREEN unit that reports nothing, forever, whose only symptom is the
+      # silence alarm days later. That is this change's own subject
+      # reproduced inside it, so the value is refused here by name instead.
+      - image_prune_heartbeat_ping_key is match('^[A-Za-z0-9_-]+$')
+    fail_msg: >-
+      image_prune_heartbeat_ping_key was not supplied, or is not a bare token
+      of letters, digits, `_` and `-`. This role has no default for it: it is
+      the project ping key the scheduled unit reports its own liveness under,
+      and without it the unit would run with nothing noticing when it fails,
+      is killed, or stops being scheduled. Set it Vault-encrypted in
+      ansible/inventory/group_vars/<environment>.yml, the file for the
+      environment this run targets; a Molecule scenario supplies a
+      fixture value alongside image_prune_heartbeat_base_url pointed at a
+      local sink.
+    quiet: true
+
+- name: Create the directory holding the application enumeration
+  ansible.builtin.file:
+    path: /etc/prune-host-images
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# This file, not the script, is how the enumeration reaches the host: the
+# script body is {% raw %}-wrapped below and interpolates nothing.
+#
+# `map(attribute='name')` is the point of this task. The elements are
+# {name, public_key} mappings, and rendering them raw fails SILENTLY: the file
+# would name something, so the no-application guard would not fire; every
+# "name" would miss its /opt/<name>/docker-compose.yml as the benign
+# never-deployed skip; and the keep set would reduce to the images containers
+# hold -- which is `docker image prune -a`, reporting a healthy run.
+#
+# The on-host copy is refreshed by a converge, so retiring an application makes
+# its images reclaimable at the next scheduled run AFTER the next converge.
+- name: Write the application enumeration the prune reads
+  ansible.builtin.copy:
+    dest: /etc/prune-host-images/apps
+    owner: root
+    group: root
+    mode: "0644"
+    # No trailing newline when the list is empty: the file is then genuinely
+    # zero-byte rather than one blank line, so "the host carries no
+    # enumeration" and "the enumeration names no application" stay two
+    # distinguishable states on disk as well as in the report.
+    content: "{{ (deploy_apps | map(attribute='name') | join('\n')) + '\n' if deploy_apps | length > 0 else '' }}"
+
+# `{% raw %}` because the script uses Go template syntax
+# (`docker images --format '{{.ID}}'`, `docker inspect -f '{{.Image}}'`) that
+# Ansible's Jinja rendering would otherwise try to evaluate. The whole body is
+# wrapped: wrapping only parts of it would leave a content block that is half
+# Jinja and half Go template, which is the collision the wrapper prevents.
+- name: Install the prune script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/prune-host-images
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      {% raw %}#!/bin/bash
+      # Removes every local image no enumerated application and no container
+      # still references. See openspec/specs/iac-host-configuration/spec.md,
+      # "Unreferenced Host Images Are Pruned on a Schedule".
+      #
+      # Six things in here look simplifiable and are not:
+      #
+      #   * LOCAL IMAGES ARE ENUMERATED BEFORE THE KEEP SET. With the keep set
+      #     built first, an image a concurrent deploy pulls in between is on
+      #     the host, outside a keep set read from the pre-deploy Compose file,
+      #     and -- before `up -d --wait` -- held by no container, so neither
+      #     the runtime refusal nor the per-tag re-check below protects it.
+      #     This order means the interval can only narrow what is removed.
+      #
+      #   * THE REFERENCE SET SPANS EVERY DECLARED PROFILE. A bare
+      #     `config --images` omits every service behind an inactive profile,
+      #     which is exactly the defined-but-never-started class this exists to
+      #     protect.
+      #
+      #   * A MALFORMED REFERENCE ABANDONS THE RUN. `docker compose config`
+      #     returns 0 on an unset interpolation variable, emitting something
+      #     like `ghcr.io/example/:v1`. Treating that as a reference resolving
+      #     to no local image would silently drop that application protection.
+      #
+      #   * REFERENCES ARE COMPARED AS IDENTITIES, NEVER AS STRINGS. A digest
+      #     pin carries no tag, a moving tag moves, one image may carry several
+      #     tags. Absence of a tag is not evidence that nothing references an
+      #     image.
+      #
+      #   * REMOVAL IS NEVER FORCED, and a tagged image is removed through each
+      #     of its tags. `docker image rm <id>` on a multiply-tagged image
+      #     fails with "must be forced", and the runtime refusal to remove an
+      #     image a container holds is the last backstop against a wrong keep
+      #     set.
+      #
+      #   * A REFUSAL IS COUNTED AND NAMED, AND CHANGES NOTHING ELSE. It does
+      #     not stop the loop, is never retried with force, and does not make
+      #     the run exit non-zero -- the refusal is that backstop working, and
+      #     a unit recorded as failed because its backstop worked reports the
+      #     opposite of what happened. What it is read from is the invocation
+      #     exit status, never the image surviving; see the removal loop.
+      set -euo pipefail
+
+      apps_file=/etc/prune-host-images/apps
+
+      # Holds one `docker image inspect` OR one `docker image rm` stderr at a
+      # time, so a reference that could not be resolved can be told apart from
+      # one that resolved to nothing, and so a removal the runtime rejected can
+      # be attributed to the identity it was made for. One slot, deliberately:
+      # a second file would need a second entry in the trap below, and a
+      # message that must be attributed to one identity must not be mixed with
+      # another one.
+      inspect_err="$(mktemp)"
+      # `|| :` so a failing cleanup cannot turn a successful run's exit 0 into
+      # a 1: bash takes the EXIT trap's last status as the script's.
+      trap 'rm -f "$inspect_err" || :' EXIT
+
+      # Every abandon path reports its own condition and exits non-zero. The
+      # conditions must be distinguishable from one another: the remedy for an
+      # absent enumeration is a converge, and for an empty one an inventory
+      # edit. Unlike app-deploy reclamation, which must never fail a deploy
+      # that already succeeded, this unit has no caller to damage -- so it
+      # fails, and the host records it.
+      abandon() {
+        printf 'prune-host-images: abandoned -- %s\n' "$1" >&2
+        exit 1
+      }
+
+      if [ ! -r "$apps_file" ]; then
+        abandon "this host carries no enumeration at ${apps_file}; it has not been converged with the image_prune role"
+      fi
+
+      apps=()
+      # `|| [ -n "$line" ]`: an operator may hand-edit this file between
+      # converges, and a final line with no trailing newline would otherwise be
+      # dropped -- that application losing its protection with no report at all.
+      # The expansion replaces a `tr` whose own failure would exit non-zero
+      # under `set -e` with nothing reported.
+      while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//[[:space:]]/}"
+        [ -n "$line" ] || continue
+        apps+=("$line")
+      done < "$apps_file"
+
+      if [ "${#apps[@]}" -eq 0 ]; then
+        abandon "the enumeration at ${apps_file} is present and names no application"
+      fi
+
+      # Enumerated first, and its status checked in its own right rather than
+      # as the head of a pipeline whose failure would be swallowed and printed
+      # as `considered 0, removed 0, refused 0` -- byte-identical to a healthy
+      # run over a host with nothing to reclaim.
+      if ! listing=$(docker images -a --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null); then
+        abandon "the local images could not be enumerated"
+      fi
+
+      # id -> its removable tags. An image with a repository but no tag is
+      # digest-referenced and has no tag to drop, so it stays here with an
+      # empty tag list and is removed by identity if it turns out unreferenced.
+      declare -A tags_of=()
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        row_id="${row%% *}"
+        row_ref="${row#* }"
+        if [ -z "${tags_of[$row_id]+set}" ]; then
+          tags_of["$row_id"]=""
+        fi
+        case "$row_ref" in
+          '<none>:<none>'|*':<none>') : ;;
+          *) tags_of["$row_id"]="${tags_of[$row_id]} ${row_ref}" ;;
+        esac
+      done <<< "$listing"
+
+      # A reference is well formed or it is not; resolution is a separate
+      # question. A WELL-FORMED reference resolving to no local image names an
+      # image this host has not pulled and contributes nothing. A MALFORMED one
+      # means the rendering lost something, and abandons the run.
+      #
+      # A digest reference is well formed: it is the form this whole mechanism
+      # exists to honour, and rejecting it would abandon every run of a host
+      # whose applications pin.
+      well_formed() {
+        local ref="$1" name repo tail_seg digest
+        case "$ref" in
+          ''|*' '*|*'$'*|*'//'*|*':/'*|*'::'*) return 1 ;;
+        esac
+        # A reference may carry a tag, a digest, or -- canonically -- BOTH, as
+        # `repo:tag@sha256:...`. Strip the digest first and then a tag from what
+        # remains, so the repository is validated on its own in every form.
+        # Validating a still-tagged string here rejected `ghcr.io/o/r:v1@sha256:...`
+        # while accepting `nginx:1.25@sha256:...`, and rejecting a valid
+        # reference abandons EVERY run on a host that pins that way.
+        if [ "${ref#*@}" != "$ref" ]; then
+          name="${ref%%@*}"
+          digest="${ref#*@}"
+          case "$digest" in
+            *:*) [ -n "${digest%%:*}" ] && [ -n "${digest#*:}" ] || return 1 ;;
+            *) return 1 ;;
+          esac
+        else
+          name="$ref"
+        fi
+        repo="$name"
+        tail_seg="${name##*/}"
+        if [ "${tail_seg#*:}" != "$tail_seg" ]; then
+          repo="${name%:*}"
+          [ -n "${name##*:}" ] || return 1
+        fi
+        case "$repo" in
+          ''|*/|/*) return 1 ;;
+        esac
+        # Only the FIRST segment may carry a colon, as a registry port. A colon
+        # anywhere deeper means the tag was mis-split -- `a/b:v1:v2` -- which is
+        # a malformed reference and not a repository named `b:v1`.
+        case "${repo#*/}" in
+          *:*) [ "${repo#*/}" = "$repo" ] || return 1 ;;
+        esac
+        return 0
+      }
+
+      declare -A keep=()
+
+      for app in ${apps[@]+"${apps[@]}"}; do
+        compose="/opt/${app}/docker-compose.yml"
+        # An enumerated application with no Compose file has never deployed, so
+        # it has no image here either. It contributes nothing, and that is
+        # benign -- unlike a file that exists and cannot be rendered.
+        [ -f "$compose" ] || continue
+
+        # --project-directory alone drives Compose file discovery, so no -f is
+        # needed. `docker compose config` is NOT a daemon call -- it parses
+        # locally and returns 0 against a dead runtime -- so a failure here
+        # means the file, not the runtime.
+        if ! profiles=$(docker compose --project-directory "/opt/${app}" config --profiles 2>/dev/null); then
+          abandon "the Compose file for ${app} could not be rendered"
+        fi
+
+        profile_args=()
+        while IFS= read -r profile; do
+          [ -n "$profile" ] || continue
+          profile_args+=(--profile "$profile")
+        done <<< "$profiles"
+
+        if ! refs=$(docker compose --project-directory "/opt/${app}" ${profile_args[@]+"${profile_args[@]}"} config --images 2>/dev/null); then
+          abandon "the Compose file for ${app} could not be rendered"
+        fi
+
+        while IFS= read -r ref; do
+          [ -n "$ref" ] || continue
+          if ! well_formed "$ref"; then
+            malformed_msg="${app} rendered a malformed image reference (${ref});"
+            malformed_msg="${malformed_msg} an unset interpolation variable"
+            malformed_msg="${malformed_msg} produces one, and treating it as"
+            malformed_msg="${malformed_msg} unreferenced would silently drop"
+            malformed_msg="${malformed_msg} that application own protection"
+            abandon "$malformed_msg"
+          fi
+          # `docker image inspect` exits 1 both for an image this host has
+          # not pulled -- benign, contributes nothing -- and for a runtime it
+          # cannot reach, which is a keep set that could not be determined.
+          # Discarding stderr makes those indistinguishable, and the second
+          # silently SHRINKS the union. That fails open on exactly the
+          # digest-pinned class this mechanism exists to reach: an untagged
+          # image has no tag to re-check before removal, so nothing downstream
+          # catches it and the runtime refusal never engages, because the image
+          # genuinely is held by no container.
+          # `--`: a reference rendered from an unset prefix can begin with a
+          # dash (`${PREFIX}-app:v1`), which the CLI would parse as a flag and
+          # report as an unknown shorthand flag rather than as the malformed
+          # reference it is. The run abandons either way; this makes it say so.
+          if resolved=$(docker image inspect -f '{{.Id}}' -- "$ref" 2>"$inspect_err"); then
+            keep["$resolved"]=1
+          elif ! grep -qi 'no such image' "$inspect_err"; then
+            abandon "the reference ${ref} from ${app} could not be resolved: $(tr -d '\n' < "$inspect_err")"
+          fi
+        done <<< "$refs"
+      done
+
+      # Every container image, running or stopped, independently of any Compose
+      # file. The runtime refusal guards the IMAGE and not its individual tags,
+      # so a two-tag image a container holds would otherwise lose one tag on
+      # every run.
+      if ! container_ids=$(docker ps -aq 2>/dev/null); then
+        abandon "the local containers could not be enumerated"
+      fi
+      container_ids_count="$(printf '%s\n' "$container_ids" | grep -c . || true)"
+      if [ -n "$container_ids" ]; then
+        # Guarded: `docker inspect` with no arguments exits 1, which under
+        # `set -e` would abandon the run on a host with no containers.
+        # `|| true` here would swallow a wholesale failure exactly as it
+        # swallows xargs exit 123 for one container that vanished mid-run --
+        # the same "could not ask" read as "answered nothing" as above. A
+        # partial answer is tolerated; no answer at all abandons.
+        held_images="$(printf '%s\n' "$container_ids" | xargs docker inspect -f '{{.Image}}' 2>/dev/null || true)"
+        if [ -z "$held_images" ]; then
+          abandon "the images held by local containers could not be read, though ${container_ids_count} container(s) exist"
+        fi
+        while IFS= read -r held; do
+          [ -n "$held" ] || continue
+          keep["$held"]=1
+        done <<< "$held_images"
+      fi
+
+      # An explicit guard, not a property of the comparison: every filter shape
+      # available here degrades the WRONG way on an empty keep set, so without
+      # this the whole host becomes a candidate.
+      if [ "${#keep[@]}" -eq 0 ]; then
+        abandon "the keep set is empty; no enumerated application references an image and no container holds one"
+      fi
+
+      considered="${#tags_of[@]}"
+      removed=0
+      refused=0
+
+      for image_id in ${tags_of[@]+"${!tags_of[@]}"}; do
+        [ -z "${keep[$image_id]+set}" ] || continue
+        dropped=0
+        # Set where the RUNTIME REJECTED an invocation for this identity, which
+        # is read from the invocation's exit status and never from the image
+        # surviving. Three things can happen to a candidate and only the
+        # middle one is a refusal: the runtime deletes the image and says
+        # `Deleted:` at status 0; the runtime rejects the call at a non-zero
+        # status; or the call succeeds at status 0 having only dropped a
+        # reference from an image the runtime is keeping for a reason of its
+        # own. That last is what every removal but the last looks like on an
+        # ordinary multi-tag image, so a count reading "attempted and not
+        # deleted" would read non-zero on healthy runs over ordinary hosts --
+        # the signal-free report this count exists to end, moved one field to
+        # the right.
+        rejected=0
+        rejected_reason=
+        image_tags="${tags_of[$image_id]}"
+        if [ -z "${image_tags// /}" ]; then
+          # No tag to drop: remove by identity.
+          #
+          # `|| rm_status=$?` and NOT `|| true`. Written `$(... || true)` the
+          # guard sits INSIDE the command substitution, so the assignment's
+          # status is unconditionally 0 and the rejection is unreadable -- a
+          # `refused` pinned at zero forever, which reports exactly as a host
+          # with nothing to refuse. The guard is still here: `set -e` is in
+          # force and a rejected removal is a normal outcome.
+          rm_status=0
+          rm_output=$(docker image rm "$image_id" 2>"$inspect_err") || rm_status=$?
+          case "$rm_output" in
+            *'Deleted: '*) dropped=1 ;;
+          esac
+          # A non-zero status is not yet a refusal. `no such image` means the
+          # image was GONE before this invocation -- a concurrent app-deploy
+          # reclaimed it in the window this script own summary comment
+          # acknowledges -- and the runtime rejected nothing. Counting it would
+          # send an operator hunting a keep-set defect that is not there, and
+          # the delta already takes the symmetric position for `removed`: an
+          # image a concurrent actor removed is not this run work. Same `grep`
+          # on the same slot as the keep-set resolution above, which draws the
+          # "could not ask" / "answered nothing" line in the same place.
+          if [ "$rm_status" -ne 0 ] && ! grep -qi 'no such image' "$inspect_err"; then
+            rejected=1
+            rejected_reason="$(tr -d '\n' < "$inspect_err")"
+          fi
+        else
+          for image_tag in $image_tags; do
+            # Selected by identity, removed by name -- and a pull can re-point
+            # a tag in between. Re-check, or a tag a concurrent deploy has just
+            # moved is dropped from an image no container holds yet.
+            current=$(docker image inspect -f '{{.Id}}' "$image_tag" 2>/dev/null || true)
+            [ "$current" = "$image_id" ] || continue
+            rm_status=0
+            rm_output=$(docker image rm "$image_tag" 2>"$inspect_err") || rm_status=$?
+            case "$rm_output" in
+              *'Deleted: '*) dropped=1 ;;
+            esac
+            # Same exclusion as the by-identity branch, and needed here too
+            # even though the re-check above narrows the window rather than
+            # closing it: the tag can go between that check and this call.
+            if [ "$rm_status" -ne 0 ] && ! grep -qi 'no such image' "$inspect_err"; then
+              rejected=1
+              rejected_reason="$(tr -d '\n' < "$inspect_err")"
+            fi
+          done
+        fi
+        removed=$((removed + dropped))
+        # An identity both deleted and rejected counts as REMOVED, so that
+        # `removed + refused` can never exceed `considered`. The two cannot
+        # co-occur as the loop is written -- a deletion makes the remaining
+        # tags unresolvable and the re-check above skips them -- so this
+        # ordering is what keeps that invariant true of a later edit rather
+        # than of this one.
+        if [ "$dropped" -eq 0 ] && [ "$rejected" -eq 1 ]; then
+          refused=$((refused + 1))
+          # Named as well as counted, because the count cannot be acted on. On
+          # a managed host two causes are expected and they are not the same
+          # problem: an image a container holds means the keep set is WRONG and
+          # this refusal is what stood between it and a live image, while an
+          # untagged image carrying more than one repository reference cannot
+          # be removed by this run at all and will be offered and refused on
+          # every run after this one. Carrying the runtime's own text rather
+          # than classifying it is what keeps a cause neither of those readable
+          # -- `image has dependent child images` is a third the runtime
+          # produces, on a host that builds images rather than pulling them.
+          printf 'prune-host-images: refused %s -- %s\n' \
+            "$image_id" "${rejected_reason:-the runtime gave no reason}" >&2
+        fi
+      done
+
+      # All three counts are over distinct identities: `docker images -a`
+      # yields a row per tag, so a two-tag image would otherwise be counted
+      # twice on each side. `removed` is anchored to this run own invocations
+      # reporting the image deleted, not read off the host afterwards --
+      # app-deploy removes images too, and a weekly window will occasionally
+      # overlap a deploy.
+      #
+      # `refused` is anchored the same way, to an invocation the runtime
+      # REJECTED, and is read from that invocation exit status rather than from
+      # the image still being present afterwards -- the image is present after
+      # a rejection and after a removal that only dropped a reference, so its
+      # survival does not separate them and the status does.
+      #
+      # It is here because the gap between `considered` and `removed` carries
+      # no signal on its own: `considered` is every identity the host holds
+      # rather than the set this run offered, so a defective keep set whose
+      # removals were blocked printed exactly what a healthy run over a fully
+      # referenced host printed. Each refusal is also named on stderr above.
+      #
+      # APPENDED rather than inserted, so the pair a reader already knows stays
+      # adjacent and in its existing order.
+      printf 'prune-host-images: considered %s, removed %s, refused %s\n' \
+        "$considered" "$removed" "$refused"
+      {% endraw %}
+
+# 0600 root, per iac-host-configuration's "Secrets Never Committed in Plaintext
+# and Never Left World-Readable on Host". The key grants access to nothing, but
+# a party who holds it can suppress this alarm by reporting success on the
+# unit's behalf, which is the outcome the reporting exists to prevent.
+- name: Write the address the reporting script reads
+  ansible.builtin.copy:
+    dest: /etc/prune-host-images/heartbeat.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      HEARTBEAT_BASE_URL='{{ image_prune_heartbeat_base_url }}'
+      HEARTBEAT_PING_KEY='{{ image_prune_heartbeat_ping_key }}'
+  no_log: true
+
+# The reporting script needs an HTTP client, and this role may not assume one.
+# The Molecule base image carries no `curl`, which is how this was found: the
+# unit ran, reported nothing, and stayed green -- the `-` prefix below made the
+# missing client invisible to systemd, exactly as it is meant to make a
+# third-party outage invisible. Left implicit, the same absence on a host would
+# read as a working reporter whose check merely happens to be silent, which is
+# the failure this whole change exists to end.
+- name: Ensure the HTTP client the reporting script uses is installed
+  ansible.builtin.apt:
+    name: curl
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ image_prune_apt_cache_valid_time }}"
+
+# 0700 root, and a script rather than a `curl` written straight into
+# ExecStopPost=: a command line is readable from /proc/<pid>/cmdline by any
+# local account while the process runs, and this host deliberately carries
+# unprivileged operator accounts. The script keeps the key in its environment
+# and hands curl the URL on stdin, so the 0600 file above is not defeated
+# during exactly the window the ping is in flight.
+- name: Install the liveness reporting script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/prune-host-images-report
+    owner: root
+    group: root
+    mode: "0700"
+    content: |
+      #!/bin/sh
+      # Reports one activation of prune-host-images.service to the external
+      # observer. See openspec/specs/iac-host-configuration/spec.md,
+      # "Scheduled Host Units Report Their Own Liveness".
+      #
+      # WHAT RAISES THE ALARM IS SILENCE, NOT THIS PING. The observer alarms
+      # when the check has not been reported to within its period and grace,
+      # so a failed run, a run killed on TimeoutStartSec, and a timer that has
+      # stopped firing are equally visible -- and the last of those leaves no
+      # failed unit for anything on this host to read.
+      #
+      # Run by systemd as ExecStopPost=, never from inside the prune script:
+      # a run killed from outside its own process cannot report its own death,
+      # and that kill is precisely what the unit's duration bound exists for.
+      set -eu
+
+      # Both values are single-quoted in the file this sources, so an operator
+      # key carrying a space, a `#` or a `$` reaches the URL intact rather
+      # than being mangled into one addressing no check -- a failure whose
+      # only symptom would be one journal line a week.
+      . /etc/prune-host-images/heartbeat.env
+
+      # Templated per host, not written as a literal: two hosts converged by
+      # this role would otherwise share one check, and the live host's weekly
+      # success would keep it green while the other host's timer was dead.
+      slug="{{ inventory_hostname }}-prune-host-images"
+
+      # $SERVICE_RESULT, never $EXIT_STATUS: on the TimeoutStartSec path --
+      # the one this reporting exists for -- systemd sets EXIT_STATUS to a
+      # signal name (KILL) rather than a number, so anything branching on it
+      # breaks there and only there. EXIT_STATUS is carried below as
+      # diagnostic text, where a signal name is what you want to read.
+      if [ "${SERVICE_RESULT:-unknown}" = "success" ]; then
+        endpoint="${HEARTBEAT_BASE_URL}/${HEARTBEAT_PING_KEY}/${slug}?create=1"
+      else
+        endpoint="${HEARTBEAT_BASE_URL}/${HEARTBEAT_PING_KEY}/${slug}/fail?create=1"
+      fi
+
+      # create=1 on BOTH endpoints. A slug-addressed ping to a check that does
+      # not exist returns 404 and does nothing, and a unit that fails from its
+      # first activation never takes the success path -- so a success-only
+      # create=1 would leave a chronically failing prune reported by nothing.
+      #
+      # The URL and the diagnostic body both reach curl on STDIN, never on its
+      # command line -- `printf` is a shell builtin under /bin/sh here, so no
+      # second process carries the key in /proc/<pid>/cmdline either. A
+      # heredoc would remove even that assumption, but it puts a redirection
+      # token on curl's own line, which the static check that guards this
+      # property reads as an operand.
+      #
+      # The body is what an operator sees in the check's event log when they
+      # open a failed check: without it the log says "fail" and nothing about
+      # why. $EXIT_STATUS is a SIGNAL NAME on the timeout path, which is
+      # exactly what makes it worth carrying here.
+      #
+      # The bounded timeout is not a preference: a hung request inside
+      # ExecStopPost= would hold the unit in deactivating until
+      # TimeoutStopSec, on the very path a hung container runtime already put
+      # it.
+      rc=0
+      printf 'url = "%s"\ndata = "result=%s status=%s"\n' \
+        "${endpoint}" "${SERVICE_RESULT:-unknown}" "${EXIT_STATUS:-unknown}" |
+        curl --fail --silent --show-error --retry 2 --max-time 20 --config - || rc=$?
+      if [ "${rc}" -eq 0 ]; then
+        exit 0
+      fi
+
+      # Reached only when the report could not be delivered. The unit's own
+      # result is deliberately unaffected -- see the `-` prefix on
+      # ExecStopPost= -- so this line is the ONLY local trace that anything
+      # went wrong, and an operator answering the resulting silence days later
+      # has nothing else to read.
+      printf 'prune-host-images: reporting %s to %s failed with curl status %s, so that check falls silent and alarms (systemd result %s, exit %s)\n' \
+        "${slug}" "${HEARTBEAT_BASE_URL}" "${rc}" \
+        "${SERVICE_RESULT:-unknown}" "${EXIT_STATUS:-unknown}" >&2
+      exit 0
+
+- name: Install the prune service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/prune-host-images.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Remove local container images nothing references
+      Documentation=https://github.com/shatynska/infrastructure
+      After=docker.service
+      Wants=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/prune-host-images
+      TimeoutStartSec={{ image_prune_timeout_start_sec }}
+      # Runs on EVERY exit path, including the TimeoutStartSec kill -- unlike
+      # OnFailure= (failure only) or ExecStartPost= (success path only). The
+      # leading `-` makes its own failure invisible to systemd on purpose: a
+      # prune that did its work correctly must not be recorded as failed
+      # because a third party was briefly unreachable. The unsent ping becomes
+      # silence, and silence is what the observer alarms on.
+      ExecStopPost=-/usr/local/bin/prune-host-images-report
+
+- name: Install the prune timer unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/prune-host-images.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Weekly removal of local container images nothing references
+
+      [Timer]
+      OnCalendar={{ image_prune_on_calendar }}
+      RandomizedDelaySec={{ image_prune_randomized_delay_sec }}
+      Persistent=true
+      Unit=prune-host-images.service
+
+      [Install]
+      WantedBy=timers.target
+
+# The TIMER is enabled and started, never the service. Starting the service
+# would run a prune during the converge, which is Ansible removing images from
+# a host as a side effect of configuring it.
+- name: Enable and start the prune timer
+  ansible.builtin.systemd:
+    name: prune-host-images.timer
+    # Reloaded here rather than by a notified handler: `meta: flush_handlers`
+    # is play-wide, and this role is one of seven in host-baseline.yml -- it
+    # would fire an unrelated role's pending handler (geerlingguy.docker's
+    # "restart docker", say) at a point this role chose. The module performs
+    # the reload before it enables, which is all this role needs.
+    daemon_reload: true
+    enabled: true
+    state: started
