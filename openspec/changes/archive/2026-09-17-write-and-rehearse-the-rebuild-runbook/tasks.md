@@ -55,14 +55,15 @@
 - [x] 7.4 Where the observer's settings turned out to differ from what the register claims, correct the register against what task 6.1 read — the observer is the authority on its own configuration, and the register is a claim about it until compared. Verify the corrected values against that reading, and where they already agreed, record that they did rather than leaving the comparison unreported.
   - Corrected against the **pre-destroy** reading, which is the direction the runbook's own phase 12 permits: a disagreement found before anything is destroyed is between two claims about a running system, where one found afterwards is most likely the rebuild having reset a check. Both tables had drifted, both in the same direction — the observer held the tighter value in every case.
 - [x] 7.5 Where the rehearsal could not complete a step, disclose it under `## Not performed` with a `Reason:` line, rather than ticking it or deleting it. Verify the `Reason:` label is present and non-empty.
-- [ ] 7.6 Re-run the verification, commit, dispatch the code reviewer over the committed diff, and open the rehearsal pull request. Verify the operator confirms it merged.
+- [x] 7.6 Re-run the verification, commit, dispatch the code reviewer over the committed diff, and open the rehearsal pull request. Verify the operator confirms it merged.
 
 ## 8. Archive
 
-- [ ] 8.1 Bring the branch back to the freshly fetched trunk, run `openspec archive write-and-rehearse-the-rebuild-runbook`, `git add -A`, and delete this change's `docs/backlog.md` entry. Verify `openspec validate --archived` passes and the archived record's task list records no outstanding work that is neither ticked nor disclosed.
-- [ ] 8.2 Open the record's own pull request and wait for the operator's confirmation that it merged. Verify from the pull request's state.
+- [x] 8.1 Bring the branch back to the freshly fetched trunk, run `openspec archive write-and-rehearse-the-rebuild-runbook`, `git add -A`, and delete this change's `docs/backlog.md` entry. Verify `openspec validate --archived` passes and the archived record's task list records no outstanding work that is neither ticked nor disclosed.
 
 ---
+
+**The record's own pull request is not a task here, and this paragraph is where it moved to.** It is opened after the commit that writes this file, so a checkbox for it would be unticked by construction forever — which is what this project's conventions say to record in prose instead. It is owed: this file is committed, then the record's pull request is opened, then the operator confirms it merged, read from the pull request's own state.
 
 **After the archive record's pull request merges**, and once every other pull request this change opened has merged and nothing uncommitted or unpushed remains, the branch is removed locally and on the remote and the working tree is removed from the repository's main checkout. Those acts happen after the commit that writes this file, so they cannot be tasks in it and are recorded here in prose instead. Read each merge from the pull request's own state rather than from branch ancestry.
 
