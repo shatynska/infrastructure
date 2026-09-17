@@ -74,6 +74,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # ITS OWN STEP, AND FIRST -- the same guard `platform-deploy.yml` runs,
+      # and more sharply needed here: a converge owns the firewall, the SSH
+      # configuration and the operator accounts on a real host, which is a
+      # larger act than a Compose deploy. A dispatch from an unmerged branch
+      # would apply Ansible nobody has reviewed, so this runs before the step
+      # below reads any stack's `pipeline.yml`, before any Environment is
+      # named and before any credential is in reach.
+      #
+      # SEPARATE FROM THE DISCOVERY STEP BELOW rather than its first lines,
+      # for the same reason `platform-deploy.yml`'s is separate from its own:
+      # that body is executed verbatim by `.github/tests` against a scratch
+      # tree, and a guard reading the event would make it depend on variables
+      # no such harness can supply -- so the body would die under `set -u` in
+      # the one place it is exercised most.
+      - name: Refuse a converge from anything but the default branch
+        env:
+          RUNNING_REF: ${{ github.ref }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEFAULT_REF#refs/heads/}" ]; then
+            echo "::error::The repository's default branch could not be resolved, so this run cannot establish that it is converging reviewed Ansible. Refusing rather than assuming it is."
+            exit 1
+          fi
+          if [ "$RUNNING_REF" != "$DEFAULT_REF" ]; then
+            echo "::error::This run is on '${RUNNING_REF}', and a host converge applies Ansible from '${DEFAULT_REF}' alone. A converge owns the firewall, the SSH configuration and the operator accounts on a real host, so it runs from the branch that has been merged and reviewed and from no other. Merge the change, then dispatch this workflow from ${DEFAULT_REF} naming one stack if you need to converge it without waiting for the next host-configuration change: a converge of unreviewed Ansible has no legitimate form."
+            exit 1
+          fi
+
       - name: Discover the stacks that can be converged
         id: discover
         env:
