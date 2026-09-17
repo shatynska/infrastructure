@@ -1000,6 +1000,8 @@ All five active targets should report `"health":"up"` — `prometheus`, `node-ex
 
 **Two of those are also the check that the stacks are genuinely separate**, and it is worth making deliberately the first time a second stack is deployed: the two Grafanas must want different passwords, and the test alert must arrive in one channel rather than both. If either fails, a value was copied between Environments — which no build reports.
 
+**Both halves were performed for the first time on 2026-09-16 and both failed**; `docs/backlog.md` `perform-the-stack-separation-check-that-was-never-run` has the account, and the two fixes landed on 2026-09-16 and 2026-09-17. Read this as a step with a history of being skipped rather than as a formality. And note what its Grafana half actually is: **a login, not a comparison of what the two Environments hold.** Those can differ while both hosts still accept one password — that is precisely the state 2026-09-17 found, and the reason Appendix A carries a rotation step.
+
 **Secrets created in this stage:** the seven in 7.3, per stack.
 
 ## Stage 8. Onboarding an application
@@ -1083,12 +1085,30 @@ The Hetzner rows come in pairs, one per stack, because a Hetzner token reaches e
 | `PLATFORM_ACME_EMAIL` | **Each** stack's Env secret | 7 | A mailbox | Certificate registration |
 | `PLATFORM_POSTGRES_USER` / `_PASSWORD` | **Each** stack's Env secret, its own values | 7 | Chosen / generated per stack | That host's Postgres startup; every manual `psql` there |
 | `PLATFORM_POSTGRES_EXPORTER_PASSWORD` | **Each** stack's Env secret, and typed into that host's Postgres | 7 | Generated per stack | That host's Postgres metrics |
-| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | **Each** stack's Env secret, its own value | 7 | Generated per stack | That stack's Grafana login |
+| `PLATFORM_GRAFANA_ADMIN_PASSWORD` | **Each** stack's Env secret, its own value | 7 | Generated per stack | That stack's Grafana login. **Rotating it takes a step on the host** — the paragraph under this table |
 | `PLATFORM_SLACK_WEBHOOK_URL` | **Each** stack's Env secret | 7 | Slack app, **a channel per stack** | Alert delivery. Nothing labels an alert with its host, so the channel is what attributes it |
 | `PLATFORM_DEADMANSWITCH_URL` | **Each** stack's Env secret | 7 | Heartbeat service, **a check per stack** | The external alarm. One check fed by two hosts stays green while either is alive |
 | `HEARTBEAT_PING_KEY` | **Repo** secret, and Vault-encrypted in each `group_vars/<environment>.yml` | 7 | Heartbeat service → project ping key | Nothing notices a periodic job failing or stopping |
 | `APP_CLIENT_ID` / `APP_PRIVATE_KEY` | **Repo** secrets | 3 | The GitHub App (§3.2) — client id from its settings page, private key downloaded once at creation | The weekly hook-update pull request stops being opened, and **nothing says so**: the workflow's heartbeat check reports that the *run* happened, not that a pull request came out of it, so a run that fails at the minting step still looks like a job that had nothing to do. Hook revisions then quietly stop being updated. The key does not expire; the App being uninstalled or its key revoked is what breaks it |
 | `<APP>_DEPLOY_SSH_KEY`, `DEPLOY_HOST`, app secrets | App repo Env secrets | 8 | Stage 8 | That application's deploys. **One set per deploy target** — a different key and a different host in each, like the per-stack rows above |
+
+**Rotating `PLATFORM_GRAFANA_ADMIN_PASSWORD` takes a second step, on the host, and the rotation silently does not happen without it.** Grafana reads `admin_password` when its database is created and never again — its own `defaults.ini` says *"can be changed before first start of grafana, or in profile settings"* — and that database is on the data volume, so it outlives the container. Replacing the secret and deploying therefore recreates `platform-grafana-1` with the new value inside it, reports success, and leaves Grafana accepting the **old** password. Measured on staging 2026-09-17: the deploy log said `Recreated`, `docker inspect` showed the new value, and `/api/user` answered `401` to it.
+
+From your operator account on that host, after the deploy:
+
+```sh
+docker exec platform-grafana-1 sh -c \
+  'grafana cli --homepath /usr/share/grafana admin reset-admin-password "$GF_SECURITY_ADMIN_PASSWORD"'
+```
+
+Reading the value out of the container's own environment keeps the new password off your shell history and out of the process listing, and makes the step mean *make Grafana agree with what was shipped* rather than *type it a second time*. **Then confirm it, because nothing else will tell you**: the stack is healthy either way, and the deploy was green before the step as well as after.
+
+```sh
+docker exec platform-grafana-1 sh -c \
+  'curl -s -o /dev/null -w "%{http_code}\n" -u "admin:$GF_SECURITY_ADMIN_PASSWORD" http://localhost:3000/api/user'
+```
+
+`200` is the pass; `401` is the state the reset exists to leave behind. Run it **before** the reset as well if you would rather see the defect than take it on trust — and log in from your workstation afterwards, since this probe establishes that the credential is right and not that the dashboard is reachable over the tailnet. `docs/backlog.md` `make-a-rotated-grafana-password-reach-grafana` is the change that would remove the step. **None of this reaches a new or rebuilt host** — there the database is created at first boot from exactly this variable, which is why §7.5 works as written.
 
 `HEARTBEAT_PING_KEY` is a **repository** secret, never an Environment one: a job reading a `main-production` Environment secret waits on required-reviewer approval, and an alarm that waits for a human to approve its own delivery is not an alarm. The same value goes into Ansible Vault for the host's prune unit.
 

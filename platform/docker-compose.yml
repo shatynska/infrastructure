@@ -394,6 +394,17 @@ services:
     environment:
       # Never left at its image default -- see iac-platform-services's
       # "The dashboard interface has no default credential" scenario.
+      #
+      # READ ONLY WHEN GRAFANA'S DATABASE IS CREATED, which is the first boot
+      # against the bind mount below; Grafana's own defaults.ini says of
+      # admin_password "can be changed before first start of grafana, or in
+      # profile settings". So rotating this value recreates this container
+      # -- an environment: value IS part of the service definition, unlike an
+      # inline config's content -- with the new value in it, and leaves
+      # Grafana accepting the old one, green throughout. The host step that
+      # completes a rotation is in docs/bootstrap-a-new-host.md Appendix A;
+      # docs/backlog.md `make-a-rotated-grafana-password-reach-grafana` is
+      # the change that would remove it.
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       # The base URL Grafana builds its own links and redirects from, so it
       # must name the host, not whatever machine is viewing. Interpolates the
