@@ -322,7 +322,7 @@ services:
       # Editing either config below means regenerating this. The static check in
       # .github/tests fails the pull request and names the value it should hold,
       # so this is a paste rather than a calculation.
-      platform.config-checksum: "921a970cfbc8"
+      platform.config-checksum: "749ebfe68c6e"
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -527,9 +527,9 @@ configs:
 
             - alert: ContainerRestartingOrOOMKilled
               expr: >-
-                increase(container_oom_events_total[10m]) > 0
+                increase(container_oom_events_total{name!=""}[10m]) > 0
                 or
-                changes(container_start_time_seconds[10m]) > 3
+                changes(container_start_time_seconds{name!=""}[10m]) > 3
               for: 0m
               labels:
                 severity: warning
