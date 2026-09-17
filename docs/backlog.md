@@ -897,20 +897,6 @@ Not blocked. It touches `docs/` and no mechanism.
 
 ---
 
-## 53. guard-the-converge-dispatch-to-the-default-branch
-
-**Not blocked. Recorded 2026-09-16, from the code review of `write-and-rehearse-the-rebuild-runbook`, which did not create this gap and did make it routine.**
-
-`.github/workflows/platform-deploy.yml` refuses a `workflow_dispatch` from any ref but the default branch, and it does so as the **first** step of its `discover` job — before any Environment is named and before any credential is in reach. The comment there argues the case: a deploy carries the committed stack definition to a real host, so it runs from the branch that has been merged and reviewed and from no other.
-
-**`.github/workflows/host-converge.yml` makes the same kind of dispatch and has no such guard.** Its `branches: [main]` sits on the `push:` trigger alone; the `workflow_dispatch` beside it accepts any ref. So a dispatch from an unmerged branch checks that ref out and converges a real host with Ansible nobody has reviewed — which is a larger act than a deploy, since the converge owns the firewall, the SSH configuration and the operator accounts rather than a Compose file. Production's Environment still gates the job on a reviewer, so this is not an unguarded path to production; staging's does not, and staging is a real host on the tailnet.
-
-**Why it is recorded now.** It has always been true, and until recently a converge dispatch was a rare act. `docs/runbook-rebuild.md` phase 8 makes one a routine step of every rebuild — it is how the converge key is proved usable — so the odds of somebody dispatching from the branch they are working on went up. The runbook says `--ref main` and says the discipline is the operator's rather than the workflow's, which is honest and is not a guard.
-
-**What a change owes.** The guard itself is a near-copy of `platform-deploy.yml`'s, and the reasoning is already written there; the decisions are what to do about the two differences. That workflow's guard runs in a job whose only input is the repository, while `host-converge.yml`'s `discover` already reads each stack's `pipeline.yml` — so the guard must come before that read rather than beside it. And a refusal message has to say what to do instead, which for a converge is "merge it", not "dispatch it from `main`" — a converge of unreviewed Ansible has no legitimate form. `.github/tests` is where the assertion belongs, beside the one that reads `platform-deploy.yml`'s guard today.
-
----
-
 ## 54. make-a-rotated-secret-reach-its-inline-config
 
 **Not blocked, and it is a live defect. Found 2026-09-16 while closing `give-staging-its-own-dead-mans-switch-check`, by checking whether the fix had actually landed rather than by reading the deploy's result.**

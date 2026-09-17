@@ -472,6 +472,26 @@ class WorkflowLocatorMixin:
             "anywhere but on a runner, so its refusals would be asserted nowhere.",
         )
 
+    def guard_step(self):
+        """The dispatch-ref guard: the one `run:` step whose `env:` reads both
+        `github.ref` and `github.event.repository.default_branch` -- the same
+        two facts `platform-deploy.yml`'s own guard reads, and nothing else in
+        either workflow reads both."""
+        workflow = self.workflow()
+        candidates = []
+        for job_name, index, step in steps(workflow):
+            values = " ".join(str(v) for v in (step.get("env") or {}).values())
+            if "default_branch" in values and "github.ref" in values:
+                candidates.append(
+                    (step_label(job_name, index, step), (job_name, index, step))
+                )
+        return self._one(
+            candidates,
+            "step naming both `github.ref` and "
+            "`github.event.repository.default_branch`",
+            "The guard that refuses a dispatch off the default branch reads both.",
+        )
+
 
 # --------------------------------------------------------------------------
 # iac-cicd-pipeline / Each Stack Declares Its Own Pipeline Configuration
@@ -1822,6 +1842,111 @@ class TestHostConvergeDiscoveryFailsClosed(
                 f"a run supplying no environment emitted no row for `{name}`, so a "
                 f"merge converges fewer hosts than the repository carries: {emitted!r}",
             )
+
+
+# --------------------------------------------------------------------------
+# ADDED DIRECTLY AS A FIX, NOT DERIVED FROM A CHANGE'S DELTA SPECS.
+#
+# `docs/backlog.md` `guard-the-converge-dispatch-to-the-default-branch`:
+# `platform-deploy.yml` refuses a `workflow_dispatch` from any ref but the
+# default branch, as the first step of its `discover` job, before any
+# Environment is named or any credential is in reach. This workflow made the
+# same kind of dispatch with no such guard -- and a converge owns the
+# firewall, the SSH configuration and the operator accounts on a real host,
+# a larger act than the Compose deploy that entry compares it to. There is no
+# change here: the guard is a near-copy of `platform-deploy.yml`'s own, whose
+# reasoning is already written there, so this entry was taken as a fix
+# instead.
+# --------------------------------------------------------------------------
+
+
+class TestAConvergeDispatchIsRefusedOffTheDefaultBranch(
+    WorkflowLocatorMixin, unittest.TestCase
+):
+    """Runs the guard's own body, the same extract-and-run shape
+    `TestHostConvergeDiscoveryFailsClosed` above uses: grepping would
+    establish that a step named for the purpose exists, not that it refuses.
+    """
+
+    def setUp(self) -> None:
+        require_external_tools(
+            self, ("bash",), "execute the host-converge workflow's dispatch-ref guard"
+        )
+
+    def _run_guard(self, running_ref: str, default_branch: str | None):
+        _, _, step = self.guard_step()
+        scratch = Path(tempfile.mkdtemp(prefix="converge-guard-"))
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        environment = dict(
+            os.environ,
+            RUNNING_REF=running_ref,
+            # Mirrors the real expression's own shape,
+            # `refs/heads/${{ github.event.repository.default_branch }}`: an
+            # unresolved default branch collapses to `refs/heads/`, not to an
+            # empty string.
+            DEFAULT_REF=f"refs/heads/{default_branch or ''}",
+        )
+        return run_snippet(str(step["run"]), environment, scratch)
+
+    def test_the_guard_precedes_the_pipeline_declaration_read(self) -> None:
+        """DERIVED -- the backlog entry's own obligation: discovery already
+        reads each stack's `pipeline.yml`, "so the guard must come before that
+        read rather than beside it"."""
+        guard_job, guard_index, _ = self.guard_step()
+        discovery_job, discovery_job_dict, discovery_step_obj = self.discovery_step()
+        self.assertEqual(
+            guard_job,
+            discovery_job,
+            "the guard and the pipeline-declaration read are in different "
+            f"jobs, so their order cannot be compared: {guard_job!r} vs "
+            f"{discovery_job!r}",
+        )
+        discovery_index = discovery_job_dict["steps"].index(discovery_step_obj)
+        self.assertLess(
+            guard_index,
+            discovery_index,
+            "the guard does not run before the step that reads each stack's "
+            "`pipeline.yml`, so a dispatch off an unmerged branch would have "
+            "that declaration read -- and Ansible applied downstream -- "
+            "before the guard has a chance to refuse it",
+        )
+
+    def test_a_dispatch_off_the_default_branch_is_refused(self) -> None:
+        result = self._run_guard("refs/heads/some-feature-branch", "main")
+        combined = result.stdout + result.stderr
+        self.assertNotEqual(
+            0,
+            result.returncode,
+            f"a converge dispatched off the default branch was not refused: {combined!r}",
+        )
+        self.assertIn(
+            "merge",
+            combined.lower(),
+            "the refusal does not say what to do instead -- merge the change -- "
+            f"and reads instead: {combined!r}",
+        )
+
+    def test_a_dispatch_on_the_default_branch_is_not_refused(self) -> None:
+        result = self._run_guard("refs/heads/main", "main")
+        self.assertEqual(
+            0,
+            result.returncode,
+            "a converge dispatched on the repository's own default branch was "
+            f"refused: {(result.stdout + result.stderr)!r}",
+        )
+
+    def test_an_unresolved_default_branch_is_refused_rather_than_assumed(self) -> None:
+        """The same fail-closed shape `platform-deploy.yml`'s guard uses: an
+        unresolvable `github.event.repository.default_branch` refuses rather
+        than being read as a `DEFAULT_REF` of `refs/heads/`, which a
+        `RUNNING_REF` of exactly that string would then silently satisfy."""
+        result = self._run_guard("refs/heads/main", None)
+        self.assertNotEqual(
+            0,
+            result.returncode,
+            "a converge ran with no resolved default branch rather than "
+            f"refusing: {(result.stdout + result.stderr)!r}",
+        )
 
 
 # --------------------------------------------------------------------------
