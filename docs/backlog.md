@@ -881,17 +881,9 @@ The tailscale role is 140 comment lines against 197 non-blank, measured 2026-09-
 
 Not blocked. It touches `docs/` and no mechanism.
 
-## 52. write-and-rehearse-the-rebuild-runbook
-
-**Not blocked; recorded because every piece exists and nobody has run them in sequence.**
-
-Recovering this host from nothing is: a Terraform apply through the gated pipeline (with `server_enabled` toggled, and the destroy-override label for the replace), DNS (a manual edit at the zone's own provider — `docs/bootstrap-a-new-host.md` §4.4 gives the shape of the records and not their values, and is also where the automation of this step is declined), the first converge of the rebuilt host, which is a hand-run one from a workstation with the Vault password and a fresh tailnet key -- the pipeline reaches a host over the tailnet and joining it is what that play does, so `apply-host-configuration-through-a-gated-workflow` did not remove this step and could not, the platform deploy from a re-run of `platform-deploy.yml`, one deploy per application from its own repository, the two manual steps `platform/README.md` lists (the `pgexporter` role and the dead-man's-switch registration). No *platform-stack* store needs restoring: `scope-the-shared-database-to-non-durable-data` classified each of them as needing no backup — each is either recreated by a redeploy or its loss is accepted, and the runbook should say which, because Prometheus's history and Grafana's UI-created state fall in the second group and do not come back. An application's database in the shared instance falls in the second group too, but is not the end of it: the application cannot start without one, so the runbook needs a re-provisioning step per application — the provisioning recipe in `docs/onboard-an-application.md` for that host with `rotate=yes` — before that application's deploy. That leaves one gap, and it is the one the same change names as a divergence — on the production host, `commerce-ops` keeps durable data in a PostgreSQL container of its own that nothing backs up, so a rebuild today loses it. `move-commerce-ops-durable-data-to-supabase` is what closes that; until it does, the runbook has to say so. Those steps live in four repositories and two README sections, in no stated order, and the time they take is unknown.
-
-A `docs/runbook-rebuild.md` that lists them in order, names the secret each step needs, and records the last rehearsal's date and duration is the deliverable. The rehearsal is the point; the document is how it survives. Staging is where the rehearsal can happen without touching prod: converged since 2026-09-10 and carrying the platform stack since 2026-09-13, so the thing this entry once waited on is in place and the rehearsal is now merely unscheduled.
-
 ---
 
-## 53. announce-a-rebuild-to-the-applications-that-hold-databases
+## 52. announce-a-rebuild-to-the-applications-that-hold-databases
 
 **Not blocked. Recorded 2026-09-16, from planning `write-and-rehearse-the-rebuild-runbook`, which found the gap and did not fold it in.**
 
@@ -905,7 +897,7 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 
 ---
 
-## 54. guard-the-converge-dispatch-to-the-default-branch
+## 53. guard-the-converge-dispatch-to-the-default-branch
 
 **Not blocked. Recorded 2026-09-16, from the code review of `write-and-rehearse-the-rebuild-runbook`, which did not create this gap and did make it routine.**
 
@@ -919,7 +911,7 @@ A `docs/runbook-rebuild.md` that lists them in order, names the secret each step
 
 ---
 
-## 55. make-a-rotated-secret-reach-its-inline-config
+## 54. make-a-rotated-secret-reach-its-inline-config
 
 **Not blocked, and it is a live defect. Found 2026-09-16 while closing `give-staging-its-own-dead-mans-switch-check`, by checking whether the fix had actually landed rather than by reading the deploy's result.**
 
@@ -937,7 +929,7 @@ So the mechanism is exactly as sound as it was designed to be, for committed edi
 
 ---
 
-## 56. perform-the-stack-separation-check-that-was-never-run
+## 55. perform-the-stack-separation-check-that-was-never-run
 
 **Not blocked. Found 2026-09-16 by the rehearsal's pre-state capture, which read the running containers rather than the documents — three live defects, of which two were fixed the same day.** What remains is the Grafana admin password and the absence of any repeatable check; the account below is kept whole because the three share one cause and one blind spot.
 
@@ -972,7 +964,7 @@ The last row is the tell. It differs because `provision-commerce-ops-database-in
 
 ---
 
-## 57. decide-whether-the-data-volume-should-survive-a-server-toggle
+## 56. decide-whether-the-data-volume-should-survive-a-server-toggle
 
 **Not blocked, and deliberately not yet worth doing. Recorded 2026-09-16 from a question asked during `write-and-rehearse-the-rebuild-runbook`'s rehearsal, once the destroy had shown what the coupling actually does.**
 
@@ -990,7 +982,7 @@ The money is not the obstacle and should not be cited as one: a detached 10 GB v
 
 ---
 
-## 58. set-staging-alertmanager-to-its-register-values
+## 57. set-staging-alertmanager-to-its-register-values
 
 **Not blocked, and it is a live misconfiguration rather than a plan. Recorded 2026-09-16, from the code review of `write-and-rehearse-the-rebuild-runbook`'s rehearsal, which caught it in the rehearsal's own data.**
 
