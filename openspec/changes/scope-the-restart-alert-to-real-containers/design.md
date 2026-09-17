@@ -2,7 +2,9 @@
 
 See `proposal.md` — Why, for the incident and the measurements behind it. What the design has to work with:
 
-`ContainerRestartingOrOOMKilled` lives in the `prometheus_rules` config entry of `platform/docker-compose.yml`, alongside every other rule this stack evaluates and alongside the Grafana dashboard JSON that reads the same two metrics. Deployment is a Prometheus configuration reload on merge to `main`, not a container replacement.
+`ContainerRestartingOrOOMKilled` lives in the `prometheus_rules` config entry of `platform/docker-compose.yml`, alongside every other rule this stack evaluates and alongside the Grafana dashboard JSON that reads the same two metrics.
+
+**Editing that entry does not reach the host by itself.** Compose decides whether to replace a container from a digest of the service definition, and that digest does not cover the content of an inline `configs:` block; the content is copied into the container at creation and Prometheus has no reload path here. `apply-shipped-config-on-deploy` added the `platform.config-checksum` label on the `prometheus` service for exactly this reason — a property that moves when the content moves, so the deploy recreates the container. So this change has two edits in one file, not one, and the second is not bookkeeping: without it the deploy replaces nothing, reports every container running and healthy, exits zero and changes nothing. `.github/tests/test_shipped_config_reaches_the_container.py` fails the pull request and names the value the label should hold.
 
 Measured against staging's Prometheus on 2026-09-17, cAdvisor v0.60.5 exports:
 
@@ -103,6 +105,9 @@ Whether those two are actually reachable is a real question and not one this cha
 
 ## Migration Plan
 
-No state to migrate and no data to carry over. The rule is text in a config entry; the deploy reloads Prometheus's rule files, and firing state for a rule whose expression changed simply re-evaluates on the next cycle. Rollback is reverting the commit and letting the same workflow deploy it.
+No state to migrate and no data to carry over. The rule is text in a config entry, and the moved `platform.config-checksum` is what carries it: the deploy recreates the `prometheus` container, which is created holding the narrowed rule. Rollback is reverting the commit — both edits together, since reverting the rule without the checksum leaves a deploy that changes nothing — and letting the same workflow deploy it.
 
-One consequence to state rather than discover: any `ContainerRestartingOrOOMKilled` alert *currently firing* on a cgroup at deploy time resolves as its series leaves the expression's result set, which sends a resolved notification to Slack for an alert nobody wanted. Alertmanager's `group_interval` is five minutes, so that arrives within one grouping cycle of the deploy and then stops.
+Two consequences to state rather than discover:
+
+- Prometheus's own container is replaced, so its in-memory alert state goes with it while its metrics storage does not, that being on the data volume. Any `ContainerRestartingOrOOMKilled` *currently firing* on a cgroup at deploy time therefore resolves, which sends a resolved notification to Slack for an alert nobody wanted. Alertmanager's `group_interval` is five minutes, so that arrives within one grouping cycle and then stops.
+- That replacement is itself a container restart, and cAdvisor sees it. One restart is not more than three in ten minutes, so it does not raise the very rule being changed — the same reasoning `bound-host-log-growth-and-add-swap` recorded before a converge that restarted all eleven containers at once. It is said here so that nobody spends the deploy window diagnosing it.
