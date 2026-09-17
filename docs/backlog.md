@@ -979,19 +979,3 @@ The money is not the obstacle and should not be cited as one: a detached 10 GB v
 **Why it is not worth doing now.** Under *No Store on This Host Holds Data Requiring Backup* (`openspec/specs/iac-safety-hardening/spec.md`) nothing on that volume is durable: Prometheus's database is bounded by its own retention, Grafana's provisioned state is reproduced by a redeploy, and the shared instance admits no durable data at all. There is nothing there to protect, so decoupling would buy protection for data that does not exist.
 
 **The trigger is durable data landing on that host, not cost and not convenience.** At that point two things are owed together — the decoupling *and* a real backup — and **the decoupling alone is the more dangerous half**, because a volume that survives a toggle looks like protection while remaining unprotected against deletion, corruption, and the region. Whoever takes this should deliver both or neither. The production divergence that requirement already records — `commerce-ops`'s own PostgreSQL, which nothing backs up — is the first candidate to make the trigger real.
-
----
-
-## 57. set-staging-alertmanager-to-its-register-values
-
-**Not blocked, and it is a live misconfiguration rather than a plan. Recorded 2026-09-16, from the code review of `write-and-rehearse-the-rebuild-runbook`'s rehearsal, which caught it in the rehearsal's own data.**
-
-`main-staging-alertmanager` was created on the evening of 2026-09-16 by its own first ping, as part of closing the shared dead-man's-switch defect — and `docs/bootstrap-a-new-host.md`'s Appendix A says what that means: *"A check comes into existence at its job's first ping and carries the vendor's default period until it is corrected here."* **Nobody has corrected it there.** So staging's dead-man's-switch is running on the observer's defaults rather than on the 5 minutes / 2 minutes Appendix A records for it, and that row is a claim rather than a record — Appendix A now says so in as many words.
-
-**What it costs is the mechanism itself.** This is the alarm for when everything else is down. A default period longer than the reporter's means silence goes unnoticed for as long as the default allows; a default shorter than it means a healthy host alarms. Neither is knowable without looking, which is the point: the one check whose job is to notice that nothing is reporting is itself unverified.
-
-**The fix is one operator action:** read `main-staging-alertmanager`'s period and grace at the observer, set them to what Appendix A's second table records, and — where the observer turns out to hold something better — correct the table instead, in its own pull request, saying which of the two was wrong. `docs/runbook-rebuild.md`'s phase 12 has the tie-break: before a destroy the observer is the authority and the register is corrected; after one the register is right and the observer is what you fix. This is neither, being a check that never existed before, so the register's values are intent and the observer's are the vendor's.
-
-**Its own entry rather than folded into `perform-the-stack-separation-check-that-was-never-run`**, which is the cluster it came from. That entry's remaining work is the shared Grafana password and the design of a repeatable check, and both want thought; this wants a minute and a browser. Folded in, a one-minute action would sit behind a change that needs design and inherit its priority.
-
-**It is recorded here rather than left as a note in Appendix A**, and the reason is this repository's own measurement: `perform-the-stack-separation-check-that-was-never-run` records that *"a runbook step performed once is what let three values sit shared for weeks"*, and that this class of defect *"is invisible to every automated guard this repository has"*. A note in a document read once per rebuild is that same shape. An entry survives the change that found it, which a disclosure inside that change's task list does not.
