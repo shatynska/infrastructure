@@ -42,7 +42,7 @@ ssh_allowed_cidrs = ["176.104.184.0/24"]
 # Mirrored by hardening_web_allowed_cidrs in group_vars/staging.yml.
 web_allowed_cidrs = ["0.0.0.0/0"]
 
-server_enabled = true
+server_enabled = false
 
 volume_enabled = true
 
